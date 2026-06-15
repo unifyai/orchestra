@@ -113,26 +113,13 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
 
     from sqlalchemy.orm import object_session
 
-    from orchestra.web.api.utils.assistant_infra import (
-        delete_phone_number,
-    )
+    from orchestra.web.api.utils.assistant_infra import delete_phone_number
 
-    deploy_env = None
     session = object_session(contact)
-    if session:
-        assistant = (
-            session.query(Assistant)
-            .filter(
-                Assistant.agent_id == contact.assistant_id,
-            )
-            .first()
-        )
-        if assistant is not None:
-            deploy_env = assistant.deploy_env
 
     if contact.contact_type == "phone":
         if contact.contact_value:
-            await delete_phone_number(contact.contact_value, deploy_env=deploy_env)
+            await delete_phone_number(contact.contact_value)
             logger.info(
                 "Deprovisioned phone %s (contact %d)",
                 contact.contact_value,
@@ -362,28 +349,19 @@ async def _process_ba_grace_contacts(
     # If the billing account has been topped up, clear grace period.
     if ba.credits >= 0:
         assistant_ids_to_reawaken: Set[int] = set()
-        assistant_deploy_envs: Dict[int, str | None] = {}
         for contact in contacts:
             contact.status = "active"
             contact.grace_period_started_at = None
             set_last_notification_day(contact, 0)
             ar.restored_contacts += 1
             assistant_ids_to_reawaken.add(contact.assistant_id)
-            assistant_deploy_envs[contact.assistant_id] = (
-                contact.assistant.deploy_env
-                if getattr(contact, "assistant", None)
-                else None
-            )
 
         # Reawaken affected assistants
         for aid in assistant_ids_to_reawaken:
             try:
                 from orchestra.web.api.utils.assistant_infra import reawaken_assistant
 
-                await reawaken_assistant(
-                    str(aid),
-                    deploy_env=assistant_deploy_envs.get(aid),
-                )
+                await reawaken_assistant(str(aid))
             except Exception as e:
                 logger.warning(
                     "Failed to reawaken assistant %d after grace period "
@@ -428,7 +406,6 @@ async def _process_ba_grace_contacts(
 
     # --- Deprovision overdue contacts ---
     assistant_ids_to_reawaken: Set[int] = set()
-    assistant_deploy_envs: Dict[int, str | None] = {}
     had_deletions = False
 
     for contact in overdue_contacts:
@@ -438,11 +415,6 @@ async def _process_ba_grace_contacts(
 
             # 2. Track assistant for reawaken
             assistant_ids_to_reawaken.add(contact.assistant_id)
-            assistant_deploy_envs[contact.assistant_id] = (
-                contact.assistant.deploy_env
-                if getattr(contact, "assistant", None)
-                else None
-            )
 
             # 3. Soft-delete the contact
             contact.status = "deleted"
@@ -479,10 +451,7 @@ async def _process_ba_grace_contacts(
         try:
             from orchestra.web.api.utils.assistant_infra import reawaken_assistant
 
-            await reawaken_assistant(
-                str(aid),
-                deploy_env=assistant_deploy_envs.get(aid),
-            )
+            await reawaken_assistant(str(aid))
         except Exception as e:
             logger.warning(
                 "Failed to reawaken assistant %d after contact deletion: %s",

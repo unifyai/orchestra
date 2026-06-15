@@ -226,7 +226,7 @@ def notify_billing_event_failure(
 
     Args:
         failure_type: Short label, e.g. ``"webhook_processing"``,
-            ``"auto_recharge"``, ``"contact_levy"``, ``"contact_deprovisioning"``.
+            ``"contact_levy"``, ``"contact_deprovisioning"``.
         error: The exception message.
         context_id: Deduplication key (event ID, billing account ID, etc.).
         billing_account_id: Optional BA ID for the embed.

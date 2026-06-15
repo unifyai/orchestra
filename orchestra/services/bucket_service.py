@@ -843,3 +843,12 @@ class BucketService:
                 f"Failed to list account photos under {prefix}: {e}",
             )
         return deleted
+
+
+def create_bucket_service():
+    """Return GCS storage in cloud deployments and local disk storage for self-host."""
+    from orchestra.services.local_bucket_service import LocalBucketService
+
+    if settings.is_self_host:
+        return LocalBucketService()
+    return BucketService()

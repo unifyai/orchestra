@@ -17,7 +17,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantCleanupTask,
     AssistantContact,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import (
     delete_phone_number,
@@ -81,7 +81,6 @@ class AssistantCleanupSpec:
     """
 
     assistant_id: int
-    deploy_env: str | None = None
     desktop_mode: str | None = None
     profile_photo: str | None = None
     profile_video: str | None = None
@@ -101,7 +100,6 @@ class AssistantCleanupSpec:
         payload = task.cleanup_payload or {}
         return cls(
             assistant_id=task.assistant_id,
-            deploy_env=task.deploy_env,
             desktop_mode=task.desktop_mode,
             profile_photo=payload.get("profile_photo"),
             profile_video=payload.get("profile_video"),
@@ -115,7 +113,6 @@ class AssistantCleanupSpec:
 def build_cleanup_spec(
     *,
     assistant_id: int,
-    deploy_env: str | None = None,
     desktop_mode: str | None = None,
     profile_photo: str | None = None,
     profile_video: str | None = None,
@@ -124,7 +121,6 @@ def build_cleanup_spec(
     """Create an assistant cleanup spec from already-loaded ORM objects."""
     return AssistantCleanupSpec(
         assistant_id=assistant_id,
-        deploy_env=deploy_env,
         desktop_mode=desktop_mode,
         profile_photo=profile_photo,
         profile_video=profile_video,
@@ -148,7 +144,6 @@ def build_cleanup_spec_from_assistant(
     """Create a cleanup spec directly from an assistant row."""
     return build_cleanup_spec(
         assistant_id=int(assistant.agent_id),
-        deploy_env=assistant.deploy_env,
         desktop_mode=assistant.desktop_mode,
         profile_photo=assistant.profile_photo,
         profile_video=assistant.profile_video,
@@ -225,10 +220,7 @@ async def deprovision_assistant_contacts(
                             spec.assistant_id,
                         )
                     else:
-                        await delete_phone_number(
-                            contact.contact_value,
-                            deploy_env=spec.deploy_env,
-                        )
+                        await delete_phone_number(contact.contact_value)
                 elif contact.contact_type == "email" and contact.contact_value:
                     logger.info(
                         "Skipping external deprovision for email contact "
@@ -296,7 +288,6 @@ def enqueue_cleanup_tasks(
     for spec in cleanup_specs:
         task = AssistantCleanupTask(
             assistant_id=spec.assistant_id,
-            deploy_env=spec.deploy_env,
             desktop_mode=spec.desktop_mode,
             source_flow=source_flow,
             cleanup_payload=spec.to_payload(),
@@ -313,7 +304,7 @@ def _delete_assistant_gcs_data(spec: AssistantCleanupSpec) -> dict[str, object]:
 
     errors: list[str] = []
     deleted_counts = {"media": 0, "recordings": 0, "attachments": 0}
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
 
     for field_name in ("profile_photo", "profile_video"):
         gcs_url = getattr(spec, field_name)
@@ -395,7 +386,6 @@ async def process_assistant_cleanup_tasks(
         try:
             runtime_result = await teardown_assistant_runtime(
                 spec.assistant_id,
-                deploy_env=spec.deploy_env,
                 desktop_mode=spec.desktop_mode,
             )
             contact_result = await deprovision_assistant_contacts(

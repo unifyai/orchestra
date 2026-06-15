@@ -13,6 +13,7 @@ from orchestra.web.api.plot.validation import (
     VALID_SORT_ORDER,
     validate_hex_color,
 )
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel, OptionalSafeText
 
 # =============================================================================
 # Input Schemas
@@ -72,15 +73,15 @@ class PlotConfigInput(BaseModel):
         None,
         description="Sort order: unsorted, asc, or desc",
     )
-    title: Optional[str] = Field(
+    title: OptionalSafeLabel = Field(
         None,
         description="Title for the plot (can be inferred by LLM)",
     )
-    x_label: Optional[str] = Field(
+    x_label: OptionalSafeLabel = Field(
         None,
         description="Custom label for x-axis and tooltip (overrides field name)",
     )
-    y_label: Optional[str] = Field(
+    y_label: OptionalSafeLabel = Field(
         None,
         description="Custom label for y-axis and tooltip (overrides field name)",
     )
@@ -103,11 +104,11 @@ class PlotConfigInput(BaseModel):
         description="Format string for y-axis ticks (e.g., '$' prefix for currency)",
     )
     # Group by and aggregate labels
-    group_by_label: Optional[str] = Field(
+    group_by_label: OptionalSafeLabel = Field(
         None,
         description="Custom label for group_by field in tooltip and legend (overrides field name)",
     )
-    aggregate_label: Optional[str] = Field(
+    aggregate_label: OptionalSafeLabel = Field(
         None,
         description="Custom label for aggregate field in tooltip (overrides field name)",
     )
@@ -284,7 +285,7 @@ class CreatePlotRequest(BaseModel):
         None,
         description="Direct plot configuration",
     )
-    description: Optional[str] = Field(
+    description: OptionalSafeText = Field(
         None,
         description="Natural language description for LLM inference",
     )
@@ -292,7 +293,7 @@ class CreatePlotRequest(BaseModel):
         ...,
         description="Project and logs configuration",
     )
-    title: Optional[str] = Field(
+    title: OptionalSafeLabel = Field(
         None,
         description="Optional title for the plot",
     )
@@ -301,7 +302,7 @@ class CreatePlotRequest(BaseModel):
 class UpdatePlotRequest(BaseModel):
     """Request to update an existing plot."""
 
-    title: Optional[str] = Field(
+    title: OptionalSafeLabel = Field(
         None,
         description="New title for the plot",
     )

@@ -5,6 +5,12 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
+from orchestra.web.api.utils.safe_text import (
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+)
+
 
 class PermissionResponse(BaseModel):
     """Schema for permission response."""
@@ -36,16 +42,16 @@ class RoleResponse(BaseModel):
 class RoleCreate(BaseModel):
     """Schema for creating a custom role."""
 
-    name: str
-    description: Optional[str] = None
+    name: SafeLabel
+    description: OptionalSafeText = None
     permission_ids: List[int] = []
 
 
 class RoleUpdate(BaseModel):
     """Schema for updating a custom role."""
 
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: OptionalSafeLabel = None
+    description: OptionalSafeText = None
 
 
 class RolePermissionAdd(BaseModel):

@@ -7,6 +7,8 @@ import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Generator
+from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qsl
 
 import numpy as np
 import pytest
@@ -24,7 +26,7 @@ except ImportError:
     plt = None
 from fastapi import FastAPI
 from google.cloud import storage
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -36,11 +38,15 @@ TIMING_RECORDS = []
 # Global to track current test info for timing records
 CURRENT_TEST_INFO = {"name": None, "mode": None}
 
-from orchestra_core.db.dependencies import get_db_session
-from orchestra_core.db.utils import create_database, drop_database
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
 from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
+
+
+def _xdist_worker_suffix(worker_id) -> str:
+    return f"_{worker_id}" if worker_id not in (None, "master") else ""
 
 
 def _detach_hnsw_indexes(meta) -> list[tuple[Any, Any]]:
@@ -62,6 +68,39 @@ def _restore_detached_indexes(removed_indexes: list[tuple[Any, Any]]) -> None:
         table.indexes.add(index)
 
 
+@pytest.fixture(autouse=True)
+def stub_coordinator_pubsub_boundary():
+    """Stub Coordinator Pub/Sub provisioning during platform API tests.
+
+    User and workspace creation now provisions a personal Coordinator, which
+    would otherwise call Communication with an unset ``UNITY_COMMS_URL``. Tests
+    that need real infra fanout should patch or override this boundary locally.
+    """
+    with (
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic,
+        patch(
+            "orchestra.web.api.users.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_users_pubsub,
+        patch(
+            "orchestra.web.api.organization.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_org_pubsub,
+        patch(
+            "orchestra.web.api.auth.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_auth_pubsub,
+    ):
+        mock_create_pubsub_topic.return_value = {"success": True}
+        mock_delete_users_pubsub.return_value = {"success": True}
+        mock_delete_org_pubsub.return_value = {"success": True}
+        mock_delete_auth_pubsub.return_value = {"success": True}
+        yield
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     """
@@ -79,7 +118,7 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
 
     :yield: new engine.
     """
-    from orchestra_core.db.meta import meta  # noqa: WPS433
+    from orchestra.db.meta import meta  # noqa: WPS433
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -92,8 +131,9 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     url = str(settings.db_url)
     # If using xdist, the testing database (orchestra_test) needs to be
     # instantiated for every thread
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    suffix = _xdist_worker_suffix(worker_id)
+    if suffix:
+        url = str(settings.db_url.with_path(f"/{settings.db_base}{suffix}"))
     engine = create_engine(url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -301,8 +341,9 @@ def fastapi_app_concurrent(
     # Create a SEPARATE engine for concurrent tests with production-like settings
     # Production uses READ COMMITTED (PostgreSQL default) with proper transactions.
     url = str(settings.db_url)
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    suffix = _xdist_worker_suffix(worker_id)
+    if suffix:
+        url = str(settings.db_url.with_path(f"/{settings.db_base}{suffix}"))
 
     concurrent_engine = create_engine(
         url,
@@ -372,7 +413,7 @@ async def client_concurrent(
     """
     test_name = request.node.nodeid
     async with TestAwareAsyncClient(
-        app=fastapi_app_concurrent,
+        transport=ASGITransport(app=fastapi_app_concurrent),
         base_url="http://test",
         test_name=test_name,
     ) as ac:
@@ -383,10 +424,21 @@ class TestAwareAsyncClient(AsyncClient):
     """AsyncClient wrapper that injects test name into requests for SQL capture."""
 
     def __init__(self, *args, test_name: str = "unknown", **kwargs):
+        app = kwargs.pop("app", None)
+        if app is not None and "transport" not in kwargs:
+            kwargs["transport"] = ASGITransport(app=app)
         super().__init__(*args, **kwargs)
         self._test_name = test_name
 
     async def request(self, method, url, **kwargs):
+        params = kwargs.get("params")
+        if isinstance(url, str) and "?" in url and params is not None:
+            path, query = url.split("?", 1)
+            merged_params = dict(parse_qsl(query, keep_blank_values=True))
+            merged_params.update(dict(params))
+            url = path
+            kwargs["params"] = merged_params
+
         # Inject test name header for SQL capture
         headers = kwargs.get("headers", {})
         if headers is None:
@@ -456,7 +508,7 @@ async def client(
     """
     test_name = request.node.nodeid
     async with TestAwareAsyncClient(
-        app=fastapi_app,
+        transport=ASGITransport(app=fastapi_app),
         base_url="http://test",
         test_name=test_name,
     ) as ac:
@@ -972,7 +1024,7 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
 
     :yield: new engine.
     """
-    from orchestra_core.db.meta import meta  # noqa: WPS433
+    from orchestra.db.meta import meta  # noqa: WPS433
     from orchestra.db.models import load_all_models  # noqa: WPS433
 
     load_all_models()
@@ -985,8 +1037,9 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
     url = str(settings.db_url)
     # If using xdist, the testing database (orchestra_test) needs to be
     # instantiated for every thread
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    suffix = _xdist_worker_suffix(worker_id)
+    if suffix:
+        url = str(settings.db_url.with_path(f"/{settings.db_base}{suffix}"))
     engine = create_engine(url, isolation_level="AUTOCOMMIT")
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -1104,8 +1157,8 @@ def large_log_dataset(_engine_session: Engine):
     Session-scoped fixture that creates a large dataset of logs for performance testing.
     :param _engine_session: SQLAlchemy database engine with session scope.
     """
-    from orchestra_core.db.dao.context_dao import ContextDAO
-    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.field_type_dao import FieldTypeDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
@@ -1599,8 +1652,8 @@ def large_repairs_dataset(
     """
     from sqlalchemy import delete
 
-    from orchestra_core.db.dao.context_dao import ContextDAO
-    from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.field_type_dao import FieldTypeDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
     from orchestra.db.models.orchestra_models import (
         Context,

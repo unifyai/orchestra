@@ -1,4 +1,4 @@
-"""Schema tests for Coordinator assistants and team-only spaces."""
+"""Schema tests for Coordinator assistants."""
 
 from __future__ import annotations
 
@@ -6,7 +6,15 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, Organization, Space, User
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    Assistant,
+    ContactMembership,
+    Organization,
+    User,
+)
 from orchestra.web.api.assistant.views import _build_assistant_read
 
 
@@ -44,7 +52,7 @@ def _make_assistant(
     assistant = Assistant(
         user_id=owner.id,
         organization_id=organization.id if organization else None,
-        first_name="Coordinator",
+        first_name="Marty",
         surname="Assistant",
         is_coordinator=is_coordinator,
     )
@@ -53,25 +61,35 @@ def _make_assistant(
     return assistant
 
 
-def _make_space(
+def _make_personal_contact_memberships(
     dbsession: Session,
-    owner: User,
-    suffix: str,
-    *,
-    organization: Organization | None = None,
-    kind: str | None = None,
-) -> Space:
-    space = Space(
-        name=f"Coordinator Space {suffix}",
-        description=f"Coordinator schema workspace for {suffix} tests.",
-        owner_user_id=owner.id,
-        organization_id=organization.id if organization else None,
+    assistant: Assistant,
+) -> None:
+    dbsession.add_all(
+        [
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                authoring_assistant_id=assistant.agent_id,
+                contact_id=0,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+                should_respond=True,
+                response_policy="",
+                can_edit=True,
+            ),
+            ContactMembership(
+                assistant_id=assistant.agent_id,
+                authoring_assistant_id=assistant.agent_id,
+                contact_id=1,
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                relationship=CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+                should_respond=True,
+                response_policy="",
+                can_edit=True,
+            ),
+        ],
     )
-    if kind is not None:
-        space.kind = kind
-    dbsession.add(space)
     dbsession.flush()
-    return space
 
 
 def test_personal_coordinator_unique_index_scopes_to_personal_rows(
@@ -79,10 +97,13 @@ def test_personal_coordinator_unique_index_scopes_to_personal_rows(
 ) -> None:
     """A user can have one personal Coordinator while regular assistants remain allowed."""
     owner = _make_user(dbsession, "personal-unique")
-    organization = _make_organization(dbsession, owner, "personal-unique")
     _make_assistant(dbsession, owner, is_coordinator=True)
     _make_assistant(dbsession, owner)
-    _make_assistant(dbsession, owner, organization=organization, is_coordinator=True)
+    _make_assistant(
+        dbsession,
+        owner,
+        organization=_make_organization(dbsession, owner, "personal-unique"),
+    )
 
     duplicate = Assistant(
         user_id=owner.id,
@@ -136,48 +157,11 @@ def test_is_coordinator_is_immutable_after_persistence(
         assistant.is_coordinator = False
 
 
-def test_space_kind_defaults_to_team_and_rejects_org_default(
-    dbsession: Session,
-) -> None:
-    """Spaces are team-only; org_default values are rejected."""
-    owner = _make_user(dbsession, "org-default")
-    organization = _make_organization(dbsession, owner, "org-default")
-
-    default_space = _make_space(dbsession, owner, "default", organization=organization)
-    assert default_space.kind == "team"
-    _make_space(dbsession, owner, "team-sibling", organization=organization)
-
-    rejected_space = Space(
-        name="Rejected org default",
-        description="Rejected workspace kind for coordinator schema tests.",
-        owner_user_id=owner.id,
-        organization_id=organization.id,
-        kind="org_default",
-    )
-    dbsession.add(rejected_space)
-    with pytest.raises(IntegrityError, match="ck_spaces_kind"):
-        dbsession.flush()
-
-
-def test_space_kind_rejects_unknown_values(dbsession: Session) -> None:
-    """Only team spaces are valid kinds."""
-    owner = _make_user(dbsession, "invalid-kind")
-    space = Space(
-        name="Archived Space",
-        description="Archived space kind row used to exercise the kind constraint.",
-        owner_user_id=owner.id,
-        kind="archived",
-    )
-    dbsession.add(space)
-
-    with pytest.raises(IntegrityError, match="ck_spaces_kind"):
-        dbsession.flush()
-
-
 def test_assistant_read_projects_coordinator_flag(dbsession: Session) -> None:
     """Assistant reads carry the Coordinator role flag as a concrete boolean."""
     owner = _make_user(dbsession, "read-projection")
     assistant = _make_assistant(dbsession, owner, is_coordinator=True)
+    _make_personal_contact_memberships(dbsession, assistant)
 
     assistant_read = _build_assistant_read(assistant, dbsession)
 

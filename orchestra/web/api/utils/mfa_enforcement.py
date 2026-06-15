@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.auth_dao import AuthDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Organization, OrganizationMember
 
 logger = logging.getLogger(__name__)

@@ -8,8 +8,8 @@ from typing import List, Optional, Union
 
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.models.orchestra_models import Interface, Tab, Tile

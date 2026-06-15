@@ -1,16 +1,15 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
-from orchestra.lib.billing import get_billing_entity, queue_auto_recharge
+from orchestra.lib.billing import get_billing_entity
 from orchestra.web.api.credits.schema import (
     AggregatedTransactionHistoryResponse,
     AggregatedTransactionItem,
@@ -39,6 +38,49 @@ def _check_org_billing_permission(session, user_id, organization_id, permission)
         raise HTTPException(
             status_code=403,
             detail=f"You do not have {permission} permission in this organization",
+        )
+
+
+def _schedule_auto_increment_email(
+    background_tasks: BackgroundTasks,
+    session,
+    ba: BillingAccount,
+    new_template,
+    *,
+    user_id: str,
+) -> None:
+    """Best-effort: queue the 'you were auto-upgraded' email after response.
+
+    Resolves the recipient (the requesting user's email; the billing email
+    is no longer stored locally — it lives on the Stripe Customer) and
+    schedules it on FastAPI ``BackgroundTasks`` so the deduct hot path is
+    never blocked by the Gmail API call.
+    """
+    try:
+        from orchestra.db.dao.user_dao import UserDAO
+        from orchestra.lib.subscription_billing import build_auto_increment_email
+        from orchestra.web.api.utils.email import send_email_async
+
+        user = UserDAO(session).get_user_with_id(user_id)
+        recipient = user.email if user else None
+        if not recipient:
+            return
+
+        subject, body = build_auto_increment_email(new_template)
+        # Send from the shared hello@ role mailbox (impersonated) rather than
+        # the default ONBOARDING_EMAIL, which is a personal mailbox.
+        background_tasks.add_task(
+            send_email_async,
+            recipient,
+            subject,
+            body,
+            from_email="hello@unify.ai",
+            impersonate_email="hello@unify.ai",
+        )
+    except Exception:
+        logger.warning(
+            "Failed to schedule auto-increment notification email",
+            exc_info=True,
         )
 
 
@@ -113,6 +155,7 @@ def get_credits(
 def deduct_credits(
     request_fastapi: Request,
     request: DeductCreditsRequest,
+    background_tasks: BackgroundTasks,
     session=Depends(get_db_session),
 ) -> DeductCreditsResponse:
     """
@@ -120,8 +163,9 @@ def deduct_credits(
 
     The amount must be positive. The balance is allowed to go negative so
     that the spending-limit hook (which checks ``credit_balance <= 0``)
-    will correctly block subsequent LLM calls. If auto-recharge is
-    configured, it is triggered after the deduction.
+    will correctly block subsequent LLM calls. If the account is on a
+    self-serve subscription with auto-increment enabled, depleting the
+    wallet bumps it to the next tier (and emails the holder).
     \f
     :param request_fastapi: FastAPI request object.
     :param request: Request body containing the amount to deduct.
@@ -129,6 +173,7 @@ def deduct_credits(
     :return: Response with previous, deducted, and current credit amounts.
     """
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.settings import settings
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -141,6 +186,13 @@ def deduct_credits(
         raise HTTPException(status_code=400, detail="Billing is not set up")
 
     current_credits = float(billing_entity.credits)
+
+    if not settings.charges_billing:
+        return DeductCreditsResponse(
+            previous_credits=current_credits,
+            deducted=0.0,
+            current_credits=current_credits,
+        )
 
     # ``BillingAccountDAO.deduct_credits`` is mode-aware: CREDITS mutates
     # the wallet and returns the new balance; METERED writes a
@@ -162,25 +214,43 @@ def deduct_credits(
     if new_balance is None:
         # METERED: ledger row written, wallet untouched.
         new_balance = billing_entity.credits
-    elif billing_entity.should_trigger_autorecharge(new_balance):
+    elif float(new_balance) <= 0:
+        # Self-serve subscription depletion: auto-upgrade to the next tier
+        # when opted in (capped at the top tier; hard stop otherwise).
+        # Isolated so a Stripe error never blocks the deduction commit —
+        # the wallet stays depleted and the spending-limit hook hard-stops
+        # subsequent calls, same as the non-auto-increment path.
         ba = (
             session.query(BillingAccount)
             .filter(BillingAccount.id == billing_entity.billing_account_id)
             .first()
         )
-        if ba:
-            recharged = queue_auto_recharge(
-                session,
-                ba,
-                int(billing_entity.autorecharge_qty),
-                entity_label=(
-                    f"user {billing_entity.entity_id}"
-                    if billing_entity.is_user
-                    else f"org {billing_entity.entity_id}"
-                ),
-            )
-            if recharged:
-                new_balance = ba.credits
+        if ba and ba.auto_increment and ba.stripe_subscription_id:
+            try:
+                from orchestra.lib.subscription_billing import (
+                    auto_increment_on_depletion,
+                )
+
+                bumped = auto_increment_on_depletion(
+                    session,
+                    ba,
+                )
+                if bumped is not None:
+                    new_balance = ba.credits
+                    _schedule_auto_increment_email(
+                        background_tasks,
+                        session,
+                        ba,
+                        bumped,
+                        user_id=user_id,
+                    )
+            except Exception:
+                logger.exception(
+                    {
+                        "message": "Auto-increment failed on depletion (non-fatal)",
+                        "billing_account_id": billing_entity.billing_account_id,
+                    },
+                )
 
     session.commit()
 

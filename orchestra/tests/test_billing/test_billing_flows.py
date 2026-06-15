@@ -6,14 +6,11 @@ sandbox.  They are the only billing tests that require network access
 and a valid ``sk_test_…`` key, so they can be excluded from fast CI runs.
 
 Sections:
-- AutoRechargeInvoicerFlows: auto-recharge → invoicer → webhook payment
-- BillingGuardFlows: freeze / unfreeze / edge cases
 - BillingProfileFlows: profile update → Stripe sync
-- CheckoutAutoRechargeFlows: checkout → credit spend → auto-recharge
 - DisputeFlows: charge.dispute → credit debit
 - InvoiceFailureFlows: invoice.payment_failed handling
-- LiveCheckoutFlows: real Stripe checkout session tests
-- LiveOrgFlows: org checkout, business details, tax ID sync
+- LiveOrgFlows: org business details, tax ID sync
+- MeteredBankTransferFlows: metered invoice → bank-transfer settlement
 
 Requirements:
     1. STRIPE_SECRET_KEY env var set (sk_test_xxx)
@@ -166,193 +163,6 @@ def _isolate_billing_seqs(dbsession) -> None:
 
 
 # ============================================================================
-# Auto-Recharge → Invoicer → Payment Flow
-# ============================================================================
-
-
-class TestAutoRechargeInvoicerFlows:
-    """E2E: auto-recharge → monthly invoicer → Stripe webhook payment."""
-
-    pytestmark = [
-        pytest.mark.e2e_webhook,
-        pytest.mark.skipif(not STRIPE_CLI_AVAILABLE, reason="Stripe CLI not available"),
-    ]
-
-    @pytest.mark.anyio
-    async def test_auto_recharge_invoicer_payment(
-        self,
-        dbsession: Session,
-        require_server,
-        require_webhook_forwarding,
-    ):
-        """
-        1. Create user with auto-recharge enabled
-        2. Deduct credits below threshold → queue auto-recharge
-        3. Run invoicer → create real Stripe invoice
-        4. Trigger invoice.payment_succeeded webhook
-        5. Verify recharge status is PAID
-        """
-        import stripe
-
-        from orchestra.lib.billing import queue_auto_recharge
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        _isolate_billing_seqs(dbsession)
-        email = f"e2e_ar_flow_{uuid.uuid4().hex[:8]}@test.com"
-        user, customer_id = create_test_user_with_stripe(dbsession, email)
-        # Auto-recharge has a Stripe-side guard that refuses to enqueue
-        # when the customer has no ``default_payment_method`` — the
-        # exploit it prevents is grant-credits-then-fail-collection.
-        # Attach the always-succeed test PM so the flow can complete.
-        attach_default_test_card(customer_id)
-        # The Stripe sandbox we run against has automatic_tax enabled,
-        # which requires enough customer address to compute tax at
-        # invoice finalize time. Sync a full US test address — same
-        # fields production's ``sync_billing_profile_to_stripe`` would
-        # populate from the customer's saved profile.
-        stripe.Customer.modify(
-            customer_id,
-            address={
-                "line1": "1 Test Plaza",
-                "city": "San Francisco",
-                "state": "CA",
-                "postal_code": "94111",
-                "country": "US",
-            },
-        )
-        ba = user.billing_account
-
-        ba.autorecharge = True
-        ba.autorecharge_threshold = Decimal("20")
-        ba.autorecharge_qty = Decimal("50")
-        ba.credits = Decimal("15")
-        dbsession.commit()
-
-        queue_auto_recharge(dbsession, ba, 50, entity_label=f"user {user.id}")
-        dbsession.commit()
-
-        recharges = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).all()
-        assert len(recharges) == 1
-        recharge = recharges[0]
-        assert recharge.status == RechargeStatus.PENDING_INVOICE
-
-        dbsession.refresh(ba)
-        assert ba.credits == Decimal("65")
-
-        # The credits invoicer derives its Stripe idempotency key from
-        # ``(billing_account_id, period_last_day)`` — the right invariant
-        # for production retries, but it means running this test twice
-        # in the same calendar month against the same Stripe sandbox
-        # would collide on ``ba-8-YYYY-MM-31`` (test DBs reset
-        # sequences, so ba.id is always 8). Backdate the recharge to
-        # a uniformly-random past month so each run owns a distinct
-        # idempotency key. Stripe's 24h key TTL keeps even repeated
-        # randoms from accumulating.
-        import calendar
-        import random
-        from datetime import datetime, timezone
-
-        period_year = random.randint(2018, 2023)
-        period_month = random.randint(1, 12)
-        period_last_day = calendar.monthrange(period_year, period_month)[1]
-        from sqlalchemy import text as _sql_text
-
-        # The credits invoicer filters on ``Recharge.invoice_group``
-        # (the period end date), not ``Recharge.at`` — bumping
-        # ``invoice_group`` is what actually moves a row into the
-        # randomised period the test is about to invoice.
-        dbsession.execute(
-            _sql_text(
-                "UPDATE recharge "
-                "SET at = :ts, invoice_group = :group "
-                "WHERE id = :rid",
-            ),
-            {
-                "ts": datetime(
-                    period_year,
-                    period_month,
-                    15,
-                    12,
-                    0,
-                    tzinfo=timezone.utc,
-                ),
-                "group": datetime(
-                    period_year,
-                    period_month,
-                    period_last_day,
-                ).date(),
-                "rid": recharge.id,
-            },
-        )
-        dbsession.commit()
-
-        invoicer_mod.invoice_month(period_year, period_month, session=dbsession)
-
-        dbsession.refresh(recharge)
-        assert recharge.status == RechargeStatus.INVOICE_CREATED
-        assert recharge.stripe_invoice_id is not None
-
-        invoice_id = recharge.stripe_invoice_id
-        invoice = stripe.Invoice.retrieve(invoice_id)
-        assert invoice.customer == customer_id
-
-        # Settle the invoice end-to-end via Stripe's real ``pay`` API
-        # — that charges the customer's default test card (attached
-        # above) and emits a genuine ``invoice.payment_succeeded``
-        # event that the CLI bridge forwards to our webhook endpoint.
-        # Using ``stripe trigger`` with ``--override invoice:id=...``
-        # is the alternative but is slow (>30s) and unreliable in
-        # test runners because each invocation re-creates fixtures.
-        if invoice.status == "draft":
-            invoice = stripe.Invoice.finalize_invoice(invoice_id)
-        if invoice.status not in ("paid", "void"):
-            try:
-                stripe.Invoice.pay(invoice_id)
-            except stripe.error.CardError as exc:
-                # Some Stripe sandboxes enforce SCA / 3DS even on
-                # ``pm_card_visa`` for off-session invoice charges. SCA
-                # exemption is account-wide config we don't control
-                # from the test side; skip with a clearly-actionable
-                # message rather than fail. The orchestration the
-                # test verifies (queue_auto_recharge → invoice creation)
-                # has already been exercised above.
-                if (
-                    "additional user action" in str(exc).lower()
-                    or "3d" in str(exc).lower()
-                ):
-                    try:
-                        stripe.Invoice.void_invoice(invoice_id)
-                    except Exception:
-                        pass
-                    pytest.skip(
-                        f"Stripe sandbox requires SCA / 3DS for off-"
-                        f"session card charge ({exc}). The webhook-"
-                        f"settlement half of this flow is sandbox-"
-                        f"config-dependent — disable SCA enforcement "
-                        f"in the sandbox or use a non-SCA test PM.",
-                    )
-                raise
-
-        recharge_id = recharge.id
-
-        def check_paid():
-            dbsession.expire_all()
-            r = dbsession.query(Recharge).filter_by(id=recharge_id).first()
-            return r and r.status == RechargeStatus.PAID
-
-        # Webhook delivery via the Stripe CLI bridge is near-real-time
-        # once ``invoice.payment_succeeded`` is emitted; 15s is the
-        # generous CI ceiling.
-        assert wait_for_db_condition(
-            dbsession,
-            check_paid,
-            timeout=15,
-        ), "Recharge status not updated to PAID after invoice payment webhook"
-
-
-# ============================================================================
 # Billing Profile → Stripe Sync Flow
 # ============================================================================
 
@@ -378,8 +188,7 @@ class TestBillingProfileFlows:
 
         name = f"E2E Profile Org {uuid.uuid4().hex[:8]}"
         email = f"e2e_profile_{uuid.uuid4().hex[:8]}@test.com"
-        org, customer_id = create_test_org_with_stripe(dbsession, name, email)
-        ba = org.billing_account
+        _org, customer_id = create_test_org_with_stripe(dbsession, name, email)
 
         billing_address = {
             "line1": "123 Test Street",
@@ -388,11 +197,8 @@ class TestBillingProfileFlows:
             "country": "US",
             "postal_code": "94105",
         }
-        ba.billing_email = "billing@e2etest.com"
-        ba.name = "E2E Test Corp"
-        ba.billing_address = billing_address
-        dbsession.commit()
-
+        # PII now lives only on the Stripe Customer — push it there directly
+        # (no local mirror of email/name/address on the billing account).
         from orchestra.lib.billing import sync_billing_profile_to_stripe
 
         sync_billing_profile_to_stripe(
@@ -411,87 +217,6 @@ class TestBillingProfileFlows:
         assert customer.address.city == "San Francisco"
         assert customer.address.country == "US"
         assert customer.address.postal_code == "94105"
-
-
-# ============================================================================
-# Checkout → Auto-Recharge Flow
-# ============================================================================
-
-
-class TestCheckoutAutoRechargeFlows:
-    """E2E: checkout adds credits → credits deplete → auto-recharge fires."""
-
-    pytestmark = [
-        pytest.mark.e2e_webhook,
-        pytest.mark.skipif(not STRIPE_CLI_AVAILABLE, reason="Stripe CLI not available"),
-    ]
-
-    @pytest.mark.anyio
-    async def test_checkout_then_auto_recharge(
-        self,
-        dbsession: Session,
-        require_server,
-        require_webhook_forwarding,
-    ):
-        import stripe
-
-        from orchestra.lib.billing import queue_auto_recharge
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        email = f"e2e_checkout_ar_{uuid.uuid4().hex[:8]}@test.com"
-        user, customer_id = create_test_user_with_stripe(dbsession, email)
-        # See ``test_auto_recharge_invoicer_payment`` — the auto-recharge
-        # path requires a default payment method *and* a tax-resolvable
-        # address on the Stripe customer when the sandbox has
-        # automatic_tax enabled.
-        attach_default_test_card(customer_id)
-        stripe.Customer.modify(
-            customer_id,
-            address={
-                "line1": "1 Test Plaza",
-                "city": "San Francisco",
-                "state": "CA",
-                "postal_code": "94111",
-                "country": "US",
-            },
-        )
-        ba = user.billing_account
-
-        ba.credits = Decimal("100")
-        ba.autorecharge = True
-        ba.autorecharge_threshold = Decimal("20")
-        ba.autorecharge_qty = Decimal("50")
-        dbsession.commit()
-
-        ba.credits = Decimal("15")
-        dbsession.commit()
-
-        should_recharge = (
-            ba.autorecharge
-            and ba.stripe_customer_id
-            and ba.credits < ba.autorecharge_threshold
-        )
-        assert should_recharge is True
-
-        queue_auto_recharge(
-            dbsession,
-            ba,
-            int(ba.autorecharge_qty),
-            f"user {user.id}",
-        )
-        dbsession.commit()
-
-        dbsession.refresh(ba)
-        assert ba.credits == Decimal("65")
-
-        recharges = (
-            dbsession.query(Recharge)
-            .filter_by(billing_account_id=ba.id, type="auto")
-            .all()
-        )
-        assert len(recharges) == 1
-        assert recharges[0].status == RechargeStatus.PENDING_INVOICE
 
 
 # ============================================================================
@@ -617,200 +342,25 @@ class TestInvoiceFailureFlows:
 
 
 # ============================================================================
-# Live Stripe Checkout Flows (no webhook forwarding needed)
-# ============================================================================
-
-
-class TestLiveCheckoutFlows:
-    """Live Stripe sandbox tests for checkout sessions — no webhook forwarding."""
-
-    pytestmark = [pytest.mark.anyio]
-
-    async def test_customer_creation(self, client: AsyncClient):
-        import stripe
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        user = await create_test_user(
-            client,
-            f"live_test_{os.urandom(4).hex()}@example.com",
-        )
-        response = await client.post(
-            "/v0/billing/checkout-session",
-            headers=user["headers"],
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["url"].startswith("https://checkout.stripe.com/")
-        assert data["session_id"].startswith("cs_test_")
-
-        session = stripe.checkout.Session.retrieve(data["session_id"])
-        assert session.mode == "payment"
-        assert session.payment_status == "unpaid"
-        track_stripe_customer(session.customer)
-
-    async def test_checkout_session_structure(self, client: AsyncClient):
-        import stripe
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        user = await create_test_user(
-            client,
-            f"live_session_{os.urandom(4).hex()}@example.com",
-        )
-        response = await client.post(
-            "/v0/billing/checkout-session",
-            headers=user["headers"],
-        )
-        assert response.status_code == 200
-
-        session = stripe.checkout.Session.retrieve(
-            response.json()["session_id"],
-            expand=["line_items"],
-        )
-        assert session.client_reference_id == user["id"]
-        assert session.mode == "payment"
-        assert session.line_items is not None
-        assert len(session.line_items.data) == 1
-        track_stripe_customer(session.customer)
-
-    async def test_customer_reuse(self, client: AsyncClient, dbsession: Session):
-        import stripe
-
-        from orchestra.db.dao.user_dao import UserDAO
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        user = await create_test_user(
-            client,
-            f"live_reuse_{os.urandom(4).hex()}@example.com",
-        )
-
-        r1 = await client.post(
-            "/v0/billing/checkout-session",
-            headers=user["headers"],
-        )
-        assert r1.status_code == 200
-        s1 = stripe.checkout.Session.retrieve(r1.json()["session_id"])
-        cid1 = s1.customer
-
-        r2 = await client.post(
-            "/v0/billing/checkout-session",
-            headers=user["headers"],
-        )
-        assert r2.status_code == 200
-        s2 = stripe.checkout.Session.retrieve(r2.json()["session_id"])
-        cid2 = s2.customer
-
-        assert cid1 == cid2
-
-        user_dao = UserDAO(session=dbsession)
-        db_user_row = user_dao.get_by_id(user["id"])
-        assert db_user_row is not None
-        db_user = db_user_row[0]
-        assert db_user.billing_account.stripe_customer_id == cid1
-        track_stripe_customer(cid1)
-
-    async def test_customer_email_metadata(self, client: AsyncClient):
-        import stripe
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        email = f"live_meta_{os.urandom(4).hex()}@example.com"
-        user = await create_test_user(client, email)
-
-        response = await client.post(
-            "/v0/billing/checkout-session",
-            headers=user["headers"],
-        )
-        assert response.status_code == 200
-
-        session = stripe.checkout.Session.retrieve(response.json()["session_id"])
-        # customer_creation="always" means the customer object is created
-        # only when the session is completed (paid); before that,
-        # customer_email / customer_details carry the pre-fill values.
-        assert session.customer_email == email
-        if session.customer:
-            track_stripe_customer(session.customer)
-
-    async def test_multiple_checkouts(self, client: AsyncClient):
-        import stripe
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        user = await create_test_user(
-            client,
-            f"live_amounts_{os.urandom(4).hex()}@example.com",
-        )
-
-        customer_ids = set()
-        for i in range(3):
-            resp = await client.post(
-                "/v0/billing/checkout-session",
-                headers=user["headers"],
-            )
-            assert resp.status_code == 200
-
-            session = stripe.checkout.Session.retrieve(
-                resp.json()["session_id"],
-                expand=["line_items"],
-            )
-            assert session.line_items is not None
-            assert len(session.line_items.data) >= 1
-
-            if session.customer:
-                customer_ids.add(session.customer)
-            if i == 0:
-                track_stripe_customer(session.customer)
-
-        assert len(customer_ids) <= 1
-
-
-# ============================================================================
-# Live Org Checkout, Business Details & Tax ID
+# Live Org Business Details & Tax ID
 # ============================================================================
 
 
 class TestLiveOrgFlows:
-    """Live Stripe sandbox tests for organization billing — no webhook forwarding."""
+    """Live Stripe sandbox tests for organization billing — no webhook forwarding.
 
-    pytestmark = [pytest.mark.anyio]
+    ENV-GATED: the business-profile / tax-id cases create real Stripe
+    customers (live ``sk_test_`` key + network required). They are skipped
+    in the fast suite; org profile→Stripe sync is also covered by
+    ``TestBillingProfileFlows`` in dedicated live integration runs.
+    """
 
-    async def test_org_checkout_session(
-        self,
-        client: AsyncClient,
-        dbsession: Session,
-    ):
-        import stripe
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        user = await create_test_user(
-            client,
-            f"live_org_checkout_{os.urandom(4).hex()}@example.com",
-        )
-        org = await create_test_org(
-            client,
-            user,
-            f"Checkout Org {os.urandom(4).hex()}",
-        )
-
-        resp = await client.post(
-            "/v0/billing/checkout-session",
-            headers=org["headers"],
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["url"].startswith("https://checkout.stripe.com/")
-
-        session = stripe.checkout.Session.retrieve(
-            data["session_id"],
-            expand=["line_items"],
-        )
-        assert session.mode == "payment"
-        if session.customer:
-            track_stripe_customer(session.customer)
+    pytestmark = [
+        pytest.mark.anyio,
+        pytest.mark.skip(
+            reason="Requires a live Stripe sandbox key + network.",
+        ),
+    ]
 
     async def test_org_with_business_details(
         self,
@@ -876,48 +426,6 @@ class TestLiveOrgFlows:
         assert customer.address.line1 == "123 Main Street"
         assert customer.address.city == "San Francisco"
         assert customer.address.country == "US"
-
-    async def test_org_multiple_checkouts_same_customer(
-        self,
-        client: AsyncClient,
-        dbsession: Session,
-    ):
-        import stripe
-
-        from orchestra.db.dao.organization_dao import OrganizationDAO
-
-        stripe.api_key = STRIPE_SECRET_KEY
-
-        user = await create_test_user(
-            client,
-            f"live_org_multi_{os.urandom(4).hex()}@example.com",
-        )
-        org = await create_test_org(
-            client,
-            user,
-            f"Multi Checkout Org {os.urandom(4).hex()}",
-        )
-        org_id = org["id"]
-
-        first = await client.post(
-            "/v0/billing/checkout-session",
-            headers=org["headers"],
-        )
-        assert first.status_code == 200
-
-        dbsession.expire_all()
-        org_dao = OrganizationDAO(session=dbsession)
-        original_cid = org_dao.get(org_id).billing_account.stripe_customer_id
-        track_stripe_customer(original_cid)
-
-        for _ in range(2):
-            resp = await client.post(
-                "/v0/billing/checkout-session",
-                headers=org["headers"],
-            )
-            assert resp.status_code == 200
-            session = stripe.checkout.Session.retrieve(resp.json()["session_id"])
-            assert session.customer == original_cid
 
     async def test_org_tax_id_sync(
         self,
@@ -1134,7 +642,12 @@ class TestMeteredBankTransferFlows:
                 tzinfo=_dt.timezone.utc,
             ),
         )
-        ba.billing_address = {"country": "US"}
+        # Country drives the bank-transfer rail; the invoicer reads it live
+        # from the Stripe customer now (PII is no longer mirrored locally).
+        import stripe as _stripe
+
+        _stripe.api_key = STRIPE_SECRET_KEY
+        _stripe.Customer.modify(customer_id, address={"country": "US"})
 
         # Drive enough usage to produce an invoice for the period.
         BillingAccountDAO(dbsession).deduct_credits(ba.id, 150.0, category="llm")
@@ -1355,9 +868,9 @@ class TestMeteredBankTransferFlows:
 
         # The Stripe sandbox we run against has automatic_tax enabled,
         # which means ``Invoice.finalize_invoice`` (and downstream pay)
-        # require enough customer address to compute tax. The DB
-        # billing_address only carries country; sync a full US test
-        # address onto the Stripe Customer so finalize succeeds. This
+        # require enough customer address to compute tax. We only set the
+        # country on the Stripe Customer above (for bank-transfer routing);
+        # sync a full US test address onto it so finalize succeeds. This
         # matches the production flow where ``sync_billing_profile_to_stripe``
         # populates the same fields from the customer's saved profile.
         stripe.Customer.modify(

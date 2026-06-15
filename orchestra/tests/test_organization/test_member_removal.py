@@ -14,19 +14,21 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     AssistantCleanupTask,
     AssistantContact,
     ResourceAccess,
+    TeamAssistantMembership,
     TeamMember,
 )
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_user, ensure_assistants_project
 
 
 @pytest.fixture(autouse=True)
@@ -51,11 +53,14 @@ def mock_assistant_infra_calls(request):
         "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.BucketService",
+        "orchestra.web.api.organization.views.create_bucket_service",
     ) as mock_bucket_cls, patch(
         "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
         new_callable=AsyncMock,
-    ):
+    ), patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_personal_coordinator_topic:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_assistant_cleanup.return_value = {
@@ -72,7 +77,9 @@ def mock_assistant_infra_calls(request):
             "failed": 0,
             "errors": [],
         }
+        mock_personal_coordinator_topic.return_value = {"success": True}
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         mock_bucket_instance = MagicMock()
         mock_bucket_instance.delete_all_assistant_data.return_value = {
@@ -276,6 +283,96 @@ async def test_member_removal_removes_from_teams(client: AsyncClient, dbsession)
         dbsession.query(TeamMember).filter(TeamMember.user_id == member["id"]).all()
     )
     assert len(teams_after) == 0, "Member should be removed from all teams"
+
+
+@pytest.mark.anyio
+async def test_member_removal_drops_personal_coordinator_memberships_from_org_teams(
+    client: AsyncClient,
+    dbsession,
+):
+    """Removing an org member drops that member's workspace Coordinator from org teams."""
+
+    owner = await create_test_user(client, "team_cleanup_owner@test.com")
+    member = await create_test_user(client, "team_cleanup_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Membership Cleanup Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert (
+        add_member_resp.status_code == status.HTTP_201_CREATED
+    ), add_member_resp.json()
+
+    create_team_resp = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        headers=owner["headers"],
+        json={
+            "name": "Membership Cleanup Team",
+            "description": "Shared team used to verify member-removal cleanup.",
+        },
+    )
+    assert (
+        create_team_resp.status_code == status.HTTP_201_CREATED
+    ), create_team_resp.json()
+    team_id = create_team_resp.json()["id"]
+
+    with patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as create_topic_mock, patch(
+        "orchestra.services.team_membership_refresh_service.reawaken_assistant",
+        new_callable=AsyncMock,
+    ):
+        create_topic_mock.return_value = {"success": True, "skipped": True}
+        add_team_member_resp = await client.post(
+            f"/v0/organizations/{org_id}/teams/{team_id}/assistant-members",
+            headers=owner["headers"],
+            json={"member_user_id": member["id"]},
+        )
+        assert (
+            add_team_member_resp.status_code == status.HTTP_201_CREATED
+        ), add_team_member_resp.json()
+        member_coordinator_id = add_team_member_resp.json()["assistant_id"]
+
+        membership_before = (
+            dbsession.query(TeamAssistantMembership)
+            .filter(
+                TeamAssistantMembership.assistant_id == member_coordinator_id,
+                TeamAssistantMembership.team_id == team_id,
+            )
+            .one_or_none()
+        )
+        assert membership_before is not None
+        coordinator = dbsession.get(Assistant, member_coordinator_id)
+        assert coordinator is not None
+        assert coordinator.user_id == member["id"]
+        assert coordinator.organization_id == org_id
+        assert coordinator.is_coordinator
+
+        remove_resp = await client.delete(
+            f"/v0/organizations/{org_id}/members/{member['id']}",
+            headers=owner["headers"],
+        )
+        assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    dbsession.expire_all()
+    membership_after = (
+        dbsession.query(TeamAssistantMembership)
+        .filter(
+            TeamAssistantMembership.assistant_id == member_coordinator_id,
+            TeamAssistantMembership.team_id == team_id,
+        )
+        .one_or_none()
+    )
+    assert membership_after is None
 
 
 # =============================================================================
@@ -526,7 +623,7 @@ async def test_member_removal_deprovisions_contacts_before_deleting_unshared_ass
         )
 
     assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
-    mock_delete_phone.assert_awaited_once_with("+15551110000", deploy_env=None)
+    mock_delete_phone.assert_awaited_once_with("+15551110000")
     mock_delete_routes.assert_called_once_with(agent_id)
 
     dbsession.expire_all()
@@ -977,12 +1074,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     member_org_key = add_resp.json()["api_key"]
     member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
 
-    # Create Assistants project for org
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
 
     # Member creates assistant (unshared - only they have access)
     assistant_dao = AssistantDAO(dbsession)
@@ -1141,12 +1233,7 @@ async def test_member_removal_preserves_other_assistant_logs(
         headers=owner["headers"],
     )
 
-    # Create Assistants project
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
 
     # Create two assistants - one for each member (both unshared)
     assistant_dao = AssistantDAO(dbsession)
@@ -1350,12 +1437,7 @@ async def test_member_removal_sets_contact_is_system_false(
         headers=owner["headers"],
     )
 
-    # Create Assistants project with All/Contacts context
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
 
     # Create Contact log for the member with is_system=True
     # Match by email since contact sync now uses email

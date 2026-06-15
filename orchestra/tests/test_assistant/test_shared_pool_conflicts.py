@@ -41,6 +41,7 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
     BillingAccount,
+    CommunicationCallSession,
     ConflictEvent,
     DecommissionedRoute,
     Organization,
@@ -49,6 +50,11 @@ from orchestra.db.models.orchestra_models import (
     SharedPlatformRoute,
     SharedPoolNumber,
     User,
+)
+from orchestra.settings import settings
+from orchestra.services.universal_unity_email import (
+    ensure_coordinator_universal_email_contact,
+    get_universal_unity_email_address,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
@@ -115,11 +121,13 @@ def _make_assistant(
     user: User,
     name: str = "Bot",
     org_id: int | None = None,
+    is_coordinator: bool = False,
 ) -> Assistant:
     assistant = Assistant(
         user_id=user.id,
         first_name=name,
         organization_id=org_id,
+        is_coordinator=is_coordinator,
     )
     dbsession.add(assistant)
     dbsession.flush()
@@ -152,6 +160,25 @@ def _enable_discord(
         contact_type="discord",
         contact_value=pool_bot.number,
         status="active",
+    )
+    dbsession.add(contact)
+    dbsession.flush()
+    return contact
+
+
+def _enable_shared_email(
+    dbsession: Session,
+    assistant: Assistant,
+    email_address: str,
+) -> AssistantContact:
+    contact = AssistantContact(
+        assistant_id=assistant.agent_id,
+        contact_type="email",
+        contact_value=email_address,
+        provider="google_workspace",
+        provisioned_by="platform",
+        status="active",
+        metadata_={"universal_unity": True},
     )
     dbsession.add(contact)
     dbsession.flush()
@@ -999,6 +1026,174 @@ class TestColdMessages:
         result = dao.resolve_inbound(pool_numbers[0].number, "+15550529999")
         assert result["assistant_id"] == a1.agent_id
         assert result["role"] == "contact"
+
+
+class TestUniversalUnityWhatsApp:
+    def test_verified_owner_routes_to_single_owned_unity(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-owner@test.com", "+15550610001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, user.whatsapp_number)
+
+        assert result == {"assistant_id": coordinator.agent_id, "role": "owner"}
+        assert (
+            dbsession.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == pool_numbers[0].id,
+                SharedPlatformRoute.contact_number == user.whatsapp_number,
+            )
+            .first()
+            is None
+        )
+
+    def test_unknown_universal_sender_fails_closed(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-known@test.com", "+15550620001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, "+15550629999")
+
+        assert result == {"action": "reject_cold"}
+
+    def test_multiple_owned_unities_fail_closed(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-ambiguous@test.com", "+15550630001")
+        org = _make_org(dbsession, user, "UnityAmbiguous")
+        personal = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        org_coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org.id,
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, personal, pool_numbers[0])
+        _enable_whatsapp(dbsession, org_coordinator, pool_numbers[0])
+
+        result = dao.resolve_inbound(pool_numbers[0].number, user.whatsapp_number)
+
+        assert result == {"action": "reject_ambiguous"}
+
+    def test_universal_pool_is_excluded_from_generic_assignment(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "regular-assignment@test.com", "+15550640001")
+        assistant = _make_assistant(dbsession, user, "Regular")
+
+        pool = dao.assign_pool_number(assistant.agent_id, [user.id])
+
+        assert pool.number == pool_numbers[1].number
+
+    def test_universal_unity_owner_route_is_ephemeral(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-owner-route@test.com", "+15550650001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        route, resolution = dao.get_or_create_route(
+            coordinator.agent_id,
+            user.whatsapp_number,
+        )
+
+        assert resolution is None
+        assert route.pool_number.number == pool_numbers[0].number
+        assert route.assistant_id == coordinator.agent_id
+        assert (
+            dbsession.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == pool_numbers[0].id,
+                SharedPlatformRoute.contact_number == user.whatsapp_number,
+            )
+            .first()
+            is None
+        )
+
+    def test_universal_unity_external_route_fails_without_reassigning(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+        )
+        user = _make_user(dbsession, "unity-external-route@test.com", "+15550660001")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        contact = _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        with pytest.raises(ValueError, match="verified platform users"):
+            dao.get_or_create_route(coordinator.agent_id, "+15550669999")
+
+        dbsession.refresh(contact)
+        assert contact.contact_value == pool_numbers[0].number
 
 
 # ============================================================================
@@ -3163,6 +3358,236 @@ class TestCallPermissionEndpoints:
         )
         assert resp.status_code == status.HTTP_200_OK
         assert resp.json()["permitted"] is False
+
+
+class TestCallSessionEndpoints:
+    """Endpoint-level tests for WhatsApp call-session persistence."""
+
+    @pytest.fixture
+    async def test_user(self, client: AsyncClient):
+        return await create_test_user(client, "call_session@test.com")
+
+    @pytest.fixture
+    async def test_assistant(self, test_user, dbsession: Session):
+        assistant = Assistant(user_id=test_user["id"], first_name="CallSessionBot")
+        dbsession.add(assistant)
+        dbsession.commit()
+        return assistant
+
+    async def test_create_lookup_update_and_upsert_call_session(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        test_assistant: Assistant,
+    ):
+        payload = {
+            "provider": "twilio",
+            "provider_call_sid": "CA_test_call_session",
+            "channel": "whatsapp_call",
+            "assistant_id": test_assistant.agent_id,
+            "from_number": "+15550100001",
+            "to_number": "+15550100002",
+            "pool_number": "+15550100002",
+            "conference_name": "unity_wa_conf_CA_test_call_session",
+            "livekit_room": "unity_wa_room_1_CA_test_call_session",
+            "status": "created",
+            "metadata": {"sip_dispatch_rule_id": "rule-1"},
+        }
+
+        create_resp = await client.post(
+            "/v0/admin/whatsapp/call-session",
+            json=payload,
+            headers=ADMIN_HEADERS,
+        )
+        assert create_resp.status_code == status.HTTP_200_OK, create_resp.text
+        created = create_resp.json()
+        assert created["provider_call_sid"] == payload["provider_call_sid"]
+        assert created["assistant_id"] == test_assistant.agent_id
+        assert created["metadata"]["sip_dispatch_rule_id"] == "rule-1"
+
+        lookup_resp = await client.get(
+            "/v0/admin/whatsapp/call-session/CA_test_call_session",
+            headers=ADMIN_HEADERS,
+        )
+        assert lookup_resp.status_code == status.HTTP_200_OK
+        assert lookup_resp.json()["livekit_room"] == payload["livekit_room"]
+
+        update_resp = await client.patch(
+            "/v0/admin/whatsapp/call-session",
+            json={
+                "provider": "twilio",
+                "provider_call_sid": "CA_test_call_session",
+                "status": "recording_ready",
+                "recording_url": "https://storage.googleapis.com/bucket/call.mp3",
+                "metadata": {"egress_id": "egress-1"},
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert update_resp.status_code == status.HTTP_200_OK, update_resp.text
+        updated = update_resp.json()
+        assert updated["status"] == "recording_ready"
+        assert updated["recording_url"].endswith("/call.mp3")
+        assert updated["metadata"] == {
+            "sip_dispatch_rule_id": "rule-1",
+            "egress_id": "egress-1",
+        }
+
+        upsert_resp = await client.post(
+            "/v0/admin/whatsapp/call-session",
+            json={**payload, "status": "in-progress"},
+            headers=ADMIN_HEADERS,
+        )
+        assert upsert_resp.status_code == status.HTTP_200_OK, upsert_resp.text
+        assert upsert_resp.json()["id"] == created["id"]
+        assert upsert_resp.json()["status"] == "in-progress"
+        assert (
+            dbsession.query(CommunicationCallSession)
+            .filter_by(provider="twilio", provider_call_sid="CA_test_call_session")
+            .count()
+            == 1
+        )
+
+
+class TestSharedCoordinatorEmailRouting:
+    """Shared coordinator email routing uses the universal owner model."""
+
+    def test_universal_email_contact_can_be_shared_by_coordinators(
+        self,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user1 = _make_user(dbsession, "shared-email-owner-1@test.com")
+        user2 = _make_user(dbsession, "shared-email-owner-2@test.com")
+        coordinator1 = _make_assistant(
+            dbsession,
+            user1,
+            "Unity",
+            is_coordinator=True,
+        )
+        coordinator2 = _make_assistant(
+            dbsession,
+            user2,
+            "Unity",
+            is_coordinator=True,
+        )
+
+        contact1 = ensure_coordinator_universal_email_contact(
+            dbsession,
+            coordinator=coordinator1,
+        )
+        contact2 = ensure_coordinator_universal_email_contact(
+            dbsession,
+            coordinator=coordinator2,
+        )
+        dbsession.flush()
+
+        assert contact1.contact_value == email_address
+        assert contact2.contact_value == email_address
+        assert contact1.metadata_ == {"universal_unity": True}
+        assert contact2.metadata_ == {"universal_unity": True}
+
+    async def test_email_resolve_routes_verified_owner(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user = _make_user(dbsession, "shared-email-owner@test.com")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_shared_email(dbsession, coordinator, email_address)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={"mailbox": email_address, "sender": user.email},
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == {
+            "assistant_id": coordinator.agent_id,
+            "role": "owner",
+            "action": None,
+        }
+
+    async def test_email_resolve_rejects_unknown_sender(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user = _make_user(dbsession, "shared-email-cold-owner@test.com")
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_shared_email(dbsession, coordinator, email_address)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={"mailbox": email_address, "sender": "cold-sender@test.com"},
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["action"] == "reject_cold"
+
+    async def test_email_resolve_rejects_ambiguous_owned_coordinators(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        email_address = get_universal_unity_email_address()
+        user = _make_user(dbsession, "shared-email-ambiguous@test.com")
+        personal = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        organization = _make_org(dbsession, user)
+        org_scoped = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org_id=organization.id,
+            is_coordinator=True,
+        )
+        _enable_shared_email(dbsession, personal, email_address)
+        _enable_shared_email(dbsession, org_scoped, email_address)
+        dbsession.commit()
+
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={"mailbox": email_address, "sender": user.email},
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["action"] == "reject_ambiguous"
+
+    async def test_email_resolve_404_for_non_shared_mailbox(
+        self,
+        client: AsyncClient,
+    ):
+        response = await client.get(
+            "/v0/admin/email/resolve",
+            params={
+                "mailbox": "specialist@unify.ai",
+                "sender": "owner@test.com",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 # ============================================================================

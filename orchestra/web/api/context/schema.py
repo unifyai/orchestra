@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from orchestra.web.api.utils.safe_text import OptionalSafeText
+
 
 class ForeignKeyConfig(BaseModel):
     """Foreign key configuration for referential integrity."""
@@ -70,7 +72,7 @@ class ForeignKeyConfig(BaseModel):
             raise ValueError("Foreign key name must be a string")
 
         # For nested paths, use the path parser for validation
-        from orchestra_core.db.utils import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         if FKPathParser.is_nested_path(v):
             # Validate nested path syntax
@@ -119,7 +121,7 @@ class ForeignKeyConfig(BaseModel):
 
     def model_post_init(self, __context):
         """Auto-populate nested path metadata after validation."""
-        from orchestra_core.db.utils import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         # Check if this is a nested path
         self.is_nested = FKPathParser.is_nested_path(self.name)
@@ -151,7 +153,7 @@ class ContextCreateRequest(BaseModel):
             "example": "experiment1/trial1",
         },
     )
-    description: str | None = Field(
+    description: OptionalSafeText = Field(
         default=None,
         description="Optional description of the context",
         example="Context for experiment 1 trial 1",

@@ -10,36 +10,30 @@ class SignedUrlRequest(BaseModel):
 
     gcs_uri: str = Field(
         ...,
-        description="GCS URI of the object (e.g., gs://bucket/path/to/object)",
+        description="GCS URI of the object, for example gs://bucket/path/to/object",
         examples=["gs://bucket/images/photo.jpg"],
     )
     expiration_minutes: int = Field(
         default=60,
         ge=1,
-        le=10080,  # Max 7 days
-        description="URL expiration time in minutes (1-10080, default 60)",
+        le=10080,
+        description="URL expiration time in minutes.",
     )
     download: bool = Field(
         default=False,
-        description="If true, the signed URL will force download with Content-Disposition: attachment",
+        description="When true, the URL includes an attachment Content-Disposition.",
     )
     filename: Optional[str] = Field(
         default=None,
-        description="Override the filename in Content-Disposition header (only used when download=True)",
+        description="Filename override for attachment downloads.",
     )
 
 
 class SignedUrlResponse(BaseModel):
     """Response body containing the signed URL."""
 
-    signed_url: str = Field(
-        ...,
-        description="Temporary signed URL for accessing the object",
-    )
-    expires_in_minutes: int = Field(
-        ...,
-        description="URL expiration time in minutes",
-    )
+    signed_url: str
+    expires_in_minutes: int
 
 
 class DownloadRequest(BaseModel):
@@ -47,23 +41,14 @@ class DownloadRequest(BaseModel):
 
     gcs_uri: str = Field(
         ...,
-        description="GCS URI of the object (e.g., gs://bucket/path/to/object)",
+        description="GCS URI of the object, for example gs://bucket/path/to/object",
         examples=["gs://bucket/images/photo.jpg"],
     )
 
 
 class DownloadResponse(BaseModel):
-    """Response body containing the object content."""
+    """Response body containing object content."""
 
-    content_base64: str = Field(
-        ...,
-        description="Base64-encoded content of the object",
-    )
-    content_type: Optional[str] = Field(
-        default=None,
-        description="MIME type of the object if available",
-    )
-    size_bytes: int = Field(
-        ...,
-        description="Size of the object in bytes",
-    )
+    content_base64: str
+    content_type: Optional[str] = None
+    size_bytes: int

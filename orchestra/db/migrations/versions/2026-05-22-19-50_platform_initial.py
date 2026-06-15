@@ -2,13 +2,13 @@
 
 Replaces the 259-revision platform alembic chain with a single migration
 that creates the full platform schema (everything outside the 13 kernel
-tables that orchestra-core's `0001_core_initial` already created). The
+tables that orchestra's `0001_core_initial` already created). The
 schema body is generated verbatim from a `pg_dump` of a fresh database
 that ran the historical 259-chain to its head, so every constraint name,
 index, function, and partial-unique definition matches production
 exactly.
 
-`down_revision` points at orchestra-core's `0001_core_initial` so the
+`down_revision` points at orchestra's `0001_core_initial` so the
 two chains formally converge: a fresh database now runs core then
 platform sequentially with no `DuplicateTable` conflicts.
 

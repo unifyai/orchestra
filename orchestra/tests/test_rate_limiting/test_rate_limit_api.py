@@ -456,6 +456,7 @@ class TestStagingBypass:
             "orchestra.web.api.utils.rate_limiting.settings",
         ) as mock_settings:
             mock_settings.is_staging = True
+            mock_settings.charges_billing = False
             mock_settings.environment = "production"
 
             response = await client.post(

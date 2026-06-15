@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Tab
-from orchestra_core.db.utils import get_next_order_value
+from orchestra.db.utils import get_next_order_value
 
 
 class TabDAO:

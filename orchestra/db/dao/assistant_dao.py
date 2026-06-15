@@ -4,8 +4,9 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from zoneinfo import available_timezones
 
+import sqlalchemy as sa
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
@@ -21,6 +22,26 @@ class AssistantSpendingCapResult:
 
 
 VALID_TIMEZONES = available_timezones()
+
+
+def _require_assistant_scope(
+    organization_id: Optional[int],
+    user_id: Optional[str],
+) -> None:
+    """Enforce XOR on owner-scoped assistant lookups.
+
+    Used by routing-oriented APIs (``coordinator``, ``resolve_token``)
+    that operate on either an organization or a personal user but never
+    both at once. Mirrors the polymorphic owner contract that
+    :class:`~orchestra.db.models.orchestra_models.SlackInstall` carries.
+    """
+    has_org = organization_id is not None
+    has_user = user_id is not None
+    if has_org == has_user:
+        raise ValueError(
+            "Provide exactly one of organization_id or user_id "
+            f"(got organization_id={organization_id!r}, user_id={user_id!r}).",
+        )
 
 
 class AssistantDAO:
@@ -39,6 +60,14 @@ class AssistantDAO:
     def __init__(self, session: Session):
         self.session = session
 
+    @staticmethod
+    def _normalize_name_part(value: Optional[str]) -> Optional[str]:
+        """Normalize optional name text for case-insensitive matching."""
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
+
     def create_assistant(
         self,
         user_id: str,
@@ -52,14 +81,12 @@ class AssistantDAO:
         profile_photo: Optional[str] = None,
         profile_video: Optional[str] = None,
         desktop_mode: Optional[str] = None,
-        user_desktop_id: Optional[int] = None,
-        user_desktop_filesys_sync: bool = False,
         voice_id: Optional[str] = None,
         voice_provider: Optional[str] = None,
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
         is_local: bool = False,
-        deploy_env: str | None = None,
+        is_coordinator: bool = False,
         job_title: Optional[str] = None,
     ) -> Assistant:
         """
@@ -89,8 +116,6 @@ class AssistantDAO:
             profile_photo=profile_photo,
             profile_video=profile_video,
             desktop_mode=desktop_mode,
-            user_desktop_id=user_desktop_id,
-            user_desktop_filesys_sync=user_desktop_filesys_sync,
             about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
@@ -98,11 +123,51 @@ class AssistantDAO:
             voice_provider=voice_provider,
             timezone=timezone,
             is_local=is_local,
-            deploy_env=deploy_env,
+            is_coordinator=is_coordinator,
         )
         self.session.add(assistant)
         self.session.flush()
         return assistant
+
+    def find_by_natural_key(
+        self,
+        *,
+        user_id: str,
+        organization_id: Optional[int],
+        first_name: Optional[str],
+        surname: Optional[str],
+    ) -> Optional[Assistant]:
+        """Return an assistant with the same normalized natural-name key.
+
+        Organization scope:
+            ``organization_id + first_name + surname``
+
+        Personal scope:
+            ``user_id + first_name + surname`` with ``organization_id`` NULL
+        """
+        normalized_first_name = self._normalize_name_part(first_name)
+        if normalized_first_name is None:
+            return None
+        normalized_surname = self._normalize_name_part(surname) or ""
+
+        stmt = select(Assistant).where(
+            func.lower(func.trim(func.coalesce(Assistant.first_name, "")))
+            == normalized_first_name,
+            func.lower(func.trim(func.coalesce(Assistant.surname, "")))
+            == normalized_surname,
+        )
+        if organization_id is None:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
+        else:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+
+        rows = self.session.execute(
+            stmt.order_by(Assistant.created_at.asc(), Assistant.agent_id.asc()),
+        ).scalars()
+        return rows.first()
 
     def get_assistant_by_id(
         self,
@@ -157,6 +222,101 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
+    def coordinator(
+        self,
+        *,
+        organization_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Assistant]:
+        """Return the Coordinator assistant for an owner scope, if any.
+
+        The Coordinator handles cross-assistant administrative traffic
+        (Slack DMs to unknown contacts, ambiguous ``@app <token>``
+        mentions, org-wide announcements). Exactly one of
+        ``organization_id`` or ``user_id`` must be supplied:
+
+        * ``organization_id`` — the org's coordinator (one per org
+          thanks to ``ux_assistants_one_workspace_coordinator_per_membership``).
+        * ``user_id`` — the user's personal coordinator (one per user
+          among assistants with ``organization_id IS NULL``).
+        """
+        _require_assistant_scope(organization_id, user_id)
+        stmt = select(Assistant).where(Assistant.is_coordinator.is_(True))
+        if organization_id is not None:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+        else:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def resolve_token(
+        self,
+        token: str,
+        *,
+        organization_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+    ) -> list[Assistant]:
+        """Resolve a Slack ``@<app> <token>`` addressing token to assistants.
+
+        A token matches an assistant by any of three forms (all
+        case-insensitive, owner-scoped):
+
+        * **agent id** — when ``token`` is all digits, the numeric
+          ``agent_id``. Globally unique, so it is the guaranteed
+          disambiguator.
+        * **first name** — ``first_name`` on its own (convenient when
+          unique within the owner scope).
+        * **full name** — ``"first surname"`` (trimmed), the canonical
+          dedup form when two assistants share a first name.
+
+        Exactly one of ``organization_id`` or ``user_id`` must be
+        supplied:
+
+        * ``organization_id`` — search the org's assistants.
+        * ``user_id`` — search the user's personal assistants
+          (``organization_id IS NULL``).
+
+        An id match stays owner-scoped: an id belonging to a different
+        organization or user does not resolve, preserving cross-scope
+        isolation.
+
+        The caller decides the next step based on the result-list length:
+
+        * 0 → unknown token, route to coordinator with a hint.
+        * 1 → unambiguous, route to that assistant.
+        * >1 → ambiguous, route to coordinator with a disambiguation hint.
+        """
+        _require_assistant_scope(organization_id, user_id)
+        token = (token or "").strip()
+        if not token:
+            return []
+        normalized = token.lower()
+        full_name = sa.func.trim(
+            sa.func.concat(
+                Assistant.first_name,
+                " ",
+                sa.func.coalesce(Assistant.surname, ""),
+            ),
+        )
+        match_conditions = [
+            sa.func.lower(Assistant.first_name) == normalized,
+            sa.func.lower(full_name) == normalized,
+        ]
+        if token.isdigit():
+            match_conditions.append(Assistant.agent_id == int(token))
+        stmt = select(Assistant).where(or_(*match_conditions))
+        if organization_id is not None:
+            stmt = stmt.where(Assistant.organization_id == organization_id)
+        else:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id.is_(None),
+            )
+        stmt = stmt.order_by(Assistant.agent_id.asc())
+        return list(self.session.execute(stmt).scalars().all())
+
     def list_assistants_for_user(
         self,
         user_id: str,
@@ -166,6 +326,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        agent_id: Optional[int] = None,
         include_demo: bool = False,
         demo_only: bool = False,
     ) -> List[Assistant]:
@@ -256,17 +417,21 @@ class AssistantDAO:
                     ),
                 ),
             )
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 
     def list_all_org_assistants(
         self,
         organization_id: int,
+        requesting_user_id: Optional[str] = None,
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
+        agent_id: Optional[int] = None,
         include_demo: bool = False,
         demo_only: bool = False,
     ) -> List[Assistant]:
@@ -276,7 +441,13 @@ class AssistantDAO:
         This returns all assistants in the org, regardless of who created them.
         Should only be called after verifying the user has assistant:read permission.
 
+        When ``requesting_user_id`` is provided, org-scoped Coordinator rows are
+        visible only when owned by that user. Non-coordinator assistants remain
+        org-visible for collaborative workflows.
+
         :param organization_id: Organization ID.
+        :param requesting_user_id: Optional caller user_id for coordinator
+            visibility filtering.
         :param include_demo: If True, include demo assistants in results.
         :param demo_only: If True, only return demo assistants.
         :return: List of all assistants in the organization.
@@ -284,6 +455,13 @@ class AssistantDAO:
         stmt = select(Assistant).where(
             Assistant.organization_id == organization_id,
         )
+        if requesting_user_id is not None:
+            stmt = stmt.where(
+                or_(
+                    Assistant.is_coordinator.is_(False),
+                    Assistant.user_id == requesting_user_id,
+                ),
+            )
 
         # Demo filtering
         if demo_only:
@@ -342,6 +520,8 @@ class AssistantDAO:
                     ),
                 ),
             )
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 
@@ -799,10 +979,7 @@ class AssistantDAO:
 
         Updates ``last_correspondence_at`` and clears
         ``last_followup_sent_at`` so that a subsequent lapse can fire a
-        fresh follow-up. Deliberately does *not* clear
-        ``termination_initiated_at`` — cancelling an in-flight
-        termination requires an explicit brain decision, not mere
-        message traffic.
+        fresh re-engagement nudge.
 
         :param agent_id: Assistant agent ID.
         :param when: Timestamp of the correspondence event (tz-aware).
@@ -836,37 +1013,26 @@ class AssistantDAO:
         )
         return result.rowcount
 
-    def mark_termination_initiated(
+    def set_inactivity_followup_opt_out(
         self,
         agent_id: int,
-        when: datetime,
+        opted_out: bool,
     ) -> int:
-        """Mark an assistant as entering the pre-cleanup grace period.
+        """Opt an assistant in or out of inactivity re-engagement follow-ups.
+
+        Setting ``opted_out=True`` excludes this Coordinator from the
+        follow-up routine until it is cleared. Called when the boss
+        explicitly declines further follow-ups (and again to re-enable
+        them if they later re-engage).
 
         :param agent_id: Assistant agent ID.
-        :param when: Timestamp of the termination decision (tz-aware).
-        :return: Number of rows updated.
+        :param opted_out: New opt-out state.
+        :return: Number of rows updated (0 if agent_id does not exist).
         """
         result = self.session.execute(
             update(Assistant)
             .where(Assistant.agent_id == agent_id)
-            .values(termination_initiated_at=when),
-        )
-        return result.rowcount
-
-    def clear_termination_initiated(self, agent_id: int) -> int:
-        """Cancel an in-flight termination.
-
-        Called when the brain decides that fresh engagement should rescue
-        an assistant that had been marked for cleanup.
-
-        :param agent_id: Assistant agent ID.
-        :return: Number of rows updated.
-        """
-        result = self.session.execute(
-            update(Assistant)
-            .where(Assistant.agent_id == agent_id)
-            .values(termination_initiated_at=None),
+            .values(inactivity_followup_opted_out=opted_out),
         )
         return result.rowcount
 
@@ -877,79 +1043,69 @@ class AssistantDAO:
         include_demo: bool = False,
         include_local: bool = False,
     ) -> List[Assistant]:
-        """Return assistants whose next action is an inactivity follow-up.
+        """Return personal Coordinators whose owner is due a follow-up.
 
-        An assistant qualifies when its most recent correspondence
-        pre-dates ``followup_cutoff`` and no follow-up is already in
-        flight and it has not been marked for termination.
+        This is a *per-user* query: a user is due a re-engagement
+        follow-up when they have not interacted with **any** of their
+        assistants (the Coordinator included) for ``followup_cutoff``.
+        The returned rows are the users' personal Coordinators (the
+        assistant that follows up); ``last_followup_sent_at`` on the
+        Coordinator row records the last follow-up so we don't re-fire
+        every run.
 
-        :param followup_cutoff: Only consider assistants with
-            ``last_correspondence_at < followup_cutoff``.
+        Activity is the most recent ``last_correspondence_at`` across all
+        of a user's assistants. That column carries a ``server_default``
+        of ``now()`` at row creation, so a user who signed up and never
+        engaged still has a baseline timestamp (their signup time) and is
+        followed up with once the window elapses — no separate "never
+        engaged" case is needed.
+
+        The follow-up re-arms automatically: once the user engages again
+        (any assistant's ``last_correspondence_at`` moves past the
+        Coordinator's ``last_followup_sent_at``), a fresh lapse becomes
+        eligible. A follow-up already sent after the latest activity is
+        not repeated. Coordinators whose owner has opted out
+        (``inactivity_followup_opted_out``) are excluded entirely.
+
+        :param followup_cutoff: Activity older than this triggers a
+            follow-up.
         :param limit: Optional cap on the returned batch.
-        :param include_demo: Include demo assistants (default: False).
-        :param include_local: Include ``is_local=True`` (local-runtime
-            test) assistants (default: False).
-        :return: Candidate assistants.
+        :param include_demo: Include demo assistants in the activity
+            aggregate and as Coordinators (default: False).
+        :param include_local: Include ``is_local=True`` assistants
+            (default: False).
+        :return: Personal Coordinator rows to follow up with.
         """
-        stmt = select(Assistant).where(
-            Assistant.last_correspondence_at.isnot(None),
-            Assistant.last_correspondence_at < followup_cutoff,
-            Assistant.last_followup_sent_at.is_(None),
-            Assistant.termination_initiated_at.is_(None),
+        activity_query = select(
+            Assistant.user_id.label("user_id"),
+            func.max(Assistant.last_correspondence_at).label("last_activity"),
+        ).where(Assistant.user_id.isnot(None))
+        if not include_demo:
+            activity_query = activity_query.where(Assistant.demo_id.is_(None))
+        if not include_local:
+            activity_query = activity_query.where(Assistant.is_local.is_(False))
+        activity_subq = activity_query.group_by(Assistant.user_id).subquery()
+
+        stmt = (
+            select(Assistant)
+            .join(activity_subq, activity_subq.c.user_id == Assistant.user_id)
+            .where(
+                Assistant.is_coordinator.is_(True),
+                Assistant.organization_id.is_(None),
+                Assistant.inactivity_followup_opted_out.is_(False),
+                activity_subq.c.last_activity.isnot(None),
+                activity_subq.c.last_activity < followup_cutoff,
+                or_(
+                    Assistant.last_followup_sent_at.is_(None),
+                    Assistant.last_followup_sent_at < activity_subq.c.last_activity,
+                ),
+            )
         )
         if not include_demo:
             stmt = stmt.where(Assistant.demo_id.is_(None))
         if not include_local:
             stmt = stmt.where(Assistant.is_local.is_(False))
-        stmt = stmt.order_by(Assistant.last_correspondence_at.asc())
-        if limit is not None:
-            stmt = stmt.limit(limit)
-        return list(self.session.execute(stmt).scalars().all())
-
-    def find_auto_cleanup_candidates(
-        self,
-        cleanup_cutoff: datetime,
-        limit: Optional[int] = None,
-        include_demo: bool = False,
-        include_local: bool = False,
-    ) -> List[Assistant]:
-        """Return assistants eligible for deprovision + hard-delete.
-
-        Two paths feed this query:
-          * **Silent** — ``last_followup_sent_at < cleanup_cutoff`` with
-            no fresh inbound since. The inbound-clears-followup rule in
-            :meth:`touch_last_correspondence_at` makes the mere presence
-            of ``last_followup_sent_at`` a sufficient stand-in for "no
-            reply since the follow-up".
-          * **Explicit** — ``termination_initiated_at < cleanup_cutoff``,
-            set by the brain when the user declines to continue.
-
-        :param cleanup_cutoff: Only consider assistants whose relevant
-            timestamp pre-dates this value.
-        :param limit: Optional cap on the returned batch.
-        :param include_demo: Include demo assistants (default: False).
-        :param include_local: Include ``is_local=True`` (local-runtime
-            test) assistants (default: False).
-        :return: Candidate assistants.
-        """
-        stmt = select(Assistant).where(
-            or_(
-                and_(
-                    Assistant.termination_initiated_at.isnot(None),
-                    Assistant.termination_initiated_at < cleanup_cutoff,
-                ),
-                and_(
-                    Assistant.last_followup_sent_at.isnot(None),
-                    Assistant.last_followup_sent_at < cleanup_cutoff,
-                    Assistant.termination_initiated_at.is_(None),
-                ),
-            ),
-        )
-        if not include_demo:
-            stmt = stmt.where(Assistant.demo_id.is_(None))
-        if not include_local:
-            stmt = stmt.where(Assistant.is_local.is_(False))
-        stmt = stmt.order_by(Assistant.agent_id.asc())
+        stmt = stmt.order_by(activity_subq.c.last_activity.asc())
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.session.execute(stmt).scalars().all())

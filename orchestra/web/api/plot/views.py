@@ -10,13 +10,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.plot_dao import PlotDAO, TokenGenerationError
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Plot, Project
 from orchestra.settings import settings
 from orchestra.web.api.plot.llm_inference import (

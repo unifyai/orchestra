@@ -10,7 +10,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.permission_dao import PermissionDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.roles.schema import (
     PermissionResponse,
     RoleCreate,

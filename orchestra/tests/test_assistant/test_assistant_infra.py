@@ -95,6 +95,7 @@ def mock_all_infra(dbsession):
                 "orchestra.web.api.assistant.views.settings",
             ) as mock_settings:
                 mock_settings.is_staging = True
+                mock_settings.charges_billing = False
                 with patch(
                     "orchestra.web.api.assistant.views.get_db_session",
                     side_effect=_mock_get_db_session_generator(dbsession),
@@ -713,10 +714,10 @@ async def test_org_assistant_with_infra_creates_org_assistants_project(
     """Test that org assistant with infra creates org Assistants project."""
     org_ctx = await _create_org_with_approved_owner(client)
 
-    # Verify no Assistants project exists yet
+    # Org coordinator bootstrap already created the Assistants project.
     projects_resp = await client.get("/v0/projects", headers=org_ctx["org_headers"])
     assert projects_resp.status_code == 200
-    assert "Assistants" not in projects_resp.json()
+    assert "Assistants" in projects_resp.json()
 
     payload = {
         "first_name": "OrgProject",

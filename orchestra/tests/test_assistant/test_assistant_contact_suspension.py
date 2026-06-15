@@ -148,13 +148,11 @@ def _make_ba(
     dbsession: Session,
     credits: float = 100.0,
     account_status: str = "ACTIVE",
-    billing_email: str | None = None,
     stripe_customer_id: str | None = None,
 ) -> BillingAccount:
     ba = BillingAccount(
         credits=Decimal(str(credits)),
         account_status=account_status,
-        billing_email=billing_email,
         stripe_customer_id=stripe_customer_id,
     )
     dbsession.add(ba)
@@ -1231,16 +1229,12 @@ class TestEmailHelpers:
         emails = get_notification_emails_for_ba(dbsession, org_ba)
         assert "owner@test.com" in emails
 
-    def test_get_notification_emails_includes_billing_email(
+    def test_get_notification_emails_uses_user_email(
         self,
         dbsession: Session,
     ):
-        """If BA has billing_email set, it's included in recipients."""
-        ba = _make_ba(
-            dbsession,
-            credits=0,
-            billing_email="billing@corp.com",
-        )
+        """Recipients come from the linked user (billing email is Stripe-only)."""
+        ba = _make_ba(dbsession, credits=0)
         user = _make_user(
             dbsession,
             "email_u3",
@@ -1251,24 +1245,20 @@ class TestEmailHelpers:
 
         emails = get_notification_emails_for_ba(dbsession, ba)
         assert "user@test.com" in emails
-        assert "billing@corp.com" in emails
 
     def test_get_notification_emails_no_duplicates(self, dbsession: Session):
-        """If billing_email equals user email, only one entry is returned."""
-        ba = _make_ba(
-            dbsession,
-            credits=0,
-            billing_email="same@test.com",
-        )
-        user = _make_user(
+        """A user who is also the org owner only appears once."""
+        org_ba = _make_ba(dbsession, credits=0)
+        owner = _make_user(
             dbsession,
             "email_u4",
-            ba,
+            org_ba,
             email="same@test.com",
         )
+        _make_org(dbsession, owner, org_ba, name="DedupOrg")
         dbsession.flush()
 
-        emails = get_notification_emails_for_ba(dbsession, ba)
+        emails = get_notification_emails_for_ba(dbsession, org_ba)
         assert emails.count("same@test.com") == 1
 
 

@@ -167,27 +167,6 @@ async def test_link_account(client: AsyncClient):
     assert response.status_code == 200, response.json()
 
 
-@pytest.mark.anyio
-async def test_set_user_tier(client: AsyncClient):
-    """Test setting user tier."""
-    # Create user
-    url = "/v0/admin/user"
-    params = {"email": "crud_tier@example.com"}
-    response = await client.post(url, json=params, headers=HEADERS)
-    user_id = response.json()["id"]
-
-    # Set tier (endpoint moved to admin /billing/tier, backward-compat at /user/tier)
-    url = "/v0/admin/billing/tier"
-    response = await client.put(
-        url,
-        params={"user_id": user_id, "tier": "enterprise"},
-        headers=HEADERS,
-    )
-    if response.status_code == 404:
-        pytest.skip("Billing tier endpoint not available")
-    assert response.status_code == 200, response.json()
-
-
 # ---------------------------------------------------------------------------
 # Self-healing: missing API key tests
 # ---------------------------------------------------------------------------

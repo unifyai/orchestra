@@ -8,22 +8,16 @@ Covers:
    - Mixed contact types (phone, email, whatsapp)
    - Cost fallback when country_code is not in AssistantContactCost table
    - Multiple billing accounts in a single run
-   - Credits deducted correctly / auto-recharge handling
+   - Credits deducted correctly
    - Admin endpoint: POST /v0/admin/billing/resource-levy
-2. Monthly credits invoicer (invoice_month):
-   - Aggregates PENDING_INVOICE recharges by billing account
-   - Creates Stripe invoice per billing account
-   - Skips accounts without stripe_customer_id
-   - Handles mixed user + org recharges
-   - Includes tax ID in invoice when present
-3. Monthly metered invoicer (invoice_metered_month):
+2. Monthly metered invoicer (invoice_metered_month):
    - End-to-end ``max(commit, usage) - grants`` formula via the public
      entrypoint with realistic period-windowed ledger data
    - Collection-method dispatch (SEND_INVOICE_NET_30 vs AUTO_CARD)
    - Idempotency, isolation across accounts on partial Stripe failures
    - Suspended-account policy (still invoiced, status stamped to detail)
    - Skips accounts without ``stripe_customer_id``; never touches CREDITS
-4. FX policies driving ``invoice_metered_month``:
+3. FX policies driving ``invoice_metered_month``:
    - USD (``fx_policy IS NULL``) — no conversion
    - LOCKED_RATE (template-pinned)
    - SPOT (Frankfurter live, fetched at invoice time)
@@ -50,7 +44,6 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
     User,
 )
-from orchestra.lib.billing import queue_auto_recharge
 from orchestra.routines.assistant_contact_levy import levy_provisioned_resources
 from orchestra.tests.test_billing.conftest import (
     make_assistant,
@@ -58,6 +51,7 @@ from orchestra.tests.test_billing.conftest import (
     make_contact,
     make_org,
     make_user,
+    make_user_with_billing,
 )
 
 # ============================================================================
@@ -560,18 +554,18 @@ class TestLevyCreditManagement:
         dbsession.refresh(ba)
         assert ba.credits == Decimal("100") - Decimal("5.00")
 
-    @patch(
-        "orchestra.routines.assistant_contact_levy.queue_auto_recharge",
-        return_value=True,
-    )
-    def test_auto_recharge_triggered(self, mock_ar, dbsession: Session):
-        """Auto-recharge is triggered when credits drop below threshold."""
+    def test_levy_does_not_trigger_auto_recharge(self, dbsession: Session):
+        """The levy no longer queues a one-time auto-recharge top-up.
+
+        Self-serve auto-recharge was retired with the subscription model
+        (CREDITS accounts are now on monthly subscription plans with opt-in
+        auto-increment handled at the deduction path). The levy still
+        deducts the contact cost; depletion drops the account into the
+        grace-period path rather than triggering a top-up.
+        """
         ba = make_billing_account(
             dbsession,
             credits=12,
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
             stripe_customer_id="cus_test_ar",
         )
         user = make_user(dbsession, "cred_u2", ba)
@@ -588,45 +582,11 @@ class TestLevyCreditManagement:
 
         result = levy_provisioned_resources(2026, 3, session=dbsession)
 
-        # Credits: 12 - 5 = 7, which is below threshold of 10
         ar = [r for r in result.account_results if r.billing_account_id == ba.id]
         assert len(ar) == 1
-        assert ar[0].auto_recharge_triggered is True
-        mock_ar.assert_called_once()
-
-    @patch("orchestra.routines.assistant_contact_levy.queue_auto_recharge")
-    def test_auto_recharge_not_triggered_without_stripe(
-        self,
-        mock_ar,
-        dbsession: Session,
-    ):
-        """Auto-recharge is NOT triggered if no stripe_customer_id."""
-        ba = make_billing_account(
-            dbsession,
-            credits=12,
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-            stripe_customer_id=None,  # No stripe!
-        )
-        user = make_user(dbsession, "cred_u3", ba)
-        asst = make_assistant(dbsession, user.id, first_name="CredNoStripe")
-        make_contact(
-            dbsession,
-            asst.agent_id,
-            contact_type="whatsapp",
-            contact_value="+15553010003",
-            provider="twilio",
-            country_code=None,
-        )
-        dbsession.flush()
-
-        result = levy_provisioned_resources(2026, 3, session=dbsession)
-
-        ar = [r for r in result.account_results if r.billing_account_id == ba.id]
-        assert len(ar) == 1
-        assert ar[0].auto_recharge_triggered is False
-        mock_ar.assert_not_called()
+        # Levy still deducted (12 - 5 = 7) and no top-up fired.
+        dbsession.refresh(ba)
+        assert ba.credits == Decimal("7")
 
     def test_stays_active_when_negative(self, dbsession: Session):
         """Account stays ACTIVE when credits go negative (no status change)."""
@@ -1151,328 +1111,6 @@ class TestLevyResultStructure:
 
 
 # ============================================================================
-# Monthly Invoicer Routine
-# ============================================================================
-
-
-class TestMonthlyInvoicer:
-    """Tests for the invoice_month routine."""
-
-    @pytest.fixture(autouse=True)
-    def _mock_configure_stripe(self, monkeypatch):
-        import orchestra.lib.billing
-
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-    def _make_recharge(
-        self,
-        dbsession: Session,
-        ba: BillingAccount,
-        quantity: float = 100,
-        invoice_group=None,
-    ):
-        import datetime as _dt
-
-        from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-        from orchestra_core.lib.time import month_end_utc
-
-        if invoice_group is None:
-            now = _dt.datetime.now(_dt.timezone.utc)
-            invoice_group = month_end_utc(now)
-
-        r = Recharge(
-            billing_account_id=ba.id,
-            quantity=Decimal(str(quantity)),
-            amount_usd=Decimal(str(quantity)),
-            status=RechargeStatus.PENDING_INVOICE,
-            invoice_group=invoice_group,
-            type="usage",
-        )
-        dbsession.add(r)
-        dbsession.flush()
-        return r
-
-    def test_aggregates_recharges_and_creates_invoice(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """Invoicer aggregates PENDING_INVOICE rows and creates a Stripe invoice."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        calls = {"item": [], "invoice": []}
-
-        def _inv_create(**kw):
-            calls["invoice"].append(kw)
-            return SimpleNamespace(id="in_test_agg")
-
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: calls["item"].append(kw)),
-            Invoice=SimpleNamespace(create=_inv_create),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        ba = make_billing_account(dbsession, stripe_customer_id="cus_inv_agg")
-        make_user(dbsession, "inv_agg_user", ba)
-        now = _dt.datetime.now(_dt.timezone.utc)
-        r1 = self._make_recharge(dbsession, ba, quantity=50)
-        r2 = self._make_recharge(dbsession, ba, quantity=30)
-        dbsession.flush()
-
-        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        from orchestra.db.models.orchestra_models import RechargeStatus
-
-        dbsession.refresh(r1)
-        dbsession.refresh(r2)
-        assert r1.status == RechargeStatus.INVOICE_CREATED
-        assert r2.status == RechargeStatus.INVOICE_CREATED
-        assert r1.stripe_invoice_id == "in_test_agg"
-        assert r2.stripe_invoice_id == "in_test_agg"
-        assert len(calls["invoice"]) == 1
-        assert result.accounts_invoiced == 1
-        assert result.accounts_failed == 0
-
-    def test_skips_account_without_stripe_customer(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """Invoicer skips billing accounts without a stripe_customer_id."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        calls = {"invoice": []}
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: None),
-            Invoice=SimpleNamespace(
-                create=lambda **kw: calls["invoice"].append(kw)
-                or SimpleNamespace(id="in_x"),
-            ),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        ba = make_billing_account(dbsession, stripe_customer_id=None)
-        make_user(dbsession, "inv_no_cus", ba)
-        now = _dt.datetime.now(_dt.timezone.utc)
-        r = self._make_recharge(dbsession, ba, quantity=50)
-        dbsession.flush()
-
-        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        from orchestra.db.models.orchestra_models import RechargeStatus
-
-        dbsession.refresh(r)
-        assert r.status == RechargeStatus.PENDING_INVOICE
-        assert len(calls["invoice"]) == 0
-        assert result.accounts_skipped == 1
-        assert result.accounts_invoiced == 0
-
-    def test_handles_multiple_billing_accounts(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """Invoicer creates separate invoices per billing account."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        invoice_counter = {"n": 0}
-
-        def _inv_create(**kw):
-            invoice_counter["n"] += 1
-            return SimpleNamespace(id=f"in_multi_{invoice_counter['n']}")
-
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: None),
-            Invoice=SimpleNamespace(create=_inv_create),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        ba1 = make_billing_account(dbsession, stripe_customer_id="cus_m1")
-        ba2 = make_billing_account(dbsession, stripe_customer_id="cus_m2")
-        make_user(dbsession, "inv_m1", ba1)
-        make_user(dbsession, "inv_m2", ba2)
-        now = _dt.datetime.now(_dt.timezone.utc)
-        r1 = self._make_recharge(dbsession, ba1, quantity=40)
-        r2 = self._make_recharge(dbsession, ba2, quantity=60)
-        dbsession.flush()
-
-        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        from orchestra.db.models.orchestra_models import RechargeStatus
-
-        dbsession.refresh(r1)
-        dbsession.refresh(r2)
-        assert r1.status == RechargeStatus.INVOICE_CREATED
-        assert r2.status == RechargeStatus.INVOICE_CREATED
-        assert r1.stripe_invoice_id != r2.stripe_invoice_id
-        assert invoice_counter["n"] == 2
-        assert result.accounts_invoiced == 2
-
-    def test_stripe_failure_isolates_to_one_account(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """A Stripe error for one account does not prevent others from invoicing."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        call_count = {"n": 0}
-
-        def _inv_create(**kw):
-            call_count["n"] += 1
-            if kw["customer"] == "cus_fail":
-                raise Exception("Simulated Stripe failure")
-            return SimpleNamespace(id=f"in_ok_{call_count['n']}")
-
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: None),
-            Invoice=SimpleNamespace(create=_inv_create),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        ba_fail = make_billing_account(dbsession, stripe_customer_id="cus_fail")
-        ba_ok = make_billing_account(dbsession, stripe_customer_id="cus_ok")
-        make_user(dbsession, "inv_fail", ba_fail)
-        make_user(dbsession, "inv_ok", ba_ok)
-        now = _dt.datetime.now(_dt.timezone.utc)
-        r_fail = self._make_recharge(dbsession, ba_fail, quantity=40)
-        r_ok = self._make_recharge(dbsession, ba_ok, quantity=60)
-        dbsession.flush()
-
-        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        from orchestra.db.models.orchestra_models import RechargeStatus
-
-        dbsession.refresh(r_fail)
-        dbsession.refresh(r_ok)
-        assert r_fail.status == RechargeStatus.PENDING_INVOICE
-        assert r_ok.status == RechargeStatus.INVOICE_CREATED
-        assert result.accounts_invoiced == 1
-        assert result.accounts_failed == 1
-        assert len(result.errors) == 1
-
-    def test_no_pending_rows_is_noop(self, dbsession: Session, monkeypatch):
-        """Invoicer does nothing when there are no PENDING_INVOICE rows."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        calls = {"invoice": []}
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: None),
-            Invoice=SimpleNamespace(
-                create=lambda **kw: calls["invoice"].append(kw)
-                or SimpleNamespace(id="in_x"),
-            ),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        now = _dt.datetime.now(_dt.timezone.utc)
-        result = invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        assert len(calls["invoice"]) == 0
-        assert result.accounts_invoiced == 0
-
-    def test_includes_tax_id_in_invoice(self, dbsession: Session, monkeypatch):
-        """Invoicer includes customer_tax_ids when billing account has tax_id."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        calls = {"invoice": []}
-
-        def _inv_create(**kw):
-            calls["invoice"].append(kw)
-            return SimpleNamespace(id="in_tax")
-
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: None),
-            Invoice=SimpleNamespace(create=_inv_create),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        ba = make_billing_account(dbsession, stripe_customer_id="cus_tax_inv")
-        ba.tax_id = "12-3456789"
-        ba.tax_id_type = "us_ein"
-        ba.billing_address = {"country": "US"}
-        make_user(dbsession, "inv_tax_user", ba)
-        now = _dt.datetime.now(_dt.timezone.utc)
-        self._make_recharge(dbsession, ba, quantity=100)
-        dbsession.flush()
-
-        invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        assert len(calls["invoice"]) == 1
-        inv_params = calls["invoice"][0]
-        assert "customer_tax_ids" in inv_params
-        assert inv_params["customer_tax_ids"][0]["type"] == "us_ein"
-        assert inv_params["customer_tax_ids"][0]["value"] == "12-3456789"
-
-    def test_prepaid_skip(self, dbsession: Session, monkeypatch):
-        """Pre-paid (PAID) recharge rows are NOT re-invoiced."""
-        import datetime as _dt
-        from types import SimpleNamespace
-
-        from orchestra.routines import monthly_credits_invoicer as invoicer_mod
-
-        calls = {"item": [], "invoice": []}
-        dummy_stripe = SimpleNamespace(
-            InvoiceItem=SimpleNamespace(create=lambda **kw: calls["item"].append(kw)),
-            Invoice=SimpleNamespace(
-                create=lambda **kw: calls["invoice"].append(kw)
-                or SimpleNamespace(id="in_skip"),
-            ),
-            StripeError=Exception,
-        )
-        monkeypatch.setattr(invoicer_mod, "stripe", dummy_stripe)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=100,
-            stripe_customer_id="cus_prepaid",
-        )
-        make_user(dbsession, "inv_prepaid", ba)
-        r = Recharge(
-            billing_account_id=ba.id,
-            quantity=500,
-            amount_usd=Decimal("50.00"),
-            status=RechargeStatus.PAID,
-            stripe_invoice_id="in_paid",
-            type="payment",
-        )
-        dbsession.add(r)
-        dbsession.flush()
-
-        now = _dt.datetime.now(_dt.timezone.utc)
-        invoicer_mod.invoice_month(now.year, now.month, session=dbsession)
-
-        dbsession.refresh(r)
-        assert r.status == RechargeStatus.PAID
-        assert calls["invoice"] == []
-        assert calls["item"] == []
-
-
-# ============================================================================
 # Monthly Metered Invoicer (invoice_metered_month)
 # ============================================================================
 
@@ -1633,14 +1271,24 @@ def _metered_stripe_mock(invoice_id: str = "in_test123") -> SimpleNamespace:
         invoice_calls.append(kw)
         return SimpleNamespace(id=f"{invoice_id}_{len(invoice_calls)}")
 
+    # The invoicer reads the billing country live from the Stripe customer
+    # (PII is no longer stored locally). Stripe returns a dict-like object,
+    # so back it with a plain dict whose country tests can set via
+    # ``_customer_state``.
+    customer_state: dict = {"country": None}
+
+    def _cust_retrieve(*a, **kw):
+        return {"address": {"country": customer_state["country"]}}
+
     return SimpleNamespace(
         InvoiceItem=SimpleNamespace(create=_ii_create),
         Invoice=SimpleNamespace(create=_inv_create),
         StripeError=Exception,
         InvalidRequestError=Exception,
-        Customer=SimpleNamespace(retrieve=lambda *a, **kw: SimpleNamespace()),
+        Customer=SimpleNamespace(retrieve=_cust_retrieve),
         _ii_calls=invoice_item_calls,
         _inv_calls=invoice_calls,
+        _customer_state=customer_state,
     )
 
 
@@ -2111,7 +1759,7 @@ class TestMonthlyMeteredInvoicer:
             Invoice=SimpleNamespace(create=_inv_create),
             StripeError=Exception,
             InvalidRequestError=Exception,
-            Customer=SimpleNamespace(retrieve=lambda *a, **kw: SimpleNamespace()),
+            Customer=SimpleNamespace(retrieve=lambda *a, **kw: {"address": {}}),
         )
         _patch_metered_stripe(monkeypatch, stripe_mod)
         _mute_metered_metrics(monkeypatch)
@@ -2989,9 +2637,9 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
         Returns ``(stripe_mock, invoice_call_kwargs)``. Encapsulates
         the boilerplate so each test stays focused on its assertion.
 
-        ``billing_country`` is stamped into ``BillingAccount.billing_address``
-        — required for EUR ``customer_balance`` (Stripe needs an IBAN
-        country) and harmless for every other currency.
+        ``billing_country`` is exposed via the mocked Stripe customer
+        (``Customer.retrieve``) — required for EUR ``customer_balance``
+        (Stripe needs an IBAN country) and harmless for every other currency.
         """
         import datetime as _dt
 
@@ -3031,8 +2679,8 @@ class TestMonthlyMeteredInvoicerPaymentMethods:
             dbsession.refresh(ba)
 
         if billing_country is not None:
-            ba.billing_address = {"country": billing_country}
-            dbsession.flush()
+            # Country now comes from the Stripe customer, not a local column.
+            stripe._customer_state["country"] = billing_country
 
         if preferred_payment_method_types is not None:
             BillingAccountDAO(dbsession).set_payment_preferences(
@@ -3706,663 +3354,6 @@ class TestMeteredInvoicerPeriodAverage:
         ]
 
 
-# ============================================================================
-# Auto-Recharge Queuing
-# ============================================================================
-
-
-def _mock_customer_with_pm():
-    """Return a mock Stripe Customer that has a default payment method."""
-    return SimpleNamespace(
-        invoice_settings=SimpleNamespace(
-            default_payment_method=SimpleNamespace(id="pm_test"),
-        ),
-        default_source=None,
-    )
-
-
-def _mock_customer_without_pm():
-    """Return a mock Stripe Customer with no payment method."""
-    return SimpleNamespace(
-        invoice_settings=SimpleNamespace(default_payment_method=None),
-        default_source=None,
-    )
-
-
-def _make_stripe_mock(
-    *,
-    invoice_item_create=None,
-    invoice_item_delete=None,
-    customer_retrieve=None,
-    stripe_error_cls=Exception,
-    invalid_request_cls=None,
-):
-    """Build a ``SimpleNamespace`` that quacks like the ``stripe`` module."""
-    if invoice_item_create is None:
-        invoice_item_create = lambda **kw: SimpleNamespace(id="ii_test")
-    if customer_retrieve is None:
-        customer_retrieve = lambda *a, **kw: _mock_customer_with_pm()
-    ii_ns = {"create": invoice_item_create}
-    if invoice_item_delete is not None:
-        ii_ns["delete"] = invoice_item_delete
-    invalid = invalid_request_cls or stripe_error_cls
-    return SimpleNamespace(
-        InvoiceItem=SimpleNamespace(**ii_ns),
-        Customer=SimpleNamespace(retrieve=customer_retrieve),
-        StripeError=stripe_error_cls,
-        InvalidRequestError=invalid,
-        error=SimpleNamespace(
-            StripeError=stripe_error_cls,
-            InvalidRequestError=invalid,
-        ),
-    )
-
-
-class TestAutoRechargeQueuing:
-    """Tests for the queue_auto_recharge function."""
-
-    def test_basic(self, dbsession: Session, monkeypatch):
-        """queue_auto_recharge creates a PENDING_INVOICE recharge record."""
-        import orchestra.lib.billing
-
-        mock_stripe = _make_stripe_mock()
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=100,
-            stripe_customer_id="cus_test123",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "test_user_ar", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is True
-        recharge = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).first()
-        assert recharge is not None
-        assert recharge.quantity == Decimal("50")
-        assert recharge.amount_usd == Decimal("50.00")
-        assert recharge.status == RechargeStatus.PENDING_INVOICE
-        assert recharge.type == "auto"
-
-    def test_month_end_grouping(self, dbsession: Session, monkeypatch):
-        """Auto-recharges are grouped by month-end date."""
-        import orchestra.lib.billing
-
-        mock_stripe = _make_stripe_mock()
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=100,
-            stripe_customer_id="cus_grouping_test",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "grouping_user", ba)
-        dbsession.commit()
-
-        queue_auto_recharge(dbsession, ba, 50)
-        queue_auto_recharge(dbsession, ba, 25)
-        dbsession.commit()
-
-        recharges = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).all()
-        assert len(recharges) == 2
-        assert recharges[0].invoice_group == recharges[1].invoice_group
-        assert (
-            recharges[0].invoice_group.day
-            == calendar.monthrange(
-                recharges[0].invoice_group.year,
-                recharges[0].invoice_group.month,
-            )[1]
-        )
-
-    def test_creates_stripe_invoice_item(self, dbsession: Session, monkeypatch):
-        """queue_auto_recharge creates both a DB record AND a Stripe invoice item."""
-        import orchestra.lib.billing
-
-        calls = []
-
-        def mock_create(**kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(
-                id="ii_test_123",
-                customer=kwargs["customer"],
-                amount=kwargs["amount"],
-            )
-
-        mock_stripe_module = _make_stripe_mock(invoice_item_create=mock_create)
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        stripe_customer_id = "cus_test_auto_recharge"
-        ba = make_billing_account(
-            dbsession,
-            credits=5,
-            stripe_customer_id=stripe_customer_id,
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "auto_recharge_stripe_test", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is True
-        recharge = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).first()
-        assert recharge is not None
-        assert recharge.quantity == Decimal("50")
-        assert recharge.status == RechargeStatus.PENDING_INVOICE
-
-        assert len(calls) == 1
-        assert calls[0]["customer"] == stripe_customer_id
-        assert calls[0]["amount"] == 5000
-        assert calls[0]["currency"] == "usd"
-        assert "auto-recharge" in calls[0]["description"]
-        assert calls[0]["metadata"]["recharge_type"] == "auto"
-
-    def test_no_stripe_customer_id(self, dbsession: Session, monkeypatch):
-        """Without a Stripe customer, no recharge is created and no credits granted."""
-        import orchestra.lib.billing
-
-        calls = []
-        mock_stripe_module = _make_stripe_mock(
-            invoice_item_create=lambda **kw: calls.append(kw) or None,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=5,
-            stripe_customer_id=None,
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "no_stripe_customer_user", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is False
-        recharge = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).first()
-        assert recharge is None
-        assert len(calls) == 0
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 5
-
-    def test_stripe_error_prevents_recharge(self, dbsession: Session, monkeypatch):
-        """When Stripe InvoiceItem creation fails, no recharge or credits are granted."""
-        import orchestra.lib.billing
-
-        class MockStripeError(Exception):
-            def __init__(self, message, param=None):
-                super().__init__(message)
-                self.param = param
-
-        mock_stripe_module = _make_stripe_mock(
-            invoice_item_create=lambda **kw: (_ for _ in ()).throw(
-                MockStripeError("Customer not found"),
-            ),
-            stripe_error_cls=MockStripeError,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=5,
-            stripe_customer_id="cus_error_test",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "stripe_error_user", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is False
-        recharge = dbsession.query(Recharge).filter_by(billing_account_id=ba.id).first()
-        assert recharge is None
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 5
-
-    def test_adds_credits_immediately(self, dbsession: Session, monkeypatch):
-        """queue_auto_recharge adds credits to the billing account right away."""
-        import orchestra.lib.billing
-
-        mock_stripe_module = _make_stripe_mock()
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=5,
-            stripe_customer_id="cus_ar_credits",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "ar_adds_credits_user", ba)
-        dbsession.commit()
-
-        assert float(ba.credits) == 5
-
-        result = queue_auto_recharge(dbsession, ba, 50, entity_label="test")
-        dbsession.commit()
-
-        assert result is True
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 55
-
-    def test_credits_survive_negative_balance(self, dbsession: Session, monkeypatch):
-        """Auto-recharge can bring a negative balance back to positive."""
-        import orchestra.lib.billing
-
-        mock_stripe_module = _make_stripe_mock()
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=-10,
-            stripe_customer_id="cus_ar_negative",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=100,
-        )
-        make_user(dbsession, "ar_negative_user", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 100, entity_label="test")
-        dbsession.commit()
-
-        assert result is True
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 90
-
-    def test_db_error_cleans_up_invoice_item(self, dbsession: Session, monkeypatch):
-        """If the DB write fails after InvoiceItem creation, the item is deleted."""
-        import orchestra.lib.billing
-
-        created_items = []
-        deleted_items = []
-
-        def mock_create(**kwargs):
-            item = SimpleNamespace(id="ii_cleanup_test")
-            created_items.append(item)
-            return item
-
-        def mock_delete(item_id):
-            deleted_items.append(item_id)
-
-        mock_stripe_module = _make_stripe_mock(
-            invoice_item_create=mock_create,
-            invoice_item_delete=mock_delete,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=5,
-            stripe_customer_id="cus_cleanup_test",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "cleanup_user", ba)
-        dbsession.commit()
-
-        original_add = dbsession.add
-
-        def exploding_add(obj):
-            if isinstance(obj, Recharge):
-                raise RuntimeError("Simulated DB failure")
-            return original_add(obj)
-
-        monkeypatch.setattr(dbsession, "add", exploding_add)
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-
-        assert result is False
-        assert len(created_items) == 1
-        assert len(deleted_items) == 1
-        assert deleted_items[0] == "ii_cleanup_test"
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 5
-
-    def test_no_payment_method_skips_and_disables(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """No payment method → auto-recharge skipped and disabled."""
-        import orchestra.lib.billing
-
-        ii_calls = []
-        mock_stripe_module = _make_stripe_mock(
-            invoice_item_create=lambda **kw: ii_calls.append(kw),
-            customer_retrieve=lambda *a, **kw: _mock_customer_without_pm(),
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=50,
-            stripe_customer_id="cus_no_pm",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "no_pm_user", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is False
-        assert ba.autorecharge is False
-        assert len(ii_calls) == 0
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 50
-
-    def test_deleted_customer_skips_and_disables(self, dbsession: Session, monkeypatch):
-        """Deleted Stripe customer → auto-recharge skipped and disabled."""
-        import orchestra.lib.billing
-
-        class MockInvalidRequest(Exception):
-            pass
-
-        def boom(*a, **kw):
-            raise MockInvalidRequest("No such customer")
-
-        mock_stripe_module = _make_stripe_mock(
-            customer_retrieve=boom,
-            invalid_request_cls=MockInvalidRequest,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=50,
-            stripe_customer_id="cus_deleted",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "deleted_cus_user", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is False
-        assert ba.autorecharge is False
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 50
-
-    def test_stripe_api_error_on_retrieve_skips_but_keeps_enabled(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """Transient Stripe API error on customer retrieve → skip but don't disable."""
-        import orchestra.lib.billing
-
-        class MockStripeError(Exception):
-            pass
-
-        class MockInvalidRequest(MockStripeError):
-            pass
-
-        def boom(*a, **kw):
-            raise MockStripeError("Service unavailable")
-
-        mock_stripe_module = _make_stripe_mock(
-            customer_retrieve=boom,
-            stripe_error_cls=MockStripeError,
-            invalid_request_cls=MockInvalidRequest,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=50,
-            stripe_customer_id="cus_api_err",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        make_user(dbsession, "api_err_user", ba)
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 50)
-        dbsession.commit()
-
-        assert result is False
-        assert ba.autorecharge is True
-        dbsession.refresh(ba)
-        assert float(ba.credits) == 50
-
-
-# ============================================================================
-# Auto-Recharge Eligibility & Spending Requirements
-# ============================================================================
-
-
-class TestAutoRechargeEligibility:
-    """Tests for auto-recharge eligibility based on spending history."""
-
-    def test_minimum_autorecharge_amount(self, dbsession: Session):
-        """Auto-recharge amount must be at least $25."""
-        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
-        ba = make_billing_account(
-            dbsession,
-            credits=1000,
-            stripe_customer_id="cus_autorecharge_test",
-        )
-        make_user(dbsession, "autorecharge_test_user", ba)
-        dbsession.commit()
-
-        ba_dao = BillingAccountDAO(dbsession)
-
-        with pytest.raises(ValueError, match="Minimum auto-recharge amount is \\$25"):
-            ba_dao.set_autorecharge_qty(ba.id, 10.0)
-
-        ba_dao.set_autorecharge_qty(ba.id, 25.0)
-        dbsession.commit()
-        dbsession.refresh(ba)
-        assert float(ba.autorecharge_qty) == 25.0
-
-        ba_dao.set_autorecharge_qty(ba.id, 50.0)
-        dbsession.commit()
-        dbsession.refresh(ba)
-        assert float(ba.autorecharge_qty) == 50.0
-
-    def test_new_user_cannot_enable(self, dbsession: Session):
-        """New user cannot enable auto-recharge without meeting spend threshold."""
-        from orchestra.db.dao.billing_account_dao import (
-            MIN_SPEND_FOR_AUTO_RECHARGE,
-            BillingAccountDAO,
-        )
-
-        ba = make_billing_account(
-            dbsession,
-            credits=1000,
-            stripe_customer_id="cus_new_user",
-        )
-        make_user(dbsession, "new_user_test", ba)
-        dbsession.commit()
-
-        ba_dao = BillingAccountDAO(dbsession)
-        assert not ba_dao.can_enable_auto_recharge(ba.id)
-        assert ba_dao.get_total_spending(ba.id) == 0
-        assert ba_dao.get_total_spending(ba.id) < MIN_SPEND_FOR_AUTO_RECHARGE
-
-    def test_eligibility_with_spending(self, dbsession: Session):
-        """Cumulative PAID recharges unlock auto-recharge eligibility."""
-        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
-        ba = make_billing_account(
-            dbsession,
-            credits=500,
-            stripe_customer_id="cus_spending",
-        )
-        make_user(dbsession, "spending_test_user", ba)
-        dbsession.commit()
-
-        ba_dao = BillingAccountDAO(dbsession)
-
-        assert ba_dao.get_total_spending(ba.id) == 0
-        assert not ba_dao.can_enable_auto_recharge(ba.id)
-
-        # Below threshold
-        rec1 = Recharge(
-            billing_account_id=ba.id,
-            quantity=500,
-            amount_usd=Decimal("500.00"),
-            type="payment",
-            status=RechargeStatus.PAID,
-        )
-        dbsession.add(rec1)
-        dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 500.0
-        assert not ba_dao.can_enable_auto_recharge(ba.id)
-
-        # Cross threshold
-        rec2 = Recharge(
-            billing_account_id=ba.id,
-            quantity=600,
-            amount_usd=Decimal("600.00"),
-            type="auto",
-            status=RechargeStatus.PAID,
-        )
-        dbsession.add(rec2)
-        dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 1100.0
-        assert ba_dao.can_enable_auto_recharge(ba.id)
-
-        # Promo should NOT count
-        rec3 = Recharge(
-            billing_account_id=ba.id,
-            quantity=1000,
-            amount_usd=Decimal("1000.00"),
-            type="promo",
-            status=RechargeStatus.PAID,
-        )
-        dbsession.add(rec3)
-        dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 1100.0
-
-        # PENDING should NOT count
-        rec4 = Recharge(
-            billing_account_id=ba.id,
-            quantity=500,
-            amount_usd=Decimal("500.00"),
-            type="payment",
-            status=RechargeStatus.PENDING_INVOICE,
-        )
-        dbsession.add(rec4)
-        dbsession.flush()
-        assert float(ba_dao.get_total_spending(ba.id)) == 1100.0
-
-    def test_existing_customer_unaffected(self, dbsession: Session):
-        """Existing customers with auto-recharge enabled continue to work normally."""
-        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
-        ba = make_billing_account(
-            dbsession,
-            credits=500,
-            stripe_customer_id="cus_existing",
-            autorecharge=True,
-            autorecharge_qty=50,
-            autorecharge_threshold=100,
-        )
-        make_user(dbsession, "existing_customer", ba)
-        dbsession.commit()
-
-        ba_dao = BillingAccountDAO(dbsession)
-
-        ba_dao.set_autorecharge_qty(ba.id, 100.0)
-        ba_dao.set_autorecharge_threshold(ba.id, 50.0)
-        dbsession.commit()
-        dbsession.refresh(ba)
-        assert ba.autorecharge is True
-        assert float(ba.autorecharge_qty) == 100.0
-        assert float(ba.autorecharge_threshold) == 50.0
-
-        ba_dao.set_autorecharge(ba.id, False)
-        dbsession.commit()
-        dbsession.refresh(ba)
-        assert ba.autorecharge is False
-
-        ba_dao.set_autorecharge(ba.id, True)
-        dbsession.commit()
-        dbsession.refresh(ba)
-        assert ba.autorecharge is True
-
-    def test_amount_validation_edge_cases(self, dbsession: Session):
-        """Edge cases around the $25 minimum auto-recharge amount."""
-        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
-        ba = make_billing_account(
-            dbsession,
-            credits=1000,
-            stripe_customer_id="cus_validation",
-        )
-        make_user(dbsession, "autorecharge_validation_user", ba)
-        dbsession.commit()
-
-        ba_dao = BillingAccountDAO(dbsession)
-
-        test_cases = [
-            (24.99, False),
-            (25.00, True),
-            (25.01, True),
-            (0.01, False),
-            (1000.00, True),
-        ]
-
-        for amount, should_succeed in test_cases:
-            if should_succeed:
-                ba_dao.set_autorecharge_qty(ba.id, amount)
-                dbsession.commit()
-                dbsession.refresh(ba)
-                assert float(ba.autorecharge_qty) == amount
-            else:
-                with pytest.raises(ValueError, match="Minimum auto-recharge amount"):
-                    ba_dao.set_autorecharge_qty(ba.id, amount)
-
-
-# ============================================================================
-# METERED-mode guards on the existing CREDITS-mode pipelines
-# ============================================================================
-#
-# These exercise the defensive guards that prevent METERED accounts from
-# being touched by CREDITS-mode machinery: ``queue_auto_recharge`` (the
-# auto-top-up path), ``invoice_month`` (the credits invoicer), and the
-# ``levy_provisioned_resources`` routine (the per-contact monthly levy).
-
-
 def _make_metered_template_for_guards(
     dbsession: Session,
     *,
@@ -4398,270 +3389,6 @@ def _assign_metered(dbsession: Session, ba, template):
     )
 
 
-class TestAutoRechargeMeteredGuard:
-    """``queue_auto_recharge`` short-circuits METERED accounts."""
-
-    def test_metered_account_short_circuits(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """METERED account never makes the Stripe call and returns False."""
-        import orchestra.lib.billing
-
-        # Sentinel that fails loudly if Stripe is touched.
-        sentinel = MagicMock(
-            side_effect=AssertionError("Stripe must not be called for METERED"),
-        )
-        stripe_mod = SimpleNamespace(
-            Customer=SimpleNamespace(retrieve=sentinel),
-            InvoiceItem=SimpleNamespace(create=sentinel, delete=sentinel),
-            StripeError=Exception,
-            InvalidRequestError=Exception,
-            error=SimpleNamespace(
-                StripeError=Exception,
-                InvalidRequestError=Exception,
-            ),
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", stripe_mod)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            stripe_customer_id="cus_meterguard",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=50,
-        )
-        tpl = _make_metered_template_for_guards(dbsession, name="autorecharge-meter")
-        _assign_metered(dbsession, ba, tpl)
-        dbsession.commit()
-
-        result = queue_auto_recharge(
-            dbsession,
-            ba,
-            50,
-            entity_label=f"ba {ba.id}",
-        )
-        assert result is False
-        assert (
-            dbsession.query(Recharge).filter_by(billing_account_id=ba.id).count() == 0
-        )
-        assert ba.credits == Decimal("0")
-
-    def test_credits_account_still_runs(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """Pristine (CREDITS) account still goes through the auto-recharge path."""
-        import orchestra.lib.billing
-
-        def _customer_retrieve(*a, **kw):
-            return SimpleNamespace(
-                invoice_settings=SimpleNamespace(default_payment_method="pm_x"),
-                default_source=None,
-            )
-
-        def _ii_create(**kw):
-            return SimpleNamespace(id="ii_credits_path")
-
-        stripe_mod = SimpleNamespace(
-            Customer=SimpleNamespace(retrieve=_customer_retrieve),
-            InvoiceItem=SimpleNamespace(create=_ii_create),
-            StripeError=Exception,
-            InvalidRequestError=Exception,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "stripe", stripe_mod)
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            stripe_customer_id="cus_credits_path",
-            autorecharge=True,
-            autorecharge_threshold=10,
-            autorecharge_qty=25,
-        )
-        # No assignment override → CREDITS by default
-        dbsession.commit()
-
-        result = queue_auto_recharge(dbsession, ba, 25, entity_label=f"ba {ba.id}")
-        assert result is True
-        assert (
-            dbsession.query(Recharge).filter_by(billing_account_id=ba.id).count() == 1
-        )
-
-
-class TestMonthlyCreditsInvoicerMeteredFilter:
-    """``invoice_month`` (the CREDITS invoicer) skips rows whose plan_id
-    points at a METERED template — and *only* those rows.
-
-    The filter keys off ``Recharge.plan_id``'s template mode rather
-    than the account's live billing mode: the account may have
-    switched plans between when the recharge was written and when this
-    routine runs, but the recharge itself belongs to whichever plan
-    was active at write time. Any other rule strands the recharge:
-
-    * "skip if the live account mode is METERED" silently drops a
-      pre-switch CREDITS auto-recharge (the row's ``plan_id`` is
-      NULL — by invariant, CREDITS auto-recharge / payment / promo
-      rows have no plan attribution — so it must be invoiced).
-    * "process every PENDING_INVOICE row" would double-bill any
-      METERED-mode recharge that somehow ended up in PENDING (which
-      shouldn't happen in steady state but is the data-corruption
-      case we want belt-and-braces against).
-
-    The combined ``set_plan`` guard (``PendingRechargesError``) is
-    the primary defence; this filter is the second line for rows
-    that landed via reconciliation / manual SQL outside the DAO.
-    """
-
-    @staticmethod
-    def _stripe_mock_with_invoice():
-        """Stripe stub that records ``Invoice.create`` calls."""
-        calls: list[dict] = []
-
-        def _create(**kwargs):
-            calls.append(kwargs)
-            inv_id = f"in_credits_test_{len(calls)}"
-            return SimpleNamespace(id=inv_id)
-
-        return (
-            SimpleNamespace(
-                Invoice=SimpleNamespace(create=_create),
-                StripeError=Exception,
-                InvalidRequestError=Exception,
-            ),
-            calls,
-        )
-
-    def test_pending_invoice_with_metered_plan_id_is_skipped(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """``Recharge.plan_id`` → METERED template ⇒ skip the row.
-
-        This is the data-corruption guard: if a stray PENDING_INVOICE
-        row gets attributed to a METERED assignment somehow (manual
-        SQL, reconciliation patch, future bug), the CREDITS invoicer
-        must not pick it up — the metered invoicer owns rows tagged
-        to METERED plans.
-        """
-        import datetime as _dt
-
-        import orchestra.lib.billing
-        import orchestra.routines.monthly_credits_invoicer as inv_mod
-        from orchestra.db.dao.billing_plan_assignment_dao import (
-            BillingPlanAssignmentDAO,
-        )
-        from orchestra.routines.monthly_credits_invoicer import invoice_month
-
-        invoice_sentinel = MagicMock(
-            side_effect=AssertionError(
-                "stripe.Invoice.create must not run for METERED-plan recharges",
-            ),
-        )
-        stripe_mod = SimpleNamespace(
-            Invoice=SimpleNamespace(create=invoice_sentinel),
-            StripeError=Exception,
-            InvalidRequestError=Exception,
-        )
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-        monkeypatch.setattr(inv_mod, "stripe", stripe_mod)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            stripe_customer_id="cus_meter_planid_filter",
-        )
-        tpl = _make_metered_template_for_guards(dbsession, name="planid-filter-tpl")
-        _assign_metered(dbsession, ba, tpl)
-        active = BillingPlanAssignmentDAO(dbsession).get_active(ba.id)
-        assert active is not None
-
-        invoice_group = _dt.date(2026, 4, 30)
-        rch = Recharge(
-            billing_account_id=ba.id,
-            type="auto",
-            quantity=Decimal("25"),
-            amount_usd=Decimal("25"),
-            invoice_group=invoice_group,
-            status=RechargeStatus.PENDING_INVOICE,
-            plan_id=active.id,  # METERED-attributed row
-        )
-        dbsession.add(rch)
-        dbsession.commit()
-
-        result = invoice_month(2026, 4, session=dbsession)
-        assert result.accounts_invoiced == 0
-        assert result.accounts_failed == 0
-        dbsession.refresh(rch)
-        assert rch.status == RechargeStatus.PENDING_INVOICE
-        assert rch.stripe_invoice_id is None
-
-    def test_pending_invoice_with_null_plan_id_invoices_even_on_metered_account(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """``Recharge.plan_id IS NULL`` ⇒ CREDITS-world row ⇒ invoice it,
-        regardless of the account's *current* mode.
-
-        This is the exploit-prevention test: a CREDITS auto-recharge
-        (always written with ``plan_id=NULL`` by invariant) that
-        happened *before* the account migrated to METERED is still a
-        legitimate CREDITS liability. The credits invoicer must collect
-        it. The previous "live account mode" filter would silently
-        drop it and let the customer keep the credits for free.
-        """
-        import datetime as _dt
-
-        import orchestra.lib.billing
-        import orchestra.routines.monthly_credits_invoicer as inv_mod
-        from orchestra.routines.monthly_credits_invoicer import invoice_month
-
-        stripe_mod, calls = self._stripe_mock_with_invoice()
-        monkeypatch.setattr(orchestra.lib.billing, "configure_stripe", lambda: None)
-        monkeypatch.setattr(inv_mod, "stripe", stripe_mod)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            stripe_customer_id="cus_strand_test",
-        )
-        # Account is currently on a METERED plan, but the recharge below
-        # was written *before* the switch (plan_id=NULL by CREDITS
-        # invariant). The fix routes it to the credits invoicer.
-        tpl = _make_metered_template_for_guards(dbsession, name="strand-tpl")
-        _assign_metered(dbsession, ba, tpl)
-
-        invoice_group = _dt.date(2026, 4, 30)
-        rch = Recharge(
-            billing_account_id=ba.id,
-            type="auto",
-            quantity=Decimal("100"),
-            amount_usd=Decimal("100"),
-            invoice_group=invoice_group,
-            status=RechargeStatus.PENDING_INVOICE,
-            plan_id=None,  # CREDITS-world row
-        )
-        dbsession.add(rch)
-        dbsession.commit()
-
-        result = invoice_month(2026, 4, session=dbsession)
-        assert result.accounts_invoiced == 1, result.errors
-        assert result.accounts_failed == 0
-        dbsession.refresh(rch)
-        assert rch.status == RechargeStatus.INVOICE_CREATED
-        assert rch.stripe_invoice_id is not None
-        # And exactly one Stripe invoice was issued for this account.
-        assert len(calls) == 1
-        assert calls[0]["customer"] == "cus_strand_test"
-
-
 class TestContactLevyMeteredBehaviour:
     """``levy_provisioned_resources`` against METERED accounts.
 
@@ -4695,9 +3422,6 @@ class TestContactLevyMeteredBehaviour:
             dbsession,
             credits=0,
             stripe_customer_id="cus_meter_levy",
-            autorecharge=True,
-            autorecharge_threshold=100,
-            autorecharge_qty=50,
         )
         tpl = _make_metered_template_for_guards(dbsession, name="levy-meter-tpl")
         _assign_metered(dbsession, ba, tpl)
@@ -4743,19 +3467,13 @@ class TestContactLevyMeteredBehaviour:
         self,
         dbsession: Session,
     ):
-        """CREDITS path still mutates the wallet and trips grace period.
-
-        Auto-recharge is disabled here so the grace transition is
-        observable (otherwise the auto-refill would top the wallet
-        back into positive territory and contacts would stay active).
-        """
+        """CREDITS path still mutates the wallet and trips grace period."""
         from orchestra.tests.test_billing.conftest import make_contact
 
         ba = make_billing_account(
             dbsession,
             credits=Decimal("0.50"),  # below the $1.50 levy → goes negative
             stripe_customer_id="cus_credits_levy",
-            autorecharge=False,
         )
         user = make_user(dbsession, "credits_levy_u1", ba)
         asst = make_assistant(dbsession, user.id, first_name="CreditsLevy")
@@ -4966,8 +3684,8 @@ class TestPlanConfigurationMatrix:
             credits=0,
             stripe_customer_id=f"cus_matrix_{_matrix_id(case)}",
         )
-        ba.billing_address = {"country": _MATRIX_BILLING_COUNTRY[case["currency"]]}
-        dbsession.flush()
+        # Country comes from the Stripe customer now, not a local column.
+        stripe._customer_state["country"] = _MATRIX_BILLING_COUNTRY[case["currency"]]
 
         # ``set_plan`` will close the conftest-inserted default
         # assignment; backdate that close so it precedes the new
@@ -5044,7 +3762,7 @@ class TestPlanConfigurationMatrix:
             assert cb_opts["bank_transfer"]["type"] == expected_rail
             # ``eu_bank_transfer`` requires an additional ``country``
             # parameter (Stripe-mandated for SEPA): the invoicer reads
-            # it off ``BillingAccount.billing_address.country``. Other
+            # it live from the Stripe customer's address. Other
             # rails are configured by ``type`` alone.
             if expected_rail == "eu_bank_transfer":
                 assert cb_opts["bank_transfer"]["eu_bank_transfer"]["country"] == (
@@ -5085,3 +3803,184 @@ class TestPlanConfigurationMatrix:
             assert Decimal(recharge.detail["fx_rate"]) == Decimal("0.80")
         else:
             assert recharge.detail["fx_policy"] == "NONE"
+
+
+# ============================================================================
+# Credit-grant expiry routines
+# ============================================================================
+
+
+def _grant_past(days: int = 1):
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _grant_future(days: int = 30):
+    from datetime import datetime, timedelta, timezone
+
+    return datetime.now(timezone.utc) + timedelta(days=days)
+
+
+class TestCreditGrantExpirySweep:
+    """The daily ``sweep_expired_grants`` forfeit routine, end-to-end."""
+
+    def test_sweep_routine_forfeits_expired_grants(self, dbsession: Session) -> None:
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+        from orchestra.lib.credit_grants import (
+            GRANT_KIND_TRIAL,
+            grant_expiring_credits,
+        )
+        from orchestra.routines.credit_grant_expiry_sweep import sweep_expired_grants
+
+        _u1, ba1 = make_user_with_billing(dbsession, "sweep_a")
+        _u2, ba2 = make_user_with_billing(dbsession, "sweep_b")
+        dao = BillingAccountDAO(dbsession)
+
+        # ba1: expired trial — should be swept.
+        grant_expiring_credits(
+            dbsession,
+            ba1.id,
+            100,
+            grant_kind=GRANT_KIND_TRIAL,
+            expires_at=_grant_past(),
+        )
+        # ba2: trial still valid — should be left alone.
+        grant_expiring_credits(
+            dbsession,
+            ba2.id,
+            100,
+            grant_kind=GRANT_KIND_TRIAL,
+            expires_at=_grant_future(),
+        )
+        dbsession.flush()
+
+        result = sweep_expired_grants(session=dbsession)
+
+        assert result.accounts_forfeited == 1
+        assert result.total_forfeited == 100.0
+        assert dao.get_credits(ba1.id) == Decimal("0")
+        assert dao.get_credits(ba2.id) == Decimal("100")
+
+
+def _capture_reminders(monkeypatch) -> list[dict]:
+    """Monkeypatch the reminder routine's email delivery to capture sends."""
+    from orchestra.routines import credit_expiry_reminder as mod
+
+    sent: list[dict] = []
+
+    def _fake_deliver(recipient: str, subject: str, body: str) -> bool:
+        sent.append({"to": recipient, "subject": subject, "body": body})
+        return True
+
+    monkeypatch.setattr(mod, "_deliver", _fake_deliver)
+    return sent
+
+
+class TestCreditExpiryReminder:
+    """Pre-expiry credit reminder routine: send once per distinct expiry."""
+
+    def test_reminder_sent_for_upcoming_expiry(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ) -> None:
+        from orchestra.lib.credit_grants import (
+            GRANT_KIND_TRIAL,
+            grant_expiring_credits,
+        )
+        from orchestra.routines.credit_expiry_reminder import (
+            send_credit_expiry_reminders,
+        )
+
+        sent = _capture_reminders(monkeypatch)
+        _user, ba = make_user_with_billing(dbsession, "remind_soon")
+        # Expires in 2 days — inside the default 3-day reminder window.
+        grant_expiring_credits(
+            dbsession,
+            ba.id,
+            50,
+            grant_kind=GRANT_KIND_TRIAL,
+            expires_at=_grant_future(days=2),
+        )
+        dbsession.flush()
+
+        result = send_credit_expiry_reminders(session=dbsession)
+
+        assert result.reminders_sent == 1
+        assert len(sent) == 1
+        assert sent[0]["to"] == "remind_soon@test.com"
+        # Display framing: 50 USD credits -> 50 * 400 = 20,000 displayed credits.
+        assert "20,000 credits" in sent[0]["body"]
+        # Trial copy nudges toward subscribing.
+        assert "trial" in sent[0]["body"].lower()
+        dbsession.refresh(ba)
+        assert ba.credit_expiry_reminded_at is not None
+
+    def test_reminder_is_idempotent_per_expiry(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ) -> None:
+        from orchestra.lib.credit_grants import (
+            GRANT_KIND_PLAN,
+            grant_expiring_credits,
+        )
+        from orchestra.routines.credit_expiry_reminder import (
+            send_credit_expiry_reminders,
+        )
+
+        sent = _capture_reminders(monkeypatch)
+        _user, ba = make_user_with_billing(dbsession, "remind_once")
+        grant_expiring_credits(
+            dbsession,
+            ba.id,
+            50,
+            grant_kind=GRANT_KIND_PLAN,
+            expires_at=_grant_future(days=2),
+        )
+        dbsession.flush()
+
+        first = send_credit_expiry_reminders(session=dbsession)
+        second = send_credit_expiry_reminders(session=dbsession)
+
+        assert first.reminders_sent == 1
+        assert second.reminders_sent == 0
+        assert second.skipped_already_reminded == 1
+        # Only the single email went out across both runs.
+        assert len(sent) == 1
+        # Plan copy is the use-it-or-lose-it variant (no trial wording).
+        assert "roll over" in sent[0]["body"].lower()
+
+    def test_reminder_not_sent_outside_window(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ) -> None:
+        from orchestra.lib.credit_grants import (
+            GRANT_KIND_PLAN,
+            grant_expiring_credits,
+        )
+        from orchestra.routines.credit_expiry_reminder import (
+            send_credit_expiry_reminders,
+        )
+
+        sent = _capture_reminders(monkeypatch)
+        _user, ba = make_user_with_billing(dbsession, "remind_far")
+        # Expires in 30 days — well outside the 3-day window.
+        grant_expiring_credits(
+            dbsession,
+            ba.id,
+            50,
+            grant_kind=GRANT_KIND_PLAN,
+            expires_at=_grant_future(days=30),
+        )
+        dbsession.flush()
+
+        result = send_credit_expiry_reminders(session=dbsession)
+
+        assert result.reminders_sent == 0
+        assert result.accounts_scanned == 0
+        assert sent == []
+        dbsession.refresh(ba)
+        assert ba.credit_expiry_reminded_at is None

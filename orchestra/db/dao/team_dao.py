@@ -1,10 +1,18 @@
 """Data Access Object for Team model."""
 
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Team, TeamMember
+from orchestra.db.models.orchestra_models import (
+    TEAM_STATUS_ACTIVE,
+    Assistant,
+    Team,
+    TeamAssistantMembership,
+    TeamMember,
+)
+
+TEAM_STATUS_DELETING = "deleting"
 
 
 class TeamDAO:
@@ -77,17 +85,18 @@ class TeamDAO:
         id: int,
         name: Optional[str] = None,
         description: Optional[str] = None,
-    ) -> None:
+    ) -> Team | None:
         """
         Update a team.
 
         :param id: Team ID.
         :param name: New team name.
         :param description: New team description.
+        :return: Updated team row, or None when the team does not exist.
         """
         team = self.get(id)
         if not team:
-            return
+            return None
 
         if name is not None:
             team.name = name
@@ -95,6 +104,7 @@ class TeamDAO:
             team.description = description
 
         self.session.flush()
+        return team
 
     def delete(self, id: int) -> None:
         """
@@ -210,3 +220,206 @@ class TeamDAO:
 
         self.session.flush()
         return deleted
+
+    def get_assistant(self, assistant_id: int) -> Optional[Assistant]:
+        """Return an assistant by primary key."""
+
+        return self.session.get(Assistant, assistant_id)
+
+    def get_assistant_membership(
+        self,
+        *,
+        team_id: int,
+        assistant_id: int,
+    ) -> Optional[TeamAssistantMembership]:
+        """Return a live assistant membership for a team pair."""
+
+        return self.session.get(
+            TeamAssistantMembership,
+            {"team_id": team_id, "assistant_id": assistant_id},
+        )
+
+    def add_assistant_membership(
+        self,
+        *,
+        team: Team,
+        assistant: Assistant,
+        added_by: str,
+    ) -> TeamAssistantMembership:
+        """Materialize a live assistant membership in a team."""
+
+        membership = TeamAssistantMembership(
+            team_id=team.id,
+            assistant_id=assistant.agent_id,
+            added_by=added_by,
+        )
+        self.session.add(membership)
+        self.session.flush()
+        return membership
+
+    def list_assistant_members(
+        self,
+        team_id: int,
+    ) -> list[tuple[TeamAssistantMembership, Assistant]]:
+        """Return live assistant members for a team."""
+
+        rows = (
+            self.session.query(TeamAssistantMembership, Assistant)
+            .join(
+                Assistant,
+                Assistant.agent_id == TeamAssistantMembership.assistant_id,
+            )
+            .filter(TeamAssistantMembership.team_id == team_id)
+            .order_by(TeamAssistantMembership.created_at.asc())
+            .all()
+        )
+        return list(rows)
+
+    def list_teams_for_assistant(self, assistant_id: int) -> list[Team]:
+        """Return active teams where an assistant is a live member."""
+
+        return list(
+            self.session.query(Team)
+            .join(
+                TeamAssistantMembership,
+                TeamAssistantMembership.team_id == Team.id,
+            )
+            .filter(
+                TeamAssistantMembership.assistant_id == assistant_id,
+                Team.status == TEAM_STATUS_ACTIVE,
+            )
+            .order_by(Team.id.asc())
+            .all(),
+        )
+
+    def team_ids_for_assistant(self, assistant_id: int) -> list[int]:
+        """Return sorted live team ids for an assistant."""
+
+        return self.team_ids_for_assistants([assistant_id]).get(assistant_id, [])
+
+    def team_ids_for_assistants(
+        self,
+        assistant_ids: Iterable[int],
+    ) -> dict[int, list[int]]:
+        """Return sorted live team ids keyed by assistant id."""
+
+        ids = list(assistant_ids)
+        if not ids:
+            return {}
+        rows = (
+            self.session.query(
+                TeamAssistantMembership.assistant_id,
+                Team.id,
+            )
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
+            .filter(TeamAssistantMembership.assistant_id.in_(ids))
+            .filter(Team.status == TEAM_STATUS_ACTIVE)
+            .order_by(
+                TeamAssistantMembership.assistant_id.asc(),
+                Team.id.asc(),
+            )
+            .all()
+        )
+        memberships: dict[int, list[int]] = {assistant_id: [] for assistant_id in ids}
+        for assistant_id, team_id in rows:
+            memberships.setdefault(int(assistant_id), []).append(int(team_id))
+        return memberships
+
+    def team_summaries_for_assistant(
+        self,
+        assistant_id: int,
+    ) -> list[dict[str, int | str | None]]:
+        """Return sorted live team summaries for an assistant."""
+
+        return self.team_summaries_for_assistants([assistant_id]).get(
+            assistant_id,
+            [],
+        )
+
+    def team_summaries_for_assistants(
+        self,
+        assistant_ids: Iterable[int],
+    ) -> dict[int, list[dict[str, int | str | None]]]:
+        """Return sorted live team summaries keyed by assistant id."""
+
+        ids = list(assistant_ids)
+        if not ids:
+            return {}
+        rows = (
+            self.session.query(
+                TeamAssistantMembership.assistant_id,
+                Team.id,
+                Team.name,
+                Team.description,
+            )
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
+            .filter(TeamAssistantMembership.assistant_id.in_(ids))
+            .filter(Team.status == TEAM_STATUS_ACTIVE)
+            .order_by(
+                TeamAssistantMembership.assistant_id.asc(),
+                Team.id.asc(),
+            )
+            .all()
+        )
+        memberships: dict[int, list[dict[str, int | str | None]]] = {
+            assistant_id: [] for assistant_id in ids
+        }
+        for assistant_id, team_id, name, description in rows:
+            memberships.setdefault(int(assistant_id), []).append(
+                {
+                    "team_id": int(team_id),
+                    "name": str(name),
+                    "description": description,
+                },
+            )
+        return memberships
+
+    def assistant_team_ids_for_user(
+        self,
+        *,
+        user_id: str,
+        organization_id: int,
+    ) -> list[int]:
+        """Return team ids where the user's workspace coordinator is a member."""
+
+        coordinator = (
+            self.session.query(Assistant)
+            .filter(
+                Assistant.user_id == user_id,
+                Assistant.organization_id == organization_id,
+                Assistant.is_coordinator.is_(True),
+            )
+            .order_by(Assistant.agent_id.asc())
+            .first()
+        )
+        if coordinator is None:
+            return []
+        return self.team_ids_for_assistant(coordinator.agent_id)
+
+    def remove_assistant_from_org_teams(
+        self,
+        *,
+        assistant_id: int,
+        organization_id: int,
+    ) -> list[int]:
+        """Remove an assistant from every team in an organization."""
+
+        team_ids = [
+            int(team_id)
+            for (team_id,) in self.session.query(TeamAssistantMembership.team_id)
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
+            .filter(
+                TeamAssistantMembership.assistant_id == assistant_id,
+                Team.organization_id == organization_id,
+            )
+            .all()
+        ]
+        if not team_ids:
+            return []
+
+        self.session.query(TeamAssistantMembership).filter(
+            TeamAssistantMembership.assistant_id == assistant_id,
+            TeamAssistantMembership.team_id.in_(team_ids),
+        ).delete(synchronize_session=False)
+        self.session.flush()
+        return team_ids

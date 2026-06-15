@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orchestra"
-version = "0.1.0"
+version = "0.0.0"
 description = "Backend API and persistence layer for Unity and the wider Unify stack"
 authors = [
     "Unify <hello@unify.ai>",
@@ -20,14 +20,11 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-# Pinned to 3.12.x: several core deps (asyncpg 0.28, tiktoken 0.7, etc.) lack
+# Pinned to 3.12.x: several core deps (asyncpg 0.28, etc.) lack
 # Python 3.13 wheels and would otherwise fall back to source builds requiring
 # a Rust toolchain or unavailable system headers. Bump explicitly when those
 # deps publish 3.13 wheels.
 python = "~3.12"
-# The open-source kernel. Tracked at a tagged release so platform builds
-# are reproducible; bump the rev when picking up new kernel work.
-orchestra-core = { git = "https://github.com/unifyai/orchestra-core.git", tag = "v0.1.2" }
 fastapi = "^0.100.0"
 uvicorn = { version = "^0.22.0", extras = ["standard"] }
 pydantic = "^2"
@@ -53,7 +50,7 @@ boto3 = "^1.34.131"
 botocore = "^1.34.131"
 google-cloud-aiplatform = "^1.38.1"
 psycopg2-binary = "^2.9.9"
-tiktoken = "0.7.0"
+tiktoken = "0.12.0"
 openai = "^2.8.1"
 aiohttp = "^3.9.1"
 replicate = "^0.23.1"
@@ -69,7 +66,7 @@ google-cloud-pubsub = "^2.21.5"
 google-cloud-secret-manager = "^2.20.1"
 pytest-xdist = {extras = ["psutils"], version = "^3.6.1"}
 redis = "^5.0.7"
-litellm = "^1.80.11"
+litellm = "^1.83.7"
 shortuuid = "^1.0.13"
 opencv-python = "^4.10.0.84"
 imagehash = "^4.3.1"
@@ -109,7 +106,7 @@ autoflake = "^1.6.1"
 pytest-cov = "^4.0.0"
 anyio = "^3.6.2"
 pytest-env = "^0.8.1"
-httpx = "^0.24.0"
+httpx = "^0.28.0"
 hypothesis = "^6.130.3"
 pytest-dotenv = "^0.5.2"
 python-dotenv = "^1.2.1"

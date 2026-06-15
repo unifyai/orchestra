@@ -1,23 +1,30 @@
 """Pydantic schemas for team management."""
 
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+from orchestra.web.api.utils.safe_text import (
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+)
 
 
 class TeamCreate(BaseModel):
     """Schema for creating a team."""
 
-    name: str
-    description: Optional[str] = None
+    name: SafeLabel
+    description: OptionalSafeText = None
 
 
 class TeamUpdate(BaseModel):
     """Schema for updating a team."""
 
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: OptionalSafeLabel = None
+    description: OptionalSafeText = None
 
 
 class TeamMemberAdd(BaseModel):
@@ -47,6 +54,54 @@ class TeamWithMembersResponse(BaseModel):
     organization_id: int
     created_at: datetime
     members: List[str]  # User IDs
+
+
+class TeamSummary(BaseModel):
+    """Compact team metadata for assistant runtime payloads."""
+
+    team_id: int
+    name: str
+    description: Optional[str] = None
+
+
+class TeamMembershipStatus(str, Enum):
+    """Membership creation outcomes returned by assistant-member endpoints."""
+
+    active = "active"
+
+
+class TeamAssistantMemberCreate(BaseModel):
+    """Request body for adding one assistant to a team."""
+
+    assistant_id: Optional[int] = None
+    member_user_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_exactly_one_target(self) -> "TeamAssistantMemberCreate":
+        if (self.assistant_id is None) == (self.member_user_id is None):
+            raise ValueError(
+                "exactly one of assistant_id or member_user_id is required",
+            )
+        return self
+
+
+class TeamAssistantMember(BaseModel):
+    """Assistant membership row exposed by team member endpoints."""
+
+    assistant_id: int
+    team_id: int
+    user_id: str
+    organization_id: Optional[int]
+    added_by: str
+    created_at: datetime
+
+
+class TeamMembershipResponse(BaseModel):
+    """Response for assistant membership mutations."""
+
+    membership_status: TeamMembershipStatus
+    assistant_id: int
+    team_id: int
 
 
 class ResourceAccessGrant(BaseModel):

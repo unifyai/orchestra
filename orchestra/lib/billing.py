@@ -5,10 +5,7 @@ This module is the home for cross-DAO billing orchestration:
 * :class:`BillingEntity` and :func:`get_billing_entity` — uniform handle on
   the billing account behind a user or organization. Useful when feature
   code has a request-context (user_id / organization_id) but needs to
-  resolve the billing account, autorecharge settings, etc.
-* :func:`queue_auto_recharge` — Stripe-side autorecharge mechanics.
-  No-ops for METERED accounts so the same low-balance trigger code
-  works on both modes.
+  resolve the billing account, billing mode, etc.
 * Stripe helpers (:func:`configure_stripe`, :func:`sync_billing_profile_to_stripe`,
   :func:`ensure_stripe_customer`, etc.).
 
@@ -21,7 +18,6 @@ audit row). Feature code calls those DAO methods directly.
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, Optional, Union
@@ -30,14 +26,7 @@ import stripe
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra.db.models.orchestra_models import (
-    RECHARGE_TYPE_AUTO,
-    BillingAccount,
-    BillingMode,
-    Recharge,
-    RechargeStatus,
-)
-from orchestra_core.lib.time import month_end_utc
+from orchestra.db.models.orchestra_models import BillingAccount, BillingMode
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -64,9 +53,6 @@ class BillingEntity:
     billing_account_id: int
     credits: Decimal
     stripe_customer_id: Optional[str]
-    autorecharge: bool
-    autorecharge_threshold: Decimal
-    autorecharge_qty: Decimal
     billing_mode: BillingMode = BillingMode.CREDITS
 
     @property
@@ -105,24 +91,6 @@ class BillingEntity:
         if self.is_metered:
             return True
         return self.credits >= cost
-
-    def should_trigger_autorecharge(self, new_balance: Decimal) -> bool:
-        """
-        Check if autorecharge should be triggered after a deduction.
-
-        Args:
-            new_balance: The credit balance after deduction.
-
-        Returns:
-            True if autorecharge should be triggered.
-        """
-        if not self.autorecharge:
-            return False
-        if not self.has_billing:
-            return False
-        if self.is_metered:
-            return False
-        return new_balance <= self.autorecharge_threshold
 
 
 def get_billing_entity(
@@ -164,9 +132,6 @@ def get_billing_entity(
             billing_account_id=ba.id,
             credits=ba.credits,
             stripe_customer_id=ba.stripe_customer_id,
-            autorecharge=ba.autorecharge,
-            autorecharge_threshold=ba.autorecharge_threshold,
-            autorecharge_qty=ba.autorecharge_qty,
             billing_mode=ba_dao.resolve_billing_mode(ba),
         )
 
@@ -190,253 +155,8 @@ def get_billing_entity(
         billing_account_id=ba.id,
         credits=ba.credits,
         stripe_customer_id=ba.stripe_customer_id,
-        autorecharge=ba.autorecharge,
-        autorecharge_threshold=ba.autorecharge_threshold,
-        autorecharge_qty=ba.autorecharge_qty,
         billing_mode=ba_dao.resolve_billing_mode(ba),
     )
-
-
-def queue_auto_recharge(
-    session: Session,
-    billing_account: BillingAccount,
-    credits: int,
-    entity_label: str = "",
-) -> bool:
-    """
-    Create a Stripe InvoiceItem then record an auto-recharge.
-
-    The InvoiceItem is created **first** so that credits are only granted
-    when the billable artifact exists on Stripe.  If InvoiceItem creation
-    fails (network error, invalid customer, etc.), no credits are granted
-    and no recharge record is written — preventing revenue leakage.
-
-    Returns True if the recharge was queued, False if skipped or failed.
-
-    METERED-mode accounts are short-circuited at the top: they pay by
-    monthly invoice (handled by ``monthly_metered_invoicer``), not by
-    topping up a credits wallet. Routing this guard through the central
-    ``queue_auto_recharge`` rather than every call site means the
-    contact levy, low-balance triggers, and any future caller all
-    benefit without per-site changes.
-    """
-    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-    from orchestra.db.models.orchestra_models import BillingMode
-
-    if (
-        BillingAccountDAO(session).resolve_billing_mode(billing_account)
-        == BillingMode.METERED
-    ):
-        logger.debug(
-            "Auto-recharge skipped for billing_account %s (%s): "
-            "account is METERED — invoiced via monthly_metered_invoicer",
-            billing_account.id,
-            entity_label,
-        )
-        return False
-
-    if not billing_account.stripe_customer_id:
-        logger.warning(
-            "Auto-recharge skipped for billing_account %s (%s): "
-            "no stripe_customer_id",
-            billing_account.id,
-            entity_label,
-        )
-        return False
-
-    # Verify the customer still has a valid payment method before
-    # creating an InvoiceItem that will inevitably fail at collection.
-    try:
-        configure_stripe()
-        customer = stripe.Customer.retrieve(
-            billing_account.stripe_customer_id,
-            expand=["invoice_settings.default_payment_method"],
-        )
-        has_pm = bool(
-            (
-                customer.invoice_settings
-                and customer.invoice_settings.default_payment_method
-            )
-            or customer.default_source,
-        )
-        if not has_pm:
-            logger.warning(
-                {
-                    "message": "Auto-recharge skipped: no payment method on file",
-                    "billing_account_id": billing_account.id,
-                    "stripe_customer_id": billing_account.stripe_customer_id,
-                    "entity": entity_label,
-                },
-            )
-            billing_account.autorecharge = False
-            return False
-    except stripe.InvalidRequestError:
-        logger.warning(
-            {
-                "message": "Auto-recharge skipped: Stripe customer not found or deleted",
-                "billing_account_id": billing_account.id,
-                "stripe_customer_id": billing_account.stripe_customer_id,
-                "entity": entity_label,
-            },
-        )
-        billing_account.autorecharge = False
-        return False
-    except stripe.StripeError as e:
-        logger.warning(
-            {
-                "message": "Auto-recharge skipped: Stripe API error checking payment method",
-                "billing_account_id": billing_account.id,
-                "error": str(e),
-            },
-        )
-        return False
-
-    now = datetime.now(timezone.utc)
-    invoice_group = month_end_utc(now)
-
-    logger.info(
-        "Queueing auto-recharge – %s, BillingAccount: %s, Credits: %s, "
-        "Stripe Customer ID: %s",
-        entity_label,
-        billing_account.id,
-        credits,
-        billing_account.stripe_customer_id,
-    )
-
-    # Step 1: Create the Stripe InvoiceItem BEFORE any DB changes.
-    # If this fails the function returns False and the caller's session
-    # is left untouched — no free credits.
-    try:
-        configure_stripe()
-
-        invoice_item = stripe.InvoiceItem.create(
-            customer=billing_account.stripe_customer_id,
-            amount=int(credits * 100),
-            currency="usd",
-            description=f"{credits} credits (auto-recharge)",
-            metadata={
-                "recharge_type": "auto",
-                "billing_account_id": str(billing_account.id),
-                "invoice_group": str(invoice_group),
-            },
-        )
-
-        logger.info(
-            "Stripe InvoiceItem created: %s for billing_account %s",
-            invoice_item.id,
-            billing_account.id,
-        )
-
-    except stripe.StripeError as e:
-        logger.error(
-            "Stripe error creating InvoiceItem for billing_account %s (%s): "
-            "%s — credits NOT granted",
-            billing_account.id,
-            entity_label,
-            e,
-        )
-        try:
-            from orchestra.routines.billing_notifications import (
-                notify_billing_event_failure,
-            )
-
-            notify_billing_event_failure(
-                "auto_recharge",
-                error=str(e),
-                context_id=f"ba_{billing_account.id}",
-                billing_account_id=billing_account.id,
-            )
-        except Exception:
-            logger.warning("Failed to send billing event notification", exc_info=True)
-        return False
-
-    except Exception as e:
-        logger.error(
-            "Unexpected error creating InvoiceItem for billing_account %s (%s): "
-            "%s — credits NOT granted",
-            billing_account.id,
-            entity_label,
-            e,
-        )
-        try:
-            from orchestra.routines.billing_notifications import (
-                notify_billing_event_failure,
-            )
-
-            notify_billing_event_failure(
-                "auto_recharge",
-                error=str(e),
-                context_id=f"ba_{billing_account.id}",
-                billing_account_id=billing_account.id,
-            )
-        except Exception:
-            logger.warning("Failed to send billing event notification", exc_info=True)
-        return False
-
-    # Step 2: Record the recharge in the DB and grant credits.
-    # The InvoiceItem already exists on Stripe at this point.  If the DB
-    # write fails we best-effort delete the InvoiceItem to avoid orphans.
-    try:
-        recharge = Recharge(
-            billing_account_id=billing_account.id,
-            type=RECHARGE_TYPE_AUTO,
-            quantity=Decimal(credits),
-            amount_usd=Decimal(credits),
-            invoice_group=invoice_group,
-            status=RechargeStatus.PENDING_INVOICE,
-        )
-        session.add(recharge)
-        ba_dao = BillingAccountDAO(session)
-        new_balance = ba_dao.add_credits(
-            billing_account.id,
-            float(credits),
-            category="recharge",
-            description=f"Auto-recharge ({credits} credits)",
-            detail={"event": "auto_recharge", "invoice_group": str(invoice_group)},
-        )
-
-        logger.info(
-            "Auto-recharge recorded for billing_account %s: "
-            "$%.2f (%s credits), group: %s, new balance: %s",
-            billing_account.id,
-            credits,
-            credits,
-            invoice_group,
-            new_balance,
-        )
-    except Exception as e:
-        logger.error(
-            "DB error after InvoiceItem %s created for billing_account %s: %s "
-            "— attempting cleanup",
-            invoice_item.id,
-            billing_account.id,
-            e,
-        )
-        try:
-            stripe.InvoiceItem.delete(invoice_item.id)
-            logger.info("Cleaned up orphaned InvoiceItem %s", invoice_item.id)
-        except Exception as cleanup_err:
-            logger.error(
-                "Failed to clean up InvoiceItem %s: %s",
-                invoice_item.id,
-                cleanup_err,
-            )
-        try:
-            from orchestra.routines.billing_notifications import (
-                notify_billing_event_failure,
-            )
-
-            notify_billing_event_failure(
-                "auto_recharge_db",
-                error=str(e),
-                context_id=f"ba_{billing_account.id}",
-                billing_account_id=billing_account.id,
-            )
-        except Exception:
-            logger.warning("Failed to send billing event notification", exc_info=True)
-        return False
-
-    return True
 
 
 # =========================================================================
@@ -728,43 +448,110 @@ TAX_TYPE_MAP: Dict[str, Dict[str, str]] = {
 # the metered invoicer itself.
 
 
+def validate_address_tax_location(address: Optional[dict]) -> Optional[str]:
+    """Check that Stripe Tax can resolve a jurisdiction for ``address``.
+
+    Stripe is the source of truth for whether an address maps to a real tax
+    location (a US address needs a valid ZIP/state; many countries resolve
+    from the country alone). We probe it with a *throwaway* customer created
+    with ``tax.validate_location='immediately'`` — Stripe raises when the
+    location can't be resolved — then delete the probe so nothing is
+    persisted on the real account.
+
+    This lets the billing-profile save fail fast with a clear message instead
+    of the customer only discovering the problem at checkout (where the
+    Subscription create is what trips Stripe Tax).
+
+    Returns a user-facing error string when the address is rejected, or
+    ``None`` when it's accepted *or* when the check can't run (missing
+    country, Stripe not configured, transient API error) — we never block a
+    profile save on a probe failure that isn't a definitive location rejection.
+    """
+    if not address or not (address.get("country") or "").strip():
+        return None
+
+    probe = None
+    try:
+        configure_stripe()
+        probe = stripe.Customer.create(
+            address={
+                "line1": address.get("line1", ""),
+                "line2": address.get("line2", ""),
+                "city": address.get("city", ""),
+                "state": address.get("state", ""),
+                "postal_code": address.get("postal_code", ""),
+                "country": address.get("country", ""),
+            },
+            tax={"validate_location": "immediately"},
+        )
+    except stripe.error.InvalidRequestError as exc:
+        msg = str(exc).lower()
+        if "location" in msg or "address" in msg or "tax" in msg:
+            return (
+                "We couldn't verify this billing address for tax. Please check "
+                "it's a complete, valid address — including a correct postal/ZIP "
+                "code and, for US addresses, a state."
+            )
+        # Some other invalid-request reason (not an address-location problem) —
+        # don't block the save on it.
+        return None
+    except Exception:  # noqa: BLE001 — never block a save on a probe failure.
+        return None
+
+    # Accepted: clean up the throwaway probe customer (best-effort).
+    try:
+        stripe.Customer.delete(probe["id"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def ensure_stripe_customer(
     session: Session,
     billing_account: BillingAccount,
     *,
     is_business: Optional[bool] = None,
+    name: Optional[str] = None,
+    email: Optional[str] = None,
+    address: Optional[dict] = None,
+    tax_id: Optional[str] = None,
     fallback_name: Optional[str] = None,
     fallback_email: Optional[str] = None,
 ) -> str:
     """Return ``stripe_customer_id``, creating the Stripe Customer if absent.
 
     Idempotent. If ``billing_account.stripe_customer_id`` is already set,
-    returns it without touching Stripe. Otherwise creates a Stripe
-    Customer using whatever profile fields are populated on the
-    ``BillingAccount`` (billing email/address/tax_id) and falling back to
-    the ``fallback_*`` parameters for fields that are missing.
+    returns it without touching Stripe.
+
+    Billing profile data is **not** read from the ``BillingAccount`` (PII is
+    no longer stored locally — Stripe is the source of truth). Callers that
+    have profile data on hand (the billing-profile save path) pass it in via
+    ``name`` / ``email`` / ``address`` / ``tax_id``; callers that don't (the
+    admin/invoicer/setup-intent backstops) create a bare Customer with just
+    the fallback email + metadata, and the profile is synced later when the
+    customer saves it.
 
     Args:
         session: Database session — used to persist the new
             ``stripe_customer_id`` back onto the account.
         billing_account: The account that needs a Stripe Customer.
-        is_business: Hint for ``build_stripe_customer_name`` so that org
-            accounts get ``name=`` set to the business name (and personal
-            accounts to the user's display name). Inferred from
-            ``billing_account.business_name`` if omitted.
-        fallback_name: Display/business name to use when neither
-            ``billing_account.name`` nor ``business_name`` is set. Useful
-            for orgs whose name lives on the ``Organization`` row, not on
-            ``BillingAccount``.
-        fallback_email: Email to use when ``billing_account.billing_email``
-            is unset (commonly the user's account email).
+        is_business: Hint for ``build_stripe_customer_name`` so business
+            accounts get ``business_name`` set (personal → ``individual_name``).
+            Defaults to personal treatment.
+        name: Display/business name to seed the Customer with.
+        email: Invoice email to seed the Customer with.
+        address: Billing address dict to seed the Customer with.
+        tax_id: Tax ID to attach to the new Customer.
+        fallback_name: Name to use when ``name`` is not supplied.
+        fallback_email: Email to use when ``email`` is not supplied
+            (commonly the user's account email).
 
     Returns:
         The ``stripe_customer_id`` (existing or freshly created).
 
     Raises:
         stripe.error.StripeError: If the API call fails.
-        RuntimeError: If neither billing_email nor fallback_email is
+        RuntimeError: If neither ``email`` nor ``fallback_email`` is
             available — Stripe requires an email to send invoices.
     """
     from orchestra.web.api.utils.business_validation import build_stripe_customer_name
@@ -774,13 +561,12 @@ def ensure_stripe_customer(
 
     configure_stripe()
 
-    email = billing_account.billing_email or fallback_email
-    if not email:
+    resolved_email = email or fallback_email
+    if not resolved_email:
         raise RuntimeError(
             f"Cannot create Stripe Customer for billing_account "
-            f"{billing_account.id}: no billing_email on file and no "
-            "fallback_email provided. Ask the customer to set their "
-            "billing email on the Billing Profile, or pass "
+            f"{billing_account.id}: no email provided. Ask the customer to "
+            "set their billing email on the Billing Profile, or pass "
             "fallback_email when calling.",
         )
 
@@ -789,16 +575,19 @@ def ensure_stripe_customer(
     if is_business is None:
         is_business = False
 
-    create_params: Dict[str, Any] = {"email": email}
+    create_params: Dict[str, Any] = {"email": resolved_email}
 
-    name_value = billing_account.name or fallback_name
+    name_value = name or fallback_name
     if name_value:
         create_params.update(
             build_stripe_customer_name(is_business=is_business, name=name_value),
         )
 
-    address = billing_account.billing_address or {}
-    if address.get("line1"):
+    address = address or {}
+    # Sync the address whenever a country is present (the minimum Stripe Tax
+    # needs to resolve a location), not just when a street line exists —
+    # self-serve subscribers are gated on country, which must reach Stripe.
+    if address.get("country") or address.get("line1"):
         create_params["address"] = {
             "line1": address.get("line1", ""),
             "line2": address.get("line2", ""),
@@ -820,14 +609,13 @@ def ensure_stripe_customer(
     billing_account.stripe_customer_id = customer_id
     session.flush()
 
-    # Attach tax id if we already have one (best-effort; failure here
-    # shouldn't block customer creation). ``sync_tax_id_to_stripe``
-    # already swallows Stripe-side errors internally, so anything we
-    # see here is either a config lookup miss
-    # (``get_stripe_tax_id_type`` raising on an unknown country) or a
-    # genuinely unexpected import/runtime error — log loudly and
-    # carry on rather than masking it with bare ``Exception``.
-    if billing_account.tax_id:
+    # Attach tax id if one was supplied (best-effort; failure here shouldn't
+    # block customer creation). ``sync_tax_id_to_stripe`` already swallows
+    # Stripe-side errors internally, so anything we see here is either a
+    # config lookup miss (``get_stripe_tax_id_type`` raising on an unknown
+    # country) or a genuinely unexpected import/runtime error — log loudly
+    # and carry on rather than masking it with bare ``Exception``.
+    if tax_id:
         try:
             from orchestra.web.api.utils.business_validation import (
                 sync_tax_id_to_stripe,
@@ -836,7 +624,7 @@ def ensure_stripe_customer(
             country_code = address.get("country") if address else None
             sync_tax_id_to_stripe(
                 customer_id,
-                billing_account.tax_id,
+                tax_id,
                 country_code,
                 logger=logger,
             )
@@ -857,7 +645,7 @@ def ensure_stripe_customer(
                 "TAX_TYPE_MAP / get_stripe_tax_id_type",
                 customer_id,
                 address.get("country") if address else None,
-                billing_account.tax_id,
+                tax_id,
                 exc,
                 exc_info=True,
             )
@@ -868,6 +656,238 @@ def ensure_stripe_customer(
         billing_account.id,
     )
     return customer_id
+
+
+def fetch_billing_profile_from_stripe(
+    stripe_customer_id: Optional[str],
+) -> Dict[str, Any]:
+    """Read the editable billing profile back from the Stripe Customer.
+
+    Stripe is the source of truth for billing PII (name / email / address /
+    tax ID). This returns the dict shape the billing-profile response builders
+    expect (the same shape the local DAO used to return before billing PII was
+    moved to Stripe), so response builders don't have to change.
+
+    Best-effort: returns empty/None values if there's no customer yet or if
+    Stripe is unreachable, so the profile screen degrades gracefully rather
+    than erroring.
+    """
+    empty: Dict[str, Any] = {
+        "billing_email": None,
+        "name": None,
+        "tax_id": None,
+        "tax_id_type": None,
+        "tax_id_verification_status": None,
+        "billing_address": {},
+    }
+    if not stripe_customer_id:
+        return empty
+
+    try:
+        configure_stripe()
+        customer = stripe.Customer.retrieve(stripe_customer_id)
+    except stripe.error.StripeError as exc:
+        logger.warning(
+            "Could not fetch billing profile from Stripe for %s: %s",
+            stripe_customer_id,
+            exc,
+        )
+        return empty
+
+    address = customer.get("address") or {}
+    profile: Dict[str, Any] = {
+        "billing_email": customer.get("email"),
+        "name": customer.get("name"),
+        "tax_id": None,
+        "tax_id_type": None,
+        "tax_id_verification_status": None,
+        "billing_address": (
+            {
+                "line1": address.get("line1") or "",
+                "line2": address.get("line2") or "",
+                "city": address.get("city") or "",
+                "state": address.get("state") or "",
+                "postal_code": address.get("postal_code") or "",
+                "country": address.get("country") or "",
+            }
+            if address
+            else {}
+        ),
+    }
+
+    try:
+        tax_ids = stripe.Customer.list_tax_ids(stripe_customer_id, limit=1)
+        if tax_ids and tax_ids.data:
+            first = tax_ids.data[0]
+            profile["tax_id"] = first.get("value")
+            profile["tax_id_type"] = first.get("type")
+            verification = first.get("verification") or {}
+            profile["tax_id_verification_status"] = verification.get("status")
+    except stripe.error.StripeError as exc:
+        logger.warning(
+            "Could not fetch tax IDs from Stripe for %s: %s",
+            stripe_customer_id,
+            exc,
+        )
+
+    return profile
+
+
+#: Fields that must all be present for an address to resolve a tax
+#: jurisdiction for Stripe automatic tax (a country alone covers country-level
+#: VAT, but sub-national tax — e.g. US sales tax — needs postal_code + the
+#: city/line so Stripe can place the customer).
+_REQUIRED_ADDRESS_FIELDS = ("line1", "city", "postal_code", "country")
+
+
+def is_billing_address_complete(address: Optional[Dict[str, Any]]) -> bool:
+    """Return whether ``address`` is complete enough for Stripe automatic tax.
+
+    This is the single definition behind the derived ``billing_setup_complete``
+    flag: callers recompute the flag from the *live* Stripe address whenever it
+    changes (profile PATCH, admin edit, ``customer.updated`` webhook) so the
+    flag never drifts from Stripe — without storing the address (PII) locally.
+    """
+    if not address:
+        return False
+    return all((address.get(f) or "").strip() for f in _REQUIRED_ADDRESS_FIELDS)
+
+
+class PaymentMethodError(Exception):
+    """Raised for invalid payment-method management requests."""
+
+
+def create_setup_intent(customer_id: str) -> str:
+    """Create a Stripe SetupIntent for saving a card, return its client secret.
+
+    ``usage="off_session"`` so the saved card can be charged for future
+    subscription renewals without the customer present. The client secret is
+    handed to Stripe Elements in the browser to confirm the card; the secret
+    key never leaves the backend.
+    """
+    configure_stripe()
+    intent = stripe.SetupIntent.create(
+        customer=customer_id,
+        payment_method_types=["card"],
+        usage="off_session",
+    )
+    return intent["client_secret"]
+
+
+def list_payment_methods(customer_id: str) -> list[dict]:
+    """List the customer's saved cards, flagging the default for invoices.
+
+    Returns a list of plain dicts (id, brand, last4, exp month/year, and
+    ``is_default``) — the customer's ``invoice_settings.default_payment_method``
+    is the card that backs subscription renewals.
+    """
+    configure_stripe()
+    customer = stripe.Customer.retrieve(customer_id)
+    invoice_settings = (
+        customer.get("invoice_settings")
+        if isinstance(customer, dict)
+        else getattr(customer, "invoice_settings", None)
+    ) or {}
+    default_pm = (
+        invoice_settings.get("default_payment_method")
+        if isinstance(invoice_settings, dict)
+        else getattr(invoice_settings, "default_payment_method", None)
+    )
+
+    methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
+    data = methods.get("data", []) if isinstance(methods, dict) else methods.data
+    cards: list[dict] = []
+    for pm in data or []:
+        pm_id = pm.get("id") if isinstance(pm, dict) else pm.id
+        card = (
+            pm.get("card") if isinstance(pm, dict) else getattr(pm, "card", None)
+        ) or {}
+        get = (
+            card.get
+            if isinstance(card, dict)
+            else (lambda k, c=card: getattr(c, k, None))
+        )
+        cards.append(
+            {
+                "id": pm_id,
+                "brand": get("brand"),
+                "last4": get("last4"),
+                "exp_month": get("exp_month"),
+                "exp_year": get("exp_year"),
+                "is_default": pm_id == default_pm,
+            },
+        )
+    return cards
+
+
+def resolve_default_payment_method(customer_id: str) -> Optional[str]:
+    """Return the payment method to charge a self-serve subscription on.
+
+    Prefers the customer's invoice default (``invoice_settings.default_
+    payment_method``). When none is explicitly set but the customer has
+    saved cards (e.g. they added one in the in-app manager without
+    promoting it), falls back to the most recently attached card so a
+    first subscribe can still charge off-session. Returns ``None`` when the
+    customer has no card on file at all.
+
+    Used by ``create_subscription`` to charge the first invoice off-session
+    instead of redirecting to a Stripe-hosted page.
+    """
+    configure_stripe()
+    customer = stripe.Customer.retrieve(customer_id)
+    invoice_settings = (
+        customer.get("invoice_settings")
+        if isinstance(customer, dict)
+        else getattr(customer, "invoice_settings", None)
+    ) or {}
+    default_pm = (
+        invoice_settings.get("default_payment_method")
+        if isinstance(invoice_settings, dict)
+        else getattr(invoice_settings, "default_payment_method", None)
+    )
+    if default_pm:
+        return (
+            default_pm
+            if isinstance(default_pm, str)
+            else getattr(default_pm, "id", None)
+        )
+
+    methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
+    data = methods.get("data", []) if isinstance(methods, dict) else methods.data
+    for pm in data or []:
+        pm_id = pm.get("id") if isinstance(pm, dict) else pm.id
+        if pm_id:
+            return pm_id
+    return None
+
+
+def set_default_payment_method(
+    customer_id: str,
+    subscription_id: Optional[str],
+    payment_method_id: str,
+) -> None:
+    """Make ``payment_method_id`` the default card for future invoices.
+
+    Sets it on the customer's ``invoice_settings`` (used for new invoices)
+    and, when there's an active subscription, on the subscription itself so
+    renewals charge the chosen card.
+    """
+    configure_stripe()
+    stripe.Customer.modify(
+        customer_id,
+        invoice_settings={"default_payment_method": payment_method_id},
+    )
+    if subscription_id:
+        stripe.Subscription.modify(
+            subscription_id,
+            default_payment_method=payment_method_id,
+        )
+
+
+def detach_payment_method(payment_method_id: str) -> None:
+    """Detach (remove) a saved card from its customer."""
+    configure_stripe()
+    stripe.PaymentMethod.detach(payment_method_id)
 
 
 def extract_tax_id_info(description: str) -> Dict[str, str]:

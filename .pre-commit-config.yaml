@@ -44,12 +44,11 @@ repos:
     language: system
     types: [python]
 
-  - id: check-core-purity
-    name: orchestra_core purity (no platform imports)
-    entry: bash scripts/check_core_purity.sh
+  - id: check-no-release-versioning
+    name: no first-party release versioning
+    entry: python3 scripts/check_no_release_versioning.py
     language: system
     pass_filenames: false
-    files: ^orchestra_core/.*\.py$
 
   # - id: flake8
   #   name: Check with Flake8

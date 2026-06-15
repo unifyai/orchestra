@@ -9,6 +9,7 @@ from orchestra.web.api import (  # noqa: WPS235
     billing,
     context,
     credits,
+    integrations,
     interface,
     log,
     organization,
@@ -31,15 +32,20 @@ from orchestra.web.api.dependencies import (
 )
 from orchestra.web.api.desktop import router as desktop_router
 from orchestra.web.api.discord import admin_router as discord_admin_router
+from orchestra.web.api.email import admin_router as email_admin_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.messages import admin_router as messages_admin_router
 from orchestra.web.api.messages import router as messages_router
 from orchestra.web.api.organization import admin_router as organization_admin_router
+from orchestra.web.api.phone import admin_router as phone_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
+from orchestra.web.api.slack import admin_router as slack_admin_router
 from orchestra.web.api.table_view.views import admin_router as table_view_admin_router
 from orchestra.web.api.table_view.views import router as table_view_router
+from orchestra.settings import settings
+from orchestra.web.api.utils.assistant_infra import fetch_comms_features
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 from orchestra.web.api.whatsapp import admin_router as whatsapp_admin_router
 
@@ -71,9 +77,6 @@ groupings = {
         "Organizations",
         "Roles & Permissions",
         "Teams & Resource Access",
-    ],
-    "Storage": [
-        "Storage",
     ],
 }
 
@@ -184,9 +187,36 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
+    email_admin_router,
+    prefix="/admin",
+    tags=["Email"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    phone_admin_router,
+    prefix="/admin",
+    tags=["Phone"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
     discord_admin_router,
     prefix="/admin",
     tags=["Discord"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    slack_admin_router,
+    prefix="/admin",
+    tags=["Slack"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    integrations.admin_router,
+    prefix="/admin",
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
@@ -225,6 +255,15 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    storage.public_router,
+    tags=["Storage"],
+)
+api_router.include_router(
+    storage.router,
+    tags=["Storage"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     dashboard_router,
     tags=["Dashboards"],
     include_in_schema=False,
@@ -246,6 +285,10 @@ api_router.include_router(
     interface.router,
     tags=["Configs"],
     include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    integrations.router,
     dependencies=API_KEY_AUTH,
 )
 
@@ -283,14 +326,6 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 
-# Storage
-
-api_router.include_router(
-    storage.router,
-    tags=["Storage"],
-    dependencies=API_KEY_AUTH,
-)
-
 # Messages
 
 api_router.include_router(
@@ -308,6 +343,32 @@ api_router.include_router(stripe_webhooks.router)
 @api_router.get("/health", include_in_schema=False)
 def health_check() -> None:
     """Health check endpoint. Returns 200 if the service is healthy."""
+
+
+@api_router.get("/features", tags=["System"], summary="Deployment capability flags")
+async def get_features() -> dict[str, bool]:
+    """Capability flags derived from this deployment's configured credentials.
+
+    Cross-service features are owned by whichever service holds the
+    authoritative credentials. Console (and other consumers) read these flags
+    rather than re-deriving them from their own partial env, so a feature is
+    only surfaced when the owning service can actually fulfil it. Contact
+    channels are owned by the communication layer, so we fold in its
+    ``/features`` probe. No auth: the response carries no secrets, only on/off
+    capability bits.
+    """
+    channels = await fetch_comms_features()
+    return {
+        "billing": settings.billing_enabled,
+        "workspace_google": settings.workspace_google_enabled,
+        "workspace_microsoft": settings.workspace_microsoft_enabled,
+        # Contact channels (probed from the communication gateway). Absent keys
+        # mean the comms layer is unreachable or the channel isn't configured;
+        # either way the channel is treated as unavailable downstream.
+        "contact_phone": bool(channels.get("phone", False)),
+        "contact_whatsapp": bool(channels.get("whatsapp", False)),
+        "contact_discord": bool(channels.get("discord", False)),
+    }
 
 
 @api_router.get("/docs", include_in_schema=False)

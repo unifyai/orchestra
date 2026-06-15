@@ -2,7 +2,7 @@
 
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 

@@ -38,7 +38,7 @@ from sqlalchemy import (
 )
 
 from orchestra.env import get_env
-from orchestra_core.lib.parallel import threaded_map
+from orchestra.lib.parallel import threaded_map
 
 load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB, insert
@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import BinaryExpression, Cast, ColumnClause
 from sqlalchemy.sql.selectable import CTE, Subquery
 
-from orchestra.db.models.orchestra_models import Embedding
+from orchestra.db.models.core_models import Embedding
 
 from . import alias_utils
 from .image_utils import fetch_media_with_retry
@@ -433,7 +433,7 @@ def _get_image_embedding_from_url(
     Args:
         image_url: Either a GCS URL (https://storage.googleapis.com/...) or
                    a base64 encoded image string (with or without data URI prefix)
-        bucket_service: Optional BucketService instance for fetching GCS images.
+        bucket_service: Optional bucket service instance for fetching stored images.
                        If not provided, a new instance will be created (not recommended for batch operations).
         _retry_count: Internal parameter for tracking retry attempts
 
@@ -449,9 +449,9 @@ def _get_image_embedding_from_url(
             if image_url.startswith("http://") or image_url.startswith("https://"):
                 # This is a GCS URL - download the image first
                 if bucket_service is None:
-                    from orchestra.services.bucket_service import BucketService
+                    from orchestra.services.bucket_service import create_bucket_service
 
-                    bucket_service = BucketService()
+                    bucket_service = create_bucket_service()
 
                 # Extract filename from URL and fetch with retry for GCS eventual consistency
                 filename = image_url.split("/")[-1]
@@ -1470,7 +1470,7 @@ def _get_field_type_from_db(
     """
     Query FieldType table for type information.
     """
-    from orchestra.db.models.orchestra_models import FieldType
+    from orchestra.db.models.core_models import FieldType
 
     if project_id is None:
         return None
@@ -2063,7 +2063,7 @@ def _queue_embeddings_for_generation(
         dimensions: Optional number of dimensions for the embedding
         key: The TARGET key for Embedding.key (e.g., "desc_emb")
     """
-    from orchestra.db.models.orchestra_models import EmbeddingQueue
+    from orchestra.db.models.core_models import EmbeddingQueue
 
     if not id_to_text:
         return

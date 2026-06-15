@@ -6,13 +6,15 @@ from zoneinfo import available_timezones
 
 from pydantic import BaseModel, Field, field_validator
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel, SafeLabel
+
 VALID_TIMEZONES = available_timezones()
 
 
 class OrganizationCreate(BaseModel):
     """Schema for creating an organization."""
 
-    name: str
+    name: SafeLabel
     timezone: Optional[str] = (
         None  # IANA timezone; defaults to owner's timezone if not set
     )
@@ -31,7 +33,7 @@ class OrganizationCreate(BaseModel):
 class AdminOrganizationCreate(BaseModel):
     """Schema for admin-created organizations (white-glove onboarding)."""
 
-    name: str
+    name: SafeLabel
     creator_user_id: str
     timezone: Optional[str] = None
 
@@ -48,7 +50,7 @@ class AdminOrganizationCreate(BaseModel):
 class OrganizationUpdate(BaseModel):
     """Schema for updating an organization."""
 
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
 
     @field_validator("timezone")
@@ -80,6 +82,13 @@ class OrganizationResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class OrganizationMembershipResponse(OrganizationResponse):
+    """Schema for organization membership listings for the authenticated user."""
+
+    role_id: Optional[int] = None
+    role_name: Optional[str] = None
 
 
 class OrganizationMemberAdd(BaseModel):

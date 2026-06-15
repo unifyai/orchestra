@@ -5,22 +5,22 @@ import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from sqlalchemy import Integer, and_, cast, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra.db.models.orchestra_models import (
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.models.core_models import (
     Context,
     FieldType,
     LogEvent,
     LogEventContext,
     Project,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +81,12 @@ def _extract_field_names_from_equation(equation: str) -> List[str]:
 
 
 class LogEventDAO:
+    bucket_service_factory: Callable[[], Any] = create_bucket_service
+
     def __init__(self, session: Session, context_dao: Optional[ContextDAO] = None):
         self.session = session
         self.context_dao = context_dao or ContextDAO(session)
-        self.bucket_service = BucketService()
+        self.bucket_service = type(self).bucket_service_factory()
 
     def bulk_create(
         self,
@@ -796,7 +798,7 @@ class LogEventDAO:
             completed.append(ordered_row)
 
         if unique_key_columns:
-            from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
             unique_dao = UniqueConstraintDAO(self.session)
 
@@ -1573,7 +1575,7 @@ class LogEventDAO:
             filter_dict = str_filter_exp_to_dict(filter_expr)
             filter_dict["embed_target_key"] = template.key
 
-            from orchestra.db.models.orchestra_models import Embedding
+            from orchestra.db.models.core_models import Embedding
 
             is_embedding_equation = (
                 "embed(" in template.equation or "embed_image(" in template.equation
@@ -1781,7 +1783,7 @@ class LogEventDAO:
             # (prevents worker race conditions), soft-delete embeddings (excludes
             # from HNSW search immediately), and null ref_ids (avoids per-row
             # SET NULL trigger overhead when log_event rows are deleted).
-            from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
+            from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(self.session)
             embedding_dao.cancel_queue(log_event_ids=ids, reason="Log deleted")

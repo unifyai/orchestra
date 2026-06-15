@@ -9,8 +9,8 @@ from starlette.requests import Request
 
 from orchestra.db.dao.api_message_dao import ApiMessageDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra_core.db.dependencies import get_db_session
-from orchestra.services.bucket_service import BucketService
+from orchestra.db.dependencies import get_db_session
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.messages.schema import (
     MessageComplete,
@@ -29,17 +29,13 @@ ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def _adapters_url_for_deploy_env(deploy_env: str | None = None) -> str | None:
-    return ADAPTERS_URL
-
-
 def _generate_signed_url(gs_url: str) -> str | None:
     """Best-effort signed URL generation for a gs:// URI. Returns None on failure."""
     try:
         bucket_name, object_path = parse_gcs_url(gs_url)
         if not bucket_name or not object_path:
             return None
-        svc = BucketService()
+        svc = create_bucket_service()
         bucket = svc.storage_client.bucket(bucket_name)
         blob = bucket.blob(object_path)
         if not blob.exists():
@@ -71,14 +67,18 @@ def _enrich_attachments(raw: list | None) -> list[dict]:
 
 
 async def _dispatch_to_adapters(
+    *,
     assistant_id: int,
     api_message_id: str,
     body: str,
-    deploy_env: str | None = None,
+    is_local: bool,
     attachments: list[dict] | None = None,
     tags: list[str] | None = None,
 ) -> None:
-    adapters_url = _adapters_url_for_deploy_env(deploy_env)
+    if is_local:
+        logger.info("Skipping adapter dispatch for local assistant %s", assistant_id)
+        return
+    adapters_url = ADAPTERS_URL
     if not adapters_url:
         logger.warning("UNITY_ADAPTERS_URL not set, skipping adapter dispatch")
         return
@@ -158,7 +158,7 @@ async def upload_attachment(
             detail="Assistant not found.",
         )
 
-    adapters_url = _adapters_url_for_deploy_env(assistant.deploy_env)
+    adapters_url = ADAPTERS_URL
     if not adapters_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -239,7 +239,7 @@ async def send_message(
         assistant_id=body.assistant_id,
         api_message_id=api_message.id,
         body=body.message,
-        deploy_env=assistant.deploy_env,
+        is_local=assistant.is_local,
         attachments=attachments_dicts,
         tags=body.tags,
     )

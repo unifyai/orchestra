@@ -94,7 +94,6 @@ async def test_create_assistant_success(client: AsyncClient):
     assert data["nationality"] == payload["nationality"]
     assert data["profile_photo"] == payload["profile_photo"]
     assert data["about"] == payload["about"]
-    assert data["deploy_env"] is None
     assert data["phone"] is None
     assert data["email"] is None
     assert isinstance(data.get("created_at"), str)
@@ -116,21 +115,24 @@ async def test_create_local_assistant(client: AsyncClient, mock_assistant_infra_
     assert resp.status_code == 200
     data = resp.json()["info"]
     assert data["is_local"] is True
-    assert data["deploy_env"] is None
     assert data["first_name"] == "LocalDev"
     mock_wake_up.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_create_assistant_rejects_deploy_env(client: AsyncClient):
+async def test_create_assistant_ignores_unknown_fields(client: AsyncClient):
     payload = {
-        "first_name": "Rejected",
-        "surname": "Assistant",
-        "deploy_env": "preview",
+        "first_name": "Desktop",
+        "surname": "Flow",
+        "is_user_desktop": True,
         "create_infra": False,
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["first_name"] == "Desktop"
+    assert data["surname"] == "Flow"
+    assert data["is_local"] is False
 
 
 @pytest.mark.anyio
@@ -146,6 +148,37 @@ async def test_create_assistant_missing_field(client: AsyncClient):
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_create_assistant_conflicts_on_normalized_name_in_same_scope(
+    client: AsyncClient,
+):
+    first = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Casey",
+            "surname": "Recruiter",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+    existing_id = int(first.json()["info"]["agent_id"])
+
+    duplicate = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "  casey ",
+            "surname": " recruiter  ",
+            "create_infra": False,
+        },
+        headers=HEADERS,
+    )
+    assert duplicate.status_code == status.HTTP_409_CONFLICT, duplicate.json()
+    detail = duplicate.json()["detail"]
+    assert detail["error"] == "assistant_already_exists"
+    assert detail["existing_id"] == existing_id
 
 
 @pytest.mark.anyio
@@ -388,7 +421,7 @@ async def test_update_about_only(client: AsyncClient, mock_assistant_infra_calls
     assert updated["nationality"] == payload["nationality"]
     assert updated["phone"] is None
     assert updated["email"] is None
-    mock_reawaken.assert_called_once_with(str(aid), deploy_env=None)
+    mock_reawaken.assert_called_once_with(str(aid))
 
 
 @pytest.mark.anyio
@@ -618,31 +651,33 @@ async def test_assign_user_desktop_to_assistant(client: AsyncClient):
         "weekly_limit": 12.0,
         "max_parallel": 2,
         "nationality": "Germany",
-        "about": "An assistant for testing user_desktop_id.",
+        "about": "An assistant for testing user desktop links.",
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
     agent_id = created_data["agent_id"]
-    assert created_data["user_desktop_id"] is None
     assert created_data["user_desktop_url"] is None
     assert created_data["user_desktop_mode"] is None
 
-    # Assign desktop to assistant
-    update_payload = {"user_desktop_id": desktop_id, "create_infra": False}
-    patch_resp = await client.patch(
-        f"/v0/assistant/{agent_id}/config",
-        json=update_payload,
+    # Link the caller's own desktop to the assistant
+    link_resp = await client.post(
+        "/v0/desktop/link",
+        json={"assistant_id": int(agent_id), "desktop_id": desktop_id},
         headers=HEADERS,
     )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["info"]["desktop_id"] == desktop_id
 
-    assert patch_resp.status_code == 200
-    updated_data = patch_resp.json()["info"]
-    assert updated_data["user_desktop_id"] == desktop_id
-    assert updated_data["user_desktop_url"] == "https://abc123.tunnel.unify.ai"
-    assert updated_data["user_desktop_mode"] == "macos"
-    assert updated_data["desktop_mode"] is None
+    # Reading the assistant resolves the caller's linked desktop
+    read_resp = await client.get("/v0/assistant", headers=HEADERS)
+    assistant_data = [a for a in read_resp.json()["info"] if a["agent_id"] == agent_id][
+        0
+    ]
+    assert assistant_data["user_desktop_url"] == "https://abc123.tunnel.unify.ai"
+    assert assistant_data["user_desktop_mode"] == "macos"
+    assert assistant_data["desktop_mode"] is None
 
 
 @pytest.mark.anyio
@@ -661,7 +696,7 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
     assert desktop_resp.status_code == 200
     desktop_id = desktop_resp.json()["info"]["id"]
 
-    # Create an assistant with desktop fields set
+    # Create an assistant with its own VM desktop mode set
     payload = {
         "first_name": "FullDesktop",
         "surname": "Tester",
@@ -671,18 +706,34 @@ async def test_create_assistant_with_desktop_fields(client: AsyncClient):
         "nationality": "Canada",
         "about": "An assistant with full desktop configuration.",
         "desktop_mode": "ubuntu",
-        "user_desktop_id": desktop_id,
-        "user_desktop_filesys_sync": True,
         "create_infra": False,
     }
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
     created_data = create_resp.json()["info"]
+    agent_id = created_data["agent_id"]
     assert created_data["desktop_mode"] == "ubuntu"
-    assert created_data["user_desktop_id"] == desktop_id
-    assert created_data["user_desktop_mode"] == "macos"
-    assert created_data["user_desktop_filesys_sync"] is True
-    assert created_data["user_desktop_url"] == "https://my-desktop.example.com"
+
+    # Link the caller's desktop with filesystem sync enabled
+    link_resp = await client.post(
+        "/v0/desktop/link",
+        json={
+            "assistant_id": int(agent_id),
+            "desktop_id": desktop_id,
+            "filesys_sync": True,
+        },
+        headers=HEADERS,
+    )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["info"]["filesys_sync"] is True
+
+    read_resp = await client.get("/v0/assistant", headers=HEADERS)
+    assistant_data = [a for a in read_resp.json()["info"] if a["agent_id"] == agent_id][
+        0
+    ]
+    assert assistant_data["user_desktop_mode"] == "macos"
+    assert assistant_data["user_desktop_filesys_sync"] is True
+    assert assistant_data["user_desktop_url"] == "https://my-desktop.example.com"
 
 
 @pytest.mark.anyio
@@ -1029,7 +1080,10 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
     assert resp1.status_code == 200
     aid1 = resp1.json()["info"]["agent_id"]
 
-    # Do not create assistant for user2; expect no assistants for user2
+    # Do not create assistant for user2; expect no user-created assistants
+
+    def non_coordinator_assistants(rows):
+        return [row for row in rows if not row.get("is_coordinator")]
 
     # Verify admin endpoint returns only user1's assistants
     res1 = await client.get(
@@ -1037,17 +1091,16 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
         headers=ADMIN_HEADERS,
     )
     assert res1.status_code == 200
-    info1 = res1.json()["info"]
+    info1 = non_coordinator_assistants(res1.json()["info"])
     assert len(info1) == 1 and info1[0]["agent_id"] == aid1
 
-    # Verify admin endpoint returns no assistants for user2
+    # Verify admin endpoint returns no user-created assistants for user2
     res2 = await client.get(
         f"/v0/admin/assistant/user/{user2['id']}",
         headers=ADMIN_HEADERS,
     )
     assert res2.status_code == 200
-    info2 = res2.json()["info"]
-    assert isinstance(info2, list)
+    info2 = non_coordinator_assistants(res2.json()["info"])
     assert len(info2) == 0
 
 
@@ -1186,12 +1239,33 @@ async def test_create_assistant_creates_assistants_project(
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert resp.status_code == 200
+    assistant_id = resp.json()["info"]["agent_id"]
 
     # Verify that the "Assistants" project now exists
     projects_resp = await client.get("/v0/projects", headers=HEADERS)
     assert projects_resp.status_code == 200
     projects = projects_resp.json()
     assert "Assistants" in projects
+
+    # Owner contact bootstrap should create a root Contacts row for chat lookup.
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_resp.status_code == 200
+    owner_user_id = credits_resp.json()["id"]
+    contact_context = f"{owner_user_id}/{assistant_id}/Contacts"
+    logs_resp = await client.get(
+        f"/v0/logs?project_name=Assistants&context={contact_context}",
+        headers=HEADERS,
+    )
+    assert logs_resp.status_code == 200
+    owner_contact_logs = [
+        log for log in logs_resp.json()["logs"] if log["entries"].get("contact_id") == 1
+    ]
+    assert len(owner_contact_logs) == 1
+    owner_contact = owner_contact_logs[0]["entries"]
+    assert owner_contact["email_address"]
+    assert owner_contact["is_system"] is True
+    assert owner_contact["should_respond"] is True
+    assert owner_contact["response_policy"]
 
 
 @pytest.mark.anyio
@@ -1224,7 +1298,6 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     call_args, call_kwargs = mock_log_pre_hire_chat.call_args
     assert call_kwargs["assistant_id"] == str(assistant_id)
     assert call_kwargs["messages"] == pre_hire_chat_payload["pre_hire_chat"]
-    assert "deploy_env" in call_kwargs
 
 
 @pytest.mark.anyio
@@ -1429,7 +1502,7 @@ async def test_delete_assistant_contact(client: AsyncClient, dbsession: Session)
         assert (
             phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
         )  # Unchanged
-        mock_delete_phone.assert_called_once_with("+15558675309", deploy_env=None)
+        mock_delete_phone.assert_called_once_with("+15558675309")
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
@@ -1580,7 +1653,7 @@ async def test_delete_assistant_contact_reawakens(
     mock_reawaken.assert_called_once()
     assert mock_reawaken.call_args[0][0] == str(assistant_id)
     # Also assert the mock for deleting the phone number was called
-    mock_delete_phone.assert_called_once_with("+15552223333", deploy_env=None)
+    mock_delete_phone.assert_called_once_with("+15552223333")
 
 
 # ==== Voice Configuration Validation Tests ====
@@ -1811,7 +1884,7 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
         "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.BucketService",
+        "orchestra.web.api.assistant.views.create_bucket_service",
     ) as MockBucketServiceClass:
         mock_process_cleanup.return_value = {
             "processed": 1,
@@ -1857,7 +1930,7 @@ async def test_delete_assistant_processes_cleanup_tasks(
         "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.BucketService",
+        "orchestra.web.api.assistant.views.create_bucket_service",
     ) as MockBucketServiceClass:
         mock_process_cleanup.return_value = {
             "processed": 1,
@@ -1906,7 +1979,7 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
         "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.BucketService",
+        "orchestra.web.api.assistant.views.create_bucket_service",
     ) as MockBucketServiceClass:
         mock_process_cleanup.return_value = {
             "processed": 1,

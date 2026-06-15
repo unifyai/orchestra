@@ -31,7 +31,10 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -53,6 +56,10 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
         }
         mock_delete_disk.return_value = {
             "name": "delete_assistant_disk",
+            "success": True,
+        }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
             "success": True,
         }
 
@@ -126,7 +133,10 @@ async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup(
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -150,6 +160,10 @@ async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup(
             "name": "delete_assistant_disk",
             "success": True,
         }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
+            "success": True,
+        }
 
         result = await assistant_infra.teardown_assistant_runtime(
             "42",
@@ -157,7 +171,7 @@ async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup(
         )
 
     assert result["success"] is True
-    mock_stop_session.assert_awaited_once_with("42", deploy_env=None)
+    mock_stop_session.assert_awaited_once_with("42")
 
 
 @pytest.mark.anyio
@@ -205,7 +219,10 @@ async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comm
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -234,6 +251,12 @@ async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comm
             "skipped": True,
             "reason": "missing_comms_config",
         }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
+            "success": True,
+            "skipped": True,
+            "reason": "missing_comms_config",
+        }
 
         result = await assistant_infra.teardown_assistant_runtime(
             "42",
@@ -255,15 +278,15 @@ async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comm
     }
     mock_wait_for_runtime_cleanup.assert_not_awaited()
     mock_delete_session.assert_not_awaited()
-    mock_delete_topic.assert_awaited_once_with("42", deploy_env=None)
-    mock_delete_disk.assert_awaited_once_with("42", deploy_env=None)
+    mock_delete_topic.assert_awaited_once_with("42")
+    mock_delete_disk.assert_awaited_once_with("42")
+    mock_delete_archive.assert_awaited_once_with("42")
 
 
 @pytest.mark.anyio
 async def test_process_assistant_cleanup_tasks_retries_incomplete_runtime(dbsession):
     task = AssistantCleanupTask(
         assistant_id=42,
-        deploy_env=None,
         desktop_mode="ubuntu",
         source_flow=CleanupSource.ASSISTANT_DELETE,
         cleanup_payload={"contacts": []},
@@ -315,7 +338,6 @@ async def test_process_assistant_cleanup_tasks_with_task_ids_ignores_retry_backo
 ):
     task = AssistantCleanupTask(
         assistant_id=43,
-        deploy_env=None,
         desktop_mode="ubuntu",
         source_flow=CleanupSource.ASSISTANT_DELETE,
         cleanup_payload={"contacts": []},
@@ -362,7 +384,6 @@ async def test_process_assistant_cleanup_tasks_without_task_ids_respects_retry_b
 ):
     task = AssistantCleanupTask(
         assistant_id=44,
-        deploy_env=None,
         desktop_mode="ubuntu",
         source_flow=CleanupSource.ASSISTANT_DELETE,
         cleanup_payload={"contacts": []},
@@ -410,7 +431,10 @@ async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is
     ) as mock_delete_topic, patch(
         "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
         new_callable=AsyncMock,
-    ) as mock_delete_disk:
+    ) as mock_delete_disk, patch(
+        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+        new_callable=AsyncMock,
+    ) as mock_delete_archive:
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -446,6 +470,10 @@ async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is
             "name": "delete_assistant_disk",
             "success": True,
         }
+        mock_delete_archive.return_value = {
+            "name": "delete_assistant_pool_archive",
+            "success": True,
+        }
 
         result = await assistant_infra.teardown_assistant_runtime(
             "42",
@@ -453,7 +481,7 @@ async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is
         )
 
     assert result["success"] is True
-    mock_sessionless_fallback.assert_awaited_once_with("42", deploy_env=None)
+    mock_sessionless_fallback.assert_awaited_once_with("42")
     assert result["steps"]["sessionless_runtime_fallback"]["success"] is True
 
 
@@ -496,11 +524,11 @@ async def test_cleanup_sessionless_runtime_uses_binding_scoped_vm_release():
         result = await assistant_infra._cleanup_sessionless_runtime("42")
 
     assert result["success"] is True
-    mock_stop_jobs.assert_awaited_once_with("42", deploy_env=None)
+    mock_stop_jobs.assert_awaited_once_with("42")
     mock_release_pool_vm.assert_has_awaits(
         [
-            call("42", "binding-1", vm_name="vm-1", deploy_env=None),
-            call("42", "binding-2", vm_name="vm-2", deploy_env=None),
+            call("42", "binding-1", vm_name="vm-1"),
+            call("42", "binding-2", vm_name="vm-2"),
         ],
     )
     assert result["response"]["errors"] == []
@@ -559,7 +587,7 @@ def test_teardown_assistant_runtime_sync_runs_sessionless_fallback_when_stop_is_
         )
 
     assert result["success"] is True
-    mock_sessionless_fallback.assert_called_once_with("42", deploy_env=None)
+    mock_sessionless_fallback.assert_called_once_with("42")
     assert result["steps"]["sessionless_runtime_fallback"]["success"] is True
 
 
@@ -569,7 +597,6 @@ async def test_process_assistant_cleanup_tasks_deletes_assistant_gcs_after_runti
 ):
     task = AssistantCleanupTask(
         assistant_id=45,
-        deploy_env=None,
         desktop_mode="ubuntu",
         source_flow=CleanupSource.ASSISTANT_DELETE,
         cleanup_payload={
@@ -589,7 +616,7 @@ async def test_process_assistant_cleanup_tasks_deletes_assistant_gcs_after_runti
         "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
         new_callable=AsyncMock,
     ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.BucketService",
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
     ) as mock_bucket_cls, patch(
         "orchestra.services.assistant_cleanup_service.settings",
     ) as mock_settings:
@@ -606,6 +633,7 @@ async def test_process_assistant_cleanup_tasks_deletes_assistant_gcs_after_runti
             "errors": [],
         }
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
         mock_bucket = mock_bucket_cls.return_value
         mock_bucket.delete_all_assistant_data.return_value = {
             "media": 2,
@@ -638,7 +666,6 @@ async def test_process_assistant_cleanup_tasks_defers_gcs_until_runtime_is_clean
 ):
     task = AssistantCleanupTask(
         assistant_id=46,
-        deploy_env=None,
         desktop_mode="ubuntu",
         source_flow=CleanupSource.ASSISTANT_DELETE,
         cleanup_payload={
@@ -657,7 +684,7 @@ async def test_process_assistant_cleanup_tasks_defers_gcs_until_runtime_is_clean
         "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
         new_callable=AsyncMock,
     ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.BucketService",
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
     ) as mock_bucket_cls:
         mock_teardown.return_value = {
             "success": False,
@@ -700,7 +727,6 @@ async def test_deprovision_assistant_contacts_skips_external_calls_for_byod(
     """
     spec = AssistantCleanupSpec(
         assistant_id=4242,
-        deploy_env=None,
         desktop_mode="ubuntu",
         contacts=[
             ContactCleanupSpec(
@@ -731,7 +757,7 @@ async def test_deprovision_assistant_contacts_skips_external_calls_for_byod(
     assert result["success"] is True
     assert result["attempted"] == 2
     # BYOD phone is skipped, platform phone is deprovisioned exactly once.
-    mock_del_phone.assert_called_once_with("+15555550202", deploy_env=None)
+    mock_del_phone.assert_called_once_with("+15555550202")
 
 
 @pytest.mark.anyio
@@ -748,7 +774,6 @@ async def test_deprovision_assistant_contacts_never_calls_email_helpers(
     """
     spec = AssistantCleanupSpec(
         assistant_id=4243,
-        deploy_env=None,
         desktop_mode="ubuntu",
         contacts=[
             ContactCleanupSpec(

@@ -1,11 +1,13 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel, SafeLabel
+
 
 class DesktopCreate(BaseModel):
-    name: str = Field(
+    name: SafeLabel = Field(
         ...,
         description="Human-readable label for the desktop",
         example="Julia's MacBook Pro",
@@ -23,7 +25,7 @@ class DesktopCreate(BaseModel):
 
 
 class DesktopUpdate(BaseModel):
-    name: Optional[str] = Field(
+    name: OptionalSafeLabel = Field(
         None,
         description="Human-readable label for the desktop",
         example="Julia's MacBook Pro",
@@ -46,15 +48,42 @@ class DesktopRead(BaseModel):
     name: str = Field(..., description="Human-readable label")
     url: str = Field(..., description="Public tunnel URL")
     os: str = Field(..., description="Operating system")
-    assigned_to_assistant_id: Optional[int] = Field(
-        None,
-        description="Agent ID of the assistant this desktop is assigned to, or null",
+    assigned_to_assistant_ids: List[int] = Field(
+        default_factory=list,
+        description="Agent IDs of every assistant this desktop is linked to",
     )
     created_at: datetime = Field(..., description="When the desktop was registered")
     updated_at: Optional[datetime] = Field(
         None,
         description="When the desktop was last updated",
     )
+
+    class Config:
+        orm_mode = True
+
+
+class DesktopLinkCreate(BaseModel):
+    assistant_id: int = Field(
+        ...,
+        description="Agent ID of the assistant to link this desktop to",
+        example=42,
+    )
+    desktop_id: int = Field(
+        ...,
+        description="ID of the caller's registered desktop to link",
+        example=1,
+    )
+    filesys_sync: bool = Field(
+        False,
+        description="Whether to enable filesystem sync for this link",
+    )
+
+
+class DesktopLinkRead(BaseModel):
+    assistant_id: int = Field(..., description="Agent ID of the linked assistant")
+    desktop_id: int = Field(..., description="ID of the linked desktop")
+    owner_user_id: str = Field(..., description="User who owns the linked desktop")
+    filesys_sync: bool = Field(..., description="Whether filesystem sync is enabled")
 
     class Config:
         orm_mode = True

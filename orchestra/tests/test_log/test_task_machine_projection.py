@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 
-from orchestra.db.models.orchestra_models import Assistant
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    Context,
+    Organization,
+    Team,
+    TeamAssistantMembership,
+)
 from orchestra.services import task_machine_state_service
 from orchestra.tests.test_log import (
     HEADERS,
@@ -34,7 +41,11 @@ TASK_OUTBOUND_OPERATIONS_CONTEXT = (
         TASKS_CONTEXT,
     )
 )
+PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 SECONDARY_USER_ID = "seconday_user"
+_ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION = (
+    task_machine_state_service._reconcile_scheduled_activation_materialization
+)
 
 
 async def _ensure_task_machine_project(client: AsyncClient) -> None:
@@ -93,6 +104,49 @@ def _make_assistant(dbsession, *, user_id: str) -> Assistant:
     dbsession.add(assistant)
     dbsession.flush()
     return assistant
+
+
+def _ensure_organization(dbsession, *, owner_user_id: str) -> Organization:
+    """Return or create an organization for task routing tests."""
+
+    org = (
+        dbsession.query(Organization)
+        .filter(Organization.owner_id == owner_user_id)
+        .first()
+    )
+    if org is None:
+        org = Organization(name="Task Routing Org", owner_id=owner_user_id)
+        dbsession.add(org)
+        dbsession.flush()
+    return org
+
+
+def _make_team_member(
+    dbsession,
+    *,
+    assistant: Assistant,
+    owner_user_id: str = PRIMARY_USER_ID,
+) -> Team:
+    """Create a shared team and attach the assistant as a live member."""
+
+    org = _ensure_organization(dbsession, owner_user_id=owner_user_id)
+    team = Team(
+        name="Project Room",
+        description="Project room workspace for task routing tests.",
+        organization_id=org.id,
+        status="active",
+    )
+    dbsession.add(team)
+    dbsession.flush()
+    dbsession.add(
+        TeamAssistantMembership(
+            assistant_id=assistant.agent_id,
+            team_id=team.id,
+            added_by=owner_user_id,
+        ),
+    )
+    dbsession.flush()
+    return team
 
 
 @pytest.fixture(autouse=True)
@@ -204,6 +258,177 @@ def test_scheduled_activation_upsert_body_includes_wake_context():
     assert body["recurrence_hint"] == "recurring"
 
 
+def _scheduled_activation_payload(
+    *,
+    revision: str = "rev-1",
+    next_due_at: str = "2026-04-10T09:00:00+00:00",
+    execution_mode: str = "offline",
+    source_task_log_id: int = 555,
+) -> dict:
+    return {
+        "assistant_id": "42",
+        "task_id": 101,
+        "source_task_log_id": source_task_log_id,
+        "activation_kind": "scheduled",
+        "execution_mode": execution_mode,
+        "activation_revision": revision,
+        "next_due_at": next_due_at,
+        "task_name": "Morning briefing",
+        "task_description": "Prepare the morning update before the user checks in.",
+    }
+
+
+def test_reconcile_skips_unchanged_scheduled_delivery_identity(monkeypatch):
+    """Repeated projection of the same delivery must not rematerialize."""
+
+    posts = []
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_reconcile_scheduled_activation_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_post_task_activation_request",
+        lambda **kwargs: posts.append(kwargs),
+    )
+
+    previous = _scheduled_activation_payload(source_task_log_id=555)
+    current = {**_scheduled_activation_payload(source_task_log_id=555)}
+    current["last_materialized_at"] = "2026-04-10T08:00:00+00:00"
+
+    task_machine_state_service._reconcile_scheduled_activation_materialization(
+        previous_activation=previous,
+        current_activation=current,
+    )
+
+    assert posts == []
+
+
+def test_reconcile_upserts_changed_scheduled_delivery_identity(monkeypatch):
+    """Changed due time should rematerialize and include stale cleanup fields."""
+
+    posts = []
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_reconcile_scheduled_activation_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_post_task_activation_request",
+        lambda **kwargs: posts.append(kwargs),
+    )
+
+    task_machine_state_service._reconcile_scheduled_activation_materialization(
+        previous_activation=_scheduled_activation_payload(
+            next_due_at="2026-04-10T09:00:00+00:00",
+        ),
+        current_activation=_scheduled_activation_payload(
+            revision="rev-2",
+            next_due_at="2026-04-10T09:30:00+00:00",
+        ),
+    )
+
+    assert len(posts) == 1
+    assert posts[0]["path"] == task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH
+    body = posts[0]["body"]
+    assert body["activation_revision"] == "rev-2"
+    assert body["scheduled_for"] == "2026-04-10T09:30:00+00:00"
+    assert body["previous_activation_revision"] == "rev-1"
+    assert body["previous_scheduled_for"] == "2026-04-10T09:00:00+00:00"
+
+
+def test_reconcile_deletes_unarmed_scheduled_delivery(monkeypatch):
+    """Dropping an armed activation should still delete its Cloud Task."""
+
+    posts = []
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_reconcile_scheduled_activation_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_post_task_activation_request",
+        lambda **kwargs: posts.append(kwargs),
+    )
+
+    task_machine_state_service._reconcile_scheduled_activation_materialization(
+        previous_activation=_scheduled_activation_payload(),
+        current_activation=None,
+    )
+
+    assert len(posts) == 1
+    assert posts[0]["path"] == task_machine_state_service._TASK_ACTIVATION_DELETE_PATH
+    assert posts[0]["body"]["activation_revision"] == "rev-1"
+
+
+def test_post_task_activation_request_skips_in_self_host_mode(monkeypatch):
+    """Self-host uses Unity's LocalActivationScheduler instead of Communication."""
+
+    posts: list[tuple] = []
+
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, *args, **kwargs):
+            posts.append((args, kwargs))
+
+    monkeypatch.setenv("SELF_HOST", "1")
+    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
+
+    task_machine_state_service._post_task_activation_request(
+        path=task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH,
+        body={"assistant_id": "42", "task_id": 101},
+    )
+
+    assert posts == []
+
+
+def test_post_task_activation_request_posts_when_not_self_host(monkeypatch):
+    """Hosted deployments still mirror scheduled activations into Communication."""
+
+    posts: list[tuple] = []
+
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, url, **kwargs):
+            posts.append((url, kwargs))
+            return SimpleNamespace(
+                status_code=200,
+                text='{"success": true}',
+                raise_for_status=lambda: None,
+            )
+
+    monkeypatch.delenv("SELF_HOST", raising=False)
+    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+    monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
+
+    task_machine_state_service._post_task_activation_request(
+        path=task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH,
+        body={"assistant_id": "42", "task_id": 101},
+    )
+
+    assert len(posts) == 1
+    url, kwargs = posts[0]
+    assert url == "http://comms.test/infra/task-activation/upsert"
+    assert kwargs["json"] == {"assistant_id": "42", "task_id": 101}
+    assert kwargs["headers"]["Authorization"] == "Bearer test-admin-key"
+
+
 @pytest.mark.anyio
 async def test_task_create_projects_scheduled_activation(
     client: AsyncClient,
@@ -235,6 +460,158 @@ async def test_task_create_projects_scheduled_activation(
     assert activation["repeat"] == [{"unit": "day", "count": 1}]
     assert activation["activation_revision"]
     assert materialization_calls == [(None, activation)]
+
+
+@pytest.mark.anyio
+async def test_team_task_projects_activation_into_executor_context(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Shared task definitions should create executor-owned activation rows."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    team = _make_team_member(dbsession, assistant=assistant)
+    team_tasks_context = f"Teams/{team.id}/Tasks"
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=111,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=team_tasks_context,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    matching = [
+        log["entries"] for log in activations if log["entries"]["task_id"] == 111
+    ]
+    assert len(matching) == 1
+    activation = matching[0]
+    assert activation["assistant_id"] == str(assistant.agent_id)
+    assert activation["destination"] == f"team:{team.id}"
+    assert activation["activation_key"] == f"{assistant.agent_id}:team:{team.id}:111"
+    assert materialization_calls == [(None, activation)]
+
+    shared_activation_context = f"Teams/{team.id}/Tasks/Activations"
+    assert (
+        dbsession.query(Context)
+        .filter(Context.name == shared_activation_context)
+        .one_or_none()
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_team_task_membership_mismatch_does_not_project_activation(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Shared task rows should not arm assistants that no longer belong to the team."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    org = _ensure_organization(dbsession, owner_user_id=PRIMARY_USER_ID)
+    team = Team(
+        name="Restricted Room",
+        description="Restricted room workspace for revoked membership tests.",
+        organization_id=org.id,
+        status="active",
+    )
+    dbsession.add(team)
+    dbsession.flush()
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=112,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=f"Teams/{team.id}/Tasks",
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    assert all(log["entries"]["task_id"] != 112 for log in activations)
+    assert materialization_calls == []
+
+
+@pytest.mark.anyio
+async def test_deleting_team_does_not_project_activation(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Deleting teams stop arming new scheduled work for member assistants."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    team = _make_team_member(dbsession, assistant=assistant)
+    team.status = "deleting"
+    dbsession.flush()
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=113,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=f"Teams/{team.id}/Tasks",
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    assert all(log["entries"]["task_id"] != 113 for log in activations)
+    assert materialization_calls == []
 
 
 @pytest.mark.anyio
@@ -303,10 +680,11 @@ async def test_task_update_clears_activation_when_row_stops_being_armed(
 
 
 @pytest.mark.anyio
-async def test_task_create_rejects_offline_row_without_integer_entrypoint(
+async def test_task_create_projects_offline_agentic_activation(
     client: AsyncClient,
+    materialization_calls,
 ):
-    """Offline task rows must supply an integer entrypoint before projection."""
+    """Offline delivery should not require a symbolic function entrypoint."""
 
     await _ensure_task_machine_project(client)
     response = await _create_log(
@@ -315,8 +693,17 @@ async def test_task_create_rejects_offline_row_without_integer_entrypoint(
         context=TASKS_CONTEXT,
         entries=_offline_task_entries(task_id=250, entrypoint=None),
     )
-    assert response.status_code == 400
-    assert "Offline tasks require an integer entrypoint" in response.json()["detail"]
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    matching = [
+        log["entries"] for log in activations if log["entries"]["task_id"] == 250
+    ]
+    assert len(matching) == 1
+    activation = matching[0]
+    assert activation["execution_mode"] == "offline"
+    assert activation["entrypoint"] is None
+    assert materialization_calls == [(None, activation)]
 
 
 @pytest.mark.anyio
@@ -343,6 +730,107 @@ async def test_task_delete_clears_activation(client: AsyncClient):
 
     activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
     assert all(log["entries"]["task_id"] != 303 for log in activations)
+
+
+@pytest.mark.anyio
+async def test_admin_reproject_restores_missing_scheduled_activation(
+    client: AsyncClient,
+    materialization_calls,
+):
+    """Reprojection should rebuild an activation row from the current Tasks row."""
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=350),
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    activation_log = next(
+        log for log in activations if log["entries"]["task_id"] == 350
+    )
+    delete_response = await _delete_logs(
+        client,
+        [(activation_log["id"], None)],
+        project_name=TASK_MACHINE_PROJECT_NAME,
+        context=TASK_ACTIVATIONS_CONTEXT,
+    )
+    assert delete_response.status_code == 200, delete_response.json()
+    materialization_calls.clear()
+
+    reproject_response = await client.post(
+        "/v0/admin/task-activation/reproject",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 350,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert reproject_response.status_code == 200, reproject_response.json()
+    body = reproject_response.json()
+    assert body["upserted"] == 1
+    assert body["deleted"] == 0
+    assert body["activation"]["task_id"] == 350
+    assert body["activation"]["activation_kind"] == "scheduled"
+    assert materialization_calls == [(None, body["activation"])]
+
+    second_response = await client.post(
+        "/v0/admin/task-activation/reproject",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 350,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert second_response.status_code == 200, second_response.json()
+    activations_after_second = await _get_context_logs(
+        client,
+        context_name=TASK_ACTIVATIONS_CONTEXT,
+    )
+    matching = [
+        log for log in activations_after_second if log["entries"]["task_id"] == 350
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.anyio
+async def test_admin_reproject_is_noop_for_non_head_scheduled_row(
+    client: AsyncClient,
+):
+    """Queue tails should remain unarmed after explicit reprojection."""
+
+    await _ensure_task_machine_project(client)
+    entries = _scheduled_task_entries(task_id=351)
+    entries["schedule"]["prev_task"] = 350
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    reproject_response = await client.post(
+        "/v0/admin/task-activation/reproject",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 351,
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert reproject_response.status_code == 200, reproject_response.json()
+    body = reproject_response.json()
+    assert body["upserted"] == 0
+    assert body["deleted"] == 0
+    assert body["activation"] is None
 
 
 @pytest.mark.anyio
@@ -579,6 +1067,95 @@ async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient)
     assert latest_response.status_code == 200, latest_response.json()
     assert latest_response.json()["run"]["run_key"] == "live:42:303:second"
     assert latest_response.json()["run"]["state"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient):
+    """Source-scoped latest lookup should not cross physical task instances."""
+
+    await _ensure_task_machine_project(client)
+    first_source = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(
+            task_id=313,
+            instance_id=0,
+            start_at="2026-04-10T09:00:00+00:00",
+        ),
+    )
+    assert first_source.status_code == 200, first_source.json()
+    first_source_log_id = first_source.json()["log_event_ids"][0]
+
+    second_source = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(
+            task_id=313,
+            instance_id=1,
+            start_at="2026-04-10T09:30:00+00:00",
+        ),
+    )
+    assert second_source.status_code == 200, second_source.json()
+    second_source_log_id = second_source.json()["log_event_ids"][0]
+
+    for run_key, source_task_log_id in (
+        ("live:42:313:first", first_source_log_id),
+        ("live:42:313:second", second_source_log_id),
+    ):
+        create_response = await client.post(
+            "/v0/admin/task-run/create-or-adopt",
+            json={
+                "project_name": TASK_MACHINE_PROJECT_NAME,
+                "run_key": run_key,
+                "assistant_id": "42",
+                "task_id": 313,
+                "source_task_log_id": source_task_log_id,
+                "source_type": "scheduled",
+                "execution_mode": "live",
+                "state": "pending",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert create_response.status_code == 200, create_response.json()
+
+    update_response = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "run_key": "live:42:313:second",
+            "updates": {"state": "completed"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    scoped_response = await client.post(
+        "/v0/admin/task-run/latest",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 313,
+            "source_task_log_id": first_source_log_id,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert scoped_response.status_code == 200, scoped_response.json()
+    assert scoped_response.json()["run"]["run_key"] == "live:42:313:first"
+
+    unscoped_response = await client.post(
+        "/v0/admin/task-run/latest",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 313,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert unscoped_response.status_code == 200, unscoped_response.json()
+    assert unscoped_response.json()["run"]["run_key"] == "live:42:313:second"
 
 
 @pytest.mark.anyio

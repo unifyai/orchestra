@@ -2,18 +2,28 @@ from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 from zoneinfo import available_timezones
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 from pydantic.generics import GenericModel
+
+from orchestra.web.api.utils.safe_text import (
+    MAX_LABEL_LENGTH,
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+    SafeText,
+    validate_safe_text,
+)
 
 T = TypeVar("T")
 
 VALID_TIMEZONES = available_timezones()
-
-
-def _validate_deploy_env(v: Optional[str]) -> Optional[str]:
-    if v is not None:
-        raise ValueError("deploy_env is no longer supported; must be null.")
-    return None
 
 
 def _normalize_job_title(v: Optional[str]) -> Optional[str]:
@@ -25,7 +35,10 @@ def _normalize_job_title(v: Optional[str]) -> Optional[str]:
     if v is None:
         return None
     trimmed = v.strip()
-    return trimmed or None
+    if not trimmed:
+        return None
+    # Block HTML/script injection in the (displayed) job title.
+    return validate_safe_text(trimmed, max_length=MAX_LABEL_LENGTH)
 
 
 class InfoResponse(GenericModel, Generic[T]):
@@ -70,12 +83,12 @@ class AssistantCreate(BaseModel):
     ``organization_id`` and org RBAC, not by rewriting ``user_id``.
     """
 
-    first_name: Optional[str] = Field(
+    first_name: OptionalSafeLabel = Field(
         None,
         description="First name of the assistant",
         example="Ada",
     )
-    surname: Optional[str] = Field(
+    surname: OptionalSafeLabel = Field(
         None,
         description="Surname of the assistant",
         example="Lovelace",
@@ -124,17 +137,7 @@ class AssistantCreate(BaseModel):
         description="Desktop operating system mode for assistant's VM type",
         example="windows",
     )
-    user_desktop_id: Optional[int] = Field(
-        None,
-        description="ID of the registered user desktop to assign to this assistant",
-        example=1,
-    )
-    user_desktop_filesys_sync: Optional[bool] = Field(
-        False,
-        description="Whether to enable filesystem sync with user's desktop",
-        example=False,
-    )
-    about: Optional[str] = Field(
+    about: OptionalSafeText = Field(
         None,
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
@@ -164,10 +167,13 @@ class AssistantCreate(BaseModel):
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
-    deploy_env: Optional[str] = Field(
+    is_coordinator: Optional[bool] = Field(
         None,
-        description="Deprecated. Must be null.",
-        example=None,
+        description=(
+            "Reserved for coordinator bootstrap endpoints. "
+            "Generic assistant creation must not include this field."
+        ),
+        exclude=True,
     )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
@@ -185,11 +191,6 @@ class AssistantCreate(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
-
-    @field_validator("deploy_env")
-    @classmethod
-    def validate_deploy_env(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_deploy_env(v)
 
     @field_validator("job_title")
     @classmethod
@@ -209,11 +210,21 @@ class AssistantCreate(BaseModel):
                 raise ValueError(
                     "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
                 )
+        # AssistantRead extends AssistantCreate for response shaping, so this
+        # guard must only apply to create payload validation.
+        if (
+            self.is_coordinator is not None
+            and self.__class__.__name__ == "AssistantCreate"
+        ):
+            raise ValueError(
+                "'is_coordinator' is not accepted on this endpoint. "
+                "Use POST /user/{user_id}/coordinator instead.",
+            )
         return self
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
@@ -225,14 +236,13 @@ class AssistantCreate(BaseModel):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_mode": "windows",
-                "user_desktop_id": 1,
-                "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "timezone": "America/New_York",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
             },
-        }
+        },
+    )
 
 
 class ConsoleConfigRead(BaseModel):
@@ -244,6 +254,47 @@ class ConsoleConfigRead(BaseModel):
     theme: Optional[Dict[str, Any]] = None
 
 
+class AssistantTeamSummary(BaseModel):
+    """Organization team metadata projected onto assistant runtime responses."""
+
+    team_id: int = Field(..., description="Organization team identifier.")
+    name: str = Field(..., description="Human-readable team name.")
+    description: Optional[str] = Field(
+        None,
+        description="Semantic description of the team's purpose and scope.",
+    )
+
+
+class AssistantContactIdentityRoot(BaseModel):
+    """Root-local contact ids used by clients that read across assistant roots."""
+
+    target_scope: Literal["personal", "team"] = Field(
+        ...,
+        description="Root kind where the contact ids are meaningful.",
+    )
+    target_team_id: Optional[int] = Field(
+        None,
+        description="Organization team identifier when the target scope is a team.",
+    )
+    self_contact_id: int = Field(
+        ...,
+        description="Contact id representing the assistant inside this root.",
+    )
+    boss_contact_id: int = Field(
+        ...,
+        description="Contact id representing the assistant owner inside this root.",
+    )
+
+
+class AssistantUserDesktopLink(BaseModel):
+    """A single user's desktop linked to an assistant (admin/runtime view)."""
+
+    owner_user_id: str = Field(..., description="User who owns the linked desktop")
+    url: str = Field(..., description="Public tunnel URL of the linked desktop")
+    os: str = Field(..., description="Operating system of the linked desktop")
+    filesys_sync: bool = Field(..., description="Whether filesystem sync is enabled")
+
+
 class AssistantRead(AssistantCreate):
     """
     Schema for reading assistant data, extends AssistantCreate with additional fields.
@@ -252,14 +303,37 @@ class AssistantRead(AssistantCreate):
     owner and ``organization_id`` is the org access scope.
     """
 
+    about: Optional[str] = Field(
+        None,
+        description=(
+            "Description of the assistant. Read responses may include longer "
+            "system-authored bios, such as the canonical Coordinator persona."
+        ),
+    )
+
     user_desktop_url: Optional[str] = Field(
         None,
-        description="Resolved URL of the assigned user desktop (from device registry)",
+        description=(
+            "Resolved URL of the requesting user's own desktop linked to this "
+            "assistant (from device registry), or null if they haven't linked one"
+        ),
         example="https://abc123.tunnel.unify.ai",
+    )
+    user_desktop_filesys_sync: Optional[bool] = Field(
+        None,
+        description="Whether filesystem sync is enabled for the requesting user's linked desktop",
+        example=False,
+    )
+    user_desktops: List[AssistantUserDesktopLink] = Field(
+        default_factory=list,
+        description=(
+            "All per-user desktops linked to this assistant (admin/runtime only). "
+            "Maps each user to their own machine for an assistant several users share."
+        ),
     )
     user_desktop_mode: Optional[str] = Field(
         None,
-        description="Resolved OS of the assigned user desktop (from device registry)",
+        description="Resolved OS of the requesting user's own desktop linked to this assistant",
         example="macos",
     )
     agent_id: str = Field(
@@ -390,8 +464,27 @@ class AssistantRead(AssistantCreate):
     )
     team_ids: List[int] = Field(
         default_factory=list,
-        description="Team IDs the assistant's user belongs to within the assistant's organization. "
-        "Empty for personal assistants or when the user has no team memberships.",
+        description="Sorted organization team IDs where the assistant is a live shared-memory member.",
+    )
+    team_summaries: List[AssistantTeamSummary] = Field(
+        default_factory=list,
+        description="Sorted organization team names and descriptions for live memberships.",
+    )
+    self_contact_id: int = Field(
+        0,
+        description="Resolved Contacts row ID representing the assistant itself.",
+    )
+    boss_contact_id: int = Field(
+        1,
+        description="Resolved Contacts row ID representing the assistant owner.",
+    )
+    contact_identity_roots: List[AssistantContactIdentityRoot] = Field(
+        default_factory=list,
+        description=(
+            "Resolved self and boss contact ids for each readable root. "
+            "Contact ids are root-local, so clients must use the entry matching "
+            "the context they query."
+        ),
     )
     secrets: Optional[Dict[str, str]] = Field(
         None,
@@ -404,9 +497,10 @@ class AssistantRead(AssistantCreate):
         "Null means the assistant uses default console behavior.",
     )
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "first_name": "Ada",
                 "surname": "Lovelace",
@@ -418,8 +512,6 @@ class AssistantRead(AssistantCreate):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_mode": "windows",
-                "user_desktop_id": 1,
-                "user_desktop_filesys_sync": False,
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone_country": "US",
                 "timezone": "America/New_York",
@@ -433,7 +525,6 @@ class AssistantRead(AssistantCreate):
                 "agent_id": "12345",
                 "user_id": "123",
                 "organization_id": None,
-                "deploy_env": None,
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
@@ -441,10 +532,165 @@ class AssistantRead(AssistantCreate):
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
                 "user_image": "https://example.com/photo.jpg",
+                "team_ids": [101, 205],
+                "team_summaries": [
+                    {
+                        "team_id": 101,
+                        "name": "Support Ops",
+                        "description": "Daily customer support operations and escalation notes.",
+                    },
+                ],
+                "self_contact_id": 42,
+                "boss_contact_id": 43,
                 "is_local": False,
                 "is_coordinator": False,
             },
-        }
+        },
+    )
+
+
+class CoordinatorTranscriptSeed(BaseModel):
+    """Request body for persisting the Coordinator's opener transcript row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(..., min_length=1)
+    source_assistant_id: Optional[str] = Field(None)
+
+
+class CoordinatorTranscriptSeedResponse(BaseModel):
+    """Response returned after the opener row is present in the transcript."""
+
+    log_event_id: int
+
+
+class OnboardingSessionStarted(BaseModel):
+    """Request body for the picker-resolution onboarding event.
+
+    Console POSTs this the moment the user picks "I'd rather chat"
+    or "Start Call" in the Coordinator onboarding picker. The body
+    is intentionally tiny — the server derives the completed-step
+    snapshot itself (``derive_onboarding_progress``) and Unity reads
+    ``Coordinator/State`` plus the chat-history snapshot when
+    generating the opener, so only the medium needs to travel.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    medium: Literal["chat", "call"]
+
+
+class OnboardingSessionStartedResponse(BaseModel):
+    """Acknowledgement returned to Console.
+
+    ``emitted`` reports whether the event actually went out — it'll
+    be ``False`` when the Coordinator is no longer in onboarding
+    mode (e.g. the user already finished or skipped), in which case
+    we silently drop the event server-side.
+    """
+
+    coordinator_id: str
+    emitted: bool
+
+
+class CoordinatorDelegateRequest(BaseModel):
+    """Request body for assigning asynchronous work to a colleague."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instruction: str = Field(..., min_length=1)
+    intent: str = Field("general", min_length=1)
+    dedupe_key: Optional[str] = Field(None, min_length=1)
+    related_context: Optional[Dict[str, Any]] = None
+
+    @field_validator("instruction", "intent")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must contain non-whitespace text")
+        return stripped
+
+    @field_validator("dedupe_key")
+    @classmethod
+    def _strip_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must contain non-whitespace text")
+        return stripped
+
+
+class CoordinatorDelegateResponse(BaseModel):
+    """Response returned after a colleague delegation is dispatched."""
+
+    coordinator_id: int
+    target_assistant_id: int
+    status: str
+    activation_id: Optional[str] = None
+    accepted: bool = True
+    completion_status: str = "pending_async"
+    receipt_type: str = "async_delegation_receipt"
+    message: str = (
+        "The colleague has been woken or notified with the assignment. "
+        "This does not mean the colleague has already created durable artifacts "
+        "or completed the work."
+    )
+
+
+class CoordinatorResetResponse(BaseModel):
+    """Response returned after Coordinator-owned conversation state is reset."""
+
+    coordinator_id: str
+
+
+class CoordinatorStateUpdate(BaseModel):
+    """Request body for transitioning a Coordinator's onboarding state.
+
+    All fields are optional: a request specifying only ``mode`` flips
+    the lifecycle without touching the current step; specifying only
+    ``onboarding_step`` advances the in-flight step marker without
+    leaving ``onboarding``. Passing ``clear_onboarding_step=True``
+    resets the step (used when moving to ``working`` so a future
+    re-entry doesn't carry stale step state). ``skip_onboarding_step``
+    records an intentional user skip separately from real completion;
+    ``unskip_onboarding_step`` returns that step to the active checklist.
+
+    ``intro_watched`` records that the user has resolved the opening
+    picker (started the call or chose chat) so the ringing picker and
+    auto-playing intro never re-appear on a later page load. It is
+    one-way sticky: once ``True`` it cannot be reset to ``False``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Optional[Literal["onboarding", "working"]] = Field(None)
+    onboarding_step: Optional[str] = Field(None, min_length=1)
+    clear_onboarding_step: bool = Field(False)
+    skip_onboarding_step: Optional[str] = Field(None, min_length=1)
+    unskip_onboarding_step: Optional[str] = Field(None, min_length=1)
+    intro_watched: Optional[bool] = Field(None)
+
+
+class CoordinatorStateResponse(BaseModel):
+    """Snapshot of the latest Coordinator/State row.
+
+    ``completed_step_ids`` is not stored on the row — it is derived
+    from durable domain state on every read (workspace email contact,
+    integration secrets, action history, Tasks rows) so consumers see
+    steps completed in earlier sessions without any transition event.
+    Always ``[]`` outside onboarding mode, where derivation is skipped.
+    """
+
+    coordinator_id: int
+    mode: Literal["onboarding", "working"]
+    onboarding_step: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    completed_step_ids: List[str] = Field(default_factory=list)
+    skipped_step_ids: List[str] = Field(default_factory=list)
+    intro_watched: bool = False
 
 
 class DemoAssistantCreate(BaseModel):
@@ -461,17 +707,17 @@ class DemoAssistantCreate(BaseModel):
         description="ID of the assistant to clone configuration from",
         example=12345,
     )
-    label: str = Field(
+    label: SafeLabel = Field(
         ...,
         description="Human-readable label for this demo (e.g., 'Richard Branson demo')",
         example="Richard Branson demo",
     )
-    first_name: str = Field(
+    first_name: SafeLabel = Field(
         ...,
         description="First name of the demo assistant",
         example="Lucy",
     )
-    surname: str = Field(
+    surname: SafeLabel = Field(
         ...,
         description="Surname of the demo assistant",
         example="Branson-Demo",
@@ -494,12 +740,12 @@ class DemoAssistantCreate(BaseModel):
         example="US",
     )
     # Optional prospect details - if provided, Unity will pre-populate the boss contact
-    prospect_first_name: Optional[str] = Field(
+    prospect_first_name: OptionalSafeLabel = Field(
         None,
         description="Prospect's first name (optional, for pre-populating boss contact in Unity)",
         example="Richard",
     )
-    prospect_surname: Optional[str] = Field(
+    prospect_surname: OptionalSafeLabel = Field(
         None,
         description="Prospect's surname (optional, for pre-populating boss contact in Unity)",
         example="Branson",
@@ -607,12 +853,12 @@ class AssistantUpdate(BaseModel):
     Only includes fields that can be updated.
     """
 
-    first_name: Optional[str] = Field(
+    first_name: OptionalSafeLabel = Field(
         None,
         description="First name of the assistant",
         example="Ada",
     )
-    surname: Optional[str] = Field(
+    surname: OptionalSafeLabel = Field(
         None,
         description="Surname of the assistant",
         example="Lovelace",
@@ -662,17 +908,7 @@ class AssistantUpdate(BaseModel):
         description="Desktop operating system mode for VM type",
         example="macos",
     )
-    user_desktop_id: Optional[int] = Field(
-        None,
-        description="ID of the registered user desktop to assign to this assistant",
-        example=1,
-    )
-    user_desktop_filesys_sync: Optional[bool] = Field(
-        None,
-        description="Whether to enable filesystem sync with user's desktop",
-        example=False,
-    )
-    about: Optional[str] = Field(
+    about: OptionalSafeText = Field(
         None,
         description="Brief description about the assistant",
         example="Award-winning mathematician specializing in algorithm development",
@@ -741,10 +977,6 @@ class AssistantUpdate(BaseModel):
         description="Monthly spending limit in dollars. Set to null to remove the limit.",
         example=100.00,
     )
-    deploy_env: Optional[str] = Field(
-        None,
-        description="Deprecated. Must be null.",
-    )
 
     @field_validator("timezone")
     @classmethod
@@ -752,11 +984,6 @@ class AssistantUpdate(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
-
-    @field_validator("deploy_env")
-    @classmethod
-    def validate_update_deploy_env(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_deploy_env(v)
 
     @field_validator("job_title")
     @classmethod
@@ -796,9 +1023,10 @@ class AssistantUpdate(BaseModel):
 
         return self
 
-    class Config:
-        orm_mode = True
-        schema_extra = {
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "job_title": "Senior Mathematician",
                 "weekly_limit": 20.5,
@@ -806,8 +1034,6 @@ class AssistantUpdate(BaseModel):
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada_new.mp4",
                 "desktop_mode": "macos",
-                "user_desktop_id": 1,
-                "user_desktop_filesys_sync": True,
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
@@ -819,7 +1045,8 @@ class AssistantUpdate(BaseModel):
                 "phone_country": "GB",
                 "timezone": "Europe/London",
             },
-        }
+        },
+    )
 
 
 class AssistantStatus(BaseModel):
@@ -861,12 +1088,12 @@ class VoiceCreate(BaseModel):
         description="Provider Voice ID",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
-    name: str = Field(
+    name: SafeLabel = Field(
         ...,
         description="User-given name for the voice",
         example="English Woman Calm 1",
     )
-    description: str = Field(
+    description: SafeText = Field(
         ...,
         description="Description of the voice",
         example="Calm and relaxing voice of an english-speaking woman",
@@ -928,9 +1155,9 @@ class VoiceRead(VoiceCreate):
 
 
 class VoiceCloneRequestData(BaseModel):
-    name: str = Field(..., description="Name for the new cloned voice")
+    name: SafeLabel = Field(..., description="Name for the new cloned voice")
     language: str = Field(..., description="Language of the audio clip (e.g., 'en')")
-    description: Optional[str] = Field(
+    description: OptionalSafeText = Field(
         None,
         description="Optional description for the voice",
     )
@@ -1025,13 +1252,13 @@ class VoiceGenerateRequest(BaseModel):
 
 
 class VoiceDesignGeneratePreviewsRequest(BaseModel):
-    voice_description: Optional[str] = Field(
+    voice_description: OptionalSafeText = Field(
         None,
         min_length=20,
         max_length=1000,
         description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). If `bio` is provided, this field can be used to add more specific voice instructions. At least one of bio or voice_description should be provided.",
     )
-    bio: Optional[str] = Field(
+    bio: OptionalSafeText = Field(
         None,
         description="A biography or background of the character to generate a voice description from. Used with `voice_description` to generate a richer prompt for the TTS provider. At least one of bio or voice_description should be provided.",
     )
@@ -1097,11 +1324,11 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
         ...,
         description="The 'generated_voice_id' obtained from the '/design/preview'.",
     )
-    voice_name: str = Field(
+    voice_name: SafeLabel = Field(
         ...,
         description="Name for the new voice.",
     )
-    voice_description: str = Field(
+    voice_description: SafeText = Field(
         ...,
         description="Description for the new voice.",
     )
@@ -1511,7 +1738,7 @@ class GrantedFeaturesResponse(BaseModel):
 class SecretCreate(BaseModel):
     """Request body for ``POST /assistant/{id}/secret``."""
 
-    secret_name: str = Field(..., description="Unique name for the secret.")
+    secret_name: SafeLabel = Field(..., description="Unique name for the secret.")
     secret_value: str = Field(..., description="Secret payload (token, key, etc.).")
 
 
@@ -1618,7 +1845,7 @@ class AdminUpdateUserByAssistant(BaseModel):
         description="Timezone to set for the user in IANA format.",
         example="America/New_York",
     )
-    bio: Optional[str] = Field(
+    bio: OptionalSafeText = Field(
         None,
         description="Bio/description to set for the user.",
         example="Software engineer focused on AI systems.",
@@ -1644,6 +1871,75 @@ class AdminUpdateUserByAssistantResponse(BaseModel):
     )
 
 
+class ContactMembershipCreate(BaseModel):
+    """Admin request for an assistant contact relationship overlay."""
+
+    contact_id: int = Field(..., description="Contact row id within the target root.")
+    target_scope: Literal["personal", "team"] = Field(
+        ...,
+        description="Whether the contact id points at personal contacts or a team root.",
+    )
+    target_team_id: Optional[int] = Field(
+        None,
+        description="Team id when target_scope is 'team'.",
+    )
+    relationship: Literal["self", "boss", "coworker", "other"] = Field(
+        ...,
+        description="Assistant-specific relationship to the contact.",
+    )
+    should_respond: bool = Field(
+        True,
+        description="Whether the assistant should respond to this contact.",
+    )
+    response_policy: str = Field(
+        "standard",
+        description="Policy text or slug used by the runtime when responding.",
+    )
+    can_edit: bool = Field(
+        False,
+        description="Whether the assistant can edit the contact's shared facts.",
+    )
+
+    @model_validator(mode="after")
+    def validate_target_polarity(self) -> "ContactMembershipCreate":
+        if self.target_scope == "personal" and self.target_team_id is not None:
+            raise ValueError(
+                "personal contact memberships cannot include target_team_id",
+            )
+        if self.target_scope == "team" and self.target_team_id is None:
+            raise ValueError("team contact memberships require target_team_id")
+        return self
+
+
+class ContactMembershipRead(BaseModel):
+    """Admin response shape for an assistant contact relationship overlay."""
+
+    id: int
+    assistant_id: int
+    authoring_assistant_id: Optional[int]
+    contact_id: int
+    target_scope: str
+    target_team_id: Optional[int]
+    relationship: str
+    should_respond: bool
+    response_policy: str
+    can_edit: bool
+    created_at: datetime
+
+
+class ContactMembershipUpsertResponse(BaseModel):
+    """Admin response for idempotent contact-membership creation."""
+
+    membership: ContactMembershipRead
+    created: bool
+
+
+class ContactMembershipDeleteResponse(BaseModel):
+    """Admin response for deleting contact relationship overlays."""
+
+    deleted: int
+
+
 class AdminUpdateAssistant(BaseModel):
     """
     Admin schema for updating assistant details directly.
@@ -1655,7 +1951,7 @@ class AdminUpdateAssistant(BaseModel):
         description="Timezone to set for the assistant in IANA format.",
         example="Europe/London",
     )
-    about: Optional[str] = Field(
+    about: OptionalSafeText = Field(
         None,
         description="About/description to set for the assistant.",
         example="AI assistant specializing in customer support.",
@@ -1674,10 +1970,6 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="SSH private key for desktop filesystem sync.",
     )
-    deploy_env: Optional[str] = Field(
-        None,
-        description="Deprecated. Must be null.",
-    )
     console_config: Optional[Dict[str, Any]] = Field(
         None,
         description="Per-assistant UI/UX configuration (layout, tabs, theme). "
@@ -1690,11 +1982,6 @@ class AdminUpdateAssistant(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
-
-    @field_validator("deploy_env")
-    @classmethod
-    def validate_admin_deploy_env(cls, v: Optional[str]) -> Optional[str]:
-        return _validate_deploy_env(v)
 
     @field_validator("job_title")
     @classmethod

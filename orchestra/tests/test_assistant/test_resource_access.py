@@ -7,12 +7,17 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    HEADERS,
+    create_test_user,
+    ensure_assistants_project,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -22,31 +27,45 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_cleanup_tasks, patch(
-        "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings, patch(
-        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
-        0.0,
-    ), patch(
-        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
-        0.0,
-    ), patch(
-        "orchestra.web.api.assistant.views.BucketService",
-    ) as mock_bucket_cls, patch(
-        "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
-        new_callable=AsyncMock,
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_cleanup_tasks,
+        patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings,
+        patch(
+            "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
+            0.0,
+        ),
+        patch(
+            "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
+            0.0,
+        ),
+        patch(
+            "orchestra.web.api.assistant.views.create_bucket_service",
+        ) as mock_bucket_cls,
+        patch(
+            "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
+            new_callable=AsyncMock,
+        ) as _mock_trigger_contact_sync_safe,
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic,
     ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
         mock_cleanup_tasks.return_value = {
             "processed": 1,
             "completed": 1,
@@ -56,6 +75,7 @@ def mock_assistant_infra_calls(request):
         }
         # Patch is_staging to skip credit checks
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
         mock_bucket = MagicMock()
         mock_bucket.delete_assistant_file.return_value = None
         mock_bucket.delete_all_assistant_data.return_value = {
@@ -440,14 +460,16 @@ async def test_org_assistant_list_own_only(client: AsyncClient, dbsession):
     # Member lists (list_all_org=False, default) - should see only their own
     list_resp = await client.get("/v0/assistant", headers=member_org_headers)
     assert list_resp.status_code == 200
-    assistants = list_resp.json()["info"]
+    assistants = [
+        row for row in list_resp.json()["info"] if not row.get("is_coordinator")
+    ]
     assert len(assistants) == 1
     assert assistants[0]["first_name"] == "Member"
 
 
 @pytest.mark.anyio
 async def test_org_assistant_list_all_org(client: AsyncClient, dbsession):
-    """Test that list_all_org=True returns all org assistants."""
+    """Org list_all_org keeps coordinators self-visible while preserving shared assistants."""
     owner = await create_test_user(
         client,
         "org_listall_owner@test.com",
@@ -478,28 +500,73 @@ async def test_org_assistant_list_all_org(client: AsyncClient, dbsession):
     }
 
     # Both create assistants
-    await client.post(
+    owner_assistant_resp = await client.post(
         "/v0/assistant",
         json={"first_name": "OwnerAll", "surname": "Asst", "create_infra": False},
         headers=owner_org_headers,
     )
-    await client.post(
+    assert owner_assistant_resp.status_code == 200
+    owner_assistant_id = int(owner_assistant_resp.json()["info"]["agent_id"])
+    member_assistant_resp = await client.post(
         "/v0/assistant",
         json={"first_name": "MemberAll", "surname": "Asst", "create_infra": False},
         headers=member_org_headers,
     )
+    assert member_assistant_resp.status_code == 200
+    member_assistant_id = int(member_assistant_resp.json()["info"]["agent_id"])
 
-    # Member lists with list_all_org=True - should see all
-    list_resp = await client.get(
+    with patch(
+        "orchestra.services.coordinator_service.create_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_create_pubsub_topic:
+        mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+        owner_coordinator_resp = await client.post(
+            f"/v0/user/{owner['id']}/coordinator?organization_id={org_id}",
+            headers=owner_org_headers,
+        )
+        assert owner_coordinator_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), owner_coordinator_resp.json()
+        owner_coordinator_id = int(owner_coordinator_resp.json()["coordinator_id"])
+
+        member_coordinator_resp = await client.post(
+            f"/v0/user/{member['id']}/coordinator?organization_id={org_id}",
+            headers=member_org_headers,
+        )
+        assert member_coordinator_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), member_coordinator_resp.json()
+        member_coordinator_id = int(member_coordinator_resp.json()["coordinator_id"])
+
+    # Member list_all_org keeps shared assistants but hides other members' coordinators.
+    member_list_resp = await client.get(
         "/v0/assistant?list_all_org=true",
         headers=member_org_headers,
     )
-    assert list_resp.status_code == 200
-    assistants = list_resp.json()["info"]
-    assert len(assistants) == 2
-    names = {a["first_name"] for a in assistants}
-    assert "OwnerAll" in names
-    assert "MemberAll" in names
+    assert member_list_resp.status_code == 200
+    member_visible_ids = {
+        int(assistant["agent_id"]) for assistant in member_list_resp.json()["info"]
+    }
+    assert owner_assistant_id in member_visible_ids
+    assert member_assistant_id in member_visible_ids
+    assert member_coordinator_id in member_visible_ids
+    assert owner_coordinator_id not in member_visible_ids
+
+    # Owner sees their own coordinator but not member-owned coordinator.
+    owner_list_resp = await client.get(
+        "/v0/assistant?list_all_org=true",
+        headers=owner_org_headers,
+    )
+    assert owner_list_resp.status_code == 200
+    owner_visible_ids = {
+        int(assistant["agent_id"]) for assistant in owner_list_resp.json()["info"]
+    }
+    assert owner_assistant_id in owner_visible_ids
+    assert member_assistant_id in owner_visible_ids
+    assert owner_coordinator_id in owner_visible_ids
+    assert member_coordinator_id not in owner_visible_ids
 
 
 @pytest.mark.anyio
@@ -1087,12 +1154,7 @@ async def test_transfer_personal_to_org_with_logs_transfer(
 
     # Create the personal "Assistants" project FIRST (before assistant creation)
     project_name = "Assistants"
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=user["headers"],
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create personal assistant
     create_resp = await client.post(
@@ -1106,8 +1168,8 @@ async def test_transfer_personal_to_org_with_logs_transfer(
     assistant_name = str(agent_id)
 
     # Create logs for this assistant in the personal Assistants project
-    # Use the exact naming convention the transfer code expects
-    context_name = assistant_name  # Just the assistant ID, not with /Transcripts
+    # using the assistant-scoped context prefix transfer expects.
+    context_name = f"{user['id']}/{assistant_name}"
     log_payload = {
         "project_name": project_name,
         "context": context_name,
@@ -1181,12 +1243,7 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
     )
 
     # Create personal Assistants project
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create personal assistant
     create_resp = await client.post(
@@ -1305,12 +1362,7 @@ async def test_transfer_org_to_personal_with_logs_deletion(
 
     # Create the org "Assistants" project FIRST
     project_name = "Assistants"
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create org assistant
     create_resp = await client.post(
@@ -1384,12 +1436,7 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
 
     # Create the org "Assistants" project FIRST
     project_name = "Assistants"
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create org assistant
     create_resp = await client.post(
@@ -1470,12 +1517,7 @@ async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
 
     # Create the org "Assistants" project
     project_name = "Assistants"
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create org assistant
     create_resp = await client.post(
@@ -1611,12 +1653,7 @@ async def test_delete_org_assistant_by_other_member_cleans_creator_scoped_logs(
         "Authorization": f"Bearer {add_member_resp.json()['api_key']}",
     }
 
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert project_resp.status_code == status.HTTP_200_OK
+    await ensure_assistants_project(client, org_headers)
 
     create_resp = await client.post(
         "/v0/assistant",
@@ -1893,8 +1930,7 @@ async def test_transfer_creates_assistants_project_if_missing(
     # The key assertion is that transfer succeeded
     transfer_data = transfer_resp.json()["info"]
     assert transfer_data["transferred_to"] == "organization"
-    # logs_transferred should be False since there's no personal Assistants project
-    assert transfer_data["logs_transferred"] is False
+    assert transfer_data["transferred_to"] == "organization"
 
     # Verify assistant is now in org
     from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -1936,8 +1972,8 @@ async def test_transfer_with_no_logs_succeeds(client: AsyncClient, dbsession):
         headers=user["headers"],
     )
     assert transfer_resp.status_code == 200
-    # logs_transferred should be False since there were no logs
-    assert transfer_resp.json()["info"]["logs_transferred"] is False
+    transfer_info = transfer_resp.json()["info"]
+    assert transfer_info["transferred_to"] == "organization"
 
 
 @pytest.mark.anyio
@@ -2216,12 +2252,7 @@ async def test_transfer_creates_assistants_project_with_owner_access(
     )
 
     # Create personal Assistants project (so we can transfer logs)
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create personal assistant
     create_resp = await client.post(
@@ -2306,12 +2337,7 @@ async def test_transfer_grants_member_to_second_user_on_existing_project(
     org_headers = {"Authorization": f"Bearer {org_api_key}"}
 
     # Create Assistants project explicitly via user1's org key
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Second user joins org
     user2 = await create_test_user(
@@ -2327,13 +2353,7 @@ async def test_transfer_grants_member_to_second_user_on_existing_project(
     )
     assert invite_resp.status_code in [200, 201]
 
-    # User2 creates personal Assistants project (for log transfer)
-    proj_resp2 = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user2["headers"],
-    )
-    assert proj_resp2.status_code == 200
+    await ensure_assistants_project(client, user2["headers"])
 
     # User2 creates personal assistant
     create_resp = await client.post(
@@ -2427,20 +2447,10 @@ async def test_transfer_no_duplicate_grant_if_already_has_access(
     org_headers = {"Authorization": f"Bearer {org_api_key}"}
 
     # Create Assistants project (user gets Owner grant via normal flow)
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create personal Assistants project for log transfer
-    personal_proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert personal_proj_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create personal assistant
     create_resp = await client.post(
@@ -2503,12 +2513,7 @@ async def test_transfer_shared_all_context_logs(
     )
 
     # Create personal Assistants project
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create personal assistant
     create_resp = await client.post(
@@ -2638,12 +2643,7 @@ async def test_transfer_shared_context_to_existing_org_context(
     )
 
     # Create personal Assistants project
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create organization
     org_resp = await client.post(
@@ -2655,12 +2655,7 @@ async def test_transfer_shared_context_to_existing_org_context(
     org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
 
     # Create org Assistants project with "All/Contact" context already existing
-    org_proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert org_proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create a log in org's "All/Contact" to establish the context
     existing_log_payload = {
@@ -2764,12 +2759,7 @@ async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive
     org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
 
     # Create org Assistants project
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create org assistant
     create_resp = await client.post(
@@ -2888,12 +2878,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
 
     # Create org Assistants project
-    proj_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert proj_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create TWO org assistants
     create_resp_a = await client.post(
@@ -3054,10 +3039,10 @@ async def test_org_assistant_create_creates_assistants_project_with_owner_access
     org_api_key = org_resp.json()["api_key"]
     org_headers = {"Authorization": f"Bearer {org_api_key}"}
 
-    # Verify no Assistants project exists yet
+    # Org coordinator bootstrap already created the Assistants project.
     projects_resp = await client.get("/v0/projects", headers=org_headers)
     assert projects_resp.status_code == 200
-    assert "Assistants" not in projects_resp.json()
+    assert "Assistants" in projects_resp.json()
 
     # Create org assistant
     create_resp = await client.post(
@@ -3067,7 +3052,7 @@ async def test_org_assistant_create_creates_assistants_project_with_owner_access
     )
     assert create_resp.status_code == 200
 
-    # Verify Assistants project now exists and user can see it
+    # Verify Assistants project remains visible
     projects_resp = await client.get("/v0/projects", headers=org_headers)
     assert projects_resp.status_code == 200
     assert "Assistants" in projects_resp.json()
@@ -3234,11 +3219,11 @@ async def test_org_assistant_create_grants_member_access_to_existing_org_members
     member3_org_key = add_member3_resp.json()["api_key"]
     member3_org_headers = {"Authorization": f"Bearer {member3_org_key}"}
 
-    # Verify no Assistants project exists yet
+    # Org coordinator bootstrap already created the Assistants project.
     projects_resp = await client.get("/v0/projects", headers=org_headers)
-    assert "Assistants" not in projects_resp.json()
+    assert "Assistants" in projects_resp.json()
 
-    # User1 creates first assistant (creates Assistants project)
+    # User1 creates the first non-coordinator org assistant
     create_resp = await client.post(
         "/v0/assistant",
         json={"first_name": "Team", "surname": "Assistant", "create_infra": False},

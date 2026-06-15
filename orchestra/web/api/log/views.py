@@ -26,8 +26,9 @@ from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.context_naming import is_team_context_name
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
     ImmutableFieldError,
     LogEventDAO,
@@ -37,7 +38,7 @@ from orchestra.db.dao.log_event_dao import (
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
@@ -55,6 +56,13 @@ from orchestra.services.task_machine_state_service import (
     sync_task_activations_for_task_ids,
 )
 from orchestra.web.api.dependencies import auth_admin_key
+from orchestra.web.api.log.python2SQL import (
+    _compute_expression,
+    _extract_placeholders,
+    _substitute_placeholders,
+    build_sql_query,
+    str_filter_exp_to_dict,
+)
 from orchestra.web.api.log.schema import (
     AtomicFieldUpdateRequest,
     AtomicFieldUpdateResponse,
@@ -72,18 +80,7 @@ from orchestra.web.api.log.schema import (
     UpdateFieldRequest,
     UpdateLogRequest,
 )
-from orchestra_core.web.api.utils.helpers import CustomEncoder
-from orchestra_core.web.api.utils.http_responses import not_found
-
-from .python2SQL import (
-    _compute_expression,
-    _extract_placeholders,
-    _substitute_placeholders,
-    build_sql_query,
-    str_filter_exp_to_dict,
-)
-from .task_machine_admin import router as task_machine_admin_router
-from .utils import (
+from orchestra.web.api.log.utils import (
     _build_grouped_data,
     _compute_metric_for_key_grouped,
     _fetch_logs_for_event_ids,
@@ -102,6 +99,12 @@ from .utils import (
     compute_metric_for_key,
     create_logs_internal,
 )
+from orchestra.web.api.utils.helpers import CustomEncoder
+from orchestra.web.api.utils.http_responses import not_found
+
+from .task_machine_admin import router as task_machine_admin_router
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -139,12 +142,13 @@ def _check_project_write_permission(
     if organization_id is None:
         return
     ra_dao = ResourceAccessDAO(session)
-    if not ra_dao.check_user_permission(
+    has_permission = ra_dao.check_user_permission(
         user_id,
         "project",
         project_id,
         "project:write",
-    ):
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=403,
             detail="You do not have permission to write to this project",
@@ -182,7 +186,7 @@ def _sanitize_sql_error(error: Exception) -> str:
 
 
 # Import sibling context cleanup from shared module
-from orchestra_core.db.dao.sibling_context_cleanup import (
+from orchestra.db.dao.sibling_context_cleanup import (
     get_assistants_sibling_context_info as _get_assistants_sibling_context_info,
 )
 
@@ -1510,7 +1514,7 @@ def atomic_field_upsert(
     2. Acquires an advisory lock on the unique key values (prevents race on first insert)
     3. Finds an existing log by unique_keys or creates it with initial_data
     4. Applies an atomic operation to the specified field
-    5. If add_to_all_context=true, mirrors the log to the All/* archive context
+    5. If add_to_all_context=true, mirrors non-team logs to the All/* archive context
 
     Required body fields for upsert mode:
     - project: Name of the project
@@ -1845,8 +1849,13 @@ def _atomic_upsert_mode(
 
     mirrored_contexts = []
 
-    # If add_to_all_context=true, mirror to archive context
-    if body.add_to_all_context:
+    # If add_to_all_context=true, mirror non-team contexts to the archive context
+    if body.add_to_all_context and is_team_context_name(body.context):
+        logger.debug(
+            "Skipping archive mirror for shared-team context.",
+            extra={"mirror_skipped": True, "context_name": body.context},
+        )
+    elif body.add_to_all_context:
         context_parts = body.context.split("/")
 
         if "_user" in body.initial_data and "_assistant" in body.initial_data:
@@ -2419,7 +2428,7 @@ def _update_logs(
     if all_flat_updates:
         # Enforce unique field constraints for updated values (JSONB mode)
         if ctx_id is not None:
-            from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
             unique_fields = {
                 k
@@ -2964,7 +2973,7 @@ def _delete_logs(
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
             # Embedding cleanup before hard delete (see LogEventDAO.delete)
-            from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
+            from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(session)
             embedding_dao.cancel_queue(
@@ -3138,7 +3147,7 @@ def _delete_logs(
             # Delete logs that don't exist in other contexts - BULK DELETE
             if logs_to_delete:
                 # Embedding cleanup before hard delete (see LogEventDAO.delete)
-                from orchestra_core.db.dao.embedding_dao import EmbeddingDAO
+                from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
                 embedding_dao = EmbeddingDAO(session)
                 embedding_dao.cancel_queue(
@@ -3534,6 +3543,10 @@ def get_logs(
         "42",
         description="If provided, use this seed for deterministic random ordering instead of the default.",
     ),
+    return_sort_distance: bool = Query(
+        False,
+        description="If true and sorting takes the vector ANN fast-path, include the computed distance in each entry under the reserved '_sort_distance' key.",
+    ),
     session=Depends(get_db_session),
 ):
     """
@@ -3574,7 +3587,7 @@ def get_logs(
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -3618,6 +3631,7 @@ def get_logs(
                 session=session,
                 randomize=randomize,
                 seed=seed,
+                return_sort_distance=return_sort_distance,
             )
 
             # Handle return_ids_only mode
@@ -3929,7 +3943,7 @@ def query_logs_post(
     # Validate project
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = project_dao.get_readable_by_user_and_name(
             name=body.project_name,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -4334,7 +4348,7 @@ def get_logs_metric(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=user_id,
             organization_id=organization_id,
@@ -4976,7 +4990,7 @@ def join_query(
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = project_dao.get_readable_by_user_and_name(
             user_id=user_id,
             name=request.project_name,
             organization_id=organization_id,
@@ -5184,7 +5198,7 @@ def get_fields(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=user_id,
             organization_id=organization_id,

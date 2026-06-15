@@ -21,7 +21,7 @@ from sqlalchemy import TIMESTAMP, Text, cast, func, literal, select
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ClauseElement
 
-from orchestra.db.models.orchestra_models import LogEvent
+from orchestra.db.models.core_models import LogEvent
 
 from . import alias_utils
 from .ast_utils import (

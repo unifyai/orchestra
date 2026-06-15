@@ -8,18 +8,14 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.billing_account_dao import (
-    MIN_AUTORECHARGE_AMOUNT,
-    MIN_SPEND_FOR_AUTO_RECHARGE,
-    BillingAccountDAO,
-)
+from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     AssistantCleanupTask,
     BillingAccount,
@@ -29,7 +25,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     User,
 )
-from orchestra_core.lib.time import month_end_utc
+from orchestra.lib.time import month_end_utc
 from orchestra.services.assistant_cleanup_service import (
     DEFAULT_CLEANUP_TASK_BATCH_SIZE,
     MAX_CLEANUP_TASK_BATCH_SIZE,
@@ -515,130 +511,6 @@ def update_stripe_customer_id(  # noqa: WPS211
     session.commit()
 
 
-@router.put("/enable_autorecharge")
-def update_autorecharge(  # noqa: WPS211
-    enable: bool,
-    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Enable or disable auto-recharge on a billing account.
-
-    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
-
-    When *enabling*, the account must have met the minimum spending
-    threshold (fraud-prevention measure).
-
-    :param enable: Whether to enable or disable autorecharge.
-    :param id: (deprecated) Alias for user_id.
-    :param user_id: User ID.
-    :param organization_id: Organization ID.
-    """
-    effective_user_id = user_id or id
-    ba = _resolve_billing_account(
-        session,
-        user_id=effective_user_id,
-        organization_id=organization_id,
-    )
-
-    if enable:
-        ba_dao = BillingAccountDAO(session)
-        if ba.account_status in ("SUSPENDED", "CLOSED"):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Cannot enable auto-recharge: account is "
-                    f"{ba.account_status}. Resolve outstanding invoices first."
-                ),
-            )
-        if ba_dao.has_unpaid_auto_recharges(ba.id):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Cannot enable auto-recharge: account has unpaid "
-                    "auto-recharge invoices. Wait until they are resolved."
-                ),
-            )
-        if not ba_dao.can_enable_auto_recharge(ba.id):
-            total_spending = float(ba_dao.get_total_spending(ba.id))
-            min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"User must spend at least ${min_required:.2f} before enabling "
-                    f"auto-recharge. Current spending: ${total_spending:.2f}"
-                ),
-            )
-
-    ba.autorecharge = enable
-    session.commit()
-
-
-@router.put("/autorecharge_threshold")
-def update_autorecharge_threshold(  # noqa: WPS211
-    threshold: float,
-    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Set the autorecharge threshold on a billing account.
-
-    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
-
-    :param threshold: New autorecharge threshold.
-    :param id: (deprecated) Alias for user_id.
-    :param user_id: User ID.
-    :param organization_id: Organization ID.
-    """
-    effective_user_id = user_id or id
-    ba = _resolve_billing_account(
-        session,
-        user_id=effective_user_id,
-        organization_id=organization_id,
-    )
-    ba.autorecharge_threshold = Decimal(str(threshold))
-    session.commit()
-
-
-@router.put("/autorecharge_qty")
-def update_autorecharge_qty(  # noqa: WPS211
-    qty: float,
-    id: Optional[str] = None,  # noqa: WPS125  # backward-compat: user_id
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Set the autorecharge quantity on a billing account.
-
-    Accepts ``user_id`` (or legacy ``id``) or ``organization_id``.
-
-    :param qty: New autorecharge quantity.
-    :param id: (deprecated) Alias for user_id.
-    :param user_id: User ID.
-    :param organization_id: Organization ID.
-    """
-    if qty < float(MIN_AUTORECHARGE_AMOUNT):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Minimum auto-recharge amount is ${MIN_AUTORECHARGE_AMOUNT}. "
-            f"Provided: ${qty:.2f}",
-        )
-
-    effective_user_id = user_id or id
-    ba = _resolve_billing_account(
-        session,
-        user_id=effective_user_id,
-        organization_id=organization_id,
-    )
-    ba.autorecharge_qty = Decimal(str(qty))
-    session.commit()
-
-
 @router.put("/update_user_prompt_telemetry")
 def update_user_prompt_telemetry(
     user_id: str,
@@ -665,46 +537,6 @@ def get_user_prompt_telemetry(
 
 
 @router.post(
-    "/billing/invoice-month",
-    summary="Admin: Run the credits-mode invoicer for a period",
-    description=(
-        "Run the monthly credits-mode invoicer routine for the given "
-        "period. Defaults to the previous month. Production runs on "
-        "Cloud Scheduler (``orchestra-production-monthly-invoicer``, "
-        "``0 2 1 * *`` UTC); staging is on-demand only — call this "
-        "endpoint manually to verify changes. Idempotent: re-running "
-        "for the same period skips already-finalised PENDING_INVOICE "
-        "recharges. See ``monthly_credits_invoicer`` module docstring "
-        "for the full scheduling rationale."
-    ),
-)
-def trigger_monthly_invoicing(
-    year: Optional[int] = None,
-    month: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> dict:
-    """Trigger the credits-mode invoicing routine for a period."""
-    try:
-        from orchestra.routines.monthly_credits_invoicer import invoice_month
-
-        result = invoice_month(year, month, session=session)
-        return {
-            "status": "success",
-            "period": result.period,
-            "accounts_invoiced": result.accounts_invoiced,
-            "accounts_skipped": result.accounts_skipped,
-            "accounts_failed": result.accounts_failed,
-            "errors": result.errors,
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Monthly invoicing failed: {str(e)}",
-        )
-
-
-@router.post(
     "/billing/invoice-metered-month",
     summary="Admin: Run the metered-mode invoicer for a period",
     description=(
@@ -712,9 +544,7 @@ def trigger_monthly_invoicing(
         "period. Defaults to the previous month. Production runs on "
         "Cloud Scheduler "
         "(``orchestra-production-monthly-metered-invoicer``, "
-        "``5 2 1 * *`` UTC — five minutes after the credits-mode "
-        "scheduler so the older, well-understood credits pipeline "
-        "can't be starved by this newer one if it misbehaves); "
+        "``5 2 1 * *`` UTC); "
         "staging is on-demand only — invoke ``invoice_metered_month`` "
         "from a Python shell to verify changes. "
         "\n\n"
@@ -818,13 +648,12 @@ def trigger_assistant_contact_levy(
     This endpoint is designed to be called by Cloud Scheduler on the 1st of
     each month (``0 0 1 * *``).
 
-    Skipped in staging environments where billing infrastructure is not
-    fully configured.
+    Skipped when billing is disabled for the current environment.
     """
-    if settings.is_staging:
+    if not settings.charges_billing:
         return {
             "status": "skipped",
-            "message": "Resource levy is disabled in staging environments.",
+            "message": "Resource levy is disabled for this environment.",
         }
 
     try:
@@ -841,7 +670,6 @@ def trigger_assistant_contact_levy(
             "total_amount": float(result.total_amount),
             "accounts_processed": result.accounts_processed,
             "accounts_marked_past_due": result.accounts_marked_past_due,
-            "auto_recharges_triggered": result.auto_recharges_triggered,
             "notifications_sent": result.notifications_sent,
         }
 
@@ -921,26 +749,22 @@ async def trigger_inactivity_followup(
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Trigger the re-engagement follow-up + auto-cleanup routine.
+    Trigger the per-user re-engagement nudge routine.
 
-    Two stages:
-      1. Dispatch an inactivity follow-up for assistants whose most
-         recent correspondence pre-dates ``inactivity_followup_days``
-         and who do not yet have a follow-up in flight. Assistants
-         with a provisioned email channel wake the Unity brain via
-         the communication adapter so the brain composes and sends
-         from the assistant's own mailbox; assistants without an
-         email instead receive an orchestra-sent first-person email
-         from ``hello@unify.ai`` redirecting the boss to the Unify
-         console. Orchestra records ``last_followup_sent_at`` after
-         a successful send on either path.
-      2. Notify the assistant's lifecycle owner, then deprovision +
-         hard-delete assistants whose silent/explicit termination
-         grace period has elapsed (``inactivity_auto_cleanup_days``).
+    Finds users who have not interacted with any of their assistants
+    (the Coordinator included) for ``inactivity_followup_days`` and whose
+    personal Coordinator has not already followed up since their last
+    activity (and has not opted out), then wakes each user's Coordinator
+    via the communication adapter so the **brain composes and sends** a
+    personalised re-engagement message, recording ``last_followup_sent_at``
+    on the Coordinator after a successful dispatch.
 
-    Called by Cloud Scheduler at 01:15 and 13:15 UTC
-    (``15 1,13 * * *``) — twice daily, staggered 15 min after the
-    billing suspension routine at 01:00 UTC.
+    This routine never deletes or deprovisions assistants — contact
+    lifecycle/cost is governed solely by the billing suspension routine.
+
+    Called by the ``inactivity-followup`` GitHub Actions workflow at
+    01:15 and 13:15 UTC (``15 1,13 * * *``) — twice daily, staggered
+    15 min after the billing suspension routine at 01:00 UTC.
     """
     try:
         from orchestra.routines.inactivity_followup import run_inactivity_followup
@@ -953,9 +777,6 @@ async def trigger_inactivity_followup(
             "followup_candidates_found": result.followup_candidates_found,
             "followups_dispatched": result.followups_dispatched,
             "followups_failed": result.followups_failed,
-            "cleanup_candidates_found": result.cleanup_candidates_found,
-            "cleanups_completed": result.cleanups_completed,
-            "cleanups_failed": result.cleanups_failed,
         }
 
     except Exception as e:
@@ -1056,6 +877,84 @@ def trigger_billing_reconciliation(
         raise HTTPException(
             status_code=500,
             detail=f"Billing reconciliation failed: {str(e)}",
+        )
+
+
+@router.post(
+    "/billing/sweep-expired-grants",
+    summary="Admin: Forfeit unconsumed remainders of expired credit grants",
+    description=(
+        "Run the credit-grant expiry sweep. For every CREDITS account "
+        "holding an expired grant (trial signup credits past their "
+        "1-week window, or a plan grant whose cycle webhook was "
+        "missed) with an unconsumed remainder, posts a single negative "
+        "``forfeit`` ledger row and decrements the wallet — never below "
+        "zero, never touching non-expiring credits. Idempotent: "
+        "re-running is a no-op for already-forfeited grants. Production "
+        "runs daily on Cloud Scheduler "
+        "(``orchestra-production-credit-grant-expiry-sweep``, "
+        "``30 1 * * *`` UTC); staging is on-demand only. See "
+        "``credit_grant_expiry_sweep`` module docstring for the full "
+        "scheduling rationale."
+    ),
+)
+def trigger_credit_grant_expiry_sweep(
+    session=Depends(get_db_session),
+) -> dict:
+    """Trigger the credit-grant expiry sweep."""
+    try:
+        from orchestra.routines.credit_grant_expiry_sweep import (
+            sweep_expired_grants,
+        )
+
+        result = sweep_expired_grants(session=session)
+        return {
+            "status": "success",
+            **result.to_dict(),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Credit-grant expiry sweep failed: {str(e)}",
+        )
+
+
+@router.post(
+    "/billing/send-expiry-reminders",
+    summary="Admin: Email holders before their credit grants expire",
+    description=(
+        "Run the pre-expiry credit reminder. For every CREDITS account "
+        "holding an unconsumed grant whose expiry falls inside the "
+        "reminder window (``CREDIT_EXPIRY_REMINDER_DAYS``, default 3), "
+        "emails the holder a single 'use-it-or-lose-it' (plan) / "
+        "'subscribe before you lose these' (trial) notice. Idempotent: "
+        "each distinct expiry is reminded at most once "
+        "(``billing_account.credit_expiry_reminded_at``). Production runs "
+        "daily on Cloud Scheduler "
+        "(``orchestra-production-credit-expiry-reminder``, ``0 9 * * *`` "
+        "UTC); staging is on-demand only. See "
+        "``credit_expiry_reminder`` module docstring for the full "
+        "scheduling rationale."
+    ),
+)
+def trigger_credit_expiry_reminder(
+    session=Depends(get_db_session),
+) -> dict:
+    """Trigger the pre-expiry credit reminder run."""
+    try:
+        from orchestra.routines.credit_expiry_reminder import (
+            send_credit_expiry_reminders,
+        )
+
+        result = send_credit_expiry_reminders(session=session)
+        return {
+            "status": "success",
+            **result.to_dict(),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Credit-expiry reminder run failed: {str(e)}",
         )
 
 
@@ -1257,8 +1156,8 @@ def get_billing_account_info(
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Get billing account info (stripe customer ID, credits, auto-recharge
-    settings) for a user or organization.
+    Get billing account info (stripe customer ID, credits, account
+    status) for a user or organization.
 
     Accepts ``user_id`` or ``organization_id`` (exactly one).
 
@@ -1266,6 +1165,8 @@ def get_billing_account_info(
     :param organization_id: Organization ID (for org billing accounts).
     :return: Billing account details.
     """
+    from orchestra.lib.billing import fetch_billing_profile_from_stripe
+
     ba = _resolve_billing_account(
         session,
         user_id=user_id,
@@ -1275,26 +1176,17 @@ def get_billing_account_info(
         "billing_account_id": ba.id,
         "stripe_customer_id": ba.stripe_customer_id,
         "credits": float(ba.credits) if ba.credits else 0,
-        "autorecharge": ba.autorecharge,
-        "autorecharge_threshold": (
-            float(ba.autorecharge_threshold) if ba.autorecharge_threshold else 0
-        ),
-        "autorecharge_qty": float(ba.autorecharge_qty) if ba.autorecharge_qty else 0,
         "account_status": ba.account_status,
         # NULL = invoicer falls back to the per-CollectionMethod default
         # (``['card']`` for AUTO_CARD, ``['card', 'customer_balance']``
         # for SEND_INVOICE_NET_30).
         "preferred_payment_method_types": ba.preferred_payment_method_types,
-        # Business profile snapshot — same shape as
-        # ``BillingAccountDAO.get_billing_profile`` so the admin UI can
-        # display / edit the profile that drives Stripe Customer
-        # creation and invoice addressee fields.
+        # Business profile snapshot — PII lives only on the Stripe Customer
+        # now, so fetch it live for the admin UI rather than reading a local
+        # mirror. ``is_business`` is the derived local flag.
         "billing_profile": {
-            "billing_email": ba.billing_email,
-            "name": ba.name,
-            "tax_id": ba.tax_id,
-            "tax_id_type": ba.tax_id_type,
-            "billing_address": ba.billing_address or {},
+            **fetch_billing_profile_from_stripe(ba.stripe_customer_id),
+            "is_business": bool(ba.is_business),
         },
         # Self-serve switch catalog assignment. NULL = self-serve
         # switching disabled for this account; admins can still call
@@ -1369,248 +1261,6 @@ def set_stripe_id(
     session.commit()
     entity_label = f"user {user_id}" if user_id else f"organization {organization_id}"
     return {"message": f"Stripe ID set for {entity_label}", "billing_account_id": ba.id}
-
-
-VALID_TIERS = {"developer", "professional", "enterprise"}
-
-
-@router.put("/billing/tier")
-def set_billing_account_tier(
-    tier: str,
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> dict:
-    """
-    Set the tier on a billing account.
-
-    Accepts ``user_id`` or ``organization_id`` (exactly one).
-
-    :param tier: One of ``developer``, ``professional``, ``enterprise``.
-    :param user_id: User ID (for personal billing accounts).
-    :param organization_id: Organization ID (for org billing accounts).
-    """
-    if tier not in VALID_TIERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tier must be one of {', '.join(sorted(VALID_TIERS))}.",
-        )
-
-    ba_dao = BillingAccountDAO(session)
-
-    # Resolve or create billing account
-    if user_id and organization_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either user_id or organization_id, not both.",
-        )
-    if not user_id and not organization_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either user_id or organization_id.",
-        )
-
-    if user_id:
-        user_dao = UserDAO(session)
-        user_rows = user_dao.filter(id=user_id)
-        if not user_rows:
-            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
-        user_instance = user_rows[0][0]
-        ba = user_instance.billing_account
-        if ba is None:
-            ba = ba_dao.create(tier=tier)
-            user_instance.billing_account_id = ba.id
-        else:
-            ba.tier = tier
-    else:
-        org = session.query(Organization).filter_by(id=organization_id).first()
-        if org is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Organization {organization_id} not found.",
-            )
-        ba = org.billing_account
-        if ba is None:
-            ba = ba_dao.create(tier=tier)
-            org.billing_account_id = ba.id
-        else:
-            ba.tier = tier
-
-    session.commit()
-    entity_label = f"user {user_id}" if user_id else f"organization {organization_id}"
-    return {
-        "message": f"Tier set to '{tier}' for {entity_label}",
-        "billing_account_id": ba.id,
-    }
-
-
-@router.get("/billing_eligibility")
-@router.get("/user_billing_eligibility")  # backward-compat alias
-def get_billing_eligibility(
-    user_id: Optional[str] = None,
-    organization_id: Optional[int] = None,
-    session=Depends(get_db_session),
-) -> dict:
-    """
-    Get auto-recharge eligibility for a billing account.
-
-    Accepts either ``user_id`` or ``organization_id`` (exactly one).
-
-    Checks if the account has spent at least the minimum threshold in
-    real-money transactions before it can enable automatic top-ups.
-    This is a fraud-prevention measure to stop bot accounts from setting
-    up very low, repeated automatic refills and then disputing the charges.
-
-    :param user_id: User ID (for personal billing).
-    :param organization_id: Organization ID (for org billing).
-    :param session: Database session.
-    :return: Dictionary with eligibility information.
-    """
-    ba = _resolve_billing_account(
-        session,
-        user_id=user_id,
-        organization_id=organization_id,
-    )
-    ba_dao = BillingAccountDAO(session)
-
-    total_spending = float(ba_dao.get_total_spending(ba.id))
-    can_enable = ba_dao.can_enable_auto_recharge(ba.id)
-    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
-
-    result: dict = {
-        "billing_account_id": ba.id,
-        "total_spending": total_spending,
-        "can_enable_auto_recharge": can_enable,
-        "minimum_spend_required": min_required,
-        "remaining_spend_needed": max(0.0, min_required - total_spending),
-    }
-    # Include the caller's key for backward compatibility
-    if user_id:
-        result["user_id"] = user_id
-    if organization_id:
-        result["organization_id"] = organization_id
-    return result
-
-
-@router.post("/billing/migrate-accounts")
-@router.post("/billing/migrate-users")  # backward-compat alias
-def migrate_billing_accounts_to_compliance(
-    session=Depends(get_db_session),
-) -> dict:
-    """
-    Migrate **all** billing accounts (users + organizations) to comply with
-    auto-recharge requirements.
-
-    This endpoint will:
-    1. Disable auto-recharge for accounts that haven't met the minimum spend threshold.
-    2. Set auto-recharge amount to $25 for accounts with amounts below $25.
-
-    :param session: Database session.
-    :return: Dictionary with migration results.
-    """
-    ba_dao = BillingAccountDAO(session)
-
-    # Fetch every billing account in the system
-    all_accounts: List[BillingAccount] = session.query(BillingAccount).all()
-
-    results: dict = {
-        "total_accounts_processed": 0,
-        "accounts_disabled": [],
-        "accounts_amount_updated": [],
-        "accounts_unaffected": [],
-        "errors": [],
-    }
-
-    min_required = float(MIN_SPEND_FOR_AUTO_RECHARGE)
-
-    for ba in all_accounts:
-        try:
-            results["total_accounts_processed"] += 1
-
-            total_spending = float(ba_dao.get_total_spending(ba.id))
-            can_enable = ba_dao.can_enable_auto_recharge(ba.id)
-
-            original_autorecharge = ba.autorecharge
-            original_autorecharge_qty = ba.autorecharge_qty
-
-            changes_made = False
-
-            # Disable auto-recharge for accounts that haven't met the spend threshold
-            if original_autorecharge and not can_enable:
-                ba.autorecharge = False
-                results["accounts_disabled"].append(
-                    {
-                        "billing_account_id": ba.id,
-                        "spending": total_spending,
-                        "reason": f"Insufficient spending (${total_spending:.2f} < ${min_required:.2f})",
-                    },
-                )
-                changes_made = True
-
-            # Enforce minimum auto-recharge amount of $25
-            if original_autorecharge_qty is None or float(
-                original_autorecharge_qty,
-            ) < float(MIN_AUTORECHARGE_AMOUNT):
-                ba.autorecharge_qty = MIN_AUTORECHARGE_AMOUNT
-                old_amt = (
-                    float(original_autorecharge_qty)
-                    if original_autorecharge_qty is not None
-                    else None
-                )
-                results["accounts_amount_updated"].append(
-                    {
-                        "billing_account_id": ba.id,
-                        "old_amount": old_amt,
-                        "new_amount": float(MIN_AUTORECHARGE_AMOUNT),
-                        "reason": (
-                            f"Amount below minimum (${old_amt:.2f} < ${MIN_AUTORECHARGE_AMOUNT})"
-                            if old_amt is not None
-                            else f"Amount was None, set to minimum ${MIN_AUTORECHARGE_AMOUNT}"
-                        ),
-                        "autorecharge_enabled": original_autorecharge,
-                    },
-                )
-                changes_made = True
-
-            if not changes_made:
-                results["accounts_unaffected"].append(
-                    {
-                        "billing_account_id": ba.id,
-                        "autorecharge_enabled": original_autorecharge,
-                        "autorecharge_amount": (
-                            float(original_autorecharge_qty)
-                            if original_autorecharge_qty is not None
-                            else None
-                        ),
-                        "spending": total_spending,
-                        "auto_recharge_eligible": can_enable,
-                    },
-                )
-
-        except Exception as e:
-            results["errors"].append(
-                {
-                    "billing_account_id": ba.id if hasattr(ba, "id") else "unknown",
-                    "error": str(e),
-                },
-            )
-            continue
-
-    # Commit all changes
-    try:
-        session.commit()
-        total = results["total_accounts_processed"]
-        results["status"] = "success"
-        results["message"] = (
-            f"Migration completed successfully. Processed {total} billing account(s)."
-        )
-    except Exception as e:
-        session.rollback()
-        results["status"] = "error"
-        results["message"] = f"Migration failed during commit: {str(e)}"
-        raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
-
-    return results
 
 
 @router.post(
@@ -2229,10 +1879,12 @@ def admin_ensure_stripe_customer(
     )
     pre_existing = ba.stripe_customer_id
 
+    from orchestra.lib.subscription_billing import resolve_is_business
+
     is_business = (
         body.is_business
         if body.is_business is not None
-        else body.organization_id is not None
+        else resolve_is_business(ba, body.organization_id)
     )
 
     try:
@@ -2278,7 +1930,13 @@ def admin_update_billing_profile(
     session=Depends(get_db_session),
 ) -> BillingProfileResponse:
     """Admin-side equivalent of the customer-facing profile update."""
-    from orchestra.lib.billing import sync_billing_profile_to_stripe
+    from orchestra.lib.billing import (
+        ensure_stripe_customer,
+        fetch_billing_profile_from_stripe,
+        is_billing_address_complete,
+        sync_billing_profile_to_stripe,
+    )
+    from orchestra.lib.subscription_billing import resolve_is_business
 
     log = logging.getLogger(__name__)
 
@@ -2288,37 +1946,43 @@ def admin_update_billing_profile(
         organization_id=body.organization_id,
     )
 
-    # Snapshot the existing address before mutating — used by the
-    # tax-id sync helper as a fallback for country resolution when
-    # the caller patches tax_id without re-sending the full address.
-    existing_address = dict(ba.billing_address or {})
+    # PII is no longer stored locally — read the current profile from Stripe
+    # so a partial tax-id patch can resolve the country, then push the
+    # changes back to Stripe (the source of truth).
+    existing_profile = fetch_billing_profile_from_stripe(ba.stripe_customer_id)
+    existing_address = existing_profile.get("billing_address") or {}
 
-    ba_dao = BillingAccountDAO(session)
-    updated = ba_dao.update_billing_profile(
-        billing_account_id=ba.id,
-        billing_email=body.billing_email,
-        name=body.name,
-        tax_id=body.tax_id,
-        tax_id_type=body.tax_id_type,
-        billing_address=body.billing_address,
-    )
-    if not updated:
-        raise HTTPException(
-            status_code=404,
-            detail=f"BillingAccount {ba.id} not found.",
-        )
-    session.flush()
+    # Derive the business flag: an explicit override wins, otherwise a
+    # non-empty tax ID flips it on (else preserve the existing flag).
+    if body.is_business is not None:
+        is_business = body.is_business
+    elif body.tax_id is not None:
+        is_business = bool((body.tax_id or "").strip())
+    else:
+        is_business = bool(ba.is_business)
 
-    # Push the changes to Stripe so the next invoice / current
-    # Customer record reflect them. Only fields the caller actually
-    # provided are forwarded — `sync_billing_profile_to_stripe`
-    # already skips ``None`` values.
+    # Create the Stripe Customer if one doesn't exist yet (so the profile has
+    # somewhere to live), seeding it with whatever the admin provided.
+    if not ba.stripe_customer_id:
+        try:
+            ensure_stripe_customer(
+                session,
+                ba,
+                is_business=is_business,
+                name=body.name,
+                email=body.billing_email,
+                address=body.billing_address,
+                tax_id=body.tax_id,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except stripe.error.StripeError as exc:
+            raise HTTPException(status_code=502, detail=f"Stripe API error: {exc}")
+
+    # Push the changes to Stripe so the next invoice / current Customer
+    # record reflect them. Only fields the caller actually provided are
+    # forwarded — ``sync_billing_profile_to_stripe`` already skips ``None``.
     if ba.stripe_customer_id:
-        is_business = (
-            body.is_business
-            if body.is_business is not None
-            else body.organization_id is not None
-        )
         sync_billing_profile_to_stripe(
             ba.stripe_customer_id,
             is_business=is_business,
@@ -2330,15 +1994,26 @@ def admin_update_billing_profile(
             logger_instance=log,
         )
 
+    # Re-read the merged profile from Stripe so the response and the derived
+    # ``billing_setup_complete`` gate reflect what's actually on file — an
+    # admin address edit must keep the gate fresh just like the user PATCH.
+    profile = fetch_billing_profile_from_stripe(ba.stripe_customer_id)
+    merged_address = profile.get("billing_address") or {}
+    billing_setup_complete = is_billing_address_complete(merged_address)
+
+    ba.is_business = is_business
+    ba.billing_setup_complete = billing_setup_complete
     session.commit()
-    session.refresh(ba)
+
     return BillingProfileResponse(
         billing_account_id=ba.id,
-        billing_email=ba.billing_email,
-        name=ba.name,
-        tax_id=ba.tax_id,
-        tax_id_type=ba.tax_id_type,
-        billing_address=ba.billing_address or {},
+        billing_email=profile.get("billing_email"),
+        name=profile.get("name"),
+        tax_id=profile.get("tax_id"),
+        tax_id_type=profile.get("tax_id_type"),
+        billing_address=merged_address,
+        billing_setup_complete=billing_setup_complete,
+        is_business=is_business,
     )
 
 
@@ -2695,6 +2370,22 @@ def admin_rerun_metered_invoicing_for_account(
 # ===========================================================================
 
 
+def _org_owner_email_map(session, orgs) -> dict[str, str]:
+    """Resolve org-owner login emails for a batch of ``Organization`` rows.
+
+    An org-owned billing account has no ``User`` linked directly to the
+    billing account (the org owns it), so the recipient email must come
+    from the org owner. Billing PII (incl. any billing email) lives on the
+    Stripe customer now, not locally, so the owner's login email is the
+    reliable local signal for display.
+    """
+    owner_ids = {o.owner_id for o in orgs if o is not None}
+    if not owner_ids:
+        return {}
+    rows = session.query(User.id, User.email).filter(User.id.in_(owner_ids)).all()
+    return {uid: email for uid, email in rows if email}
+
+
 @router.get(
     "/invoices",
     response_model=AdminInvoiceListResponse,
@@ -2752,7 +2443,7 @@ def admin_list_invoices(
         None,
         description=(
             "Recipient search — case-insensitive substring match against "
-            "org name, user email, billing email, or stripe_invoice_id. "
+            "org name, user (login) email, or stripe_invoice_id. "
             "Numeric ``q`` also matches billing_account_id."
         ),
     ),
@@ -2861,7 +2552,6 @@ def admin_list_invoices(
         clauses = [
             Organization.name.ilike(needle),
             User.email.ilike(needle),
-            BillingAccount.billing_email.ilike(needle),
             Recharge.stripe_invoice_id.ilike(needle),
         ]
         try:
@@ -2884,6 +2574,7 @@ def admin_list_invoices(
                 base_q.order_by(Recharge.at.desc()).offset(offset).limit(limit),
             ).all(),
         )
+        owner_emails = _org_owner_email_map(session, [r[2] for r in rows])
         for recharge, ba, org, user, _assignment, template in rows:
             ts = recharge.at
             if ts and ts.tzinfo is None:
@@ -2900,8 +2591,8 @@ def admin_list_invoices(
             #   the customer was actually invoiced (see
             #   ``InvoicesTable.formatInvoiceAmount`` for the matching
             #   customer-side logic).
-            # * Every other Stripe-backed row type (auto_recharge,
-            #   commit_topup for CREDITS COMMITMENT, …) is intrinsically
+            # * Every other Stripe-backed row type (commit_topup for
+            #   CREDITS COMMITMENT, legacy "auto" rows, …) is intrinsically
             #   USD-denominated — the plan template's ``currency`` is
             #   only meaningful for the METERED path, so we deliberately
             #   ignore it on the fallback and label the row USD to match
@@ -2935,7 +2626,9 @@ def admin_list_invoices(
                     ),
                     recipient_name=(org.name if org else (user.name if user else None)),
                     recipient_email=(
-                        ba.billing_email or (user.email if user else None)
+                        user.email
+                        if user
+                        else (owner_emails.get(org.owner_id) if org else None)
                     ),
                     at=ts.isoformat() if ts else "",
                     invoice_group=(
@@ -3045,7 +2738,6 @@ def admin_list_invoices(
             mclauses = [
                 Organization.name.ilike(needle),
                 User.email.ilike(needle),
-                BillingAccount.billing_email.ilike(needle),
             ]
             try:
                 ba_id_match = int(q.strip())
@@ -3054,7 +2746,11 @@ def admin_list_invoices(
                 pass
             metered_q = metered_q.where(or_(*mclauses))
 
-        for ba, org, user, assignment, template in session.execute(metered_q).all():
+        metered_rows = list(session.execute(metered_q).all())
+        upcoming_owner_emails = _org_owner_email_map(
+            session, [r[1] for r in metered_rows]
+        )
+        for ba, org, user, assignment, template in metered_rows:
             try:
                 est = estimate_in_progress_invoice(
                     session,
@@ -3100,7 +2796,9 @@ def admin_list_invoices(
                     ),
                     recipient_name=(org.name if org else (user.name if user else None)),
                     recipient_email=(
-                        ba.billing_email or (user.email if user else None)
+                        user.email
+                        if user
+                        else (upcoming_owner_emails.get(org.owner_id) if org else None)
                     ),
                     at=est.period_end_exclusive.isoformat(),
                     invoice_group=period_end_label.isoformat(),

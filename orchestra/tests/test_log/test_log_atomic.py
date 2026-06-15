@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from . import HEADERS, _create_log, _create_project, _get_log
 
@@ -614,7 +614,10 @@ def test_atomic_upsert_concurrent_first_inserts_threaded(fastapi_app_concurrent)
         """Run async request in its own event loop (for thread isolation)."""
 
         async def _make_request():
-            async with AsyncClient(app=app, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
                 if method == "post":
                     return await client.post(url, json=json_data, headers=HEADERS)
                 return await client.get(url, headers=HEADERS)
@@ -772,7 +775,10 @@ def test_atomic_upsert_concurrent_high_contention_threaded(fastapi_app_concurren
         """Run async request in its own event loop (for thread isolation)."""
 
         async def _make_request():
-            async with AsyncClient(app=app, base_url="http://test") as client:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
                 if method == "post":
                     return await client.post(url, json=json_data, headers=HEADERS)
                 return await client.get(url, headers=HEADERS)
@@ -1006,14 +1012,9 @@ async def test_atomic_upsert_with_org_api_key(client: AsyncClient):
         "Content-Type": "application/json",
     }
 
-    # Step 2: Create "Assistants" project in org (via the org API key)
-    response = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    # May already exist, so accept 200 or 409
-    assert response.status_code in (200, 201, 409), response.json()
+    from orchestra.tests.utils import ensure_assistants_project
+
+    await ensure_assistants_project(client, org_headers)
 
     # Step 4: Use atomic upsert with org API key
     response = await client.post(
@@ -1125,13 +1126,9 @@ async def test_atomic_upsert_org_project_isolation(client: AsyncClient):
         "Content-Type": "application/json",
     }
 
-    # Create Assistants project in org
-    response = await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=org_headers,
-    )
-    assert response.status_code in (200, 201, 409), response.json()
+    from orchestra.tests.utils import ensure_assistants_project
+
+    await ensure_assistants_project(client, org_headers)
 
     # Step 3: Create a log with org API key (same context path but different test_id)
     response_org = await client.post(

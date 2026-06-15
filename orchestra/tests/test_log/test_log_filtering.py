@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from httpx import AsyncClient
 
-from ...web.api.log.python2SQL import str_filter_exp_to_dict_using_ast
+from orchestra.web.api.log.python2SQL import str_filter_exp_to_dict_using_ast
+
 from . import (
     HEADERS,
     _create_derived_entry,
@@ -53,6 +54,10 @@ from . import (
         (
             "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
+        ),
+        (
+            "task_id in [0, 1, 2]",
+            {"task_id": 0},
         ),
         (
             "submarine == 6.45 and van is False or len(ship) < 10 and 'audi' in car",

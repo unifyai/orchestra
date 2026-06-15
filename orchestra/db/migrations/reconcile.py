@@ -2,9 +2,9 @@
 
 Background
 ----------
-Phase-3 of the orchestra-core split squashed the platform's 259-revision
+Phase-3 of the orchestra split squashed the platform's 259-revision
 alembic chain into a single `_platform_initial` revision whose
-`down_revision` is orchestra-core's `0001_core_initial`. Existing
+`down_revision` is orchestra's `0001_core_initial`. Existing
 production databases are stamped at one of the *old* revisions
 (e.g. `phase3_core_bridge`); the new chain doesn't know about those
 names, so a naive `alembic upgrade head` fails with
@@ -30,34 +30,14 @@ from __future__ import annotations
 
 import logging
 
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 logger = logging.getLogger("alembic.reconcile")
 
-# Every revision that exists in the converged post-split chain. The
-# reconcile is a no-op when `alembic_version` is a subset of these — DBs
-# stamped at any of these revisions can reach the head via normal
-# alembic upgrade traversal.
-#
-# Chain shape:
-#     0001_core_initial
-#         ├── _platform_initial          (platform squash leaf)
-#         └── 0002_kernel_drift_fixes    (kernel drift-fix leaf)
-#                  ↓
-#              2026_platform_drift_fixes (merge node + new head)
-NEW_CHAIN_REVISIONS = frozenset(
-    {
-        "0001_core_initial",
-        "_platform_initial",
-        "0002_kernel_drift_fixes",
-        "2026_platform_drift_fixes",
-    },
-)
-
 # Where the reconcile stamps a pre-squash DB. This is the revision whose
-# schema matches what production was running just before tonight's
-# convergence work — i.e. the schema produced by the historical 259
+# schema matches the state produced by the historical 259
 # platform migrations. Stamping at this point lets alembic naturally
 # apply the kernel + platform drift-fix migrations on top, doing the
 # actual schema convergence as proper migrations rather than as a
@@ -81,12 +61,20 @@ SENTINEL_TABLES = (
 )
 
 
-def reconcile_to_new_chain(connection: Connection) -> None:
-    """Stamp `alembic_version` to the new chain's heads if needed."""
+def reconcile_to_new_chain(
+    connection: Connection,
+    script_dir: ScriptDirectory,
+) -> None:
+    """Stamp `alembic_version` to the new chain's heads if needed.
+
+    The set of "known post-squash revisions" is derived from the active
+    `ScriptDirectory` so the reconcile auto-tracks every migration added
+    after the squash — no manual list to keep in sync.
+    """
     av_exists = connection.execute(
         text(
             "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name = 'alembic_version'"
+            "WHERE table_schema = 'public' AND table_name = 'alembic_version'",
         ),
     ).first()
     if not av_exists:
@@ -95,7 +83,7 @@ def reconcile_to_new_chain(connection: Connection) -> None:
         return
 
     rows = connection.execute(
-        text("SELECT version_num FROM alembic_version")
+        text("SELECT version_num FROM alembic_version"),
     ).fetchall()
     versions = {r[0] for r in rows}
 
@@ -104,7 +92,8 @@ def reconcile_to_new_chain(connection: Connection) -> None:
         # alembic will INSERT the new heads as it applies the chain.
         return
 
-    if versions <= NEW_CHAIN_REVISIONS:
+    new_chain_revisions = {rev.revision for rev in script_dir.walk_revisions()}
+    if versions <= new_chain_revisions:
         # Already on (or partway up) the new chain — let alembic handle
         # any remaining upgrades the normal way.
         return
@@ -116,7 +105,7 @@ def reconcile_to_new_chain(connection: Connection) -> None:
         present = connection.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name = :t"
+                "WHERE table_schema = 'public' AND table_name = :t",
             ),
             {"t": table},
         ).first()
@@ -126,7 +115,7 @@ def reconcile_to_new_chain(connection: Connection) -> None:
         raise RuntimeError(
             f"Cannot reconcile alembic_version: required tables are missing: {missing}. "
             f"Current alembic_version contents: {sorted(versions)}. "
-            "This DB is in an unexpected pre-squash state and needs manual triage."
+            "This DB is in an unexpected pre-squash state and needs manual triage.",
         )
 
     logger.warning(

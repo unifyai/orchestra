@@ -12,29 +12,40 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
 from orchestra.db.dao.one_time_credit_grant_link_dao import OneTimeCreditGrantLinkDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.referral_dao import ReferralDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.lib.referrals import ReferralError, attribute_referral
+from orchestra.services.coordinator_service import (
+    ensure_personal_coordinator_provisioned,
+    ensure_workspace_coordinator_provisioned,
+    get_workspace_coordinator,
+    list_workspace_memberships_missing_coordinator,
+)
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
     run_user_runtime_cleanup_tasks,
 )
+from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     SpendingLimitReachedRequest,
     SpendingLimitReachedResponse,
@@ -56,6 +67,13 @@ from orchestra.web.api.users.schema import (
     PhoneVerificationConfirm,
     PhoneVerificationRequest,
     QueryLoggingStatus,
+    ReferralAttributionRequest,
+    ReferralAttributionResponse,
+    ReferralCodeResponse,
+    ReferralCreateCodeRequest,
+    ReferralListItem,
+    ReferralListResponse,
+    ReferralSummaryResponse,
     UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
     UserRequest,
@@ -63,7 +81,8 @@ from orchestra.web.api.users.schema import (
     UserSpendingLimitResponse,
     UserSpendResponse,
 )
-from orchestra_core.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
+from orchestra.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -71,46 +90,81 @@ logger = logging.getLogger(__name__)
 
 # TODO: Move exceptions to exceptions file
 # TODO: Fetch organization if it exists when reading user info
-# TODO: Return tier in user info endpoints + double check rest of the information
 
 # Endpoints used by next-auth
 
 
 @admin_router.post("/user")
-def create_user(
+async def create_user(
     user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
     user_dao = UserDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    created_coordinator = False
+    coordinator_id: int | None = None
 
-    user_dao.create(
-        email=user.email,
-        name=user.name,
-        last_name=user.last_name,
-        job_title=user.job_title,
-        bio=user.bio,
-        image=user.image,
-        timezone=user.timezone,
-        phone_number=user.phone_number,
-        whatsapp_number=user.whatsapp_number,
-        discord_id=user.discord_id,
-    )
-    user_row = user_dao.filter(email=user.email)
-    new_user = user_row[0][0]
-
-    new_api_key = generate_key()
-    api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
-
-    # Seed default Unity project, interface, tab, and table tile for tasks
     try:
-        DefaultTasksSeeder.seed(session, user_id=new_user.id)
-    except Exception as e:
-        print(e)
+        user_dao.create(
+            email=user.email,
+            name=user.name,
+            last_name=user.last_name,
+            job_title=user.job_title,
+            bio=user.bio,
+            image=user.image,
+            timezone=user.timezone,
+            phone_number=user.phone_number,
+            whatsapp_number=user.whatsapp_number,
+            discord_id=user.discord_id,
+        )
+        user_row = user_dao.filter(email=user.email)
+        new_user = user_row[0][0]
 
-    # Initialize onboarding status for the new user
-    onboarding_dao = OnboardingStatusDAO(session)
-    onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+        new_api_key = generate_key()
+        api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
+
+        # Seed default Unity project, interface, tab, and table tile for tasks
+        try:
+            DefaultTasksSeeder.seed(session, user_id=new_user.id)
+        except Exception as e:
+            print(e)
+
+        # Initialize onboarding status for the new user
+        onboarding_dao = OnboardingStatusDAO(session)
+        onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+
+        coordinator, created_coordinator = (
+            await ensure_personal_coordinator_provisioned(
+                session,
+                user_id=str(new_user.id),
+            )
+        )
+        coordinator_id = coordinator.agent_id
+        session.commit()
+    except Exception:
+        session.rollback()
+        if created_coordinator and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+        raise
+
+    if created_coordinator:
+        # Best-effort welcome email from the new user's Coordinator.
+        # Runs post-commit so a mail hiccup can never undo the signup.
+        try:
+            from orchestra.routines.inactivity_notifications import (
+                send_coordinator_welcome_email,
+            )
+
+            await send_coordinator_welcome_email(
+                recipient_email=new_user.email,
+                owner_first_name=new_user.name,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to send Coordinator welcome email for user %s",
+                new_user.id,
+                exc_info=True,
+            )
 
     return {
         "id": new_user.id,
@@ -652,11 +706,6 @@ def generate_key(size=32):
     return key.replace("/", "-")
 
 
-## Tier-setting endpoint has been moved to orchestra/web/api/admin/views.py
-## under generalized PUT /billing/tier.  Backward-compat alias PUT /user/tier
-## is registered there.
-
-
 @admin_router.put("/user/quotas/reset")
 def reset_user_quotas(
     user_id: str,
@@ -705,6 +754,15 @@ def create_api_key(
     custom_key: Optional[str] = None,
     session: Session = Depends(get_db_session),
 ):
+    from orchestra.web.api.utils.safe_text import validate_safe_text
+
+    try:
+        name = validate_safe_text(name, max_length=255, allow_empty=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid API key name: {exc}",
+        )
     api_key_dao = ApiKeyDAO(session)
     existing_api_key = api_key_dao.filter(
         user_id=user_id,
@@ -829,6 +887,15 @@ def create_organization_api_key(
         custom_key: Optional custom API key value. If not provided, a random key
                     will be generated. Must be unique across all API keys.
     """
+    from orchestra.web.api.utils.safe_text import validate_safe_text
+
+    try:
+        name = validate_safe_text(name, max_length=255, allow_empty=True)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid API key name: {exc}",
+        )
     api_key_dao = ApiKeyDAO(session)
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
@@ -901,14 +968,25 @@ def list_organization(
 
 
 @admin_router.post("/organization")
-def create_organization(
+async def create_organization(
     name: str,
-    owner_id: Optional[str] = None,
+    owner_id: str,
     session: Session = Depends(get_db_session),
 ):
+    # This legacy endpoint takes ``name`` as a query param, so it bypasses the
+    # Pydantic body validation used elsewhere. Validate it explicitly to block
+    # HTML/script injection in stored organization names (defense-in-depth).
+    from orchestra.web.api.utils.safe_text import validate_safe_text
+
+    try:
+        name = validate_safe_text(name, max_length=255)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid organization name: {exc}",
+        )
+
     organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
     user_dao = UserDAO(session)
 
     existing_org = organization_dao.filter(owner_id=owner_id)
@@ -918,21 +996,19 @@ def create_organization(
             detail="This user already has an organization.",
         )
 
-    # Get Owner role
-    owner_role = role_dao.get_by_name("Owner", organization_id=None)
-    if not owner_role:
-        raise HTTPException(status_code=500, detail="Owner system role not found")
-
-    # Get owner's timezone to initialize org timezone
+    # Get owner's timezone to initialize org timezone and reuse canonical org creation.
     owner_row = user_dao.get_by_id(owner_id) if owner_id else None
     owner_timezone = owner_row[0].timezone if owner_row else None
 
-    organization_dao.create(name=name, owner_id=owner_id, timezone=owner_timezone)
-    new_org = organization_dao.filter(owner_id=owner_id)
-    organization_member_dao.create(
-        organization_id=new_org[0][0].id,
-        user_id=owner_id,
-        role_id=owner_role.id,
+    from orchestra.web.api.organization.views import (
+        _create_organization_with_owner_coordinator,
+    )
+
+    await _create_organization_with_owner_coordinator(
+        session,
+        name=name,
+        owner_user_id=owner_id,
+        timezone=owner_timezone,
     )
     return "Organization created successfully!"
 
@@ -1043,7 +1119,7 @@ async def upload_user_photo(
     file: UploadFile = File(...),
     session: Session = Depends(get_db_session),
 ):
-    from orchestra.services.bucket_service import BucketService
+    from orchestra.services.bucket_service import create_bucket_service
 
     user_id = request.state.user_id
     if not user_id:
@@ -1067,7 +1143,7 @@ async def upload_user_photo(
             detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
         )
 
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     gcs_url = bucket_service.upload_user_photo_file(
         file_content=file_content,
         user_id=user_id,
@@ -1089,7 +1165,7 @@ def remove_user_photo(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
-    from orchestra.services.bucket_service import BucketService
+    from orchestra.services.bucket_service import create_bucket_service
 
     user_id = request.state.user_id
     if not user_id:
@@ -1100,7 +1176,7 @@ def remove_user_photo(
 
     # Delete all photos for this user from the account photo bucket
     try:
-        bucket_service = BucketService()
+        bucket_service = create_bucket_service()
         bucket_service.delete_user_account_photos(user_id)
     except Exception as e:
         logger.error(f"Failed to delete GCS photos for user {user_id}: {e}")
@@ -1152,6 +1228,215 @@ def get_user_basic_info(
         "phone_number": user.phone_number,
         "whatsapp_number": user.whatsapp_number,
         "discord_id": user.discord_id,
+    }
+
+
+@router.post("/user/{user_id}/coordinator", status_code=status.HTTP_201_CREATED)
+async def create_personal_coordinator_endpoint(
+    user_id: str,
+    request: Request,
+    response: Response,
+    organization_id: int | None = Query(None),
+    preferred_phone_country: str | None = Query(None),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Create or return the authenticated user's workspace Coordinator."""
+    if request.state.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot create a Coordinator for another user.",
+        )
+
+    user_dao = UserDAO(session)
+    if not user_dao.get_by_id(user_id):
+        raise not_found("User")
+
+    if organization_id is not None:
+        org_dao = OrganizationDAO(session)
+        org_member_dao = OrganizationMemberDAO(session)
+        org = org_dao.get(organization_id)
+        if org is None:
+            raise not_found("Organization")
+        if (
+            org.owner_id != user_id
+            and org_member_dao.get_member(
+                user_id,
+                organization_id,
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create a Coordinator outside your workspaces.",
+            )
+
+    from orchestra.db.models.orchestra_models import SharedPoolNumber
+    from orchestra.services.universal_unity_discord import (
+        get_universal_unity_discord_bot_id,
+        notify_comms_discord_sync,
+    )
+
+    universal_discord_bot_id = get_universal_unity_discord_bot_id()
+    discord_pool_existed_before = bool(universal_discord_bot_id) and (
+        session.query(SharedPoolNumber)
+        .filter(
+            SharedPoolNumber.platform == "discord",
+            SharedPoolNumber.number == universal_discord_bot_id,
+        )
+        .first()
+        is not None
+    )
+
+    existing = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    response.status_code = (
+        status.HTTP_200_OK if existing is not None else status.HTTP_201_CREATED
+    )
+
+    created_coordinator = False
+    coordinator_id: int | None = None
+    try:
+        coordinator, created_coordinator = (
+            await ensure_workspace_coordinator_provisioned(
+                session,
+                user_id=user_id,
+                organization_id=organization_id,
+                preferred_phone_country=preferred_phone_country,
+            )
+        )
+        coordinator_id = coordinator.agent_id
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        conflict_keys = (
+            "ux_assistants_one_personal_coordinator_per_user",
+            "ux_assistants_one_workspace_coordinator_per_membership",
+        )
+        if not any(key in str(exc.orig) for key in conflict_keys):
+            if created_coordinator and coordinator_id is not None:
+                await delete_pubsub_topic(str(coordinator_id))
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Failed to create Coordinator.",
+            )
+        if created_coordinator and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+            created_coordinator = False
+        response.status_code = status.HTTP_200_OK
+        coordinator = get_workspace_coordinator(
+            session,
+            user_id=user_id,
+            organization_id=organization_id,
+            preferred_phone_country=preferred_phone_country,
+        )
+        if coordinator is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Failed to create Coordinator.",
+            )
+        try:
+            coordinator, created_coordinator = (
+                await ensure_workspace_coordinator_provisioned(
+                    session,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                )
+            )
+            coordinator_id = coordinator.agent_id
+            session.commit()
+        except Exception:
+            session.rollback()
+            if created_coordinator and coordinator_id is not None:
+                await delete_pubsub_topic(str(coordinator_id))
+            raise
+    except Exception:
+        session.rollback()
+        if created_coordinator and coordinator_id is not None:
+            await delete_pubsub_topic(str(coordinator_id))
+        raise
+
+    # Ask Unity to (re)connect the shared Coordinator Discord bot when this
+    # request either created a new Coordinator or seeded the universal pool
+    # row for the first time. Unity reads committed pool state over the admin
+    # API, so this must run after the commits above. Best-effort.
+    if universal_discord_bot_id and (
+        created_coordinator or not discord_pool_existed_before
+    ):
+        await notify_comms_discord_sync()
+
+    return {"coordinator_id": str(coordinator.agent_id)}
+
+
+@admin_router.post("/coordinator/workspace/backfill")
+@admin_router.post("/coordinator/personal/backfill")
+async def backfill_workspace_coordinators(
+    limit: int = Query(500, ge=1, le=5000),
+    dry_run: bool = Query(True),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Backfill missing workspace Coordinators for existing users and memberships."""
+    target_memberships = list_workspace_memberships_missing_coordinator(
+        session,
+        limit=limit,
+    )
+    if dry_run:
+        return {
+            "dry_run": True,
+            "target_count": len(target_memberships),
+            "targets": [
+                {
+                    "user_id": user_id,
+                    "organization_id": organization_id,
+                }
+                for user_id, organization_id in target_memberships
+            ],
+        }
+
+    created = 0
+    skipped = 0
+    errors: list[dict[str, str]] = []
+
+    for user_id, organization_id in target_memberships:
+        created_coordinator = False
+        coordinator_id: int | None = None
+        try:
+            coordinator, created_coordinator = (
+                await ensure_workspace_coordinator_provisioned(
+                    session,
+                    user_id=user_id,
+                    organization_id=organization_id,
+                )
+            )
+            coordinator_id = coordinator.agent_id
+            session.commit()
+            if created_coordinator:
+                created += 1
+            else:
+                skipped += 1
+        except Exception as exc:
+            session.rollback()
+            if created_coordinator and coordinator_id is not None:
+                await delete_pubsub_topic(str(coordinator_id))
+            errors.append(
+                {
+                    "user_id": user_id,
+                    "organization_id": (
+                        str(organization_id) if organization_id is not None else "null"
+                    ),
+                    "error": str(exc),
+                },
+            )
+
+    return {
+        "dry_run": False,
+        "target_count": len(target_memberships),
+        "created": created,
+        "skipped_existing": skipped,
+        "failed": len(errors),
+        "errors": errors,
     }
 
 
@@ -1297,7 +1582,7 @@ def claim_credit_grant_link(
         if org_instance:
             ba = org_instance.billing_account
             if ba is None:
-                ba = ba_dao.create()
+                ba = ba_dao.create(apply_signup_grant=False)
                 org_instance.billing_account_id = ba.id
                 session.flush()
             ba_dao.apply_credit_grant(ba.id, credit_amount)
@@ -1305,7 +1590,7 @@ def claim_credit_grant_link(
         else:
             ba = user_instance.billing_account
             if ba is None:
-                ba = ba_dao.create()
+                ba = ba_dao.create(apply_signup_grant=False)
                 user_instance.billing_account_id = ba.id
                 session.flush()
             ba_dao.apply_credit_grant(ba.id, credit_amount)
@@ -1325,6 +1610,151 @@ def claim_credit_grant_link(
             status_code=500,
             detail=f"An unexpected error occurred: {str(e)}",
         )
+
+
+@router.get("/user/referral", response_model=ReferralSummaryResponse)
+def get_referral_summary(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Return the caller's referral link, codes, and reward stats.
+
+    A primary code is created lazily on first call so the user always has a
+    link to share.
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    dao = ReferralDAO(session)
+    primary = dao.get_or_create_primary_code(user_id, organization_id)
+    session.commit()
+
+    codes = dao.list_codes(user_id, organization_id)
+    attributions = dao.list_for_referrer(user_id, organization_id)
+    pending = sum(1 for a in attributions if a.status == "pending")
+    rewarded = sum(1 for a in attributions if a.status == "rewarded")
+
+    return ReferralSummaryResponse(
+        code=primary.code,
+        referral_url=f"{settings.console_url}/login?ref={primary.code}",
+        codes=[
+            ReferralCodeResponse(
+                code=c.code,
+                label=c.label,
+                created_at=c.created_at,
+                disabled=c.disabled_at is not None,
+            )
+            for c in codes
+        ],
+        pending_count=pending,
+        rewarded_count=rewarded,
+        total_credits_earned=dao.total_credits_earned(user_id, organization_id),
+        reward_pct=settings.referral_reward_pct,
+        reward_max_credits=settings.referral_reward_max_credits,
+        referee_bonus_credits=settings.referral_referee_bonus_credits,
+    )
+
+
+@router.post(
+    "/user/referral/codes",
+    response_model=ReferralCodeResponse,
+    status_code=201,
+)
+def create_referral_code(
+    payload: ReferralCreateCodeRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Create an additional referral code (e.g. one per channel/campaign).
+
+    Scoped to the active workspace: in an organization workspace the code is
+    org-owned and its rewards are credited to the organization.
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    dao = ReferralDAO(session)
+    code = dao.create_code(
+        user_id,
+        label=payload.label,
+        organization_id=organization_id,
+    )
+    session.commit()
+    return ReferralCodeResponse(
+        code=code.code,
+        label=code.label,
+        created_at=code.created_at,
+        disabled=False,
+    )
+
+
+@router.post(
+    "/user/referral/attribute",
+    response_model=ReferralAttributionResponse,
+)
+def attribute_referral_code(
+    payload: ReferralAttributionRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Apply a referral code to the (new) caller's account.
+
+    Idempotent: safe to retry on every login until it succeeds, mirroring
+    the credit-grant-link claim flow. Attribution only — the reward is
+    granted later, when the caller makes their first qualifying payment.
+    """
+    user_id = request.state.user_id
+    user_dao = UserDAO(session)
+    user_row = user_dao.get_by_id(user_id)
+    if not user_row:
+        raise not_found("User")
+    user_instance = user_row[0]
+
+    signup_ip = request.client.host if request.client else None
+    try:
+        result = attribute_referral(
+            session,
+            referee_user=user_instance,
+            code=payload.code,
+            signup_ip=signup_ip,
+        )
+        session.commit()
+    except ReferralError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception:
+        session.rollback()
+        raise
+
+    return ReferralAttributionResponse(
+        attributed=result.attributed,
+        message=result.message,
+        code=result.code,
+    )
+
+
+@router.get("/user/referrals", response_model=ReferralListResponse)
+def list_referrals(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """List the caller's referrals (as referrer) and their reward status.
+
+    Scoped to the active workspace (personal vs the current organization).
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    dao = ReferralDAO(session)
+    items = [
+        ReferralListItem(
+            status=a.status,
+            created_at=a.created_at,
+            rewarded_at=a.rewarded_at,
+            reward_amount=(
+                float(a.reward_amount) if a.reward_amount is not None else None
+            ),
+        )
+        for a in dao.list_for_referrer(user_id, organization_id)
+    ]
+    return ReferralListResponse(referrals=items)
 
 
 @admin_router.post(
@@ -1568,10 +1998,8 @@ def update_onboarding_progress(
     The step_data is validated based on the current_step to ensure
     only valid fields are stored.
 
-    When completing onboarding, grants signup promo credits to the
-    billing account that matches the user's workspace choice:
-    - personal  → user's billing account
-    - organization → org's billing account
+    Billing accounts are funded when they are created, before any
+    credit-consuming onboarding work can run.
     """
     user_dao = UserDAO(session)
     onboarding_dao = OnboardingStatusDAO(session)
@@ -1587,26 +2015,6 @@ def update_onboarding_progress(
         current_step=body.current_step,
         step_data=body.step_data,
     )
-
-    # Grant signup promo credits when onboarding completes.
-    # The console's axios interceptor converts camelCase → snake_case
-    # before the request reaches here, so keys are always snake_case.
-    if body.current_step == "completed" and body.step_data:
-        selected_type = body.step_data.get("selected_type")
-        if selected_type:
-            org_id_str = body.step_data.get("organization_id")
-            org_id: Optional[int] = None
-            if org_id_str:
-                try:
-                    org_id = int(org_id_str)
-                except (ValueError, TypeError):
-                    org_id = None
-            ba_dao = BillingAccountDAO(session)
-            ba_dao.grant_signup_credits(
-                user_id=request.state.user_id,
-                selected_type=selected_type,
-                organization_id=org_id,
-            )
 
     session.commit()
 
@@ -1833,8 +2241,6 @@ async def get_user_spend(
     billing_mode = "CREDITS"
     if user.billing_account:
         credit_balance = float(user.billing_account.credits)
-        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
         billing_mode = (
             BillingAccountDAO(session).resolve_billing_mode(user.billing_account).value
         )

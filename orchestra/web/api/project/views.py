@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -25,7 +25,7 @@ from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.table_view_dao import TableViewDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dao.user_dao import UserDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     FavoriteProject,
@@ -67,7 +67,7 @@ from orchestra.web.api.project.schema import (
     TransferToOrganizationRequest,
 )
 from orchestra.web.api.users.views import generate_key
-from orchestra_core.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
 
@@ -712,6 +712,7 @@ def create_project(
                 is_versioned=request.is_versioned,
                 description=request.description,
                 order=request.order,
+                is_public_read=request.is_public_read,
             )
 
             # Flush to get project ID, then add explicit Owner grant for creator
@@ -746,6 +747,7 @@ def create_project(
                 is_versioned=request.is_versioned,
                 description=request.description,
                 order=request.order,
+                is_public_read=request.is_public_read,
             )
 
         return {"info": "Project created successfully!"}
@@ -1001,6 +1003,8 @@ def update_project(
             update_kwargs["icon"] = request.icon
         if request.order is not None:
             update_kwargs["order"] = request.order
+        if request.is_public_read is not None:
+            update_kwargs["is_public_read"] = request.is_public_read
 
         if update_kwargs:
             project_dao.update(id=project.id, **update_kwargs)

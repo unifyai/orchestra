@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.models.orchestra_models import LogEvent, LogEventContext
+from orchestra.db.models.core_models import LogEvent, LogEventContext
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
 
@@ -1094,7 +1094,7 @@ def compute_metric_for_key(
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import (
+        from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
             set_test_context,
@@ -1311,7 +1311,7 @@ def compute_metric_bulk(
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import (
+        from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
             set_test_context,

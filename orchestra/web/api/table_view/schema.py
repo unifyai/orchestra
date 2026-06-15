@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel
+
 # =============================================================================
 # Input Schemas
 # =============================================================================
@@ -122,7 +124,7 @@ class CreateTableViewRequest(BaseModel):
         ...,
         description="Project and logs configuration",
     )
-    title: Optional[str] = Field(
+    title: OptionalSafeLabel = Field(
         None,
         description="Optional title for the table view",
     )
@@ -131,7 +133,7 @@ class CreateTableViewRequest(BaseModel):
 class UpdateTableViewRequest(BaseModel):
     """Request to update an existing table view."""
 
-    title: Optional[str] = Field(
+    title: OptionalSafeLabel = Field(
         None,
         description="New title for the table view",
     )

@@ -1,0 +1,73 @@
+name: Inactivity Re-engagement Follow-up
+
+on:
+  schedule:
+    # Twice daily at 01:15 and 13:15 UTC — staggered 15 min after the
+    # billing suspension routine (01:00 UTC) so account state is settled.
+  - cron: '15 1,13 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  inactivity_followup_production:
+    name: Inactivity Follow-up (Production)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run inactivity follow-up routine
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/assistants/inactivity-followup" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Inactivity follow-up failed with status $http_code"
+          exit 1
+        fi
+
+        candidates=$(echo "$body" | jq -r '.followup_candidates_found // 0')
+        dispatched=$(echo "$body" | jq -r '.followups_dispatched // 0')
+        failed=$(echo "$body" | jq -r '.followups_failed // 0')
+
+        echo "::notice::Found $candidates inactive user(s): $dispatched follow-up(s) dispatched, $failed failed"
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::warning::$failed follow-up dispatch(es) failed; they remain eligible for retry on the next run"
+        fi
+
+  inactivity_followup_staging:
+    name: Inactivity Follow-up (Staging)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run inactivity follow-up routine
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://internal.example.com/v0/admin/assistants/inactivity-followup" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Inactivity follow-up (staging) failed with status $http_code"
+          exit 1
+        fi
+
+        candidates=$(echo "$body" | jq -r '.followup_candidates_found // 0')
+        dispatched=$(echo "$body" | jq -r '.followups_dispatched // 0')
+        failed=$(echo "$body" | jq -r '.followups_failed // 0')
+
+        echo "::notice::Found $candidates inactive user(s): $dispatched follow-up(s) dispatched, $failed failed"
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::warning::$failed follow-up dispatch(es) failed in staging; they remain eligible for retry on the next run"
+        fi

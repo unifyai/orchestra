@@ -121,7 +121,7 @@ def fetch_media_with_retry(
     eventual consistency delays.
 
     Args:
-        bucket_service: BucketService instance for fetching media
+        bucket_service: Bucket service instance for fetching media
         filename: The filename to fetch from GCS
         max_retries: Maximum number of retry attempts (default: 5)
         base_delay: Initial delay in seconds between retries (default: 1.0)

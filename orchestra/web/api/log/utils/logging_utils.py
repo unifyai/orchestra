@@ -24,17 +24,18 @@ from sqlalchemy import (
     select,
     text,
     true,
+    type_coerce,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra_core.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import (
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.core_models import (
     Context,
     Embedding,
     FieldType,
@@ -44,7 +45,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
 from orchestra.web.api.log.schema import CreateLogConfig
-from orchestra_core.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 from ..python2SQL import STR_TO_SQL_TYPES
 from ..python2SQL.core import build_sql_query
@@ -768,6 +769,7 @@ def _get_logs_query(
     latest_timestamp: bool = False,
     randomize: bool = False,
     seed: Optional[str] = "42",
+    return_sort_distance: bool = False,
 ) -> tuple:
     """
     JSONB-based query function for retrieving logs.
@@ -799,6 +801,10 @@ def _get_logs_query(
         latest_timestamp: If True, return only the latest created_at timestamp as ISO string
         randomize: If True, return logs in deterministic random order instead of newest-first
         seed: Seed value for deterministic random ordering (default "42")
+        return_sort_distance: If True and the query takes the vector ANN sort
+            fast-path, inject the computed distance into each row's data under
+            the reserved "_sort_distance" key. This lets read-only callers rank
+            results across sources without creating derived score columns.
 
     Returns:
         If latest_timestamp is True: ISO formatted string of the latest created_at timestamp
@@ -820,7 +826,7 @@ def _get_logs_query(
     # STEP 1: Validate project
     # =========================================================================
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = project_dao.get_readable_by_user_and_name(
             name=project_name,
             user_id=user_id,
             organization_id=organization_id,
@@ -1233,7 +1239,10 @@ def _get_logs_query(
                 ann_topk = (
                     select(
                         Embedding.ref_id.label("id"),
-                        dist.label("dist"),
+                        # The distance expression inherits the pgvector Vector
+                        # type from the operand column; coerce so fetching the
+                        # value applies float (not vector) result processing.
+                        type_coerce(dist, Float).label("dist"),
                     )
                     .where(
                         Embedding.key == lhs_key,
@@ -1258,6 +1267,7 @@ def _get_logs_query(
 
                 paginated_ids_subq = select(
                     ann_topk.c.id,
+                    ann_topk.c.dist.label("dist"),
                     func.row_number().over(order_by=row_order).label("row_num"),
                 ).order_by(*row_order)
 
@@ -1273,12 +1283,39 @@ def _get_logs_query(
                 # Fetch final results with data and created_at
                 # Join with paginated_ids_cte to preserve correct ordering via row_num
                 final_query = (
-                    session.query(LogEvent.id, LogEvent.data, LogEvent.created_at)
+                    session.query(
+                        LogEvent.id,
+                        LogEvent.data,
+                        LogEvent.created_at,
+                        paginated_ids_cte.c.dist,
+                    )
                     .join(paginated_ids_cte, LogEvent.id == paginated_ids_cte.c.id)
                     .order_by(paginated_ids_cte.c.row_num)
                 )
 
-                rows = final_query.all()
+                fetched = final_query.all()
+
+                # Keep the (id, data, created_at) row shape expected downstream;
+                # optionally surface the ANN distance inside the data payload.
+                if return_sort_distance:
+                    rows = [
+                        (
+                            event_id,
+                            {
+                                **(data or {}),
+                                "_sort_distance": (
+                                    float(dist) if dist is not None else None
+                                ),
+                            },
+                            created_at,
+                        )
+                        for event_id, data, created_at, dist in fetched
+                    ]
+                else:
+                    rows = [
+                        (event_id, data, created_at)
+                        for event_id, data, created_at, _dist in fetched
+                    ]
 
                 # Return results in standard format
                 return (rows, total_count)
@@ -1440,7 +1477,7 @@ def _get_logs_query(
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import (
+        from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
             set_test_context,
@@ -1876,7 +1913,7 @@ def _create_logs_internal(
     # Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
     # =========================================================================
     if log_data_updates:
-        from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
+        from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
         session = log_event_dao.session
 
@@ -2636,7 +2673,7 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import capture_sql, is_capture_enabled
+        from orchestra.observability.sql_capture import capture_sql, is_capture_enabled
 
         if is_capture_enabled():
             compiled_sql = final_logs_query.statement.compile(

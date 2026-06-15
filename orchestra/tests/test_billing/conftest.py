@@ -17,6 +17,7 @@ import os
 import subprocess
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -43,9 +44,6 @@ def make_billing_account(
     credits: float | Decimal = 0,
     account_status: str = "ACTIVE",
     stripe_customer_id: str | None = None,
-    autorecharge: bool = False,
-    autorecharge_threshold: float | Decimal = 0,
-    autorecharge_qty: float | Decimal = 25,
 ) -> BillingAccount:
     """Create a standalone :class:`BillingAccount`.
 
@@ -58,12 +56,10 @@ def make_billing_account(
     from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
     ba = BillingAccountDAO(dbsession).create(
+        apply_signup_grant=False,
         credits=Decimal(str(credits)),
         account_status=account_status,
         stripe_customer_id=stripe_customer_id,
-        autorecharge=autorecharge,
-        autorecharge_threshold=Decimal(str(autorecharge_threshold)),
-        autorecharge_qty=Decimal(str(autorecharge_qty)),
     )
     return ba
 
@@ -93,9 +89,6 @@ def make_user_with_billing(
     email: str | None = None,
     credits: float | Decimal = 0,
     stripe_customer_id: str | None = None,
-    autorecharge: bool = False,
-    autorecharge_threshold: float | Decimal = 0,
-    autorecharge_qty: float | Decimal = 25,
     account_status: str = "ACTIVE",
 ) -> tuple[User, BillingAccount]:
     """Create a :class:`User` **and** its :class:`BillingAccount` in one step."""
@@ -103,9 +96,6 @@ def make_user_with_billing(
         dbsession,
         credits=credits,
         stripe_customer_id=stripe_customer_id,
-        autorecharge=autorecharge,
-        autorecharge_threshold=autorecharge_threshold,
-        autorecharge_qty=autorecharge_qty,
         account_status=account_status,
     )
     user = make_user(dbsession, uid, ba, email=email)
@@ -147,6 +137,142 @@ def make_org_with_billing(
     )
     org = make_org(dbsession, owner, org_ba, name=name)
     return org, org_ba
+
+
+# ---------------------------------------------------------------------------
+# Self-serve subscription helpers (shared by the api + webhook test modules)
+# ---------------------------------------------------------------------------
+
+# Seeded tier template ids (see the ``self_serve_subscription_tiers``
+# migration / ``seeding.sql``): id 2 = ``tier_50`` (50 credits/mo), id 3 =
+# ``tier_75`` (75 credits/mo), id 22 = top tier ($30,000/mo, last member).
+TIER_50_ID = 2
+TIER_75_ID = 3
+TIER_30000_ID = 22
+
+
+def put_on_tier(
+    session: Session,
+    ba: BillingAccount,
+    template_id: int,
+    subscription_id: str,
+) -> None:
+    """Place an account on a seeded subscription tier with a fake Stripe sub."""
+    from orchestra.db.dao.billing_plan_assignment_dao import (
+        BillingPlanAssignmentDAO,
+    )
+
+    BillingPlanAssignmentDAO(session).set_plan(
+        billing_account_id=ba.id,
+        template_id=template_id,
+        effective_at=datetime.now(timezone.utc),
+    )
+    ba.stripe_subscription_id = subscription_id
+    session.flush()
+
+
+def subscription_invoice_event(
+    event_type: str,
+    *,
+    customer_id: str,
+    subscription_id: str,
+    billing_reason: str,
+    quantity: int | None = None,
+    annual: bool = False,
+    basil: bool = False,
+) -> dict:
+    """Synthetic Stripe invoice event dict for the subscription handlers.
+
+    Pass ``quantity`` (and ``annual``) to populate the invoice line's tier
+    rung + price interval, exercising the deferred tier-activation path in
+    ``apply_subscription_invoice_paid`` (the first paid invoice activates the
+    tier). Omit it to rely on the account's already-active plan assignment.
+
+    ``basil=True`` emits the shape of the current Stripe API (2025-05-28):
+    the subscription id moves from the invoice top level to
+    ``parent.subscription_details.subscription``, and the line drops the
+    expanded ``price`` (so monthly-vs-annual must be inferred from the
+    billing ``period`` span). This is the shape that actually broke
+    self-serve credit grants in local/live testing.
+    """
+    now = datetime.now(timezone.utc)
+    span = timedelta(days=365) if annual else timedelta(days=30)
+    period = {
+        "start": int(now.timestamp()),
+        "end": int((now + span).timestamp()),
+    }
+    line: dict = {"period": period}
+    invoice: dict = {
+        "id": f"in_{subscription_id}",
+        "customer": customer_id,
+        "billing_reason": billing_reason,
+        "status": "paid",
+    }
+    if basil:
+        invoice["parent"] = {
+            "subscription_details": {"subscription": subscription_id},
+        }
+        if quantity is not None:
+            line["quantity"] = quantity
+            # basil lines carry only a price id (no expanded price/recurring).
+            line["pricing"] = {
+                "price_details": {"price": f"price_{quantity}"},
+            }
+    else:
+        invoice["subscription"] = subscription_id
+        if quantity is not None:
+            line["quantity"] = quantity
+            line["price"] = {"recurring": {"interval": "year" if annual else "month"}}
+    invoice["lines"] = {"data": [line]}
+    return {
+        "id": f"evt_{event_type}_{subscription_id}",
+        "type": event_type,
+        "data": {"object": invoice},
+    }
+
+
+def template_by_name(session: Session, name: str):
+    """Fetch a seeded :class:`BillingPlanTemplate` by its unique ``name``."""
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import BillingPlanTemplate
+
+    return (
+        session.execute(
+            select(BillingPlanTemplate).where(BillingPlanTemplate.name == name),
+        )
+        .scalars()
+        .one()
+    )
+
+
+def mock_stripe_subscription(monkeypatch) -> None:
+    """Stub Stripe + price settings so tier-change logic runs offline."""
+    from types import SimpleNamespace
+
+    import orchestra.lib.subscription_billing as sub_mod
+    from orchestra.settings import settings
+
+    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_dummy", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_subscription_price_id_personal_monthly",
+        "price_personal_dummy",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        settings,
+        "stripe_unify_subscription_price_id_business_monthly",
+        "price_business_dummy",
+        raising=False,
+    )
+    dummy = SimpleNamespace(
+        Subscription=SimpleNamespace(
+            retrieve=lambda sid: {"items": {"data": [{"id": "si_dummy"}]}},
+            modify=lambda sid, **kw: None,
+        ),
+    )
+    monkeypatch.setattr(sub_mod, "stripe", dummy)
 
 
 def make_assistant(
@@ -402,15 +528,13 @@ def create_stripe_customer(email: str, metadata: Optional[dict] = None) -> str:
 def attach_default_test_card(customer_id: str) -> str:
     """Attach Stripe's always-succeed test PM to a sandbox customer.
 
-    Required by any flow that exercises ``queue_auto_recharge`` /
-    ``invoice_metered_month`` with ``collection_method=AUTO_CARD``:
-    the Stripe-side guard in ``orchestra.lib.billing.queue_auto_recharge``
-    refuses to enqueue when the customer has no
-    ``invoice_settings.default_payment_method`` (and no legacy
-    ``default_source``). ``pm_card_visa`` is Stripe's documented
-    always-successful test PaymentMethod token, safe to share across
-    tests; the customer cleanup fixture deletes the customer at
-    teardown which transitively detaches the PM.
+    Required by any flow that exercises ``invoice_metered_month`` with
+    ``collection_method=AUTO_CARD``: Stripe needs a default payment
+    method on the customer to auto-charge the finalised invoice.
+    ``pm_card_visa`` is Stripe's documented always-successful test
+    PaymentMethod token, safe to share across tests; the customer
+    cleanup fixture deletes the customer at teardown which transitively
+    detaches the PM.
 
     Returns the attached PaymentMethod id so tests can reference it.
     """
@@ -445,6 +569,7 @@ def create_test_user_with_stripe(session: Session, email: str) -> tuple[User, st
     )
 
     ba = BillingAccountDAO(session).create(
+        apply_signup_grant=False,
         credits=Decimal("0"),
         stripe_customer_id=stripe_customer_id,
         account_status="ACTIVE",

@@ -45,6 +45,11 @@ RECHARGE_TYPE_PAYMENT = "payment"
 RECHARGE_TYPE_PROMO = "promo"
 RECHARGE_TYPE_MONTHLY_COMMIT = "monthly_commit"
 RECHARGE_TYPE_OVERAGE_TRUEUP = "overage_trueup"
+# Mid-cycle subscription tier-change proration invoice (Stripe
+# ``billing_reason=subscription_update``). Recorded as a PAID Recharge row
+# purely so the in-app invoice list reconciles with Stripe; the credit delta
+# for the change is granted inline by the upgrade endpoint, not here.
+RECHARGE_TYPE_PRORATION = "subscription_proration"
 
 
 # ---------------------------------------------------------------------------
@@ -96,10 +101,21 @@ class CollectionMethod(StrEnum):
     ``AUTO_CARD`` mirrors today's behaviour (Stripe charges the card on file
     when the invoice finalises). ``SEND_INVOICE_NET_30`` flips Stripe to
     ``send_invoice`` mode with a 30-day due date.
+
+    ``STRIPE_SUBSCRIPTION`` is the self-serve recurring model: a Stripe
+    Subscription is the collection engine (it charges the card monthly,
+    handles dunning/retries/SCA and the Customer Portal) while the plan
+    template stays the source of truth for the monthly credit grant. Used
+    by the CREDITS-mode tier templates seeded into the default plan group;
+    the subscription lifecycle (``invoice.paid`` => grant + reset,
+    ``payment_failed`` => past-due, ``subscription.deleted`` => drop to
+    free) is handled in the Stripe webhook rather than the monthly
+    invoicers.
     """
 
     AUTO_CARD = "AUTO_CARD"
     SEND_INVOICE_NET_30 = "SEND_INVOICE_NET_30"
+    STRIPE_SUBSCRIPTION = "STRIPE_SUBSCRIPTION"
 
 
 class ProrationPolicy(StrEnum):

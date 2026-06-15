@@ -10,9 +10,10 @@
 # This eliminates network latency and staging server bottlenecks during testing.
 #
 # Usage:
-#   ./local_orchestra.sh start    # Start and wait for ready
-#   ./local_orchestra.sh stop     # Stop local orchestra
-#   ./local_orchestra.sh restart  # Stop then start (wipes database)
+#   ./local_orchestra.sh start    # Start and wait for ready (preserves data)
+#   ./local_orchestra.sh stop     # Stop local orchestra (preserves data)
+#   ./local_orchestra.sh restart  # Stop then start (preserves data)
+#   ./local_orchestra.sh purge    # Destroy container + named volume (wipes data)
 #   ./local_orchestra.sh check    # Check if already running
 #   ./local_orchestra.sh status   # Show status
 #
@@ -56,6 +57,7 @@ ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-60
 
 # Derived names using prefix
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
+ORCHESTRA_DB_VOLUME="${ORCHESTRA_PREFIX}-local-db-data"
 ORCHESTRA_SERVER_PIDFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.pid"
 ORCHESTRA_SERVER_LOGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.log"
 ORCHESTRA_SERVER_CONFIGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.config"
@@ -199,6 +201,79 @@ get_venv_executable() {
   fi
 }
 
+seed_billing_defaults() {
+  local db_container="$1"
+
+  docker exec "$db_container" psql -q -U orchestra -d orchestra -c "
+DO \$\$
+BEGIN
+  INSERT INTO billing_plan_template (
+      id, name, display_name, description,
+      billing_mode,
+      commit_amount, currency, commit_period, commit_schedule,
+      base_pricing_factor, overage_pricing_factor,
+      collection_method,
+      proration_policy, credits_rollover_policy,
+      fx_policy, fx_locked_rate,
+      is_custom, is_active, created_at
+  ) VALUES (
+      1, 'default', 'Default',
+      'Platform-default pay-as-you-go plan. Credit-based wallet with auto-recharge support.',
+      'CREDITS',
+      NULL, 'USD', NULL, NULL,
+      1.0, 1.0,
+      'AUTO_CARD',
+      'PRORATE', NULL,
+      NULL, NULL,
+      false, true, now()
+  )
+  ON CONFLICT (id) DO NOTHING;
+
+  PERFORM setval(
+    'billing_plan_template_id_seq',
+    GREATEST((SELECT COALESCE(MAX(id), 1) FROM billing_plan_template), 1)
+  );
+
+  INSERT INTO plan_group (id, name, display_name, description, is_active)
+  VALUES (1, 'default', 'Default', 'Default plan group for local dev / test users', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  PERFORM setval('plan_group_id_seq', GREATEST((SELECT MAX(id) FROM plan_group), 1));
+
+  INSERT INTO plan_group_member (group_id, template_id, position, added_at)
+  VALUES (1, 1, 0, now())
+  ON CONFLICT (group_id, template_id) DO NOTHING;
+
+  UPDATE billing_account
+  SET plan_group_id = 1
+  WHERE plan_group_id IS NULL;
+
+  INSERT INTO billing_plan_assignment (billing_account_id, template_id, change_reason)
+  SELECT ba.id, 1, 'local bootstrap default plan'
+  FROM billing_account ba
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM billing_plan_assignment active_assignment
+    WHERE active_assignment.billing_account_id = ba.id
+      AND active_assignment.ended_at IS NULL
+  );
+
+  WITH active AS (
+    SELECT DISTINCT ON (billing_account_id) id, billing_account_id
+    FROM billing_plan_assignment
+    WHERE ended_at IS NULL
+    ORDER BY billing_account_id, started_at DESC, id DESC
+  )
+  UPDATE billing_account ba
+  SET plan_assignment_id = active.id
+  FROM active
+  WHERE ba.id = active.billing_account_id
+    AND ba.plan_assignment_id IS NULL;
+END
+\$\$;
+" 2>&1
+}
+
 # =============================================================================
 # PostgreSQL Container Management
 # =============================================================================
@@ -246,55 +321,93 @@ remove_db_container() {
   return 0
 }
 
+_db_container_host_port() {
+  local container="${1:-$ORCHESTRA_DB_CONTAINER}"
+  docker port "$container" 5432/tcp 2>/dev/null | head -1 | sed 's/.*://'
+}
+
 start_db_container() {
   log_info "Starting PostgreSQL container with pgvector..."
 
   if is_db_container_running; then
-    log_success "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already running"
+    local mapped_port
+    mapped_port="$(_db_container_host_port "$ORCHESTRA_DB_CONTAINER")"
+    if [[ -n "$mapped_port" && "$mapped_port" == "$ORCHESTRA_DB_PORT" ]]; then
+      log_success "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already running on port $ORCHESTRA_DB_PORT"
+      return 0
+    fi
+    log_error "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' is running on port ${mapped_port:-unknown}, but ORCHESTRA_DB_PORT=$ORCHESTRA_DB_PORT"
+    log_info "Re-run with ORCHESTRA_DB_PORT=${mapped_port:-5432}, or stop the container and re-run setup"
+    return 1
+  fi
+
+  if is_compatible_db_running; then
+    log_success "Using compatible PostgreSQL on port $ORCHESTRA_DB_PORT"
     return 0
   fi
 
-  # Remove any existing container (stopped or in other states)
+  # If a stopped container already exists, restart it rather than re-creating.
+  # This preserves anonymous volumes from pre-named-volume installs and avoids
+  # unnecessary churn on the install-and-live path.
   if is_db_container_exists; then
-    log_info "Removing existing container..."
-    if ! remove_db_container; then
+    log_info "Reusing existing container '$ORCHESTRA_DB_CONTAINER' (data preserved)..."
+    if ! docker start "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
+      log_error "Failed to start existing container '$ORCHESTRA_DB_CONTAINER'"
+      log_info "If the container is in a bad state, run: $0 purge && $0 start"
       return 1
     fi
-  fi
-
-  # Check if port is already in use by something else
-  if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
-    log_error "Port $ORCHESTRA_DB_PORT is already in use by another process"
-    log_info "Stop the conflicting service or use ORCHESTRA_DB_PORT=5433"
-    return 1
-  fi
-
-  # Calculate max_connections based on CPU cores
-  local num_cores
-  if [[ "$(uname)" == "Darwin" ]]; then
-    num_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
   else
-    num_cores=$(nproc 2>/dev/null || echo 4)
-  fi
-  local max_connections=$((num_cores * 100))
-  log_info "Setting PostgreSQL max_connections=$max_connections (${num_cores} cores × 100)"
+    # Fresh start: create the container with a named volume + restart policy
+    # so it survives reboots and `unity stop` / `unity restart` cycles.
 
-  local pg_flags=(
-    "-c" "max_connections=$max_connections"
-    "-c" "statement_timeout=120s"
-    "-c" "deadlock_timeout=1s"
-  )
+    # Check if port is already in use by something else
+    if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
+      log_error "Port $ORCHESTRA_DB_PORT is already in use by another process"
+      log_info "Stop the conflicting service or use ORCHESTRA_DB_PORT=5433"
+      return 1
+    fi
 
-  if ! docker run -d \
-    --name "$ORCHESTRA_DB_CONTAINER" \
-    -p "${ORCHESTRA_DB_PORT}:5432" \
-    -e POSTGRES_PASSWORD=orchestra \
-    -e POSTGRES_USER=orchestra \
-    -e POSTGRES_DB=orchestra \
-    pgvector/pgvector:pg15 \
-    postgres "${pg_flags[@]}" >/dev/null; then
-    log_error "Failed to start PostgreSQL container"
-    return 1
+    # Ensure the named volume exists. `docker volume create` is idempotent.
+    if ! docker volume create "$ORCHESTRA_DB_VOLUME" >/dev/null 2>&1; then
+      log_error "Failed to create Docker volume '$ORCHESTRA_DB_VOLUME'"
+      return 1
+    fi
+
+    # Calculate max_connections based on CPU cores
+    local num_cores
+    if [[ "$(uname)" == "Darwin" ]]; then
+      num_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    else
+      num_cores=$(nproc 2>/dev/null || echo 4)
+    fi
+    local max_connections=$((num_cores * 100))
+    log_info "Setting PostgreSQL max_connections=$max_connections (${num_cores} cores × 100)"
+
+    local pg_flags=(
+      "-c" "max_connections=$max_connections"
+      "-c" "statement_timeout=120s"
+      "-c" "deadlock_timeout=1s"
+    )
+
+    # --restart unless-stopped  → container auto-starts when Docker comes back
+    #                              (e.g. after a reboot), but stays stopped if
+    #                              the user explicitly stopped it.
+    # -v <volume>:/var/lib/postgresql/data  → data lives in a named volume,
+    #                              so it survives container removal and is
+    #                              re-attached on the next `docker run`.
+    if ! docker run -d \
+      --name "$ORCHESTRA_DB_CONTAINER" \
+      --restart unless-stopped \
+      -v "${ORCHESTRA_DB_VOLUME}:/var/lib/postgresql/data" \
+      -p "${ORCHESTRA_DB_PORT}:5432" \
+      -e POSTGRES_PASSWORD=orchestra \
+      -e POSTGRES_USER=orchestra \
+      -e POSTGRES_DB=orchestra \
+      pgvector/pgvector:pg15 \
+      postgres "${pg_flags[@]}" >/dev/null; then
+      log_error "Failed to start PostgreSQL container"
+      return 1
+    fi
   fi
 
   log_info "Waiting for PostgreSQL to be ready..."
@@ -315,22 +428,47 @@ start_db_container() {
 }
 
 stop_db_container() {
-  if is_db_container_exists; then
-    local was_running=false
-    if is_db_container_running; then
-      was_running=true
-    fi
-
-    log_info "Removing PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
-    if remove_db_container; then
-      if [[ "$was_running" == "true" ]]; then
-        log_success "PostgreSQL container stopped and removed"
-      else
-        log_success "PostgreSQL container removed (was not running)"
-      fi
-    fi
-  else
+  # Preserve the container (and its named volume) so the next `start` is a
+  # cheap restart and data survives. Use `purge_db_container` for the
+  # destructive path.
+  if ! is_db_container_exists; then
     log_info "No PostgreSQL container to stop (container: $ORCHESTRA_DB_CONTAINER)"
+    return 0
+  fi
+  if ! is_db_container_running; then
+    log_info "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already stopped"
+    return 0
+  fi
+
+  log_info "Stopping PostgreSQL container '$ORCHESTRA_DB_CONTAINER' (data preserved)..."
+  if docker stop "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
+    log_success "PostgreSQL container stopped"
+  else
+    log_error "Failed to stop container '$ORCHESTRA_DB_CONTAINER'"
+    return 1
+  fi
+}
+
+# Destructive: stop, remove the container, and delete the named volume so all
+# data is wiped. Used by tests for inter-run isolation and by users who want
+# to start from a clean slate.
+purge_db_container() {
+  if is_db_container_exists; then
+    log_info "Removing PostgreSQL container '$ORCHESTRA_DB_CONTAINER'..."
+    if ! remove_db_container; then
+      log_error "Failed to remove container; aborting purge"
+      return 1
+    fi
+  fi
+
+  # Remove the named volume if it exists. Idempotent.
+  if docker volume inspect "$ORCHESTRA_DB_VOLUME" >/dev/null 2>&1; then
+    log_info "Removing PostgreSQL data volume '$ORCHESTRA_DB_VOLUME'..."
+    if ! docker volume rm "$ORCHESTRA_DB_VOLUME" >/dev/null 2>&1; then
+      log_warn "Could not remove volume '$ORCHESTRA_DB_VOLUME' (in use?). Data may be retained."
+    else
+      log_success "Data volume removed"
+    fi
   fi
 }
 
@@ -378,6 +516,11 @@ seed_test_user() {
     return 1
   fi
 
+  if ! seed_billing_defaults "$db_container"; then
+    log_error "Failed to seed billing defaults"
+    return 1
+  fi
+
   local user_exists
   user_exists=$(docker exec "$db_container" psql -U orchestra -d orchestra -tAc \
     "SELECT 1 FROM \"user\" WHERE id = '$test_user_id'" 2>/dev/null || echo "")
@@ -389,20 +532,56 @@ seed_test_user() {
 
   log_info "Creating test user..."
 
-  # Note: Billing fields (credits, stripe_customer_id, autorecharge, etc.)
-  # now live on the billing_account table. The 'user' table only holds
+  # Note: Billing fields (credits, stripe_customer_id, etc.) now live on
+  # the billing_account table. The 'user' table only holds
   # profile/identity fields plus a billing_account_id FK.
   docker exec "$db_container" psql -U orchestra -d orchestra -c "
 DO \$\$
 DECLARE
   _ba_id integer;
+  _default_template_id bigint;
+  _assignment_id bigint;
 BEGIN
+  -- Seed the default plan_group that billing_account.plan_group_id points
+  -- at by default (bigint DEFAULT 1 NOT NULL + FK). Production DBs have
+  -- this row pre-existing as part of platform bootstrap; a fresh local DB
+  -- doesn't, and the FK fires when we INSERT into billing_account below.
+  -- Idempotent: ON CONFLICT skips if a previous run already seeded it.
+  INSERT INTO plan_group (id, name, display_name, description, is_active)
+  VALUES (1, 'default', 'Default', 'Default plan group for local dev / test users', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Advance the sequence past the seeded id so future plan_group inserts
+  -- (e.g. from tests creating their own groups) don't collide on id=1.
+  PERFORM setval('plan_group_id_seq', GREATEST((SELECT MAX(id) FROM plan_group), 1));
+
   -- Only seed if user doesn't already exist
   IF NOT EXISTS (SELECT 1 FROM \"user\" WHERE id = '$test_user_id') THEN
     -- Create a billing_account for the test user
-    INSERT INTO billing_account (credits, autorecharge, autorecharge_threshold, autorecharge_qty, account_status, tier)
-    VALUES (10000, false, 0, 25, 'ACTIVE', 'developer')
+    INSERT INTO billing_account (credits, account_status)
+    VALUES (10000, 'ACTIVE')
     RETURNING id INTO _ba_id;
+
+    -- Establish the v2 invariant: every account has an active default plan
+    -- assignment (signup normally does this via BillingAccountDAO.create →
+    -- assign_default_at_signup). This raw seed must mirror it, otherwise the
+    -- account has no 'current' plan and GET /billing/available-plans returns
+    -- an empty list — the self-serve plan picker then renders nothing.
+    SELECT id INTO _default_template_id
+    FROM billing_plan_template
+    WHERE name = 'default' AND is_active = true
+    ORDER BY id
+    LIMIT 1;
+
+    IF _default_template_id IS NULL THEN
+      RAISE EXCEPTION 'Missing default billing_plan_template while seeding test user (run migrations first)';
+    END IF;
+
+    INSERT INTO billing_plan_assignment (billing_account_id, template_id, change_reason)
+    VALUES (_ba_id, _default_template_id, 'seed test user bootstrap')
+    RETURNING id INTO _assignment_id;
+
+    UPDATE billing_account SET plan_assignment_id = _assignment_id WHERE id = _ba_id;
 
     -- Create user record linked to the billing_account
     INSERT INTO \"user\" (id, email, billing_account_id, store_prompts)
@@ -412,12 +591,26 @@ BEGIN
     INSERT INTO api_key (user_id, key)
     VALUES ('$test_user_id', '$test_api_key')
     ON CONFLICT (key) DO NOTHING;
+
+    -- Seed the default "_" project. The unify Python client's
+    -- _get_project(required=True) falls back to "_" when no project is
+    -- active (see unify/utils/helpers.py), so any test or script that
+    -- doesn't explicitly activate a project hits POST /v0/project/_/*.
+    -- Production users get this row implicitly when they first use the
+    -- SDK; local/test DBs need it seeded.
+    INSERT INTO project (user_id, name)
+    VALUES ('$test_user_id', '_')
+    ON CONFLICT (user_id, name) DO NOTHING;
   END IF;
 END
 \$\$;
 " 2>&1
 
   if [[ $? -eq 0 ]]; then
+    if ! seed_billing_defaults "$db_container"; then
+      log_error "Failed to seed billing defaults"
+      return 1
+    fi
     log_success "Test user created"
     log_info "Test API key: $test_api_key"
     return 0
@@ -494,7 +687,12 @@ start_orchestra_server() {
   cd "$repo_path"
 
   # Set environment variables
-  export ORCHESTRA_HOST=127.0.0.1
+  # Self-host desktop containers reach Orchestra via host.docker.internal.
+  if [[ "${SELF_HOST:-0}" == "1" ]]; then
+    export ORCHESTRA_HOST=0.0.0.0
+  else
+    export ORCHESTRA_HOST=127.0.0.1
+  fi
   export ORCHESTRA_PORT="$ORCHESTRA_PORT"
   export ORCHESTRA_DB_HOST=localhost
   export ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT"
@@ -548,11 +746,20 @@ start_orchestra_server() {
   fi
   log_info "Setting file descriptor limit to $fd_limit"
 
-  # Start server (use setsid if available for proper process isolation)
+  export ORCHESTRA_WORKERS_COUNT="$workers"
+  [[ -n "${SELF_HOST:-}" ]] && export SELF_HOST
+  [[ -n "${STAGING:-}" ]] && export STAGING
+
+  # Start server (use setsid if available for proper process isolation).
+  # NB: $venv_python is left unquoted on purpose — when no in-project .venv
+  # exists, get_venv_executable falls back to the multi-word "poetry run
+  # python", which must word-split into separate argv entries (same pattern
+  # as $alembic_cmd above). Quoting it would exec the whole string as a
+  # single, non-existent binary ("poetry run python: not found").
   if command -v setsid &>/dev/null; then
-    setsid bash -c "ulimit -n $fd_limit; exec env ORCHESTRA_WORKERS_COUNT=$workers $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
+    setsid bash -c "ulimit -n $fd_limit; exec $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   else
-    bash -c "ulimit -n $fd_limit; exec env ORCHESTRA_WORKERS_COUNT=$workers $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
+    bash -c "ulimit -n $fd_limit; exec $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   fi
   local pid=$!
   disown $pid 2>/dev/null || true
@@ -720,13 +927,24 @@ cmd_stop() {
   stop_db_container
 
   echo ""
-  log_success "Local Orchestra stopped"
+  log_success "Local Orchestra stopped (data preserved; \`$0 start\` resumes from here)"
 }
 
 cmd_restart() {
   cmd_stop
   echo ""
   cmd_start
+}
+
+cmd_purge() {
+  echo "Purging Local Orchestra (destroys all local data)..."
+  echo ""
+
+  stop_orchestra_server
+  purge_db_container
+
+  echo ""
+  log_success "Local Orchestra purged. Next \`$0 start\` will create a fresh database."
 }
 
 cmd_status() {
@@ -810,6 +1028,7 @@ main() {
         case "$1" in
           --stop) cmd="stop"; shift ;;
           --restart) cmd="restart"; shift ;;
+          --purge) cmd="purge"; shift ;;
           --status) cmd="status"; shift ;;
           --check) cmd="check"; shift ;;
           --env) cmd="env"; shift ;;
@@ -841,6 +1060,9 @@ main() {
     restart)
       cmd_restart
       ;;
+    purge)
+      cmd_purge
+      ;;
     status)
       cmd_status
       ;;
@@ -854,9 +1076,10 @@ main() {
       echo "Usage: $0 [command]"
       echo ""
       echo "Commands:"
-      echo "  start    Start local orchestra (default)"
-      echo "  stop     Stop local orchestra"
-      echo "  restart  Stop then start (wipes database)"
+      echo "  start    Start local orchestra (default; preserves data)"
+      echo "  stop     Stop local orchestra (preserves data)"
+      echo "  restart  Stop then start (preserves data)"
+      echo "  purge    Destroy container + named data volume (wipes all data)"
       echo "  status   Show status"
       echo "  check    Quick check if running (returns URL or exits 1)"
       echo "  env      Output environment variables for shell eval"

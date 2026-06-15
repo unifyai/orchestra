@@ -15,12 +15,12 @@ except ImportError:
 
 import requests
 
-from orchestra.settings import settings
-from orchestra_core.observability.observability import (
+from orchestra.observability.observability import (
     get_request_id,
     get_user_email,
     get_user_id,
 )
+from orchestra.settings import settings
 
 # Include request_id in log format
 JSON_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s %(module)s %(funcName)s %(lineno)d %(traceID)s %(spanID)s %(user_id)s %(user_email)s %(request_id)s"

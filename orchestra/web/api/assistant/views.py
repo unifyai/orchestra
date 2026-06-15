@@ -6,7 +6,7 @@ import math
 import time
 import urllib.request
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, List, Literal, NamedTuple, Optional
 
 import mutagen
 from fastapi import (
@@ -23,7 +23,8 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,7 +32,7 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -41,11 +42,17 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    CONTACT_MEMBERSHIP_SCOPE_TEAM,
+    TEAM_STATUS_ACTIVE,
     Assistant,
     AssistantCleanupTask,
     AssistantConsoleConfig,
+    ContactMembership,
     Context,
     DemoAssistantMeta,
     LogEvent,
@@ -53,9 +60,13 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
+    SharedPoolNumber,
+    Team,
+    TeamAssistantMembership,
     User,
 )
 from orchestra.lib.billing import get_billing_entity
+from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_spec_from_assistant,
@@ -63,12 +74,41 @@ from orchestra.services.assistant_cleanup_service import (
     enqueue_cleanup_tasks,
     process_assistant_cleanup_tasks,
 )
-from orchestra.services.bucket_service import BucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.contact_membership_service import (
+    PERSONAL_BOSS_CONTACT_ID,
+    PERSONAL_SELF_CONTACT_ID,
+    ensure_personal_contact_memberships,
+    ensure_team_contact_memberships,
+)
+from orchestra.services.coordinator_service import (
+    COORDINATOR_MODE_ONBOARDING,
+    derive_onboarding_progress,
+    emit_onboarding_session_started_event,
+    emit_onboarding_step_skipped_event,
+    emit_secret_landed_event,
+    ensure_coordinator_owner_contact_rows,
+    get_coordinator_state,
+    heal_coordinator_universal_contacts,
+    require_authorized_coordinator,
+    require_authorized_delegate_target,
+    reset_coordinator_state,
+    seed_coordinator_transcript,
+    set_coordinator_state,
+)
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
+from orchestra.services.team_cleanup_service import purge_assistant_memberships
+from orchestra.services.universal_unity_contacts import (
+    missing_universal_coordinator_contact_types,
+)
+from orchestra.services.universal_unity_discord import (
+    get_universal_unity_discord_bot_id,
+    notify_comms_discord_sync,
+)
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistant,
@@ -76,6 +116,7 @@ from orchestra.web.api.assistant.schema import (
     AdminUpdateUserByAssistant,
     AdminUpdateUserByAssistantResponse,
     AssistantContactCreate,
+    AssistantContactIdentityRoot,
     AssistantContactRead,
     AssistantContactRemoval,
     AssistantContactUpdate,
@@ -89,15 +130,29 @@ from orchestra.web.api.assistant.schema import (
     AssistantTransferToOrgRequest,
     AssistantTransferToPersonalRequest,
     AssistantUpdate,
+    AssistantUserDesktopLink,
     AssistantVideoUploadResponse,
     ConnectRequest,
     ConnectResponse,
     ConsoleConfigRead,
     Contact,
+    ContactMembershipCreate,
+    ContactMembershipDeleteResponse,
+    ContactMembershipRead,
+    ContactMembershipUpsertResponse,
+    CoordinatorDelegateRequest,
+    CoordinatorDelegateResponse,
+    CoordinatorResetResponse,
+    CoordinatorStateResponse,
+    CoordinatorStateUpdate,
+    CoordinatorTranscriptSeed,
+    CoordinatorTranscriptSeedResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
     InfoResponse,
+    OnboardingSessionStarted,
+    OnboardingSessionStartedResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
     SecretCreate,
@@ -113,6 +168,7 @@ from orchestra.web.api.assistant.schema import (
 from orchestra.web.api.utils.assistant_infra import (
     create_phone_number,
     create_pubsub_topic,
+    delegate_to_colleague_runtime,
     delete_phone_number,
     delete_pubsub_topic,
     get_runtime_status,
@@ -124,6 +180,13 @@ from orchestra.web.api.utils.assistant_infra import (
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
 ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
+
+
+class ResolvedContactIds(NamedTuple):
+    """Resolved self and boss contact ids for one assistant."""
+
+    self_contact_id: int
+    boss_contact_id: int
 
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
@@ -160,8 +223,6 @@ RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS = frozenset(
         "about",
         "timezone",
         "desktop_mode",
-        "user_desktop_id",
-        "user_desktop_filesys_sync",
         "voice_id",
         "voice_provider",
     },
@@ -210,6 +271,246 @@ def _build_console_config_read(
     )
 
 
+def _resolved_contact_ids_for_assistants(
+    session: Session,
+    assistant_ids: list[int],
+) -> dict[int, ResolvedContactIds]:
+    """Resolve assistant-self and boss contact ids for AssistantRead payloads."""
+
+    if not assistant_ids:
+        return {}
+
+    ensure_personal_contact_memberships(session, assistant_ids)
+    ensure_coordinator_owner_contact_rows(session, assistant_ids)
+
+    relationship_values = {
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    }
+    rows = (
+        session.query(
+            ContactMembership.id,
+            ContactMembership.assistant_id,
+            ContactMembership.contact_id,
+            ContactMembership.relationship,
+        )
+        .filter(
+            ContactMembership.assistant_id.in_(assistant_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship.in_(relationship_values),
+        )
+        .order_by(
+            ContactMembership.assistant_id,
+            ContactMembership.relationship,
+            ContactMembership.id,
+        )
+        .all()
+    )
+
+    resolved: dict[int, dict[str, int]] = {
+        assistant_id: {} for assistant_id in assistant_ids
+    }
+    seen: set[tuple[int, str]] = set()
+    for _, assistant_id, contact_id, relationship_name in rows:
+        key = (assistant_id, relationship_name)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
+            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_SELF] = contact_id
+        elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
+            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS] = contact_id
+
+    missing_assistant_ids = [
+        assistant_id
+        for assistant_id, contact_ids in resolved.items()
+        if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+        or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+    ]
+    if missing_assistant_ids:
+        logging.error(
+            "Missing personal contact overlays for assistants: %s",
+            missing_assistant_ids,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="missing_contact_overlay",
+        )
+
+    return {
+        assistant_id: ResolvedContactIds(
+            self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
+            boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
+        )
+        for assistant_id, contact_ids in resolved.items()
+    }
+
+
+def _resolved_contact_identity_roots_for_assistants(
+    session: Session,
+    assistant_ids: list[int],
+    *,
+    team_ids_by_assistant: dict[int, list[int]] | None = None,
+    personal_ids_by_assistant: dict[int, ResolvedContactIds] | None = None,
+) -> dict[int, list[AssistantContactIdentityRoot]]:
+    """Resolve self/boss contact ids for every readable assistant root."""
+
+    if not assistant_ids:
+        return {}
+
+    if team_ids_by_assistant is None:
+        team_ids_by_assistant = TeamDAO(session).team_ids_for_assistants(
+            assistant_ids,
+        )
+
+    if personal_ids_by_assistant is None:
+        personal_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            assistant_ids,
+        )
+    roots_by_assistant: dict[int, list[AssistantContactIdentityRoot]] = {}
+    for assistant_id in assistant_ids:
+        personal_ids = personal_ids_by_assistant[assistant_id]
+        roots_by_assistant[assistant_id] = [
+            AssistantContactIdentityRoot(
+                target_scope=CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                target_team_id=None,
+                self_contact_id=personal_ids.self_contact_id,
+                boss_contact_id=personal_ids.boss_contact_id,
+            ),
+        ]
+
+    active_team_ids_by_assistant = {
+        assistant_id: set(team_ids_by_assistant.get(assistant_id, []))
+        for assistant_id in assistant_ids
+    }
+    active_team_ids = {
+        team_id
+        for team_ids in active_team_ids_by_assistant.values()
+        for team_id in team_ids
+    }
+    if not active_team_ids:
+        return roots_by_assistant
+
+    relationship_values = {
+        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+    }
+
+    def _fetch_team_identity_rows(
+        *,
+        pairs: set[tuple[int, int]] | None = None,
+    ) -> list[tuple[int, int, int | None, int, str]]:
+        query = session.query(
+            ContactMembership.id,
+            ContactMembership.assistant_id,
+            ContactMembership.target_team_id,
+            ContactMembership.contact_id,
+            ContactMembership.relationship,
+        ).filter(
+            ContactMembership.assistant_id.in_(assistant_ids),
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM,
+            ContactMembership.target_team_id.in_(active_team_ids),
+            ContactMembership.relationship.in_(relationship_values),
+        )
+        if pairs:
+            query = query.filter(
+                tuple_(
+                    ContactMembership.assistant_id,
+                    ContactMembership.target_team_id,
+                ).in_(sorted(pairs)),
+            )
+        return query.order_by(
+            ContactMembership.assistant_id,
+            ContactMembership.target_team_id,
+            ContactMembership.relationship,
+            ContactMembership.id,
+        ).all()
+
+    def _collect_ids_by_root(
+        rows: list[tuple[int, int, int | None, int, str]],
+    ) -> dict[tuple[int, int], dict[str, int]]:
+        ids: dict[tuple[int, int], dict[str, int]] = {}
+        seen: set[tuple[int, int, str]] = set()
+        for _, assistant_id, target_team_id, contact_id, relationship_name in rows:
+            if target_team_id is None:
+                continue
+            if target_team_id not in active_team_ids_by_assistant[assistant_id]:
+                continue
+
+            key = (assistant_id, target_team_id, relationship_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            ids.setdefault((assistant_id, target_team_id), {})[
+                relationship_name
+            ] = contact_id
+        return ids
+
+    ids_by_root = _collect_ids_by_root(_fetch_team_identity_rows())
+    missing_pairs = {
+        (assistant_id, team_id)
+        for assistant_id in assistant_ids
+        for team_id in active_team_ids_by_assistant[assistant_id]
+        if (
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF
+            not in ids_by_root.get((assistant_id, team_id), {})
+            or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS
+            not in ids_by_root.get((assistant_id, team_id), {})
+        )
+    }
+    if missing_pairs:
+        ensure_team_contact_memberships(session, sorted(missing_pairs))
+        ids_by_root.update(
+            _collect_ids_by_root(_fetch_team_identity_rows(pairs=missing_pairs)),
+        )
+
+    for assistant_id in assistant_ids:
+        for team_id in sorted(active_team_ids_by_assistant[assistant_id]):
+            contact_ids = ids_by_root.get((assistant_id, team_id), {})
+            if (
+                CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+                or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+            ):
+                logging.warning(
+                    "Missing team contact identity for assistant %s in team %s",
+                    assistant_id,
+                    team_id,
+                )
+                continue
+
+            roots_by_assistant[assistant_id].append(
+                AssistantContactIdentityRoot(
+                    target_scope=CONTACT_MEMBERSHIP_SCOPE_TEAM,
+                    target_team_id=team_id,
+                    self_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_SELF],
+                    boss_contact_id=contact_ids[CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS],
+                ),
+            )
+
+    return roots_by_assistant
+
+
+def _contact_id_pair(
+    contact_ids_by_assistant: dict[int, ResolvedContactIds],
+    assistant_id: int,
+) -> ResolvedContactIds:
+    """Return resolved contact ids for an assistant."""
+
+    try:
+        return contact_ids_by_assistant[assistant_id]
+    except KeyError:
+        logging.error(
+            "Missing personal contact overlays for assistant %s",
+            assistant_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="missing_contact_overlay",
+        )
+
+
 def _build_assistant_read(
     a: Assistant,
     session: Session,
@@ -221,9 +522,14 @@ def _build_assistant_read(
     user_image: Optional[str] = None,
     user_whatsapp_number: Optional[str] = None,
     team_ids: Optional[List[int]] = None,
+    team_summaries: Optional[list[dict[str, Any]]] = None,
+    self_contact_id: Optional[int] = None,
+    boss_contact_id: Optional[int] = None,
+    contact_identity_roots: Optional[list[AssistantContactIdentityRoot]] = None,
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
     include_internal: bool = False,
+    requesting_user_id: Optional[str] = None,
 ) -> AssistantRead:
     """Build an ``AssistantRead`` from an ORM ``Assistant``.
 
@@ -241,22 +547,65 @@ def _build_assistant_read(
             ``AssistantContactDAO.get_active_contacts_for_assistants()`` and pass them in to
             avoid N+1 queries.
     """
+    # Resolve the requesting user's *own* desktop linked to this assistant.
+    # A shared assistant can be linked to a different machine per user, so the
+    # read reflects whoever is asking (falling back to the owner for internal
+    # callers that don't carry a requesting identity).
     desktop_dao = DesktopDAO(session)
     user_desktop_url = None
     user_desktop_mode = None
-    if a.user_desktop_id is not None:
-        desktop = desktop_dao.get_by_id(a.user_desktop_id, a.user_id)
-        if desktop:
-            user_desktop_url = desktop.url
-            user_desktop_mode = desktop.os
+    user_desktop_filesys_sync = None
+    link_row = desktop_dao.get_link_for_user(
+        a.agent_id,
+        requesting_user_id or a.user_id,
+    )
+    if link_row is not None:
+        link, desktop = link_row
+        user_desktop_url = desktop.url
+        user_desktop_mode = desktop.os
+        user_desktop_filesys_sync = link.filesys_sync
 
+    # The full per-user desktop map is admin/runtime-only so members of a shared
+    # assistant don't see each other's machine URLs.
+    user_desktops: list[AssistantUserDesktopLink] = []
+    if include_internal:
+        for link, desktop in desktop_dao.list_links_for_assistant(a.agent_id):
+            user_desktops.append(
+                AssistantUserDesktopLink(
+                    owner_user_id=link.owner_user_id,
+                    url=desktop.url,
+                    os=desktop.os,
+                    filesys_sync=link.filesys_sync,
+                ),
+            )
+
+    team_dao = TeamDAO(session)
     if team_ids is None:
-        if a.organization_id is not None:
-            team_dao = TeamDAO(session)
-            teams = team_dao.get_user_teams(a.user_id, a.organization_id)
-            team_ids = [t.id for t in teams]
-        else:
-            team_ids = []
+        team_ids = team_dao.team_ids_for_assistant(a.agent_id)
+    if team_summaries is None:
+        team_summaries = team_dao.team_summaries_for_assistant(a.agent_id)
+    if self_contact_id is None or boss_contact_id is None:
+        resolved_contact_ids = _resolved_contact_ids_for_assistants(
+            session,
+            [a.agent_id],
+        )[a.agent_id]
+        if self_contact_id is None:
+            self_contact_id = resolved_contact_ids.self_contact_id
+        if boss_contact_id is None:
+            boss_contact_id = resolved_contact_ids.boss_contact_id
+
+    if contact_identity_roots is None:
+        contact_identity_roots = _resolved_contact_identity_roots_for_assistants(
+            session,
+            [a.agent_id],
+            team_ids_by_assistant={a.agent_id: team_ids},
+            personal_ids_by_assistant={
+                a.agent_id: ResolvedContactIds(
+                    self_contact_id=self_contact_id,
+                    boss_contact_id=boss_contact_id,
+                ),
+            },
+        )[a.agent_id]
 
     # Resolve contact fields from AssistantContact rows
     if contacts is None:
@@ -283,7 +632,6 @@ def _build_assistant_read(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
         organization_id=a.organization_id,
-        deploy_env=a.deploy_env,
         first_name=a.first_name,
         surname=a.surname,
         job_title=a.job_title,
@@ -292,10 +640,10 @@ def _build_assistant_read(
         profile_photo=a.profile_photo,
         profile_video=a.profile_video,
         desktop_mode=a.desktop_mode,
-        user_desktop_id=a.user_desktop_id,
-        user_desktop_filesys_sync=a.user_desktop_filesys_sync,
+        user_desktop_filesys_sync=user_desktop_filesys_sync,
         user_desktop_url=user_desktop_url,
         user_desktop_mode=user_desktop_mode,
+        user_desktops=user_desktops,
         about=a.about,
         phone_country=(phone_contact.country_code if phone_contact else None),
         weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
@@ -334,8 +682,122 @@ def _build_assistant_read(
         user_email=user_email,
         user_image=user_image,
         team_ids=team_ids,
+        team_summaries=team_summaries,
+        self_contact_id=self_contact_id,
+        boss_contact_id=boss_contact_id,
+        contact_identity_roots=contact_identity_roots,
         secrets=secrets,
         console_config=_build_console_config_read(a.console_config),
+    )
+
+
+def _is_hidden_workspace_coordinator_for_user(
+    assistant: Assistant,
+    *,
+    user_id: str,
+) -> bool:
+    """Return whether an org Coordinator row is hidden from this user."""
+    return (
+        assistant.is_coordinator
+        and assistant.organization_id is not None
+        and assistant.user_id != user_id
+    )
+
+
+def _self_heal_coordinator_contacts(
+    session: Session,
+    *,
+    coordinators: List[Assistant],
+    contacts_by_assistant: dict[int, list],
+    contact_dao: AssistantContactDAO,
+) -> bool:
+    """Backfill universal contacts for the given Coordinators on read.
+
+    Coordinator contacts (email / phone / WhatsApp / Discord) are
+    platform-managed pools provisioned at Coordinator creation. Coordinators
+    that predate that rollout (or a newly added channel) otherwise only get them
+    via the onboarding provisioning call, so a long-lived Coordinator can show
+    missing contacts indefinitely. Healing here, on the natural read path,
+    closes that gap without a console round-trip.
+
+    ``coordinators`` must already be filtered to rows the requesting user owns
+    and is authorized to provision (callers do their own ownership/permission
+    checks). Only channels actually configured for this deployment but absent on
+    the Coordinator are provisioned (so we never touch existing contacts or
+    chase a channel that isn't set up), and ``contacts_by_assistant`` is
+    refreshed in place so the freshly provisioned contacts surface in this same
+    response.
+
+    Best-effort: any failure is swallowed (the next read retries) and the
+    session is left usable for the rest of the response build.
+
+    Returns ``True`` when Unity should be pinged to (re)sync the shared Discord
+    bot pool — i.e. this read seeded the universal Discord pool row for the
+    first time. Discord is the only channel that needs an out-of-band sync;
+    Unity resolves email/phone/WhatsApp routing per message.
+    """
+    if not coordinators:
+        return False
+
+    universal_discord_bot_id = get_universal_unity_discord_bot_id()
+    discord_pool_existed_before = bool(universal_discord_bot_id) and (
+        session.query(SharedPoolNumber)
+        .filter(
+            SharedPoolNumber.platform == "discord",
+            SharedPoolNumber.number == universal_discord_bot_id,
+        )
+        .first()
+        is not None
+    )
+
+    healed_ids: list[int] = []
+    healed_discord = False
+    for coordinator in coordinators:
+        present_types = [
+            c.contact_type for c in contacts_by_assistant.get(coordinator.agent_id, [])
+        ]
+        missing = missing_universal_coordinator_contact_types(present_types)
+        if not missing:
+            continue
+        try:
+            heal_coordinator_universal_contacts(
+                session,
+                coordinator=coordinator,
+                missing_contact_types=missing,
+            )
+        except Exception:
+            logging.warning(
+                "Coordinator contact self-heal failed for %s",
+                coordinator.agent_id,
+                exc_info=True,
+            )
+            continue
+        healed_ids.append(coordinator.agent_id)
+        if "discord" in missing:
+            healed_discord = True
+
+    if not healed_ids:
+        return False
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        logging.warning(
+            "Coordinator contact self-heal commit failed",
+            exc_info=True,
+        )
+        return False
+
+    # Surface the freshly provisioned contacts in this same response.
+    refreshed = contact_dao.get_active_contacts_for_assistants(healed_ids)
+    for healed_id in healed_ids:
+        contacts_by_assistant[healed_id] = []
+    for contact in refreshed:
+        contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
+
+    return bool(
+        universal_discord_bot_id and healed_discord and not discord_pool_existed_before
     )
 
 
@@ -344,7 +806,7 @@ def _build_assistant_read(
     response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Create a new assistant",
-    description="Creates a new assistant for the authenticated user with the specified configuration. This action will deduct credits from the user account.",
+    description="Creates a new assistant for the authenticated user with the specified configuration.",
     tags=["Assistant Management"],
     responses={
         200: {
@@ -380,6 +842,20 @@ def _build_assistant_read(
                 },
             },
         },
+        409: {
+            "description": "Assistant already exists for this scope and name key.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "error": "assistant_already_exists",
+                            "message": "Assistant with this name already exists in this scope.",
+                            "existing_id": 123,
+                        },
+                    },
+                },
+            },
+        },
         422: {
             "description": "Validation Error",
             "content": {
@@ -410,8 +886,7 @@ async def create_assistant(
     attributes like name, age, and operational limits. Each assistant is tied
     to the authenticated user's account. When called with an organization API
     key, the assistant lives inside that organization but still records the
-    caller as its creator/lifecycle owner. Creating an assistant incurs a
-    credit cost.
+    caller as its creator/lifecycle owner.
     """
     user_id = request.state.user_id
     user_dao = UserDAO(session)
@@ -453,7 +928,7 @@ async def create_assistant(
                     detail="You do not have permission to create assistants in this organization.",
                 )
 
-        if not settings.is_staging:
+        if settings.charges_billing and total_creation_cost > 0:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -466,6 +941,27 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
                 )
+
+        existing_assistant = assistant_dao.find_by_natural_key(
+            user_id=user_id,
+            organization_id=organization_id,
+            first_name=assistant_in.first_name,
+            surname=assistant_in.surname,
+        )
+        if existing_assistant is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "assistant_already_exists",
+                    "message": (
+                        "Assistant with this name already exists in this scope."
+                    ),
+                    "existing_id": existing_assistant.agent_id,
+                    "first_name": assistant_in.first_name,
+                    "surname": assistant_in.surname,
+                    "organization_id": organization_id,
+                },
+            )
 
         parsed_weekly_limit = (
             Decimal(assistant_in.weekly_limit)
@@ -482,8 +978,6 @@ async def create_assistant(
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
             desktop_mode=assistant_in.desktop_mode,
-            user_desktop_id=assistant_in.user_desktop_id,
-            user_desktop_filesys_sync=assistant_in.user_desktop_filesys_sync or False,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -492,8 +986,12 @@ async def create_assistant(
             timezone=assistant_in.timezone,
             organization_id=organization_id,
             is_local=assistant_in.is_local or False,
-            deploy_env=assistant_in.deploy_env,
             job_title=assistant_in.job_title,
+        )
+        ensure_personal_contact_memberships(
+            session,
+            [assistant.agent_id],
+            repair_existing=False,
         )
 
         # Org assistants retain the creator in `user_id`; org access is granted
@@ -511,6 +1009,7 @@ async def create_assistant(
 
         # Create "Assistants" project if it doesn't exist (for logging purposes)
         ASSISTANTS_PROJECT_NAME = "Assistants"
+        assistants_project: Project | None
 
         if organization_id is not None:
             # For org context, check if project exists in org (not user-access based)
@@ -601,6 +1100,23 @@ async def create_assistant(
                     description="Project to manage and track all your assistants.",
                     is_versioned=False,
                 )
+                session.flush()
+                assistants_project = project_dao.get_by_user_and_name(
+                    user_id=user_id,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    organization_id=None,
+                )
+
+        if assistants_project is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="assistants_project_missing",
+            )
+        ensure_owner_contact_row(
+            session,
+            assistant=assistant,
+            project=assistants_project,
+        )
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
@@ -619,7 +1135,6 @@ async def create_assistant(
                 current_infra_step = "create_pubsub_topic"
                 pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
-                    deploy_env=assistant.deploy_env,
                 )
                 if "detail" in pubsub_response:
                     raise Exception(
@@ -677,7 +1192,6 @@ async def create_assistant(
                 if created_pubsub:
                     result = await delete_pubsub_topic(
                         str(assistant_id),
-                        deploy_env=assistant.deploy_env,
                     )
                     if not result.get("success"):
                         rollback_errors.append(
@@ -746,8 +1260,9 @@ async def create_assistant(
             detail="Failed to create assistant",
         )
 
-    # Phase 2: Deduct credits from the correct billing account (user or org).
-    if not settings.is_staging:
+    # Phase 2: Deduct credits from the correct billing account (user or org)
+    # when a creation cost is configured.
+    if settings.charges_billing and total_creation_cost > 0:
         try:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
@@ -787,7 +1302,6 @@ async def create_assistant(
     if not assistant_in.is_local:
         response = await wake_up_assistant(
             assistant.agent_id,
-            deploy_env=assistant.deploy_env,
         )
         if response.status_code != 200:
             logging.error(f"Failed to wake up assistant: {response.text}")
@@ -808,7 +1322,6 @@ async def create_assistant(
             await log_pre_hire_chat(
                 assistant_id=str(assistant.agent_id),
                 messages=chat_messages,
-                deploy_env=assistant.deploy_env,
             )
         except Exception as e_log:
             # We don't rollback the whole assistant creation for a logging failure,
@@ -817,9 +1330,264 @@ async def create_assistant(
                 f"Failed to log pre-hire chat for assistant {assistant.agent_id} via webhook. Error: {str(e_log)}",
             )
 
+    # No onboarding narration on specialist hire: the console
+    # immediately swaps the active assistant to the freshly-hired
+    # specialist (which ends onboarding mode on the Coordinator), so
+    # any acknowledgement from the Coordinator would land in a chat
+    # the user has already moved away from.
+
     # Phase 4: Prepare and return response
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/transcript-seed",
+    response_model=InfoResponse[CoordinatorTranscriptSeedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Seed a Coordinator transcript opener",
+    tags=["Assistant Management"],
+)
+async def seed_coordinator_transcript_endpoint(
+    coordinator_id: int,
+    seed: CoordinatorTranscriptSeed,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorTranscriptSeedResponse]:
+    """Persist the Coordinator opener transcript once."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    log_event_id = seed_coordinator_transcript(
+        session,
+        coordinator=coordinator,
+        content=seed.content,
+        source_assistant_id=seed.source_assistant_id,
+    )
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorTranscriptSeedResponse(log_event_id=log_event_id),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/reset",
+    response_model=InfoResponse[CoordinatorResetResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Reset Coordinator-owned state",
+    tags=["Assistant Management"],
+)
+async def reset_coordinator_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorResetResponse]:
+    """Clear Coordinator-owned state, transcripts, and exchange contexts."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    reset_coordinator_state(session, coordinator=coordinator)
+    session.commit()
+    return InfoResponse(
+        info=CoordinatorResetResponse(coordinator_id=str(coordinator.agent_id)),
+    )
+
+
+def _coordinator_state_response(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> CoordinatorStateResponse:
+    """Compose the state snapshot plus derived onboarding progress.
+
+    ``completed_step_ids`` is re-derived from durable domain state on
+    every read (see ``derive_onboarding_progress``) so the console
+    checklist and Unity's openers agree on what is already done even
+    when the completing action happened in an earlier session. The
+    derivation queries are skipped outside onboarding mode, where the
+    checklist no longer renders.
+    """
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_step_ids = (
+        derive_onboarding_progress(session, coordinator=coordinator)
+        if state["mode"] == COORDINATOR_MODE_ONBOARDING
+        else []
+    )
+    return CoordinatorStateResponse(
+        coordinator_id=coordinator.agent_id,
+        completed_step_ids=completed_step_ids,
+        **state,
+    )
+
+
+@router.get(
+    "/assistant/{coordinator_id}/state",
+    response_model=InfoResponse[CoordinatorStateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Read the Coordinator's onboarding state",
+    tags=["Assistant Management"],
+)
+async def get_coordinator_state_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Return the latest Coordinator/State snapshot for this workspace."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    return InfoResponse(
+        info=_coordinator_state_response(session, coordinator=coordinator),
+    )
+
+
+@router.patch(
+    "/assistant/{coordinator_id}/state",
+    response_model=InfoResponse[CoordinatorStateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Update the Coordinator's onboarding state",
+    tags=["Assistant Management"],
+)
+async def update_coordinator_state_endpoint(
+    coordinator_id: int,
+    update: CoordinatorStateUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorStateResponse]:
+    """Transition the Coordinator between ``onboarding`` and ``working``.
+
+    Used by the assistants page when the user finishes or skips
+    onboarding (writes ``mode='working'``), when the user re-enters
+    the guided view from a menu (writes ``mode='onboarding'``), and
+    when the coordinator-driven conversation advances to a new step
+    (writes ``onboarding_step``).
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    next_state = set_coordinator_state(
+        session,
+        coordinator=coordinator,
+        mode=update.mode,
+        onboarding_step=update.onboarding_step,
+        clear_onboarding_step=update.clear_onboarding_step,
+        skip_onboarding_step=update.skip_onboarding_step,
+        unskip_onboarding_step=update.unskip_onboarding_step,
+        intro_watched=update.intro_watched,
+    )
+    if update.skip_onboarding_step:
+        completed_step_ids = (
+            derive_onboarding_progress(session, coordinator=coordinator)
+            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+            else []
+        )
+        await emit_onboarding_step_skipped_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.skip_onboarding_step,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
+    session.commit()
+    return InfoResponse(
+        info=_coordinator_state_response(session, coordinator=coordinator),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/onboarding-session-started",
+    response_model=InfoResponse[OnboardingSessionStartedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Notify the Coordinator that the onboarding picker just resolved",
+    tags=["Assistant Management"],
+)
+async def notify_onboarding_session_started_endpoint(
+    coordinator_id: int,
+    body: OnboardingSessionStarted,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[OnboardingSessionStartedResponse]:
+    """Fire the picker-resolution event so Unity opens the session.
+
+    Best-effort: the emission is gated server-side on
+    ``Coordinator/State.mode == 'onboarding'``, so a stale picker
+    submit (e.g. the user already skipped onboarding in another
+    tab) silently no-ops. The endpoint always returns 200; the
+    response body carries an ``emitted`` flag the client can use
+    for telemetry but doesn't need for correctness.
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    emitted = await emit_onboarding_session_started_event(
+        session,
+        coordinator=coordinator,
+        medium=body.medium,
+    )
+    return InfoResponse(
+        info=OnboardingSessionStartedResponse(
+            coordinator_id=str(coordinator.agent_id),
+            emitted=emitted,
+        ),
+    )
+
+
+@router.post(
+    "/assistant/{target_assistant_id}/delegate",
+    response_model=InfoResponse[CoordinatorDelegateResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Assign asynchronous work to a colleague assistant",
+    tags=["Assistant Management"],
+)
+async def delegate_to_colleague_endpoint(
+    target_assistant_id: int,
+    request_body: CoordinatorDelegateRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorDelegateResponse]:
+    """Dispatch a Coordinator assignment to the target colleague runtime."""
+    coordinator, target = require_authorized_delegate_target(
+        session,
+        target_assistant_id=target_assistant_id,
+        user_id=request.state.user_id,
+    )
+    delivery = await delegate_to_colleague_runtime(
+        assistant_id=target.agent_id,
+        requested_by_assistant_id=coordinator.agent_id,
+        instruction=request_body.instruction,
+        intent=request_body.intent,
+        dedupe_key=request_body.dedupe_key,
+        related_context=request_body.related_context,
+    )
+    return InfoResponse(
+        info=CoordinatorDelegateResponse(
+            coordinator_id=coordinator.agent_id,
+            target_assistant_id=target.agent_id,
+            status=str(delivery.get("status") or "accepted"),
+            activation_id=delivery.get("activation_id"),
+            accepted=bool(delivery.get("accepted", True)),
+            completion_status=str(
+                delivery.get("completion_status") or "pending_async",
+            ),
+            receipt_type=str(
+                delivery.get("receipt_type") or "async_delegation_receipt",
+            ),
+            message=str(
+                delivery.get("message")
+                or CoordinatorDelegateResponse.model_fields["message"].default,
+            ),
+        ),
     )
 
 
@@ -886,6 +1654,7 @@ async def create_assistant(
 )
 def list_assistants(
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
     phone: Optional[str] = Query(
         None,
@@ -894,6 +1663,10 @@ def list_assistants(
     email: Optional[str] = Query(
         None,
         description="Only return assistants whose email address matches this value.",
+    ),
+    agent_id: Optional[int] = Query(
+        None,
+        description="Only return assistants whose agent_id matches this value.",
     ),
     list_all_org: bool = Query(
         False,
@@ -941,8 +1714,10 @@ def list_assistants(
                 )
             assistants = assistant_dao.list_all_org_assistants(
                 organization_id=organization_id,
+                requesting_user_id=user_id,
                 phone=phone,
                 email=email,
+                agent_id=agent_id,
                 include_demo=demo,
                 demo_only=demo_only,
             )
@@ -953,6 +1728,7 @@ def list_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
+                agent_id=agent_id,
                 include_demo=demo,
                 demo_only=demo_only,
             )
@@ -969,6 +1745,43 @@ def list_assistants(
         contacts_by_assistant: dict[int, list] = {}
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
+
+        # Backfill any missing platform-managed Coordinator contacts on read so
+        # Coordinators predating the universal-contact rollout self-heal on the
+        # owner's next visit. Mutates ``contacts_by_assistant`` in place. Also
+        # useful to self-heal existing coordinators after new contact types are
+        # configured.
+        owned_coordinators = [
+            a for a in assistants if a.is_coordinator and a.user_id == user_id
+        ]
+        if _self_heal_coordinator_contacts(
+            session,
+            coordinators=owned_coordinators,
+            contacts_by_assistant=contacts_by_assistant,
+            contact_dao=contact_dao,
+        ):
+            background_tasks.add_task(notify_comms_discord_sync)
+
+        team_dao = TeamDAO(session)
+        assistant_ids = [a.agent_id for a in assistants]
+        team_ids_by_assistant = team_dao.team_ids_for_assistants(
+            assistant_ids,
+        )
+        team_summaries_by_assistant = team_dao.team_summaries_for_assistants(
+            assistant_ids,
+        )
+        contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            assistant_ids,
+        )
+        contact_identity_roots_by_assistant = (
+            _resolved_contact_identity_roots_for_assistants(
+                session,
+                assistant_ids,
+                team_ids_by_assistant=team_ids_by_assistant,
+                personal_ids_by_assistant=contact_ids_by_assistant,
+            )
+        )
 
         return InfoResponse(
             info=[
@@ -989,6 +1802,24 @@ def list_assistants(
                         else None
                     ),
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    team_ids=team_ids_by_assistant.get(a.agent_id, []),
+                    team_summaries=team_summaries_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
+                    self_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id,
+                    boss_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id,
+                    contact_identity_roots=contact_identity_roots_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
+                    requesting_user_id=user_id,
                 )
                 for a in assistants
             ],
@@ -1050,6 +1881,11 @@ async def delete_assistant_contact(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
     # For org assistants, check assistant:write permission
     if organization_id is not None:
@@ -1076,6 +1912,24 @@ async def delete_assistant_contact(
             contact_type,
         )
 
+        # Coordinator contacts are platform-managed: the shared universal
+        # email / phone / WhatsApp pools are owned by the repair path
+        # (``ensure_coordinator_*``), so a deleted platform contact would
+        # just be re-provisioned on the owner's next visit — leaving a
+        # confusing gap in inbound routing meanwhile. Block deletion of
+        # those. Legacy ``provisioned_by="user"`` rows that predate the
+        # connect gating stay deletable so leftover BYOD contacts can
+        # still be cleaned up (here and via the disconnect endpoint).
+        if (
+            assistant.is_coordinator
+            and contact is not None
+            and contact.provisioned_by != "user"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="coordinator_contacts_are_platform_managed",
+            )
+
         if contact:
             # BYOD contacts: skip external deprovisioning (we don't own the resource).
             # Email contacts are BYOD-only since platform mailboxes were retired,
@@ -1086,7 +1940,6 @@ async def delete_assistant_contact(
                 if contact_type == "phone" and contact.contact_value:
                     await delete_phone_number(
                         contact.contact_value,
-                        deploy_env=assistant.deploy_env,
                     )
                 elif contact_type == "whatsapp":
                     from orchestra.web.api.utils.assistant_infra import (
@@ -1116,7 +1969,6 @@ async def delete_assistant_contact(
         try:
             await reawaken_assistant(
                 str(updated_assistant.agent_id),
-                deploy_env=updated_assistant.deploy_env,
             )
         except Exception as e:
             # Log the error but don't fail the request, as the main action succeeded
@@ -1204,6 +2056,22 @@ async def create_assistant_contact(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    # Coordinator contacts are platform-managed (shared universal email /
+    # phone / WhatsApp pools provisioned by the ``ensure_coordinator_*``
+    # helpers). Manual contact creation — including BYOD — is never valid
+    # for a Coordinator, so reject it here rather than letting a row land
+    # that the repair path would later clobber.
+    if assistant.is_coordinator:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="coordinator_contacts_are_platform_managed",
         )
 
     # Permission check for org assistants
@@ -1340,7 +2208,6 @@ async def create_assistant_contact(
         try:
             await reawaken_assistant(
                 str(assistant_id),
-                deploy_env=assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(
@@ -1355,9 +2222,14 @@ async def create_assistant_contact(
             organization_id=organization_id,
         )
         try:
-            return InfoResponse(
+            response = InfoResponse(
                 info=_build_assistant_read(assistant, refreshed_session),
             )
+            refreshed_session.commit()
+            return response
+        except Exception:
+            refreshed_session.rollback()
+            raise
         finally:
             refreshed_session.close()
 
@@ -1375,7 +2247,7 @@ async def create_assistant_contact(
     )
 
     # 4. Credit check (skip in staging)
-    if not settings.is_staging:
+    if settings.charges_billing:
         try:
             billing_entity = get_billing_entity(session, user_id, organization_id)
         except ValueError:
@@ -1402,7 +2274,6 @@ async def create_assistant_contact(
             phone_country = contact_request.phone_country or "US"
             phone_response = await create_phone_number(
                 phone_country=phone_country,
-                deploy_env=assistant.deploy_env,
             )
             if "detail" in phone_response:
                 raise Exception(
@@ -1425,7 +2296,6 @@ async def create_assistant_contact(
             # Register the Twilio sender (idempotent if already registered)
             await register_whatsapp_sender(
                 created_value,
-                deploy_env=assistant.deploy_env,
             )
 
         elif contact_type == "discord":
@@ -1443,7 +2313,6 @@ async def create_assistant_contact(
             await register_discord_bot(
                 created_value,
                 assistant_id,
-                deploy_env=assistant.deploy_env,
                 bot_token=pool_result.get("auth_token"),
             )
 
@@ -1489,7 +2358,7 @@ async def create_assistant_contact(
         contact.monthly_cost = monthly_cost
 
         # 7. Deduct one-time cost
-        if not settings.is_staging and one_time_cost > 0:
+        if settings.charges_billing and one_time_cost > 0:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -1522,7 +2391,6 @@ async def create_assistant_contact(
             if contact_type == "phone":
                 await delete_phone_number(
                     created_value,
-                    deploy_env=assistant.deploy_env,
                 )
         except Exception as rollback_error:
             logging.error(
@@ -1537,7 +2405,6 @@ async def create_assistant_contact(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -1551,9 +2418,14 @@ async def create_assistant_contact(
         organization_id=organization_id,
     )
     try:
-        return InfoResponse(
+        response = InfoResponse(
             info=_build_assistant_read(assistant, refreshed_session),
         )
+        refreshed_session.commit()
+        return response
+    except Exception:
+        refreshed_session.rollback()
+        raise
     finally:
         refreshed_session.close()
 
@@ -1595,6 +2467,11 @@ async def list_assistant_contacts(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant's contacts.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -1611,6 +2488,22 @@ async def list_assistant_contacts(
 
     contact_dao = AssistantContactDAO(session)
     contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+
+    # Backfill missing platform-managed contacts for the owner's Coordinator on
+    # this single-resource read too (same self-heal as the list endpoint), so a
+    # Coordinator predating the universal-contact rollout repairs itself however
+    # its contacts are fetched.
+    if assistant.is_coordinator and assistant.user_id == user_id:
+        contacts_by_assistant: dict[int, list] = {assistant_id: list(contacts)}
+        if _self_heal_coordinator_contacts(
+            session,
+            coordinators=[assistant],
+            contacts_by_assistant=contacts_by_assistant,
+            contact_dao=contact_dao,
+        ):
+            await notify_comms_discord_sync()
+        contacts = contacts_by_assistant.get(assistant_id, contacts)
+
     contact_reads = [
         AssistantContactRead(
             id=c.id,
@@ -1677,7 +2570,21 @@ async def connect_assistant_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
+    # Coordinator contacts are platform-managed (shared universal pools), so
+    # BYOD suite OAuth (email / calendar / drive) must never attach to a
+    # Coordinator. The console hides this flow for Coordinators; enforce it
+    # server-side too so a direct API call can't slip a personal mailbox in.
+    if assistant.is_coordinator:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="coordinator_contacts_are_platform_managed",
+        )
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
         if not ra_dao.check_user_permission(
@@ -1833,6 +2740,11 @@ async def disconnect_assistant_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this assistant.",
+        )
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -1937,7 +2849,6 @@ async def disconnect_assistant_account(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -1982,6 +2893,11 @@ async def get_granted_features(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -2059,6 +2975,8 @@ async def create_assistant_secret(
     )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2087,6 +3005,17 @@ async def create_assistant_secret(
         body.secret_value,
     )
     session.commit()
+    # Reactive narration: fire-and-forget tell the Coordinator a
+    # secret just landed so it can comment in-conversation. The
+    # helper gates on the Coordinator's onboarding mode and resolves
+    # workspace OAuth (GOOGLE_*/MICROSOFT_* prefixes) vs. generic
+    # integration based on the secret name. Failures are swallowed
+    # inside the helper so user-facing requests never regress.
+    await emit_secret_landed_event(
+        session,
+        assistant=assistant,
+        secret_name=body.secret_name,
+    )
     return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
 
 
@@ -2118,6 +3047,8 @@ async def update_assistant_secret(
     )
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
@@ -2146,6 +3077,14 @@ async def update_assistant_secret(
         body.secret_value,
     )
     session.commit()
+    # See sibling note on the POST handler — same narration emit, same
+    # gating semantics. Updates also count because the workspace OAuth
+    # refresh path overwrites the existing token row.
+    await emit_secret_landed_event(
+        session,
+        assistant=assistant,
+        secret_name=secret_name,
+    )
     return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
 
 
@@ -2175,6 +3114,8 @@ async def delete_assistant_secret(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if organization_id is not None:
@@ -2243,6 +3184,11 @@ async def update_assistant_contact(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
     # Permission check for org assistants
     if organization_id is not None:
@@ -2280,7 +3226,6 @@ async def update_assistant_contact(
     try:
         await reawaken_assistant(
             str(assistant_id),
-            deploy_env=assistant.deploy_env,
         )
     except Exception as e:
         logging.warning(
@@ -2288,7 +3233,7 @@ async def update_assistant_contact(
         )
 
     return InfoResponse(
-        info=_build_assistant_read(assistant, session),
+        info=_build_assistant_read(assistant, session, requesting_user_id=user_id),
     )
 
 
@@ -2426,6 +3371,12 @@ async def delete_assistant(
                 detail="Assistant not found.",
             )
 
+        if assistant.is_coordinator:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot_delete_coordinator",
+            )
+
         if organization_id is not None:
             resource_access_dao = ResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
@@ -2439,6 +3390,8 @@ async def delete_assistant(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="You do not have permission to delete this assistant.",
                 )
+
+        await purge_assistant_memberships(session, assistant=assistant)
 
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
@@ -2642,7 +3595,7 @@ async def update_assistant_config(
     organization_id = getattr(request.state, "organization_id", None)
     user_dao = UserDAO(session)
     assistant_dao = AssistantDAO(session)
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
 
     # Store the old photo URL before the update
     old_photo_url = None
@@ -2657,6 +3610,14 @@ async def update_assistant_config(
         organization_id=organization_id,
     )
     if not existing_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(
+        existing_assistant,
+        user_id=user_id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
@@ -2765,7 +3726,6 @@ async def update_assistant_config(
             try:
                 await reawaken_assistant(
                     str(assistant_id),
-                    deploy_env=updated.deploy_env,
                 )
             except Exception as e:
                 logging.warning(
@@ -3104,7 +4064,7 @@ async def transfer_assistant_to_org(
 
         # Refresh the moved assistant's Contacts so it picks up the destination
         # org's members and drops anything tied to the personal scope.
-        await trigger_contact_sync_safe(assistant_id, deploy_env=assistant.deploy_env)
+        await trigger_contact_sync_safe(assistant_id)
 
         return InfoResponse(
             info=AssistantTransferResponse(
@@ -3180,6 +4140,11 @@ async def transfer_assistant_to_personal(
         organization_id=organization_id,
     )
     if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization assistant not found.",
+        )
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization assistant not found.",
@@ -3272,7 +4237,7 @@ async def transfer_assistant_to_personal(
 
         # Refresh the moved assistant's Contacts so it drops org-scoped rows
         # and reseeds for its new personal owner.
-        await trigger_contact_sync_safe(assistant_id, deploy_env=assistant.deploy_env)
+        await trigger_contact_sync_safe(assistant_id)
 
         return InfoResponse(
             info=AssistantTransferResponse(
@@ -4123,7 +5088,7 @@ async def upload_assistant_photo(
     assistant_id: Optional[int] = Form(None),
     session: Session = Depends(get_db_session),
 ):
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     user_id = request.state.user_id
     if not user_id:
         raise HTTPException(
@@ -4140,6 +5105,11 @@ async def upload_assistant_photo(
             organization_id=organization_id,
         )
         if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+        if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
@@ -4200,7 +5170,7 @@ async def upload_assistant_video(
     assistant_id: Optional[int] = Form(None),
     session: Session = Depends(get_db_session),
 ):
-    bucket_service = BucketService()
+    bucket_service = create_bucket_service()
     user_id = request.state.user_id
     if not user_id:
         raise HTTPException(
@@ -4217,6 +5187,11 @@ async def upload_assistant_video(
             organization_id=organization_id,
         )
         if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+        if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
@@ -4305,7 +5280,7 @@ async def generate_assistant_photo(
         )
 
     # 2. Pre-check credits if not in staging
-    if not settings.is_staging:
+    if settings.charges_billing:
         try:
             billing_entity = get_billing_entity(session, user_id, organization_id)
         except ValueError:
@@ -4333,7 +5308,7 @@ async def generate_assistant_photo(
         )
 
         # 4. Deduct credits after successful generation if not in staging
-        if not settings.is_staging:
+        if settings.charges_billing:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -4376,7 +5351,7 @@ async def edit_assistant_photo(
     request: Request,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
-    bucket_service: BucketService = Depends(),
+    bucket_service=Depends(create_bucket_service),
     openai_service: OpenAIService = Depends(),
     prompt: str = Form(
         ...,
@@ -4474,7 +5449,7 @@ async def edit_assistant_photo(
             raise
 
         # 2. Pre-check credits if not in staging
-        if not settings.is_staging:
+        if settings.charges_billing:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -4500,7 +5475,7 @@ async def edit_assistant_photo(
         )
 
         # 4. Deduct credits after successful edit if not in staging
-        if not settings.is_staging:
+        if settings.charges_billing:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             edit_entity = get_billing_entity(session, user_id, organization_id)
@@ -4560,7 +5535,7 @@ async def animate_video_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
-    bucket_service: BucketService = Depends(),
+    bucket_service=Depends(create_bucket_service),
     openai_service: OpenAIService = Depends(),
     image_url: Optional[str] = Form(None),
     image_file: Optional[UploadFile] = File(None),
@@ -4730,7 +5705,7 @@ async def animate_video_endpoint(
             )
 
         # Pre-check credits
-        if not settings.is_staging:
+        if settings.charges_billing:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -4754,7 +5729,7 @@ async def animate_video_endpoint(
         _prediction_owners[prediction.id] = user_id
 
         # Deduct credits after successful prediction creation
-        if not settings.is_staging:
+        if settings.charges_billing:
             from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
             billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -4921,6 +5896,198 @@ async def admin_get_assistant_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get assistant status: {str(e)}",
         )
+
+
+def _contact_membership_read(row: ContactMembership) -> ContactMembershipRead:
+    """Serialize a contact-membership ORM row for admin responses."""
+
+    return ContactMembershipRead(
+        id=int(row.id),
+        assistant_id=int(row.assistant_id),
+        authoring_assistant_id=(
+            int(row.authoring_assistant_id)
+            if row.authoring_assistant_id is not None
+            else None
+        ),
+        contact_id=int(row.contact_id),
+        target_scope=str(row.target_scope),
+        target_team_id=(
+            int(row.target_team_id) if row.target_team_id is not None else None
+        ),
+        relationship=str(row.relationship),
+        should_respond=bool(row.should_respond),
+        response_policy=str(row.response_policy),
+        can_edit=bool(row.can_edit),
+        created_at=row.created_at,
+    )
+
+
+def _select_contact_membership(
+    session: Session,
+    *,
+    assistant_id: int,
+    contact_id: int,
+    target_scope: str,
+    target_team_id: int | None,
+) -> ContactMembership | None:
+    query = session.query(ContactMembership).filter(
+        ContactMembership.assistant_id == assistant_id,
+        ContactMembership.contact_id == contact_id,
+        ContactMembership.target_scope == target_scope,
+    )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        query = query.filter(ContactMembership.target_team_id.is_(None))
+    else:
+        query = query.filter(ContactMembership.target_team_id == target_team_id)
+    return query.order_by(ContactMembership.id).first()
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/contact-memberships",
+    response_model=InfoResponse[ContactMembershipUpsertResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: create contact membership",
+    tags=["Assistants", "Admin"],
+)
+def admin_create_contact_membership(
+    assistant_id: int,
+    request_body: ContactMembershipCreate,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ContactMembershipUpsertResponse]:
+    """Create an assistant-owned contact relationship overlay idempotently."""
+
+    assistant = session.get(Assistant, assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM:
+        membership = (
+            session.query(TeamAssistantMembership)
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
+            .filter(
+                TeamAssistantMembership.assistant_id == assistant_id,
+                TeamAssistantMembership.team_id == request_body.target_team_id,
+                Team.status == TEAM_STATUS_ACTIVE,
+            )
+            .first()
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant is not a live member of the target team.",
+            )
+
+    values = {
+        "assistant_id": assistant_id,
+        "authoring_assistant_id": assistant_id,
+        "contact_id": request_body.contact_id,
+        "target_scope": request_body.target_scope,
+        "target_team_id": request_body.target_team_id,
+        "relationship": request_body.relationship,
+        "should_respond": request_body.should_respond,
+        "response_policy": request_body.response_policy,
+        "can_edit": request_body.can_edit,
+    }
+    insert_stmt = postgres_insert(ContactMembership).values(**values)
+    if request_body.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL
+            ),
+        )
+    else:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=[
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+                ContactMembership.target_team_id,
+            ],
+            index_where=(
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM
+            ),
+        )
+    inserted_id = session.execute(
+        insert_stmt.returning(ContactMembership.id),
+    ).scalar_one_or_none()
+    session.flush()
+
+    row = None
+    created = inserted_id is not None
+    if inserted_id is not None:
+        row = session.get(ContactMembership, inserted_id)
+    if row is None:
+        row = _select_contact_membership(
+            session,
+            assistant_id=assistant_id,
+            contact_id=request_body.contact_id,
+            target_scope=request_body.target_scope,
+            target_team_id=request_body.target_team_id,
+        )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Contact membership could not be resolved after insert.",
+        )
+    session.commit()
+    return InfoResponse(
+        info=ContactMembershipUpsertResponse(
+            membership=_contact_membership_read(row),
+            created=created,
+        ),
+    )
+
+
+@admin_router.delete(
+    "/assistant/{assistant_id}/contact-memberships/{contact_id}",
+    response_model=InfoResponse[ContactMembershipDeleteResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: delete contact memberships",
+    tags=["Assistants", "Admin"],
+)
+def admin_delete_contact_memberships(
+    assistant_id: int,
+    contact_id: int,
+    target_scope: Literal["personal", "team"] = Query(...),
+    target_team_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ContactMembershipDeleteResponse]:
+    """Delete the relationship overlay for one assistant/contact target."""
+
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL and target_team_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="personal contact memberships cannot include target_team_id",
+        )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_TEAM and target_team_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="team contact memberships require target_team_id",
+        )
+
+    stmt = delete(ContactMembership).where(
+        ContactMembership.assistant_id == assistant_id,
+        ContactMembership.contact_id == contact_id,
+        ContactMembership.target_scope == target_scope,
+    )
+    if target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL:
+        stmt = stmt.where(ContactMembership.target_team_id.is_(None))
+    else:
+        stmt = stmt.where(ContactMembership.target_team_id == target_team_id)
+
+    result = session.execute(
+        stmt,
+    )
+    session.commit()
+    return InfoResponse(
+        info=ContactMembershipDeleteResponse(deleted=int(result.rowcount or 0)),
+    )
 
 
 @admin_router.post(
@@ -5131,10 +6298,6 @@ def admin_update_assistant(
         assistant.desktop_filesync_sshkey = request_body.desktop_filesync_sshkey
         updated_fields.append("desktop_filesync_sshkey")
 
-    if request_body.deploy_env is not None:
-        assistant.deploy_env = request_body.deploy_env
-        updated_fields.append("deploy_env")
-
     if "console_config" in request_body.model_fields_set:
         if request_body.console_config is None:
             if assistant.console_config is not None:
@@ -5304,6 +6467,16 @@ def admin_list_all_assistants(
         )
 
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+        skip_team_summaries = (
+            requested_fields is not None and "team_summaries" not in requested_fields
+        )
+        skip_contact_ids = requested_fields is not None and not (
+            {"self_contact_id", "boss_contact_id"} & requested_fields
+        )
+        skip_contact_identity_roots = (
+            requested_fields is not None
+            and "contact_identity_roots" not in requested_fields
+        )
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -5334,6 +6507,40 @@ def admin_list_all_assistants(
                         s.secret_name
                     ] = s.secret_value
 
+        team_ids_by_assistant = {}
+        team_summaries_by_assistant = {}
+        team_dao = TeamDAO(session)
+        agent_ids = [a.agent_id for a in assistants]
+        if not skip_teams:
+            team_ids_by_assistant = team_dao.team_ids_for_assistants(agent_ids)
+        if not skip_team_summaries:
+            team_summaries_by_assistant = team_dao.team_summaries_for_assistants(
+                agent_ids,
+            )
+        contact_ids_by_assistant = {}
+        if not skip_contact_ids:
+            contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+                session,
+                agent_ids,
+            )
+        contact_identity_roots_by_assistant = {}
+        if not skip_contact_identity_roots:
+            identity_team_ids_by_assistant = team_ids_by_assistant
+            if skip_teams:
+                identity_team_ids_by_assistant = team_dao.team_ids_for_assistants(
+                    agent_ids,
+                )
+            contact_identity_roots_by_assistant = (
+                _resolved_contact_identity_roots_for_assistants(
+                    session,
+                    agent_ids,
+                    team_ids_by_assistant=identity_team_ids_by_assistant,
+                    personal_ids_by_assistant=(
+                        contact_ids_by_assistant if not skip_contact_ids else None
+                    ),
+                )
+            )
+
         # Build AssistantRead objects
         assistant_reads = [
             _build_assistant_read(
@@ -5345,7 +6552,35 @@ def admin_list_all_assistants(
                 user_email=users[i].email if users else None,
                 user_image=users[i].image if users else None,
                 user_whatsapp_number=(users[i].whatsapp_number if users else None),
-                team_ids=[] if skip_teams else None,
+                team_ids=(
+                    [] if skip_teams else team_ids_by_assistant.get(a.agent_id, [])
+                ),
+                team_summaries=(
+                    []
+                    if skip_team_summaries
+                    else team_summaries_by_assistant.get(a.agent_id, [])
+                ),
+                self_contact_id=(
+                    PERSONAL_SELF_CONTACT_ID
+                    if skip_contact_ids
+                    else _contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id
+                ),
+                boss_contact_id=(
+                    PERSONAL_BOSS_CONTACT_ID
+                    if skip_contact_ids
+                    else _contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id
+                ),
+                contact_identity_roots=(
+                    []
+                    if skip_contact_identity_roots
+                    else contact_identity_roots_by_assistant.get(a.agent_id, [])
+                ),
                 contacts=contacts_by_assistant.get(a.agent_id, []),
                 secrets=(
                     secrets_by_assistant.get(a.agent_id, {})
@@ -5365,6 +6600,8 @@ def admin_list_all_assistants(
         # No from_fields parameter - return full AssistantRead objects
         return InfoResponse(info=assistant_reads)
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -5557,6 +6794,25 @@ def admin_list_assistants_for_user(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        team_dao = TeamDAO(session)
+        assistant_ids = [a.agent_id for a in assistants]
+        team_ids_by_assistant = team_dao.team_ids_for_assistants(assistant_ids)
+        team_summaries_by_assistant = team_dao.team_summaries_for_assistants(
+            assistant_ids,
+        )
+        contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
+            session,
+            assistant_ids,
+        )
+        contact_identity_roots_by_assistant = (
+            _resolved_contact_identity_roots_for_assistants(
+                session,
+                assistant_ids,
+                team_ids_by_assistant=team_ids_by_assistant,
+                personal_ids_by_assistant=contact_ids_by_assistant,
+            )
+        )
+
         return InfoResponse(
             info=[
                 _build_assistant_read(
@@ -5564,11 +6820,30 @@ def admin_list_assistants_for_user(
                     session,
                     api_key=api_keys[i],
                     contacts=contacts_by_assistant.get(a.agent_id, []),
+                    team_ids=team_ids_by_assistant.get(a.agent_id, []),
+                    team_summaries=team_summaries_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
+                    self_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).self_contact_id,
+                    boss_contact_id=_contact_id_pair(
+                        contact_ids_by_assistant,
+                        a.agent_id,
+                    ).boss_contact_id,
+                    contact_identity_roots=contact_identity_roots_by_assistant.get(
+                        a.agent_id,
+                        [],
+                    ),
                     include_internal=True,
                 )
                 for i, a in enumerate(assistants)
             ],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -5713,6 +6988,8 @@ async def get_assistant_spending_limit(
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
+        raise HTTPException(status_code=404, detail="Assistant not found.")
 
     # Allow org members to view limits for any assistant in their org.
     if assistant.user_id != user_id:
@@ -5737,11 +7014,14 @@ async def get_assistant_spending_limit(
         org_member_dao = OrganizationMemberDAO(session)
 
         org = org_dao.get(assistant.organization_id)
-        member = org_member_dao.get_member(user_id, assistant.organization_id)
+        owner_member = org_member_dao.get_member(
+            assistant.user_id,
+            assistant.organization_id,
+        )
 
         parent_limits = []
-        if member and member.monthly_spending_cap is not None:
-            parent_limits.append(float(member.monthly_spending_cap))
+        if owner_member and owner_member.monthly_spending_cap is not None:
+            parent_limits.append(float(owner_member.monthly_spending_cap))
         if org and org.monthly_spending_cap is not None:
             parent_limits.append(float(org.monthly_spending_cap))
 
@@ -5788,6 +7068,8 @@ async def get_assistant_spend(
     assistant_dao = AssistantDAO(session)
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
     if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    if _is_hidden_workspace_coordinator_for_user(assistant, user_id=user_id):
         raise HTTPException(status_code=404, detail="Assistant not found.")
 
     if assistant.user_id != user_id:
@@ -6030,7 +7312,6 @@ async def create_demo_assistant(
             monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
             # Link to demo metadata
             demo_id=demo_meta.id,
-            deploy_env=source_assistant.deploy_env,
         )
         session.add(demo_assistant)
         session.flush()  # Get the agent_id
@@ -6042,7 +7323,6 @@ async def create_demo_assistant(
         try:
             phone_response = await create_phone_number(
                 phone_country=phone_country,
-                deploy_env=demo_assistant.deploy_env,
             )
             if "detail" in phone_response:
                 raise Exception(f"Phone creation failed: {phone_response['detail']}")
@@ -6058,7 +7338,6 @@ async def create_demo_assistant(
         try:
             await create_pubsub_topic(
                 str(demo_assistant.agent_id),
-                deploy_env=demo_assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
@@ -6088,7 +7367,6 @@ async def create_demo_assistant(
         try:
             await wake_up_assistant(
                 str(demo_assistant.agent_id),
-                deploy_env=demo_assistant.deploy_env,
             )
         except Exception as e:
             logging.warning(f"Failed to wake up demo assistant: {e}")
@@ -6271,27 +7549,24 @@ def admin_touch_assistant_activity(
 
 
 @admin_router.post(
-    "/assistant/{assistant_id}/terminate",
+    "/assistant/{assistant_id}/opt-out-followups",
     status_code=status.HTTP_200_OK,
-    summary="Admin: mark an assistant for auto-cleanup",
+    summary="Admin: opt an assistant out of inactivity follow-ups",
     description=(
-        "Sets ``termination_initiated_at = now()`` so the assistant "
-        "enters the pre-cleanup grace period. The Unity brain calls "
-        "this when the boss explicitly declines to continue. Actual "
-        "deprovisioning and hard-delete happen on the next daily run "
-        "of the inactivity follow-up routine, once the grace period "
-        "elapses."
+        "Sets ``inactivity_followup_opted_out = true`` so the inactivity "
+        "re-engagement routine never follows up via this Coordinator "
+        "again. The Unity brain calls this when the boss explicitly asks "
+        "not to be contacted further. Nothing is deleted — this only "
+        "silences future follow-ups until the boss opts back in."
     ),
     tags=["Assistants", "Admin"],
 )
-def admin_terminate_assistant(
+def admin_opt_out_assistant_followups(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
-    from datetime import datetime, timezone
-
     dao = AssistantDAO(session)
-    rows = dao.mark_termination_initiated(assistant_id, datetime.now(timezone.utc))
+    rows = dao.set_inactivity_followup_opt_out(assistant_id, True)
     if rows == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -6302,22 +7577,23 @@ def admin_terminate_assistant(
 
 
 @admin_router.post(
-    "/assistant/{assistant_id}/cancel-termination",
+    "/assistant/{assistant_id}/opt-in-followups",
     status_code=status.HTTP_200_OK,
-    summary="Admin: cancel an in-flight termination",
+    summary="Admin: re-enable inactivity follow-ups for an assistant",
     description=(
-        "Clears ``termination_initiated_at`` so the assistant is no "
-        "longer on the auto-cleanup path. The Unity brain calls this "
-        "when the boss re-engages during the grace period."
+        "Clears ``inactivity_followup_opted_out`` so the inactivity "
+        "re-engagement routine can follow up via this Coordinator again. "
+        "The Unity brain calls this when the boss re-engages after having "
+        "previously opted out."
     ),
     tags=["Assistants", "Admin"],
 )
-def admin_cancel_assistant_termination(
+def admin_opt_in_assistant_followups(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
     dao = AssistantDAO(session)
-    rows = dao.clear_termination_initiated(assistant_id)
+    rows = dao.set_inactivity_followup_opt_out(assistant_id, False)
     if rows == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

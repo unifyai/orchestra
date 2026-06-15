@@ -1,7 +1,7 @@
 """Platform FastAPI application factory.
 
 Layers platform-only middleware (rate limiting, staging gate, Sentry) on top
-of the kernel middleware stack provided by orchestra-core, then mounts the
+of the kernel middleware stack provided by orchestra, then mounts the
 full platform router.
 """
 
@@ -9,10 +9,10 @@ import json as _json
 import logging
 import time as _time
 from collections import defaultdict
-from importlib import metadata
 
 import sentry_sdk
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import UJSONResponse
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
@@ -20,11 +20,53 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from orchestra.observability.prometheus_middleware import PrometheusMiddleware, metrics
+from orchestra.observability.request_trace_middleware import RequestTraceMiddleware
+from orchestra.pii_scrub import (
+    install_log_redaction,
+    scrub_sentry_breadcrumb,
+    scrub_sentry_event,
+)
 from orchestra.settings import settings
 from orchestra.web.api.router import api_router
-from orchestra_core.observability.prometheus_middleware import metrics
-from orchestra_core.web.application import core_middlewares
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'"
+        )
+        return response
+
+
+def core_middlewares(app: FastAPI) -> None:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "Origin",
+            "X-Requested-With",
+        ],
+    )
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(PrometheusMiddleware, app_name="orchestra")
+    app.add_middleware(RequestTraceMiddleware)
 
 
 def get_app() -> FastAPI:
@@ -37,6 +79,11 @@ def get_app() -> FastAPI:
     middleware (rate limiting, staging gate) and mounts the platform router.
     """
     import os
+
+    # Enforce pseudonymisation at the observability periphery before anything
+    # can emit a log line: scrub email/phone-shaped PII from every log record
+    # process-wide (covers Cloud Logging via stdout). Idempotent.
+    install_log_redaction()
 
     cloud_project = os.environ.get("GCP_PROJECT_ID", settings.gcp_project)
     managed_project = os.environ.get("ORCHESTRA_MANAGED_GCP_PROJECT", "gcp-project-saas")
@@ -62,6 +109,12 @@ def get_app() -> FastAPI:
             dsn=settings.sentry_dsn,
             traces_sample_rate=settings.sentry_sample_rate,
             environment=settings.environment,
+            # Pseudonymisation procedure: never let the SDK attach default PII
+            # (request bodies, cookies, user IP), and run every event /
+            # breadcrumb through the PII scrubber before transmission.
+            send_default_pii=False,
+            before_send=scrub_sentry_event,
+            before_breadcrumb=scrub_sentry_breadcrumb,
             integrations=[
                 FastApiIntegration(transaction_style="endpoint"),
                 LoggingIntegration(
@@ -73,7 +126,7 @@ def get_app() -> FastAPI:
         )
     app = FastAPI(
         title="UnifyAI HTTP API Reference",
-        version=metadata.version("orchestra"),
+        version="dev",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

@@ -21,11 +21,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.selectable import CTE, Subquery
 
-from orchestra_core.db.dao.context_dao import ContextDAO
-from orchestra_core.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra_core.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import LogEvent, LogEventContext
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.core_models import LogEvent, LogEventContext
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
 from .logging_utils import (
@@ -213,7 +213,7 @@ def _get_distinct_group_values(
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import (
+        from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
             set_test_context,
@@ -1482,7 +1482,7 @@ def _build_grouped_data_with_grouping_sets(
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import capture_sql, is_capture_enabled
+        from orchestra.observability.sql_capture import capture_sql, is_capture_enabled
 
         if is_capture_enabled():
             pass
@@ -1953,7 +1953,7 @@ def _build_grouped_data(
     try:
         from sqlalchemy import text
 
-        from orchestra.tests.test_log.sql_capture import (
+        from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
             set_test_context,

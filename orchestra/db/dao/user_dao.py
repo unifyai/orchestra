@@ -11,15 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
-    RECHARGE_TYPE_PROMO,
     Assistant,
     BillingAccount,
     PhoneVerification,
-    Recharge,
-    RechargeStatus,
     User,
 )
-from orchestra_core.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.http_responses import not_found
 
 if TYPE_CHECKING:
     from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -41,8 +38,8 @@ class UserDAO:
     """
     Data Access Object for the unified User table.
 
-    Billing account operations (credits, autorecharge, Stripe, freeze/status,
-    auto-recharge eligibility) are handled by BillingAccountDAO.
+    Billing account operations (credits, Stripe, freeze/status) are handled
+    by BillingAccountDAO.
     This DAO manages user profile fields, spending caps, and telemetry.
     """
 
@@ -65,16 +62,11 @@ class UserDAO:
         phone_number: Optional[str] = None,
         whatsapp_number: Optional[str] = None,
         discord_id: Optional[str] = None,
-        credits: Optional[float] = 0,
     ) -> User:
         """
         Create a new user with an associated BillingAccount.
 
-        The billing account is initialised with *credits* (default 0).
-        Signup promo credits are **not** granted here — they are awarded
-        later during the onboarding flow via
-        :meth:`BillingAccountDAO.grant_signup_credits` so that credits
-        land on the correct billing account (personal vs. organization).
+        The billing account factory applies signup funding and plan setup.
 
         :param email: User's email (required, unique).
         :param name: First name.
@@ -84,13 +76,8 @@ class UserDAO:
         :param image: Profile image URL.
         :param timezone: IANA timezone string.
         :param phone_number: Phone number (will be validated and formatted).
-        :param credits: Initial credit balance. Defaults to settings.signup_credit_grant.
         :return: The created User instance.
         """
-        if credits is None:
-            from orchestra.settings import settings
-
-            credits = settings.signup_credit_grant
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
 
@@ -114,9 +101,7 @@ class UserDAO:
         # automatically.
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
-        billing_account = BillingAccountDAO(self.session).create(
-            credits=credits,
-        )
+        billing_account = BillingAccountDAO(self.session).create()
 
         user = User(
             email=email,
@@ -148,16 +133,6 @@ class UserDAO:
             SharedPoolDAO(self.session, "discord").cleanup_routes_for_contact_number(
                 discord_id,
             )
-
-        if credits > 0:
-            recharge = Recharge(
-                billing_account_id=billing_account.id,
-                type=RECHARGE_TYPE_PROMO,
-                quantity=Decimal(str(credits)),
-                amount_usd=Decimal("0"),
-                status=RechargeStatus.PAID,
-            )
-            self.session.add(recharge)
 
         return user
 

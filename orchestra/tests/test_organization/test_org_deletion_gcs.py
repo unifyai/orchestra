@@ -34,10 +34,13 @@ def mock_infra_and_bucket(request):
     ) as mock_assistant_cleanup, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings, patch(
+        "orchestra.web.api.organization.views.delete_pubsub_topic",
+        new_callable=AsyncMock,
+    ) as mock_delete_topic, patch(
         "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
         new_callable=AsyncMock,
     ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.BucketService",
+        "orchestra.web.api.organization.views.create_bucket_service",
     ) as mock_bucket_cls:
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
@@ -48,6 +51,7 @@ def mock_infra_and_bucket(request):
             "failed": 0,
             "errors": [],
         }
+        mock_delete_topic.return_value = {"success": True}
         mock_org_cleanup.return_value = {
             "processed": 1,
             "completed": 1,
@@ -56,6 +60,7 @@ def mock_infra_and_bucket(request):
             "errors": [],
         }
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         mock_bucket_instance = MagicMock()
         mock_bucket_instance.delete_all_assistant_data.return_value = {
@@ -74,7 +79,7 @@ def mock_infra_and_bucket(request):
 
 
 @pytest.mark.anyio
-async def test_org_deletion_cleans_gcs_for_all_assistants(
+async def test_org_deletion_queues_cleanup_without_direct_assistant_gcs_calls(
     client: AsyncClient,
     dbsession,
     mock_infra_and_bucket,
@@ -189,7 +194,7 @@ async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
         )
 
     assert del_resp.status_code == status.HTTP_204_NO_CONTENT
-    mock_delete_phone.assert_awaited_once_with("+15553334444", deploy_env=None)
+    mock_delete_phone.assert_awaited_once_with("+15553334444")
     mock_delete_routes.assert_called_once_with(agent_id)
 
     dbsession.expire_all()

@@ -1,213 +1,161 @@
-"""Email templates and helpers for inactivity-followup deletion notifications.
+"""Email template + helper for the Coordinator welcome message.
 
-Sent by :mod:`orchestra.routines.inactivity_followup` immediately before
-the assistant row is hard-deleted, so the human who hired the assistant
-finds out they were removed because of the prolonged silence.
+The **welcome** email is sent once, the moment a user's personal
+Coordinator is provisioned at signup (see the signup paths in
+``orchestra.web.api.auth.views`` / ``orchestra.web.api.users.views``).
+It introduces the Coordinator and points the user at the console.
 
-Recipient resolution: the *creator/lifecycle owner* of the assistant —
-``Assistant.user_id``. Per the model docstring, this is:
+It is sent **from the shared Coordinator mailbox** (the
+``UNITY_COORDINATOR_EMAIL_ADDRESS`` setting, surfaced via
+:func:`orchestra.services.universal_unity_email.get_universal_unity_email_address`)
+rather than the general ``hello@unify.ai`` outbound address, so the
+message lands in the user's inbox as if their Coordinator wrote it.
 
-  * the owner for a personal assistant (``organization_id`` IS NULL), and
-  * the org member who created the assistant for an org assistant (NOT
-    the org owner).
-
-Send transport reuses ``assistant_contact_notifications.send_notification_emails``
-so we route through the same Google service-account / "general outbound"
-mailbox configured by ``ONBOARDING_EMAIL`` and the SA key path.
+The inactivity *re-engagement* nudge is **not** templated here: that
+message is composed and sent by the Coordinator brain after
+:mod:`orchestra.routines.inactivity_followup` wakes the Coordinator (see
+``unity.conversation_manager.domains.inactivity``).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
-
-from sqlalchemy.orm import Session
-
-from orchestra.db.models.orchestra_models import Assistant, User
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 
-DELETION_SUBJECT = "Your Unify assistant has been removed"
-CONSOLE_REDIRECT_SUBJECT_TEMPLATE = "Hi from {first_name} on Unify"
+WELCOME_SUBJECT = "Welcome to Unify — I'm Marty, your coordinator"
 
 _CONSOLE_URL = "https://console.unify.ai/"
 _FOOTER = (
     '<hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">'
     '<p style="font-size: 12px; color: #888;">'
-    "This is an automated notification from Unify. Please do not reply "
-    "to this email."
+    "This is an automated message from your Unify coordinator. Please "
+    "chat with me on the console rather than replying to this email."
     "</p>"
 )
 
 
-# ---------------------------------------------------------------------------
-# Recipient resolution
-# ---------------------------------------------------------------------------
-
-
-def get_owner_email_for_assistant(
-    session: Session,
-    assistant: Assistant,
-) -> Optional[str]:
-    """Return the email of the assistant's lifecycle owner, or ``None``.
-
-    Always uses ``Assistant.user_id`` — for both personal *and* org
-    assistants. The ``user_id`` column is the creator/lifecycle owner;
-    org assistants intentionally notify the creating member, not the
-    organization owner.
-    """
-    if assistant.user_id is None:
-        return None
-    user = session.query(User).filter(User.id == assistant.user_id).first()
-    if user is None:
-        return None
-    email = getattr(user, "email", None)
-    return email or None
-
-
-def get_owner_first_name_for_assistant(
-    session: Session,
-    assistant: Assistant,
-) -> Optional[str]:
-    """Return the first name of the assistant's lifecycle owner, or ``None``.
-
-    Reads ``User.name`` — the orchestra User model uses ``name`` for the
-    salutation/first name and ``last_name`` for the surname.
-    """
-    if assistant.user_id is None:
-        return None
-    user = session.query(User).filter(User.id == assistant.user_id).first()
-    if user is None:
-        return None
-    first_name = getattr(user, "name", None)
-    return first_name or None
+def _salutation(owner_first_name: Optional[str]) -> str:
+    if owner_first_name and owner_first_name.strip():
+        return f"Hi {owner_first_name.strip()},"
+    return "Hi,"
 
 
 # ---------------------------------------------------------------------------
-# Email body builder
+# Email body builders
 # ---------------------------------------------------------------------------
 
 
-def _assistant_display_name(assistant: Assistant) -> str:
-    """Return the most human-readable label for an assistant.
+def build_coordinator_welcome_email(*, owner_first_name: Optional[str]) -> str:
+    """Build the HTML body for the Coordinator's welcome email.
 
-    Prefers ``first_name surname`` when both exist; falls back to either
-    one on its own; falls back to ``f"agent {agent_id}"`` as a last resort.
+    First-person, in the Coordinator's (Coordinator's) voice. Introduces the
+    coordinator and points the user at the console to get started.
     """
-    first = (assistant.first_name or "").strip()
-    surname = (assistant.surname or "").strip()
-    full = f"{first} {surname}".strip()
-    if full:
-        return full
-    return f"agent {assistant.agent_id}"
-
-
-def _assistant_short_name(assistant: Assistant) -> str:
-    """Return just a first name (or fall-back) for the second mention."""
-    first = (assistant.first_name or "").strip()
-    if first:
-        return first
-    return _assistant_display_name(assistant)
-
-
-def build_deletion_email(
-    *,
-    assistant: Assistant,
-    owner_first_name: Optional[str],
-    days: int,
-) -> str:
-    """Build the HTML body for the inactivity deletion notification.
-
-    The copy follows the product brief: explicit acknowledgement that
-    we previously followed up, factual statement of the inactivity
-    window in days, and a path forward (hire a new assistant).
-    """
-    salutation = (
-        f"Hi {owner_first_name.strip()},"
-        if (owner_first_name and owner_first_name.strip())
-        else "Hi,"
-    )
-    full_name = _assistant_display_name(assistant)
-    short_name = _assistant_short_name(assistant)
-    return f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-        <h2 style="color: #444;">Your Unify assistant has been removed</h2>
-
-        <p>{salutation}</p>
-
-        <p>
-            We previously followed up on your assistant
-            <strong>{full_name}</strong> and you either didn't respond or
-            chose to not keep your assistant.
-        </p>
-
-        <p>
-            We're removing {short_name} now after <strong>{days} days</strong>
-            of inactivity. The assistant's contact details (phone, email,
-            WhatsApp) have been released and the assistant has been
-            deleted from your account.
-        </p>
-
-        <p>
-            If you'd like a fresh start, you can hire a new assistant any
-            time at <a href="{_CONSOLE_URL}">{_CONSOLE_URL}</a>.
-        </p>
-
-        <p>— The Unify team</p>
-
-        {_FOOTER}
-    </body>
-    </html>
-    """
-
-
-def build_console_redirect_email(
-    *,
-    assistant: Assistant,
-    owner_first_name: Optional[str],
-) -> str:
-    """Build the HTML body for the orchestra-sent fallback follow-up.
-
-    Used when the assistant has no provisioned email of its own. The
-    copy is in the assistant's first-person voice and simply nudges
-    the boss to chat on the Unify console — no attribution to the
-    Unify team in the body, no mention of why the email is routed
-    through ``hello@unify.ai``.
-
-    A "please don't reply to this email" line is included to prevent
-    bounces or ignored replies hitting the general outbound mailbox;
-    the boss is steered to the console instead.
-    """
-    salutation = (
-        f"Hi {owner_first_name.strip()},"
-        if (owner_first_name and owner_first_name.strip())
-        else "Hi,"
-    )
-    short_name = _assistant_short_name(assistant)
+    salutation = _salutation(owner_first_name)
     return f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <p>{salutation}</p>
 
         <p>
-            It's {short_name}! I noticed we haven't been in touch in a
-            while. If you'd like to get started — or pick up where we
-            left off — you can chat with me any time on the Unify
+            I'm Marty, your personal coordinator on Unify. Welcome aboard!
+            I'm here to help you get things done — I can take on tasks
+            directly, or bring in specialist assistants and coordinate
+            their work for you.
+        </p>
+
+        <p>
+            The best way to get started is to say hello and tell me what
+            you're working on. You can chat with me any time on the
             console:
         </p>
 
         <p><a href="{_CONSOLE_URL}">{_CONSOLE_URL}</a></p>
 
         <p>
-            Please don't reply to this email — chat with me on the
-            console instead.
+            Looking forward to working together,<br/>— Marty
         </p>
-
-        <p>Looking forward to hearing from you,<br/>— {short_name}</p>
 
         {_FOOTER}
     </body>
     </html>
     """
+
+
+# ---------------------------------------------------------------------------
+# Sending helper (from the shared Coordinator mailbox)
+# ---------------------------------------------------------------------------
+
+
+async def send_coordinator_emails(
+    recipients: List[str],
+    subject: str,
+    body: str,
+) -> bool:
+    """Send a Coordinator-voiced email from the shared Coordinator mailbox.
+
+    Routes through the Gmail service account, sending *from* and
+    impersonating the ``UNITY_COORDINATOR_EMAIL_ADDRESS`` mailbox so the
+    message appears to come from the user's coordinator rather than the
+    general outbound address.
+
+    Returns ``True`` only when every recipient send succeeded. No-ops
+    (returns ``False``) when the coordinator mailbox is not configured —
+    typical in local dev — so callers stay safe to run there.
+    """
+    from orchestra.services.universal_unity_email import (
+        get_universal_unity_email_address,
+    )
+    from orchestra.web.api.utils.email import send_email_async
+
+    from_address = get_universal_unity_email_address()
+    if not from_address:
+        logger.warning(
+            "Coordinator mailbox (UNITY_COORDINATOR_EMAIL_ADDRESS) not "
+            "configured; skipping coordinator email %r.",
+            subject,
+        )
+        return False
+
+    all_sent = True
+    for email_addr in recipients:
+        success = await send_email_async(
+            to_email=email_addr,
+            email_subject=subject,
+            email_body=body,
+            from_email=from_address,
+            impersonate_email=from_address,
+        )
+        if success:
+            logger.info("Coordinator email sent to %s: %s", email_addr, subject)
+        else:
+            all_sent = False
+            logger.warning(
+                "Failed to send coordinator email to %s: %s",
+                email_addr,
+                subject,
+            )
+    return all_sent
+
+
+async def send_coordinator_welcome_email(
+    *,
+    recipient_email: Optional[str],
+    owner_first_name: Optional[str],
+) -> bool:
+    """Best-effort welcome send for a freshly-provisioned Coordinator.
+
+    Returns ``False`` (without raising) when there's no recipient or the
+    coordinator mailbox is unconfigured, so signup flows can call this
+    without guarding the happy path.
+    """
+    if not recipient_email:
+        return False
+    return await send_coordinator_emails(
+        [recipient_email],
+        WELCOME_SUBJECT,
+        build_coordinator_welcome_email(owner_first_name=owner_first_name),
+    )

@@ -6,19 +6,14 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orchestra.web.api.utils.safe_text import OptionalSafeLabel
+
 if TYPE_CHECKING:
     from orchestra.db.dao.billing_plan_assignment_dao import EffectivePlan
 
 # ---------------------------------------------------------------------------
-# Checkout / Portal / Status (original billing schemas)
+# Portal (original billing schemas)
 # ---------------------------------------------------------------------------
-
-
-class CheckoutSessionResponse(BaseModel):
-    """Response from the checkout-session endpoint."""
-
-    url: str
-    session_id: str
 
 
 class PortalSessionResponse(BaseModel):
@@ -27,57 +22,33 @@ class PortalSessionResponse(BaseModel):
     url: str
 
 
-class CheckoutStatusResponse(BaseModel):
-    """Response from the checkout-status endpoint."""
+class SetupIntentResponse(BaseModel):
+    """Client secret for confirming a new card via Stripe Elements.
 
-    status: Optional[str] = None
-    payment_status: Optional[str] = None
-
-
-class AutoRechargeResponse(BaseModel):
-    """
-    Combined auto-recharge settings and eligibility.
-
-    Returned by ``GET /billing/auto-recharge``.
+    The secret authorizes the browser to attach exactly one payment method to
+    the customer; the Stripe secret key stays on the backend.
     """
 
-    # Current settings
-    enabled: bool = False
-    threshold: float = 0.0
-    qty: float = 25.0
-
-    # Validation constraints (so frontends don't hardcode them)
-    min_recharge_amount: float = 25.0
-
-    # Eligibility (fraud-prevention spending gate)
-    eligible: bool = False
-    total_spending: float = 0.0
-    minimum_spend_required: float = 0.0
-    remaining_spend_needed: float = 0.0
-
-    # Whether the Stripe customer has a default payment method on file
-    has_payment_method: bool = False
-
-    # If non-null, auto-recharge cannot be enabled and this explains why.
-    # Possible values:
-    #   "unpaid_invoice" – outstanding auto-recharge invoice being retried
-    #   "account_status" – account is SUSPENDED / CLOSED
-    #   "spending"       – spending threshold not met
-    #   "payment_method" – no default payment method
-    blocked_reason: Optional[str] = None
+    client_secret: str
 
 
-class AutoRechargeUpdateRequest(BaseModel):
-    """
-    Request body for ``PUT /billing/auto-recharge``.
+class PaymentMethodCard(BaseModel):
+    """One saved card on the Stripe customer."""
 
-    Only ``enabled`` is required.  ``threshold`` and ``qty`` are optional
-    so callers can toggle the feature on/off without re-sending the amounts.
-    """
+    id: str
+    brand: Optional[str] = None
+    last4: Optional[str] = None
+    exp_month: Optional[int] = None
+    exp_year: Optional[int] = None
+    # True for the card backing subscription renewals
+    # (customer ``invoice_settings.default_payment_method``).
+    is_default: bool = False
 
-    enabled: bool
-    threshold: Optional[float] = None
-    qty: Optional[float] = None
+
+class PaymentMethodListResponse(BaseModel):
+    """The customer's saved cards (newest-first as Stripe returns them)."""
+
+    payment_methods: list[PaymentMethodCard] = Field(default_factory=list)
 
 
 class CurrentPlanSummary(BaseModel):
@@ -144,20 +115,14 @@ class AccountInfoResponse(BaseModel):
     Response from ``GET /billing/account-info``.
 
     Returns the key billing account fields needed by the frontend:
-    credit balance, billing history indicator, auto-recharge settings,
-    and account status.  Context (personal vs org) is derived from
-    the API key.
+    credit balance, billing history indicator, and account status.
+    Context (personal vs org) is derived from the API key.
     """
 
     billing_account_id: int
     credits: float = 0.0
     account_status: str = "ACTIVE"
     last_recharge_at: Optional[str] = None
-
-    # Auto-recharge settings (mirrors AutoRechargeResponse subset)
-    autorecharge: bool = False
-    autorecharge_threshold: float = 0.0
-    autorecharge_qty: float = 25.0
 
     # Managed-billing: surfaces the active plan so the UI can render
     # a CREDITS or METERED variant of the billing page from a single
@@ -171,6 +136,31 @@ class AccountInfoResponse(BaseModel):
     # rendering the "Switch plan" section — empty list from
     # ``GET /billing/available-plans`` is treated the same as missing.
     plan_group_id: Optional[int] = None
+
+    # === SELF-SERVE SUBSCRIPTION (console subscription billing page) ===
+    # ``is_subscribed`` is true only when the account has an active Stripe
+    # subscription backing a self-serve CREDITS tier — the single flag the
+    # console branches on to render the "subscribed" vs "free/unsubscribed"
+    # variant of the page. METERED enterprise accounts are never
+    # ``is_subscribed`` (they invoice in arrears, no subscription).
+    is_subscribed: bool = False
+    # NOTE: the monthly credit allowance is intentionally NOT duplicated
+    # here — it is exactly ``plan.commit_amount`` (1 credit = $1), so the
+    # console reads it off the nested ``plan`` summary instead.
+    # ISO-8601 UTC expiry of the unconsumed signup *trial* grant lot
+    # (from the expiring-grant ledger). NULL once the trial grant is fully
+    # consumed/forfeited or the account has subscribed (subscribers no
+    # longer have a live trial grant to surface).
+    trial_expires_at: Optional[str] = None
+    # ISO-8601 UTC end of the current Stripe subscription period (the next
+    # renewal/credit-reset date), mirrored from Stripe onto the billing
+    # account. NULL for unsubscribed/free and METERED accounts.
+    next_renewal_at: Optional[str] = None
+    # Whether the active subscription is scheduled to cancel at the end of the
+    # current period. When true the console shows a persistent "cancels on
+    # {next_renewal_at}" indicator instead of "renews on". Always false for
+    # unsubscribed accounts.
+    subscription_cancel_at_period_end: bool = False
 
 
 class AvailablePlanItem(BaseModel):
@@ -235,11 +225,18 @@ class SwitchPlanRequest(BaseModel):
     """Body for ``POST /v0/billing/plan`` (customer-facing self-serve switch).
 
     The customer asks to be moved to ``template_id`` — must be a member
-    of the account's current ``plan_group``, and must be active. The
-    move always lands on the next-month boundary (AT_BOUNDARY policy);
-    no client-supplied effective date is accepted to keep the rule
-    rigid (any future flexibility — "switch immediately" — would
-    require deliberate carve-outs, not silent client overrides).
+    of the account's current ``plan_group``, and must be active. No
+    client-supplied effective date is accepted; the timing is server-
+    determined by the account's billing model (see
+    :class:`SwitchPlanResponse`):
+
+    * Self-serve subscription tiers (the account is on a Stripe
+      subscription) apply **immediately** with Stripe proration — the
+      cycle anchor resets to now, upgrades grant the credit delta on the
+      spot, downgrades take effect now without clawing back consumed
+      credits (``status="switched"``).
+    * METERED / non-subscription accounts still land on the next-month
+      boundary under the legacy AT_BOUNDARY policy (``status="scheduled"``).
 
     Optional ``change_reason`` is recorded on the new
     ``BillingPlanAssignment`` row for audit clarity.
@@ -252,18 +249,95 @@ class SwitchPlanRequest(BaseModel):
 class SwitchPlanResponse(BaseModel):
     """Response from ``POST /v0/billing/plan``.
 
-    Two-step language so the UI can render a "scheduled" state until
-    the period boundary lands. ``status`` is ``"scheduled"`` whenever
-    a new assignment row is created (always with a future
-    ``effective_at`` under AT_BOUNDARY) and ``"noop"`` when the
-    request asked for the template the account is already on.
+    Three states:
+
+    * ``"switched"`` — immediate change applied. Self-serve subscription
+      accounts change tiers on the spot (anniversary-anchored, with
+      Stripe proration); ``effective_at`` is *now*.
+    * ``"scheduled"`` — a new assignment row was created for a future
+      ``effective_at`` (legacy AT_BOUNDARY path for METERED / non-
+      subscription accounts).
+    * ``"noop"`` — the request asked for the template the account is
+      already on.
     """
 
-    status: str  # scheduled | noop
+    status: str  # switched | scheduled | noop
     billing_account_id: int
     template_id: int
     effective_at: Optional[str] = None
     classification: str  # upgrade | downgrade | sidegrade | current
+
+
+class SubscribeRequest(BaseModel):
+    """Body for ``POST /v0/billing/subscribe`` (self-serve subscription).
+
+    The customer subscribes to ``template_id`` — must be an active
+    self-serve tier (CREDITS / STRIPE_SUBSCRIPTION) that is a member of
+    the account's plan group. Creates the backing Stripe Subscription
+    and activates the plan immediately; the monthly credits are granted
+    once Stripe collects the first invoice.
+    """
+
+    template_id: int
+
+
+class SubscribeResponse(BaseModel):
+    """Response from ``POST /v0/billing/subscribe``.
+
+    ``client_secret`` / ``hosted_invoice_url`` let the frontend complete
+    payment when the customer has no usable default payment method yet
+    (Stripe ``default_incomplete`` flow). Credits are not granted until
+    the resulting ``invoice.paid`` webhook fires.
+    """
+
+    status: str  # subscribed
+    billing_account_id: int
+    template_id: int
+    stripe_subscription_id: str
+    subscription_status: Optional[str] = None
+    client_secret: Optional[str] = None
+    hosted_invoice_url: Optional[str] = None
+
+
+class CancelSubscriptionResponse(BaseModel):
+    """Response from ``DELETE /v0/billing/subscription``.
+
+    Default cancellation is scheduled at the end of the current billing
+    period (``status="canceling"``): the customer keeps credits + service
+    until ``effective_at``, when Stripe deletes the subscription and the
+    webhook reverts the account to the free tier. An immediate cancel
+    returns ``status="canceled"`` with a null ``effective_at``.
+    """
+
+    status: str  # canceling | canceled
+    billing_account_id: int
+    effective_at: Optional[str] = None
+
+
+class AutoIncrementResponse(BaseModel):
+    """Response from ``GET`` / ``PUT`` ``/v0/billing/auto-increment``.
+
+    ``auto_increment`` controls opt-in auto-upgrade-on-depletion: when
+    the wallet hits zero the subscription is bumped to the next tier up
+    the ladder (capped at the top tier; never auto-downgrades). When
+    disabled, depletion is a hard stop until the customer upgrades
+    manually.
+    """
+
+    enabled: bool = False
+    # True when the account is on a self-serve subscription tier (the
+    # only state where auto-increment is meaningful). The UI hides the
+    # toggle otherwise.
+    is_subscribed: bool = False
+    # True when the account is already on the top tier of its ladder —
+    # auto-increment can be enabled but will hard-stop at depletion.
+    at_top_tier: bool = False
+
+
+class AutoIncrementUpdateRequest(BaseModel):
+    """Body for ``PUT /v0/billing/auto-increment``."""
+
+    enabled: bool
 
 
 class InvoiceListItem(BaseModel):
@@ -272,8 +346,8 @@ class InvoiceListItem(BaseModel):
     Surfaced to customers via ``GET /v0/billing/invoices`` so they can
     see what they were billed (independent of Stripe portal access).
     Only INVOICE_CREATED / PAID / FAILED rows are returned — the
-    PENDING_INVOICE bucket is internal plumbing for the autorecharge +
-    monthly invoicer pipelines.
+    PENDING_INVOICE bucket is internal plumbing for the monthly metered
+    invoicer pipeline.
     """
 
     id: int
@@ -285,7 +359,11 @@ class InvoiceListItem(BaseModel):
     invoice_group: Optional[str] = None
     stripe_invoice_id: Optional[str] = None
     plan_assignment_id: Optional[int] = None
+    # Backend identifier (e.g. ``tier_50_annual``) — kept for correlation.
     plan_template_name: Optional[str] = None
+    # Customer-facing label (e.g. ``$600 / yr``); falls back to the
+    # backend name server-side. Preferred for display in the invoices table.
+    plan_template_display_name: Optional[str] = None
     detail: Optional[Dict[str, Any]] = None
 
 
@@ -387,7 +465,7 @@ class BillingProfileUpdate(BaseModel):
     """
 
     billing_email: Optional[str] = None
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     tax_id: Optional[str] = None
     tax_id_type: Optional[str] = None
     billing_address: Optional[BillingAddress] = None

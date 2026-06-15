@@ -22,16 +22,21 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra_core.db.dao.context_dao import delete_orphaned_log_events
-from orchestra_core.db.dao.unique_constraint_dao import UniqueConstraintDAO
+from orchestra.db.context_naming import is_team_context_name
+from orchestra.db.dao.context_dao import delete_orphaned_log_events
+from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.models.orchestra_models import (
+    TEAM_STATUS_ACTIVE,
     Assistant,
     Context,
     FieldType,
     LogEvent,
     LogEventContext,
     LogUniqueConstraint,
+    Team,
+    TeamAssistantMembership,
 )
+from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
 TASKS_CONTEXT_NAME = "Tasks"
@@ -103,6 +108,15 @@ class _TaskRow:
     created_at: datetime | None
 
 
+@dataclass(frozen=True)
+class _TaskProjectionGroup:
+    """Rows that project into one executor-owned task activation."""
+
+    assistant_id: str | None
+    task_id: int
+    rows: list[_TaskRow]
+
+
 def _split_context_name(context_name: str | None) -> list[str]:
     """Return non-empty path segments for a context name."""
 
@@ -117,9 +131,31 @@ def _assistant_id_from_context_name(context_name: str | None) -> str | None:
     segments = _split_context_name(context_name)
     if len(segments) < 2 or segments[-1] != TASKS_CONTEXT_NAME:
         return None
+    if is_team_context_name(context_name):
+        return None
     if segments[-2] == _ALL_CONTEXT_SEGMENT:
         return None
     return segments[-2]
+
+
+def _team_id_from_context_name(context_name: str | None) -> int | None:
+    """Extract the team id from a shared-team task surface context."""
+
+    segments = _split_context_name(context_name)
+    if len(segments) != 3 or segments[-1] != TASKS_CONTEXT_NAME:
+        return None
+    if segments[0] != "Teams":
+        return None
+    return _coerce_int(segments[1])
+
+
+def _destination_from_context_name(context_name: str | None) -> str | None:
+    """Return the public destination label represented by a task surface path."""
+
+    team_id = _team_id_from_context_name(context_name)
+    if team_id is None:
+        return None
+    return f"team:{team_id}"
 
 
 def build_task_activation_context_name(tasks_context_name: str) -> str:
@@ -190,17 +226,30 @@ def _resolve_assistant_id(
 
     candidate_data = task_row.data if task_row is not None else task_data
     if isinstance(candidate_data, Mapping):
+        assistant_id = _coerce_optional_str(candidate_data.get("assistant_id"))
+        if assistant_id:
+            return assistant_id
         assistant_id = _coerce_optional_str(candidate_data.get("_assistant_id"))
         if assistant_id:
             return assistant_id
     return _assistant_id_from_context_name(tasks_context_name)
 
 
-def _build_activation_key(*, assistant_id: str | None, task_id: int) -> str:
-    """Return the assistant-scoped activation key used for uniqueness."""
+def _build_activation_key(
+    *,
+    assistant_id: str | None,
+    task_id: int,
+    destination: str | None = None,
+) -> str:
+    """Return the executor-scoped activation key used for uniqueness."""
 
+    destination_label = _coerce_optional_str(destination)
     if assistant_id:
+        if destination_label:
+            return f"{assistant_id}:{destination_label}:{task_id}"
         return f"{assistant_id}:{task_id}"
+    if destination_label:
+        return f"{destination_label}:{task_id}"
     return str(task_id)
 
 
@@ -210,6 +259,10 @@ def is_task_surface_context_name(context_name: str | None) -> bool:
     segments = _split_context_name(context_name)
     if not segments or segments[-1] != TASKS_CONTEXT_NAME:
         return False
+    if is_team_context_name(context_name):
+        return (
+            len(segments) == 3 and _team_id_from_context_name(context_name) is not None
+        )
     if len(segments) >= 2 and segments[-2] == _ALL_CONTEXT_SEGMENT:
         return False
     return not is_internal_task_machine_context_name(context_name)
@@ -348,6 +401,27 @@ def _derive_tasks_context_name_from_assistant(
     return matches[0]
 
 
+def _executor_tasks_context_name(
+    session: Session,
+    *,
+    project_id: int,
+    assistant_id: str | None,
+    source_tasks_context_name: str,
+) -> str | None:
+    """Return the assistant-owned Tasks context for projected machine state."""
+
+    normalized_assistant_id = _coerce_optional_str(assistant_id)
+    if normalized_assistant_id:
+        return _derive_tasks_context_name_from_assistant(
+            session=session,
+            project_id=project_id,
+            assistant_id=normalized_assistant_id,
+        )
+    if not is_team_context_name(source_tasks_context_name):
+        return (source_tasks_context_name or "").strip("/")
+    return None
+
+
 def _get_assistant_for_task_machine_lookup(
     session: Session,
     *,
@@ -363,6 +437,31 @@ def _get_assistant_for_task_machine_lookup(
     ).scalar_one_or_none()
 
 
+def _assistant_is_team_member(
+    session: Session,
+    *,
+    assistant_id: str | None,
+    team_id: int | None,
+) -> bool:
+    """Return whether an assistant currently belongs to a shared team."""
+
+    assistant_id_int = _coerce_int(assistant_id)
+    if assistant_id_int is None or team_id is None:
+        return False
+    return (
+        session.execute(
+            select(TeamAssistantMembership)
+            .join(Team, Team.id == TeamAssistantMembership.team_id)
+            .where(
+                TeamAssistantMembership.assistant_id == assistant_id_int,
+                TeamAssistantMembership.team_id == team_id,
+                Team.status == TEAM_STATUS_ACTIVE,
+            ),
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
 def _build_assistant_tasks_context_name(*, user_id: str, assistant_id: str) -> str:
     """Return the canonical assistant-scoped user Tasks context path."""
 
@@ -376,6 +475,11 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "field_type": "str",
         "mutable": False,
         "description": "Assistant identifier mirrored from the source task row.",
+    },
+    "destination": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Team destination for the source task definition.",
     },
     "activation_key": {
         "field_type": "str",
@@ -501,6 +605,11 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "field_type": "int",
         "mutable": False,
         "description": "Logical task identifier for the run.",
+    },
+    "destination": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Team destination for the source task definition.",
     },
     "source_task_log_id": {
         "field_type": "int",
@@ -767,50 +876,84 @@ def sync_task_activations_for_task_ids(
     unique_task_ids = sorted({int(task_id) for task_id in task_ids})
     if not unique_task_ids or not is_task_surface_context_name(tasks_context_name):
         return {"upserted": 0, "deleted": 0}
+    normalized_tasks_context_name = (tasks_context_name or "").strip("/")
+    source_destination = _destination_from_context_name(normalized_tasks_context_name)
+    source_team_id = _team_id_from_context_name(normalized_tasks_context_name)
 
     tasks_context_id = _get_context_id(
         session=session,
         project_id=project_id,
-        name=tasks_context_name,
+        name=normalized_tasks_context_name,
     )
     if tasks_context_id is None:
         return {"upserted": 0, "deleted": 0}
-
-    context_ids = ensure_task_machine_contexts(
-        session=session,
-        project_id=project_id,
-        tasks_context_name=tasks_context_name,
-    )
     task_rows = _load_task_rows(
         session=session,
         project_id=project_id,
         context_id=tasks_context_id,
         task_ids=unique_task_ids,
     )
-    rows_by_task_id: dict[int, list[_TaskRow]] = {
-        task_id: [] for task_id in unique_task_ids
-    }
-    for row in task_rows:
-        task_id = _coerce_int(row.data.get("task_id"))
-        if task_id is not None and task_id in rows_by_task_id:
-            rows_by_task_id[task_id].append(row)
+    projection_groups = _projection_groups_for_task_rows(
+        task_rows,
+        task_ids=unique_task_ids,
+        tasks_context_name=normalized_tasks_context_name,
+    )
 
     upserted = 0
     deleted = 0
     materialization_pairs: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = (
         []
     )
+    handled_task_ids = {group.task_id for group in projection_groups}
     for task_id in unique_task_ids:
-        activation_key = _build_activation_key(
-            assistant_id=_resolve_assistant_id(
-                task_data=(
-                    (rows_by_task_id.get(task_id) or [None])[0].data
-                    if rows_by_task_id.get(task_id)
-                    else None
-                ),
-                tasks_context_name=tasks_context_name,
+        if task_id in handled_task_ids:
+            continue
+        if source_destination is not None:
+            deleted_rows = _delete_activation_rows_by_task_destination(
+                session=session,
+                project_id=project_id,
+                task_id=task_id,
+                destination=source_destination,
+            )
+            deleted += len(deleted_rows)
+            materialization_pairs.extend((row, None) for row in deleted_rows)
+            continue
+        assistant_id = _assistant_id_from_context_name(normalized_tasks_context_name)
+        projection_groups.append(
+            _TaskProjectionGroup(
+                assistant_id=assistant_id,
+                task_id=task_id,
+                rows=[],
             ),
-            task_id=task_id,
+        )
+
+    for group in projection_groups:
+        executor_tasks_context_name = _executor_tasks_context_name(
+            session=session,
+            project_id=project_id,
+            assistant_id=group.assistant_id,
+            source_tasks_context_name=normalized_tasks_context_name,
+        )
+        if executor_tasks_context_name is None:
+            if source_destination is not None:
+                deleted_rows = _delete_activation_rows_by_task_destination(
+                    session=session,
+                    project_id=project_id,
+                    task_id=group.task_id,
+                    destination=source_destination,
+                )
+                deleted += len(deleted_rows)
+                materialization_pairs.extend((row, None) for row in deleted_rows)
+            continue
+        context_ids = ensure_task_machine_contexts(
+            session=session,
+            project_id=project_id,
+            tasks_context_name=executor_tasks_context_name,
+        )
+        activation_key = _build_activation_key(
+            assistant_id=group.assistant_id,
+            task_id=group.task_id,
+            destination=source_destination,
         )
         existing_activation = _get_machine_row_by_unique_field(
             session=session,
@@ -823,10 +966,18 @@ def sync_task_activations_for_task_ids(
             if existing_activation is not None
             else None
         )
-        activation_payload = _build_activation_payload(
-            rows=rows_by_task_id.get(task_id, []),
-            tasks_context_name=tasks_context_name,
-        )
+        if source_destination is not None and not _assistant_is_team_member(
+            session=session,
+            assistant_id=group.assistant_id,
+            team_id=source_team_id,
+        ):
+            activation_payload = None
+        else:
+            activation_payload = _build_activation_payload(
+                rows=group.rows,
+                tasks_context_name=normalized_tasks_context_name,
+                destination=source_destination,
+            )
         if activation_payload is None:
             was_deleted = _delete_machine_row_by_unique_field(
                 session=session,
@@ -866,6 +1017,7 @@ def get_task_activation(
     *,
     assistant_id: str | None,
     task_id: int,
+    destination: str | None = None,
 ) -> LogEvent | None:
     """Return the current activation row for one assistant/task pair, if present."""
 
@@ -882,6 +1034,7 @@ def get_task_activation(
     activation_key = _build_activation_key(
         assistant_id=assistant_id,
         task_id=task_id,
+        destination=destination,
     )
     activation = _get_machine_row_by_unique_field(
         session=session,
@@ -1070,17 +1223,26 @@ def get_latest_task_run_for_task(
         project_id=project_id,
         tasks_context_name=resolved_tasks_context_name,
     )
+    filters = [
+        LogEvent.project_id == project_id,
+        LogEventContext.context_id == context_ids.runs_context_id,
+        LogEvent.data.has_key("assistant_id"),
+        LogEvent.data.has_key("task_id"),
+        LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
+        LogEvent.data.op("->>")("task_id") == str(task_id),
+    ]
+    if source_task_log_id is not None:
+        filters.extend(
+            [
+                LogEvent.data.has_key("source_task_log_id"),
+                LogEvent.data.op("->>")("source_task_log_id")
+                == str(source_task_log_id),
+            ],
+        )
     return (
         session.query(LogEvent)
         .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .filter(
-            LogEvent.project_id == project_id,
-            LogEventContext.context_id == context_ids.runs_context_id,
-            LogEvent.data.has_key("assistant_id"),
-            LogEvent.data.has_key("task_id"),
-            LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
-            LogEvent.data.op("->>")("task_id") == str(task_id),
-        )
+        .filter(*filters)
         .order_by(LogEvent.updated_at.desc(), LogEvent.created_at.desc())
         .first()
     )
@@ -1249,6 +1411,7 @@ def _build_activation_payload(
     rows: Sequence[_TaskRow],
     *,
     tasks_context_name: str,
+    destination: str | None,
 ) -> dict[str, Any] | None:
     """Choose the current activatable task instance and project its machine facts."""
 
@@ -1274,6 +1437,7 @@ def _build_activation_payload(
             row=scheduled_candidates[0],
             activation_kind="scheduled",
             tasks_context_name=tasks_context_name,
+            destination=destination,
         )
 
     trigger_candidates = [
@@ -1284,6 +1448,7 @@ def _build_activation_payload(
             row=trigger_candidates[0],
             activation_kind="triggered",
             tasks_context_name=tasks_context_name,
+            destination=destination,
         )
 
     return None
@@ -1294,6 +1459,7 @@ def _project_activation_payload(
     *,
     activation_kind: str,
     tasks_context_name: str,
+    destination: str | None,
 ) -> dict[str, Any]:
     """Flatten the chosen source task row into an activation payload."""
 
@@ -1313,13 +1479,13 @@ def _project_activation_payload(
     )
     execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
-    if execution_mode == "offline" and entrypoint is None:
-        raise ValueError("Offline tasks require an integer entrypoint.")
     payload = {
         "assistant_id": assistant_id,
+        "destination": destination,
         "activation_key": _build_activation_key(
             assistant_id=assistant_id,
             task_id=task_id,
+            destination=destination,
         ),
         "task_id": task_id,
         "source_task_log_id": row.log_event_id,
@@ -1362,6 +1528,10 @@ def _reconcile_scheduled_activation_materialization(
     current_upsert_body = _scheduled_activation_upsert_body(current_activation)
     previous_delete_body = _scheduled_activation_delete_body(previous_activation)
     if current_upsert_body is not None:
+        if previous_delete_body is not None and _scheduled_activation_delivery_identity(
+            previous_delete_body,
+        ) == _scheduled_activation_delivery_identity(current_upsert_body):
+            return
         if previous_delete_body is not None:
             current_upsert_body["previous_activation_revision"] = previous_delete_body[
                 "activation_revision"
@@ -1384,6 +1554,28 @@ def _reconcile_scheduled_activation_materialization(
         )
 
 
+def _scheduled_activation_delivery_identity(
+    body: Mapping[str, Any] | None,
+) -> tuple[str, int, str, str, str] | None:
+    """Return the external delivery identity for one scheduled activation body."""
+
+    if not isinstance(body, Mapping):
+        return None
+    assistant_id = _coerce_optional_str(body.get("assistant_id"))
+    task_id = _coerce_int(body.get("task_id"))
+    activation_revision = _coerce_optional_str(body.get("activation_revision"))
+    scheduled_for = _coerce_datetime_string(body.get("scheduled_for"))
+    execution_mode = _coerce_optional_str(body.get("execution_mode")) or "live"
+    if (
+        not assistant_id
+        or task_id is None
+        or not activation_revision
+        or not scheduled_for
+    ):
+        return None
+    return (assistant_id, task_id, activation_revision, scheduled_for, execution_mode)
+
+
 def _scheduled_activation_snapshot(
     activation: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -1404,6 +1596,7 @@ def _scheduled_activation_snapshot(
         return None
     return {
         "assistant_id": assistant_id,
+        "destination": _coerce_optional_str(activation.get("destination")),
         "task_id": task_id,
         "activation_revision": activation_revision,
         "scheduled_for": scheduled_for,
@@ -1482,7 +1675,19 @@ def _is_scheduled_activation_payload(activation: Mapping[str, Any] | None) -> bo
 
 
 def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None:
-    """Send one activation sync request to Communication when configured."""
+    """Send one activation sync request to Communication when configured.
+
+    Self-host deployments skip this sync: scheduled activations are projected
+    into Orchestra and fired in-process by Unity's LocalActivationScheduler
+    instead of Communication's Cloud Tasks queues.
+    """
+
+    if settings.is_self_host:
+        logger.info(
+            "Skipping task activation sync in self-host mode; "
+            "Unity LocalActivationScheduler owns scheduled delivery.",
+        )
+        return
 
     comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
@@ -1498,7 +1703,13 @@ def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None
             json=dict(body),
             timeout=_TASK_ACTIVATION_SYNC_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                "Task activation materialization failed via Communication "
+                f"{path}: HTTP {response.status_code} {response.text}",
+            ) from exc
 
 
 def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
@@ -1566,6 +1777,77 @@ def _load_task_rows(
         )
         for log_event_id, data, updated_at, created_at in rows
     ]
+
+
+def _projection_groups_for_task_rows(
+    rows: Sequence[_TaskRow],
+    *,
+    task_ids: Sequence[int],
+    tasks_context_name: str,
+) -> list[_TaskProjectionGroup]:
+    """Group task rows by the executor activation they materialize."""
+
+    requested_task_ids = set(task_ids)
+    rows_by_group: dict[tuple[str | None, int], list[_TaskRow]] = {}
+    for row in rows:
+        task_id = _coerce_int(row.data.get("task_id"))
+        if task_id is None or task_id not in requested_task_ids:
+            continue
+        assistant_id = _resolve_assistant_id(
+            task_row=row,
+            tasks_context_name=tasks_context_name,
+        )
+        rows_by_group.setdefault((assistant_id, task_id), []).append(row)
+    return [
+        _TaskProjectionGroup(
+            assistant_id=assistant_id,
+            task_id=task_id,
+            rows=group_rows,
+        )
+        for (assistant_id, task_id), group_rows in rows_by_group.items()
+    ]
+
+
+def _delete_activation_rows_by_task_destination(
+    session: Session,
+    *,
+    project_id: int,
+    task_id: int,
+    destination: str,
+) -> list[dict[str, Any]]:
+    """Delete stale executor activation rows for one shared task definition."""
+
+    rows = (
+        session.query(LogEvent, LogEventContext.context_id)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .filter(
+            Context.project_id == project_id,
+            Context.name.like(f"%/{TASK_ACTIVATIONS_CONTEXT_NAME}"),
+            LogEvent.data.has_key("task_id"),
+            LogEvent.data.op("->>")("task_id") == str(task_id),
+            LogEvent.data.has_key("destination"),
+            LogEvent.data.op("->>")("destination") == destination,
+        )
+        .all()
+    )
+    deleted_payloads: list[dict[str, Any]] = []
+    for log_event, context_id in rows:
+        payload = dict(log_event.data or {})
+        activation_key = _coerce_optional_str(
+            payload.get(_TASK_ACTIVATION_UNIQUE_FIELD),
+        )
+        if not activation_key:
+            continue
+        if _delete_machine_row_by_unique_field(
+            session=session,
+            project_id=project_id,
+            context_id=context_id,
+            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
+            unique_field_value=activation_key,
+        ):
+            deleted_payloads.append(payload)
+    return deleted_payloads
 
 
 def _upsert_context(

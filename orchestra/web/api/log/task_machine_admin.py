@@ -2,20 +2,24 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from orchestra_core.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Project
 from orchestra.services.task_machine_state_service import (
     create_task_outbound_operation_if_absent,
     create_task_run_if_absent,
     get_latest_task_run_for_task,
     get_task_activation,
+    resolve_tasks_context_name,
+    sync_task_activations_for_task_ids,
     update_task_outbound_operation,
     update_task_run,
 )
 from orchestra.web.api.dependencies import auth_admin_key
-from orchestra.web.api.log.schema import (
+from orchestra.web.api.log.task_machine_schema import (
     TaskActivationLookupRequest,
     TaskActivationLookupResponse,
+    TaskActivationReprojectRequest,
+    TaskActivationReprojectResponse,
     TaskOutboundOperationCreateOrAdoptRequest,
     TaskOutboundOperationMutationResponse,
     TaskOutboundOperationUpdateRequest,
@@ -140,8 +144,52 @@ def get_current_task_activation(
         project_id=project.id,
         assistant_id=request.assistant_id,
         task_id=request.task_id,
+        destination=request.destination,
     )
     return {
+        "activation": dict(activation.data or {}) if activation is not None else None,
+    }
+
+
+@router.post(
+    "/task-activation/reproject",
+    response_model=TaskActivationReprojectResponse,
+)
+def reproject_task_activation(
+    request: TaskActivationReprojectRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Recompute one task's projected activation row from the current Tasks table."""
+
+    project = _get_internal_project_or_404(
+        session,
+        project_name=request.project_name,
+        assistant_id=request.assistant_id,
+    )
+    try:
+        tasks_context_name = resolve_tasks_context_name(
+            session=session,
+            project_id=project.id,
+            assistant_id=request.assistant_id,
+        )
+        result = sync_task_activations_for_task_ids(
+            session=session,
+            project_id=project.id,
+            task_ids=[request.task_id],
+            tasks_context_name=tasks_context_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    activation = get_task_activation(
+        session=session,
+        project_id=project.id,
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+    )
+    return {
+        **result,
         "activation": dict(activation.data or {}) if activation is not None else None,
     }
 

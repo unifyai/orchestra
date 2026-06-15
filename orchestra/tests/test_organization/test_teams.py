@@ -4,7 +4,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra_core.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -39,7 +39,7 @@ async def test_create_team(client: AsyncClient):
     assert team["name"] == "Engineering"
     assert team["description"] == "Engineering team"
     assert team["organization_id"] == org_id
-    assert team["member_count"] == 0
+    assert team["member_count"] == 1
 
 
 @pytest.mark.anyio

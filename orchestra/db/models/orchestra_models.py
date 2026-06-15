@@ -3,7 +3,6 @@ from datetime import datetime
 from enum import Enum  # noqa: F401  — re-exported below
 
 import sqlalchemy as sa
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
@@ -20,18 +19,23 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
-    text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import backref, relationship, validates
 
-from orchestra_core.db.base import Base
+from orchestra.db.base import Base
 
-# Kernel models live in orchestra-core. Re-exported here so platform
+
+def _new_string_uuid() -> str:
+    return str(uuid.uuid4())
+
+
+# Kernel models live in orchestra. Re-exported here so platform
 # code can keep `from orchestra.db.models.orchestra_models import Project`
 # and treat this file as the single platform-facing model surface.
-from orchestra_core.db.models.core_models import (  # noqa: E402, F401
+from orchestra.db.models.core_models import (  # noqa: E402, F401
     ActiveDerivedLog,
     Context,
     ContextCounter,
@@ -58,6 +62,7 @@ from orchestra.db.models.enums import (  # noqa: E402, F401
     RECHARGE_TYPE_OVERAGE_TRUEUP,
     RECHARGE_TYPE_PAYMENT,
     RECHARGE_TYPE_PROMO,
+    RECHARGE_TYPE_PRORATION,
     BillingMode,
     CollectionMethod,
     CommitPeriod,
@@ -79,7 +84,7 @@ class BillingAccount(Base):
     """
     Shared billing entity for User and Organization.
 
-    Consolidates all billing-related fields (credits, Stripe customer, autorecharge,
+    Consolidates all billing-related fields (credits, Stripe customer,
     account status) AND optional business profile fields (tax ID, address, business name)
     into a single table. Both User and Organization link here via FK.
 
@@ -93,23 +98,61 @@ class BillingAccount(Base):
     # === CORE BILLING ===
     credits = Column(Numeric, nullable=False, default=0, server_default="0")
     stripe_customer_id = Column(String, nullable=True, unique=True, index=True)
-    autorecharge = Column(
+    # === SELF-SERVE SUBSCRIPTION (CREDITS tier plans) ===
+    # The active Stripe Subscription backing a self-serve CREDITS account on
+    # one of the seeded tier templates (collection_method=STRIPE_SUBSCRIPTION).
+    # NULL for accounts that have never subscribed (free/unsubscribed state on
+    # the default template) and for METERED enterprise accounts (which invoice
+    # in arrears via ``monthly_metered_invoicer`` rather than a subscription).
+    # The subscription is the collection engine; the plan template stays the
+    # source of truth for the monthly credit grant.
+    stripe_subscription_id = Column(String, nullable=True, index=True)
+    # End of the current Stripe subscription period (next renewal / credit
+    # reset). Mirrored from Stripe ``current_period_end`` on each
+    # ``invoice.paid`` and ``customer.subscription.updated`` webhook so the
+    # console can render the next-renewal date without a Stripe round-trip.
+    # NULL for unsubscribed/free accounts and METERED enterprise accounts.
+    current_period_end = Column(TIMESTAMP(timezone=True), nullable=True)
+    # Whether the active subscription is scheduled to cancel at the end of the
+    # current period (Stripe ``cancel_at_period_end``). Set immediately on an
+    # in-app cancel and kept in sync from the ``customer.subscription.updated``
+    # webhook (so a Stripe-Dashboard/Portal cancel reflects too), and reset to
+    # False on (re)subscribe and on final cancellation. Lets the console render
+    # a persistent "cancels on X" indicator instead of only a transient toast.
+    subscription_cancel_at_period_end = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
     )
-    autorecharge_threshold = Column(
+    # Opt-in: when the wallet depletes (balance <= 0) auto-upgrade the
+    # subscription to the next tier up the ladder (capped at the top tier;
+    # never auto-downgrades). False = hard stop at depletion (manual upgrade).
+    auto_increment = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    # Per-period high-water-mark of plan credits already granted this cycle
+    # (in credits). Reset to the tier's grant on each paid cycle
+    # (``invoice.paid``); on a mid-cycle upgrade we only grant the amount
+    # *above* this mark, so repeatedly toggling upgrade/downgrade cannot mint
+    # free credits (a downgrade never lowers the mark and never claws back).
+    plan_credits_granted_period = Column(
         Numeric,
         nullable=False,
         default=0,
         server_default="0",
     )
-    autorecharge_qty = Column(
-        Numeric,
-        nullable=False,
-        default=25,
-        server_default="25",
+    # Idempotency stamp for the pre-expiry credit reminder
+    # (``orchestra.routines.credit_expiry_reminder``): the ``expires_at`` of
+    # the soonest grant we last emailed a "use-it-or-lose-it" reminder for.
+    # The daily routine skips an account whose soonest upcoming expiry still
+    # matches this value, so each distinct expiry triggers at most one email.
+    credit_expiry_reminded_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
     )
     account_status = Column(
         String,
@@ -121,19 +164,25 @@ class BillingAccount(Base):
         String,
         nullable=True,
         default=None,
-    )  # dispute, admin_freeze — NULL when ACTIVE
+    )  # dispute, admin_freeze, past_due — NULL when ACTIVE
+    # Delinquency marker for the *soft* dunning window: set to the moment of
+    # the first failed subscription payment and kept while Stripe retries
+    # (account stays ACTIVE — service is not cut off). Cleared the moment
+    # payment recovers; a fully-exhausted dunning cycle escalates to a hard
+    # suspension (``account_status='SUSPENDED'``, ``suspension_reason='past_due'``)
+    # instead. Kept separate from ``suspension_reason`` so that field keeps its
+    # "why is this account suspended" meaning (NULL while ACTIVE).
+    payment_past_due_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        default=None,
+    )
     billing_setup_complete = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
     )
-    tier = Column(
-        String,
-        nullable=False,
-        server_default="developer",
-    )  # developer, pro, enterprise (future)
-
     # === MANAGED BILLING v2 — current plan assignment ===
     # Points to the currently-active ``BillingPlanAssignment`` row (which in
     # turn references a ``BillingPlanTemplate``). Every account carries a
@@ -156,21 +205,30 @@ class BillingAccount(Base):
         index=True,
     )
 
-    # === BILLING PROFILE (optional — available to all billing entities) ===
-    # A personal user can add their name / tax details without creating an org.
-    # An org fills these in for proper business invoicing.
-    # All fields sync to the Stripe Customer when set.
-    # ``name`` is the display name — mapped to Stripe's individual_name (users)
-    # or business_name (orgs) via build_stripe_customer_name().
-    billing_email = Column(String, nullable=True)
-    name = Column(String(255), nullable=True)
-    tax_id = Column(String(100), nullable=True)
-    tax_id_type = Column(String(50), nullable=True)
-    tax_id_verification_status = Column(
-        String(20),
-        nullable=True,
-    )  # pending, verified, unverified, unavailable (from Stripe)
-    billing_address = Column(JSONB, nullable=True, default=dict)
+    # === BILLING PROFILE ===
+    # The editable billing profile (name, email, address, tax ID) is NOT
+    # stored here — Stripe is the single source of truth. We persist only
+    # two non-PII *derived flags* the hot/batch paths need without a live
+    # Stripe call:
+    #
+    #   * ``is_business`` — drives business-vs-personal recurring price and
+    #     tax treatment. Set when a tax ID is saved and refined by the
+    #     ``customer.tax_id.*`` webhook (flipped off if Stripe reports the
+    #     ID ``unverified``). Resolve via ``resolve_is_business``.
+    #   * ``billing_setup_complete`` — true once a complete, tax-resolvable
+    #     address has been synced to Stripe; gates self-serve subscribe.
+    #
+    # Everything identifying (name / billing_email / billing_address /
+    # tax_id / tax_id_type / verification status) lives only on the Stripe
+    # Customer and is fetched on demand (see
+    # ``fetch_billing_profile_from_stripe``). This removes the two-way
+    # reconciliation the webhooks used to perform.
+    is_business = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Per-customer override for the payment methods exposed on
     # ``send_invoice`` Stripe invoices. NULL means "use the invoicer's
@@ -484,7 +542,8 @@ class BillingPlanTemplate(Base):
             name="ck_plan_template_commit_schedule",
         ),
         sa.CheckConstraint(
-            "collection_method IN ('AUTO_CARD', 'SEND_INVOICE_NET_30')",
+            "collection_method IN "
+            "('AUTO_CARD', 'SEND_INVOICE_NET_30', 'STRIPE_SUBSCRIPTION')",
             name="ck_plan_template_collection_method",
         ),
         sa.CheckConstraint(
@@ -794,7 +853,7 @@ class User(Base):
     __tablename__ = "user"
 
     # === IDENTITY FIELDS ===
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=_new_string_uuid)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
     last_name = Column(String)
@@ -865,7 +924,7 @@ class User(Base):
 class Account(Base):
     __tablename__ = "account"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=_new_string_uuid)
     user_id = Column(String, ForeignKey("user.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
     provider_type = Column(String, nullable=False)
@@ -1141,11 +1200,6 @@ class Organization(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    spaces = relationship(
-        "Space",
-        back_populates="organization",
-        passive_deletes=True,
-    )
 
 
 class OrganizationMember(Base):
@@ -1213,120 +1267,8 @@ class OrganizationInvite(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
-class Space(Base):
-    """A named shared memory pool owned by a user.
-
-    Spaces may be associated with an organization, but ownership always
-    resolves to a user so personal-user and organization-backed spaces share
-    one lifecycle model.
-    """
-
-    __tablename__ = "spaces"
-
-    space_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    name = Column(Text, nullable=False)
-    description = Column(Text, nullable=False)
-    organization_id = Column(
-        Integer,
-        ForeignKey("organization.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
-    owner_user_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    status = Column(
-        Text,
-        nullable=False,
-        default="active",
-        server_default="active",
-    )
-    kind = Column(Text, nullable=False, default="team", server_default="team")
-    created_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    updated_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    organization = relationship("Organization", back_populates="spaces")
-    owner = relationship(
-        "User",
-        backref=backref("owned_spaces", passive_deletes=True),
-        foreign_keys=[owner_user_id],
-    )
-    memberships = relationship(
-        "AssistantSpaceMembership",
-        back_populates="space",
-        passive_deletes=True,
-    )
-    contact_memberships = relationship(
-        "ContactMembership",
-        back_populates="target_space",
-        passive_deletes=True,
-    )
-
-    __table_args__ = (
-        Index("ix_spaces_organization_id", "organization_id"),
-        Index("ix_spaces_owner_user_id", "owner_user_id"),
-        sa.CheckConstraint(
-            "length(name) BETWEEN 1 AND 200",
-            name="ck_spaces_name_length",
-        ),
-        sa.CheckConstraint(
-            "length(description) BETWEEN 20 AND 1000",
-            name="ck_spaces_description_length",
-        ),
-        sa.CheckConstraint(
-            "status IN ('active', 'deleting')",
-            name="ck_spaces_status",
-        ),
-        sa.CheckConstraint(
-            "kind = 'team'",
-            name="ck_spaces_kind",
-        ),
-    )
-
-
-class AssistantSpaceMembership(Base):
-    """Live membership connecting an assistant to a shared space."""
-
-    __tablename__ = "assistant_space_memberships"
-
-    assistant_id = Column(
-        Integer,
-        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    space_id = Column(
-        BigInteger,
-        ForeignKey("spaces.space_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    added_by = Column(String, nullable=False)
-    created_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-
-    assistant = relationship("Assistant", back_populates="space_memberships")
-    space = relationship("Space", back_populates="memberships")
-
-    __table_args__ = (
-        sa.PrimaryKeyConstraint("assistant_id", "space_id"),
-        Index("ix_asm_space_id", "space_id"),
-    )
-
-
 CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"
-CONTACT_MEMBERSHIP_SCOPE_SPACE = "space"
+CONTACT_MEMBERSHIP_SCOPE_TEAM = "team"
 CONTACT_MEMBERSHIP_RELATIONSHIP_SELF = "self"
 CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS = "boss"
 CONTACT_MEMBERSHIP_RELATIONSHIP_COWORKER = "coworker"
@@ -1356,9 +1298,9 @@ class ContactMembership(Base):
     )
     contact_id = Column(Integer, nullable=False)
     target_scope = Column(Text, nullable=False)
-    target_space_id = Column(
-        BigInteger,
-        ForeignKey("spaces.space_id", ondelete="CASCADE"),
+    target_team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="CASCADE"),
         nullable=True,
     )
     relationship = Column(Text, nullable=False)
@@ -1395,20 +1337,17 @@ class ContactMembership(Base):
         "Assistant",
         foreign_keys=[authoring_assistant_id],
     )
-    target_space = orm_relationship("Space", back_populates="contact_memberships")
+    target_team = orm_relationship("Team", back_populates="contact_memberships")
 
     __table_args__ = (
         sa.CheckConstraint(
-            "target_scope IN ('personal', 'space')",
+            "target_scope IN ('personal', 'team')",
             name="ck_contact_memberships_target_scope",
         ),
         sa.CheckConstraint(
-            "target_scope NOT IN ('personal', 'space') OR ("
-            "target_scope = 'space' AND target_space_id IS NOT NULL"
-            ") OR ("
-            "target_scope = 'personal' AND target_space_id IS NULL"
-            ")",
-            name="ck_contact_memberships_scope_space_consistency",
+            "(target_scope = 'personal' AND target_team_id IS NULL) OR "
+            "(target_scope = 'team' AND target_team_id IS NOT NULL)",
+            name="ck_contact_memberships_scope_target_consistency",
         ),
         sa.CheckConstraint(
             "relationship IN ('self', 'boss', 'coworker', 'other')",
@@ -1419,17 +1358,6 @@ class ContactMembership(Base):
             "ix_contact_memberships_authoring_assistant_id",
             "authoring_assistant_id",
             postgresql_where=text("authoring_assistant_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_contact_memberships_target_space_id",
-            "target_space_id",
-            postgresql_where=text("target_space_id IS NOT NULL"),
-        ),
-        Index(
-            "ix_contact_memberships_assistant_space_target",
-            "assistant_id",
-            "target_space_id",
-            postgresql_where=text("target_scope = 'space'"),
         ),
         Index(
             "ix_contact_memberships_assistant_personal_self",
@@ -1446,12 +1374,23 @@ class ContactMembership(Base):
             postgresql_where=text("target_scope = 'personal'"),
         ),
         Index(
-            "ux_contact_memberships_space_pair",
+            "ix_contact_memberships_target_team_id",
+            "target_team_id",
+            postgresql_where=text("target_team_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_contact_memberships_assistant_team_target",
+            "assistant_id",
+            "target_team_id",
+            postgresql_where=text("target_scope = 'team'"),
+        ),
+        Index(
+            "ux_contact_memberships_team_pair",
             "assistant_id",
             "contact_id",
-            "target_space_id",
+            "target_team_id",
             unique=True,
-            postgresql_where=text("target_scope = 'space'"),
+            postgresql_where=text("target_scope = 'team'"),
         ),
     )
 
@@ -1524,6 +1463,10 @@ class RolePermission(Base):
     )
 
 
+TEAM_STATUS_ACTIVE = "active"
+TEAM_STATUS_DELETING = "deleting"
+
+
 class Team(Base):
     """Model for teams within organizations."""
 
@@ -1537,10 +1480,57 @@ class Team(Base):
         ForeignKey("organization.id", ondelete="CASCADE"),
         nullable=False,
     )
+    status = Column(
+        Text,
+        nullable=False,
+        default=TEAM_STATUS_ACTIVE,
+        server_default=TEAM_STATUS_ACTIVE,
+    )
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    assistant_memberships = relationship(
+        "TeamAssistantMembership",
+        back_populates="team",
+        cascade="all, delete-orphan",
+    )
+    contact_memberships = relationship(
+        "ContactMembership",
+        back_populates="target_team",
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "organization_id", name="uq_team_name_org"),
+    )
+
+
+class TeamAssistantMembership(Base):
+    """Live membership connecting an assistant to an organization team."""
+
+    __tablename__ = "team_assistant_memberships"
+
+    team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    added_by = Column(String, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    team = relationship("Team", back_populates="assistant_memberships")
+    assistant = relationship("Assistant", back_populates="team_memberships")
+
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("team_id", "assistant_id"),
+        Index("ix_team_assistant_memberships_assistant_id", "assistant_id"),
     )
 
 
@@ -1788,6 +1778,74 @@ class UserDesktop(Base):
     )
 
 
+class AssistantUserDesktop(Base):
+    """Per-user link between an assistant and a registered user desktop.
+
+    A user links their own machine to the assistants they interact with.  The
+    relationship is many-to-many: a single machine can serve several of the
+    user's assistants, and a shared (org) assistant can be linked to a separate
+    machine for each user who works with it.  Two uniqueness rules apply:
+
+    - ``(assistant_id, owner_user_id)`` -- at most one desktop per assistant
+      *per user*, so the runtime can resolve a single target for whoever is
+      currently talking to the assistant.
+    - ``(assistant_id, user_desktop_id)`` -- a given desktop is linked to a
+      given assistant at most once.
+
+    ``owner_user_id`` is denormalised from ``user_desktops.user_id`` so the
+    per-user uniqueness constraint and runtime lookups stay single-table.
+    """
+
+    __tablename__ = "assistant_user_desktops"
+
+    id = Column(Integer, primary_key=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_desktop_id = Column(
+        Integer,
+        ForeignKey("user_desktops.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    filesys_sync = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    desktop = relationship("UserDesktop")
+    assistant = relationship("Assistant", back_populates="user_desktop_links")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "assistant_id",
+            "owner_user_id",
+            name="uq_assistant_user_desktop_owner",
+        ),
+        UniqueConstraint(
+            "assistant_id",
+            "user_desktop_id",
+            name="uq_assistant_user_desktop_pair",
+        ),
+    )
+
+
 class Assistant(Base):
     """Model class for the assistants table.
 
@@ -1822,13 +1880,6 @@ class Assistant(Base):
     profile_video = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
     desktop_filesync_sshkey = Column(String, nullable=True)
-    user_desktop_id = Column(
-        Integer,
-        ForeignKey("user_desktops.id", ondelete="SET NULL"),
-        nullable=True,
-        unique=True,
-    )
-    user_desktop_filesys_sync = Column(Boolean, nullable=False, default=False)
     about = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
@@ -1838,14 +1889,15 @@ class Assistant(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
     max_parallel = Column(Integer, nullable=True)
-    deploy_env = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     # Re-engagement tracking. last_correspondence_at is touched on any
     # inbound/outbound message across all contacts; last_followup_sent_at
-    # records when the inactivity follow-up fired and is cleared when fresh
-    # activity resumes; termination_initiated_at marks entry into the
-    # pre-cleanup grace period.
+    # records when the inactivity re-engagement follow-up fired and is
+    # cleared when fresh activity resumes (re-arming the follow-up);
+    # inactivity_followup_opted_out is set when the boss explicitly asks
+    # not to be followed up with again, and excludes this Coordinator
+    # from the routine until it is cleared.
     last_correspondence_at = Column(
         TIMESTAMP(timezone=True),
         nullable=True,
@@ -1853,10 +1905,11 @@ class Assistant(Base):
         index=True,
     )
     last_followup_sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
-    termination_initiated_at = Column(
-        TIMESTAMP(timezone=True),
-        nullable=True,
-        index=True,
+    inactivity_followup_opted_out = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
     )
     voice_id = sa.Column(
         sa.String,
@@ -1892,8 +1945,13 @@ class Assistant(Base):
         back_populates="assistant",
         cascade="all, delete-orphan",
     )
-    space_memberships = relationship(
-        "AssistantSpaceMembership",
+    team_memberships = relationship(
+        "TeamAssistantMembership",
+        back_populates="assistant",
+        passive_deletes=True,
+    )
+    user_desktop_links = relationship(
+        "AssistantUserDesktop",
         back_populates="assistant",
         passive_deletes=True,
     )
@@ -1935,11 +1993,6 @@ class Assistant(Base):
             unique=True,
             postgresql_where=text("is_coordinator AND organization_id IS NULL"),
         ),
-        # Mirrors the migration `workspace_scoped_coordinators`: each
-        # (user_id, organization_id) pair allows at most one coordinator
-        # row. Declared on the model so meta.create_all-built test DBs
-        # match production schema and the test_coordinator_schema invariants
-        # actually fire.
         Index(
             "ux_assistants_one_workspace_coordinator_per_membership",
             "user_id",
@@ -2081,7 +2134,10 @@ class AssistantContact(Base):
             "contact_value",
             unique=True,
             postgresql_where=text(
-                "status != 'deleted' AND contact_type NOT IN ('whatsapp', 'discord')",
+                "status != 'deleted' "
+                "AND contact_type NOT IN ('whatsapp', 'discord') "
+                "AND NOT (contact_type IN ('email', 'phone') "
+                "AND (metadata ->> 'universal_unity') = 'true')",
             ),
         ),
         sa.CheckConstraint(
@@ -2258,6 +2314,128 @@ class CreditGrantLinkClaim(Base):
     )
 
     link = relationship("OneTimeCreditGrantLink", back_populates="claims")
+
+
+class ReferralCode(Base):
+    """A shareable referral code owned by a user.
+
+    A user may own *multiple* codes (e.g. one per channel/campaign); every
+    code resolves back to the same referrer. Generating and sharing many
+    links is allowed and harmless — the abuse surface lives entirely on the
+    *referee* side: a given user can be referred at most once (enforced by
+    ``ReferralAttribution``) and the reward is payment-gated and idempotent.
+    """
+
+    __tablename__ = "referral_code"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    code = Column(String, unique=True, index=True, nullable=False)
+    referrer_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    referrer_organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment=(
+            "Org that owns this code — reward credits go to the org's "
+            "billing account. NULL = personal code (reward to the user)."
+        ),
+    )
+    label = Column(
+        String,
+        nullable=True,
+        comment="Optional channel/campaign label (e.g. 'twitter')",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    disabled_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class ReferralAttribution(Base):
+    """Records that a user signed up via a referral code.
+
+    Exactly one row per referee (``uq_referral_referee``): a person can be
+    referred only once, regardless of how many links exist or which code
+    they clicked. The reward fires at most once, when the referee makes
+    their first qualifying paid subscription, and is reversed on
+    refund/chargeback.
+
+    Lifecycle: ``pending`` → ``rewarded`` (friend paid) → ``reversed``
+    (refund/dispute clawback).
+    """
+
+    __tablename__ = "referral_attribution"
+    __table_args__ = (UniqueConstraint("referee_user_id", name="uq_referral_referee"),)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    code = Column(String, nullable=False, index=True)
+    referrer_user_id = Column(
+        String,
+        ForeignKey("user.id"),
+        nullable=False,
+        index=True,
+    )
+    referrer_organization_id = Column(
+        Integer,
+        ForeignKey("organization.id"),
+        nullable=True,
+        index=True,
+        comment="Org that earns the reward (copied from the code); NULL = personal",
+    )
+    referee_user_id = Column(
+        String,
+        ForeignKey("user.id"),
+        nullable=False,
+        index=True,
+    )
+    referee_billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id"),
+        nullable=True,
+        index=True,
+        comment="BA whose first paid invoice qualifies the reward",
+    )
+    referrer_billing_account_id = Column(
+        Integer,
+        ForeignKey("billing_account.id"),
+        nullable=True,
+        comment="BA the referrer reward was granted to (for clawback)",
+    )
+    status = Column(
+        String,
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        comment="pending | rewarded | reversed",
+    )
+    signup_ip = Column(
+        String,
+        nullable=True,
+        comment="Referee IP at attribution time (velocity/abuse scoring)",
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    rewarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    reversed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    first_payment_invoice_id = Column(
+        String,
+        nullable=True,
+        index=True,
+        comment="Stripe invoice id of the friend's qualifying first payment",
+    )
+    reward_amount = Column(
+        Numeric,
+        nullable=True,
+        comment="Credits granted to the referrer (USD-denominated)",
+    )
+    referee_bonus_amount = Column(
+        Numeric,
+        nullable=True,
+        comment="Bonus credits granted to the referee (USD-denominated)",
+    )
 
 
 class OnboardingStatus(Base):
@@ -2631,6 +2809,12 @@ class Plot(Base):
         nullable=False,
         index=True,
     )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     user_id = Column(
         String,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -2651,9 +2835,11 @@ class Plot(Base):
 
     # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
     project = relationship("Project", backref=backref("plots", passive_deletes=True))
+    context = relationship("Context", backref=backref("plots", passive_deletes=True))
 
     __table_args__ = (
         Index("idx_plot_project_id", "project_id"),
+        Index("idx_plot_context_id", "context_id"),
         Index("idx_plot_user_id", "user_id"),
         Index("idx_plot_organization_id", "organization_id"),
     )
@@ -2674,6 +2860,12 @@ class TableView(Base):
         Integer,
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     user_id = Column(
@@ -2699,9 +2891,14 @@ class TableView(Base):
         "Project",
         backref=backref("table_views", passive_deletes=True),
     )
+    context = relationship(
+        "Context",
+        backref=backref("table_views", passive_deletes=True),
+    )
 
     __table_args__ = (
         Index("idx_table_view_project_id", "project_id"),
+        Index("idx_table_view_context_id", "context_id"),
         Index("idx_table_view_user_id", "user_id"),
         Index("idx_table_view_organization_id", "organization_id"),
     )
@@ -3007,13 +3204,18 @@ class SharedPoolNumber(Base):
         default="whatsapp",
         server_default="whatsapp",
     )
-    number = Column(String, nullable=False, unique=True)
+    number = Column(String, nullable=False)
     status = Column(String, nullable=False, default="active", server_default="active")
     twilio_sender_sid = Column(String, nullable=True)
     auth_token = Column(String, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     __table_args__ = (
+        UniqueConstraint(
+            "platform",
+            "number",
+            name="uq_shared_pool_number_platform_number",
+        ),
         sa.CheckConstraint(
             "status IN ('active', 'inactive')",
             name="ck_shared_pool_number_status",
@@ -3117,6 +3319,52 @@ class DecommissionedRoute(Base):
     )
 
 
+class CommunicationCallSession(Base):
+    """Durable routing state for provider voice-call callbacks."""
+
+    __tablename__ = "communication_call_sessions"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String, nullable=False)
+    provider_call_sid = Column(String, nullable=False)
+    channel = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    from_number = Column(String, nullable=False)
+    to_number = Column(String, nullable=False)
+    pool_number = Column(String, nullable=True)
+    conference_name = Column(String, nullable=False)
+    livekit_room = Column(String, nullable=False)
+    status = Column(String, nullable=False, server_default="created")
+    recording_url = Column(String, nullable=True)
+    metadata_ = Column("metadata", JSONB, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), onupdate=func.now())
+
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_call_sid",
+            name="uq_communication_call_sessions_provider_sid",
+        ),
+        Index(
+            "ix_communication_call_sessions_assistant_channel",
+            "assistant_id",
+            "channel",
+            "created_at",
+        ),
+        Index(
+            "ix_communication_call_sessions_livekit_room",
+            "livekit_room",
+        ),
+    )
+
+
 class ConflictEvent(Base):
     """Audit log for shared-pool conflict resolutions.
 
@@ -3168,16 +3416,27 @@ class ConflictEvent(Base):
 class CreditTransaction(Base):
     """Append-only ledger of every credit movement on a billing account.
 
-    Positive ``amount`` = credits added (recharge, promo, refund, dispute,
-    grant, carryover).
+    Positive ``amount`` = credits added. Inflow categories:
+      * ``recharge`` — one-off PAYG top-up (paid).
+      * ``subscription_recharge`` — subscription cycle / plan credits (paid;
+        the customer pays the subscription invoice that funds them).
+      * ``promo`` — promotional link/code redemption (free).
+      * ``grant`` — trial / goodwill award (free).
+      * ``refund`` / ``dispute`` / ``carryover`` — adjustments.
     Negative ``amount`` = credits spent (llm, hire, resources, media, seat,
-    subscription, forfeit_at_conversion).
+    subscription, forfeit / forfeit_at_conversion).
 
-    The public API constrains ``category`` to the canonical spending set
-    (``llm | hire | resources | media``) for debits and
-    (``recharge | promo | refund | dispute``) for credits.
-    Internal reconciliation routines may use additional diagnostic
-    categories (e.g. ``void``, ``stale_pending_recharge``).
+    The canonical spending set is ``llm | hire | resources | media`` (debits);
+    the canonical credit set is
+    ``recharge | subscription_recharge | promo | grant | refund | dispute``
+    (see ``orchestra.web.api.credits.schema``). Internal reconciliation
+    routines may use additional diagnostic categories (e.g. ``void``,
+    ``stale_pending_recharge``).
+
+    Note: subscription vs trial credits are *both* expiring grants tagged
+    ``detail.grant_kind`` (``"plan"`` / ``"trial"``); the forfeit/expiry logic
+    keys off that tag, not the ledger ``category`` — the category split is for
+    paid-vs-free reporting only.
 
     The ledger is intentionally billing-mode-agnostic: the same row shape
     serves CREDITS and METERED accounts. Drift between ledger and wallet
@@ -3246,7 +3505,6 @@ class AssistantCleanupTask(Base):
 
     id = Column(Integer, primary_key=True)
     assistant_id = Column(Integer, nullable=False)
-    deploy_env = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
     source_flow = Column(String, nullable=False)
     cleanup_payload = Column(
@@ -3316,4 +3574,198 @@ class DashboardToken(Base):
     __table_args__ = (
         Index("idx_dashboard_token_project_id", "project_id"),
         Index("idx_dashboard_token_user_id", "user_id"),
+    )
+
+
+# Sentinel `thread_ts` value used by ``SlackThreadRoute`` rows that represent
+# the *root* of a direct-message conversation. Slack DMs do not carry a real
+# thread timestamp; this lets a single unique index cover both channel threads
+# and DM roots.
+DM_ROOT_SENTINEL = "__dm_root__"
+
+
+class SlackInstall(Base):
+    """Per-workspace Slack OAuth install owned by a Unify org *or* user.
+
+    The owner is polymorphic — exactly one of ``organization_id`` or
+    ``user_id`` is set on every row (enforced by
+    ``ck_slack_install_one_owner``). This mirrors how :class:`Assistant`
+    itself works: assistants are either personal (``user_id`` set,
+    ``organization_id`` NULL) or organizational (``organization_id`` set).
+    A personal Slack install routes to the user's personal assistants;
+    an organizational install routes to the org's assistants. The two
+    populations never mix.
+
+    Uniqueness:
+
+    * ``ux_slack_install_org_team`` — at most one row per
+      ``(organization_id, slack_team_id)`` (org installs only).
+    * ``ux_slack_install_user_team`` — at most one row per
+      ``(user_id, slack_team_id)`` (personal installs only).
+    * ``ux_slack_install_active_team`` — at most one *active* (non-revoked)
+      row per ``slack_team_id``. A Slack workspace can only carry one bot
+      identity at a time, so two different owners cannot both hold the same
+      workspace live. Revoked rows are kept as an audit trail and don't
+      block a different owner from claiming the workspace afterwards.
+
+    Enterprise Grid installs additionally carry ``enterprise_id``; the
+    ``slack_team_id`` is still the unit of routing because messages always
+    arrive on a workspace.
+    """
+
+    __tablename__ = "slack_installs"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    slack_team_id = Column(String, nullable=False)
+    slack_team_name = Column(String, nullable=True)
+    slack_app_id = Column(String, nullable=False)
+    enterprise_id = Column(String, nullable=True)
+    bot_user_id = Column(String, nullable=False)
+    bot_access_token = Column(Text, nullable=False)
+    installer_user_id = Column(String, nullable=True)
+    scopes = Column(Text, nullable=True)
+    installed_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    revoked_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "(organization_id IS NULL) <> (user_id IS NULL)",
+            name="ck_slack_install_one_owner",
+        ),
+        Index(
+            "ux_slack_install_org_team",
+            "organization_id",
+            "slack_team_id",
+            unique=True,
+            postgresql_where=text("organization_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_slack_install_user_team",
+            "user_id",
+            "slack_team_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_slack_install_active_team",
+            "slack_team_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_slack_installs_team_id", "slack_team_id"),
+    )
+
+
+class SlackChannelBinding(Base):
+    """Default assistant for a Slack channel.
+
+    Created when an assistant is explicitly invited to a channel (or via
+    admin endpoint). Sets the default recipient for untokened mentions in
+    that channel. Coordinators do not need bindings — they are the
+    organization-wide fallback.
+    """
+
+    __tablename__ = "slack_channel_bindings"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("slack_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel_id = Column(String, nullable=False)
+    channel_name = Column(String, nullable=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    bound_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    install = relationship("SlackInstall")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "channel_id",
+            name="uq_slack_channel_binding",
+        ),
+    )
+
+
+class SlackThreadRoute(Base):
+    """Sticky routing for a single Slack conversation.
+
+    Carries two distinct kinds of rows, distinguished only by ``thread_ts``:
+
+    * **Channel threads** — ``thread_ts`` is the Slack root timestamp of the
+      thread (``"1709315643.123456"``). Inserted on the first explicit
+      ``<@app> <token>`` mention inside a thread *or* on the first outbound
+      reply the assistant sends. All subsequent un-tokened messages in the
+      thread inherit the assistant.
+
+    * **DM roots** — ``thread_ts`` is :data:`DM_ROOT_SENTINEL`. One row per
+      ``(install, dm_channel)``. Inserted on first assistant-initiated DM or
+      first explicit token-in-DM by the user; re-routes the whole DM
+      thereafter.
+
+    Rows expire after a configurable TTL (default 14 days, refreshed on
+    every send/receive that hits the route).
+    """
+
+    __tablename__ = "slack_thread_routes"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("slack_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel_id = Column(String, nullable=False)
+    thread_ts = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_used_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+    )
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+
+    install = relationship("SlackInstall")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "channel_id",
+            "thread_ts",
+            name="uq_slack_thread_route",
+        ),
+        Index("ix_slack_thread_routes_expires", "expires_at"),
     )

@@ -13,8 +13,17 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 from starlette import status
 
+from orchestra.db.models.orchestra_models import (
+    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+    CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+    ContactMembership,
+)
 from orchestra.services.contact_sync_service import ContactSyncService
-from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    create_test_user,
+    ensure_assistants_project,
+)
 
 # =============================================================================
 # FIXTURES
@@ -51,6 +60,7 @@ def mock_assistant_infra_calls(request):
         }
         # Patch is_staging to skip credit checks
         mock_settings.is_staging = True
+        mock_settings.charges_billing = False
 
         yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
 
@@ -75,13 +85,7 @@ async def test_user_timezone_sync_updates_contact_log(
     # Create user
     user = await create_test_user(client, "tz_sync_user@test.com")
 
-    # Create Assistants project
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
-    assert project_resp.status_code == 200
+    await ensure_assistants_project(client, user["headers"])
 
     # Create a Contact log with email_address and is_system=True
     log_payload = {
@@ -135,11 +139,7 @@ async def test_user_timezone_sync_to_multiple_projects(
     user = await create_test_user(client, "multi_proj_tz@test.com")
 
     # Create personal Assistants project with Contact log
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -168,11 +168,7 @@ async def test_user_timezone_sync_to_multiple_projects(
     org_api_key = org_resp.json()["api_key"]
     org_headers = {"Authorization": f"Bearer {org_api_key}"}
 
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
+    await ensure_assistants_project(client, org_headers)
     await client.post(
         "/v0/logs",
         json={
@@ -248,11 +244,7 @@ async def test_user_timezone_sync_no_matching_logs(
     user = await create_test_user(client, "no_match_tz@test.com")
 
     # Create Assistants project with Contact log for different user (different email)
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -306,11 +298,7 @@ async def test_user_bio_sync_updates_contact_log(
     user = await create_test_user(client, "bio_sync_user@test.com")
 
     # Create Assistants project and Contact log
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -360,11 +348,7 @@ async def test_user_bio_and_timezone_sync_together(
     user = await create_test_user(client, "both_sync_user@test.com")
 
     # Create Assistants project and Contact log
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    await ensure_assistants_project(client, user["headers"])
     await client.post(
         "/v0/logs",
         json={
@@ -479,11 +463,11 @@ async def test_assistant_timezone_sync_updates_contact_log(
 
 
 @pytest.mark.anyio
-async def test_assistant_timezone_sync_filters_by_contact_id_zero(
+async def test_assistant_timezone_sync_filters_by_resolved_self_contact_id(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Test that assistant timezone only syncs to contact_id=0 logs."""
+    """Assistant profile sync follows the resolved self contact membership."""
     user = await create_test_user(
         client,
         "asst_tz_filter@test.com",
@@ -502,8 +486,21 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
     )
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
+    resolved_self_contact_id = 42
 
-    # Create Contact logs - one with contact_id=0, one with contact_id=999
+    self_membership = (
+        dbsession.query(ContactMembership)
+        .filter(
+            ContactMembership.assistant_id == agent_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+            ContactMembership.relationship == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+        )
+        .one()
+    )
+    self_membership.contact_id = resolved_self_contact_id
+    dbsession.commit()
+
+    # Create Contact logs with the resolved self contact and stale default ids.
     await client.post(
         "/v0/logs",
         json={
@@ -511,6 +508,11 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
             "context": "All/Contacts",
             "entries": [
                 {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
+                {
+                    "_assistant": str(agent_id),
+                    "contact_id": resolved_self_contact_id,
+                    "timezone": "UTC",
+                },
                 {"_assistant": str(agent_id), "contact_id": 999, "timezone": "UTC"},
             ],
         },
@@ -524,7 +526,7 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
         headers=user["headers"],
     )
 
-    # Verify only contact_id=0 was updated
+    # Verify only the resolved self contact was updated.
     logs_resp = await client.get(
         "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=user["headers"],
@@ -532,8 +534,10 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
     logs = logs_resp.json()["logs"]
 
     for log in logs:
-        if log["entries"].get("contact_id") == 0:
+        if log["entries"].get("contact_id") == resolved_self_contact_id:
             assert log["entries"].get("timezone") == "Europe/London"
+        elif log["entries"].get("contact_id") == 0:
+            assert log["entries"].get("timezone") == "UTC"
         elif log["entries"].get("contact_id") == 999:
             assert log["entries"].get("timezone") == "UTC"  # Unchanged
 
@@ -698,13 +702,7 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     org_id = org_data["id"]
     org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
 
-    # Explicitly create Assistants project for org (needed for log access)
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert project_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # Create org assistant using org API key
     # (middleware sets organization_id from the API key)
@@ -817,13 +815,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     )
     assert add_c_resp.status_code == status.HTTP_201_CREATED
 
-    # Explicitly create Assistants project for org (needed for log access)
-    project_resp = await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=org_headers,
-    )
-    assert project_resp.status_code == 200
+    await ensure_assistants_project(client, org_headers)
 
     # A creates an org assistant
     assistant_resp = await client.post(

@@ -2,6 +2,12 @@ from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
+from orchestra.web.api.utils.safe_text import (
+    OptionalSafeLabel,
+    OptionalSafeText,
+    SafeLabel,
+)
+
 
 class BaseSchema(BaseModel):
     id: str
@@ -219,6 +225,7 @@ class InterfaceSchema(BaseInterfaceSchema):
 class CreateTileRequest(BaseTileTemplateSchema):
     """Request to create a tile - inherits common fields from base template schema"""
 
+    name: SafeLabel
     tile_id: Optional[str] = None
     tab_id: str
 
@@ -229,7 +236,7 @@ class CreateTileRequest(BaseTileTemplateSchema):
 class UpdateTileRequest(BaseModel):
     """Request to update a tile - only includes fields that can be updated"""
 
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     position: Optional[TilePosition] = None
     type: Optional[str] = None
     minW: Optional[float] = None
@@ -262,6 +269,7 @@ class UpdateTileRequest(BaseModel):
 class CreateTabRequest(BaseTabTemplateSchema):
     """Request to create a tab - inherits common fields from base template schema"""
 
+    name: SafeLabel
     tab_id: Optional[str] = None
     interface_id: str
 
@@ -272,7 +280,7 @@ class CreateTabRequest(BaseTabTemplateSchema):
 class UpdateTabRequest(BaseModel):
     """Request to update a tab - only includes fields that can be updated"""
 
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     visible: Optional[bool] = None
     active: Optional[bool] = None
     order: Optional[int] = None
@@ -287,6 +295,7 @@ class UpdateTabRequest(BaseModel):
 class CreateInterfaceRequest(BaseInterfaceTemplateSchema):
     """Request to create an interface - inherits common fields from base template schema"""
 
+    name: SafeLabel
     interface_id: Optional[str] = None
     project_name: str
     context: Optional[str] = None
@@ -298,7 +307,7 @@ class CreateInterfaceRequest(BaseInterfaceTemplateSchema):
 class UpdateInterfaceRequest(BaseModel):
     """Request to update an interface - only includes fields that can be updated"""
 
-    name: Optional[str] = None
+    name: OptionalSafeLabel = None
     active_tab_id: Optional[str] = None
     order: Optional[int] = None
     color: Optional[str] = None
@@ -421,9 +430,9 @@ class ExportTemplateRequest(BaseModel):
 
     # Common fields
     include_metadata: bool = True
-    description: Optional[str] = None
-    tags: List[str] = []
-    template_name: Optional[str] = None
+    description: OptionalSafeText = None
+    tags: List[SafeLabel] = []
+    template_name: OptionalSafeLabel = None
 
 
 class ExportInterfaceTemplateRequest(ExportTemplateRequest):
