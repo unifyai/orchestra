@@ -2481,6 +2481,42 @@ class TestAdminEndpoints:
             "needs_sender_identity": False,
         }
 
+    async def test_dispatch_routing_fault_degrades_to_handled_false(
+        self,
+        client: AsyncClient,
+        slack_world: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A routing fault must surface as ``handled=false``, never a 500.
+
+        Slack retries 5xx responses aggressively, so an unexpected exception
+        in resolution would amplify a single transient fault into a redelivery
+        storm. The endpoint catches it, logs the traceback, and tells the
+        gateway to drop the event.
+        """
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("simulated routing fault")
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.resolve_inbound",
+            _boom,
+        )
+        resp = await client.post(
+            "/v0/admin/slack/dispatch",
+            json={
+                "slack_team_id": slack_world["install"].slack_team_id,
+                "channel_id": "D01HUMAN",
+                "channel_type": "im",
+                "sender_slack_user_id": "U_HUMAN",
+                "text": "hi",
+                "event_ts": "1700000099.000001",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["handled"] is False
+
     async def test_channel_binding_lifecycle(
         self,
         client: AsyncClient,
