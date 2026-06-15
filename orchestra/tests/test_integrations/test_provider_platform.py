@@ -26,7 +26,6 @@ from orchestra.integrations.providers.local_echo import LocalEchoProviderAdapter
 from orchestra.integrations.providers.pipedream import PipedreamProviderAdapter
 from orchestra.integrations.providers.registry import get_provider_adapter
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
-from orchestra.web.api.integrations import operations
 from orchestra.web.api.integrations.operations import (
     create_confirmation_token,
     seed_default_provider_catalog,
@@ -64,6 +63,8 @@ async def _sync_integrations(
     action_class: str = "read",
     required_scopes: list[str] | None = None,
     source_type: str = "third_party",
+    sync_mode: str = "partial",
+    prune_unlisted_apps: bool = False,
 ) -> dict:
     response = await client.post(
         "/v0/admin/integrations/sync",
@@ -71,6 +72,9 @@ async def _sync_integrations(
         json={
             "backend_id": backend_id,
             "source_type": source_type,
+            "app_slugs": [app_slug],
+            "sync_mode": sync_mode,
+            "prune_unlisted_apps": prune_unlisted_apps,
             "apps": [
                 {
                     "provider_app_id": app_slug,
@@ -121,6 +125,98 @@ async def _sync_integrations(
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     return response.json()
+
+
+@pytest.mark.anyio
+async def test_partial_sync_preserves_unlisted_catalog_rows(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    await _sync_integrations(client, app_slug="gmail", tool_name="search_messages")
+    await _sync_integrations(client, app_slug="slack", tool_name="send_message")
+
+    response = await _sync_integrations(
+        client,
+        app_slug="gmail",
+        tool_name="list_threads",
+        prune_unlisted_apps=False,
+    )
+
+    assert response["apps_pruned"] == 0
+    assert response["tools_pruned"] == 0
+    assert {
+        app.canonical_app_slug
+        for app in dbsession.query(DynamicProviderApp).filter_by(backend_id="composio")
+    } == {"gmail", "slack"}
+    assert (
+        dbsession.query(ProviderToolCatalog)
+        .filter_by(backend_id="composio", canonical_app_slug="slack")
+        .count()
+        == 1
+    )
+    assert (
+        dbsession.query(ProviderToolCatalog)
+        .filter_by(backend_id="composio", canonical_app_slug="gmail")
+        .count()
+        == 1
+    )
+
+
+@pytest.mark.anyio
+async def test_partial_prune_removes_unlisted_catalog_rows(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    await _sync_integrations(client, app_slug="gmail", tool_name="search_messages")
+    await _sync_integrations(client, app_slug="slack", tool_name="send_message")
+
+    response = await _sync_integrations(
+        client,
+        app_slug="gmail",
+        tool_name="list_threads",
+        prune_unlisted_apps=True,
+    )
+
+    assert response["apps_pruned"] == 1
+    assert response["tools_pruned"] == 1
+    assert sorted(
+        app.canonical_app_slug
+        for app in dbsession.query(DynamicProviderApp)
+        .filter_by(backend_id="composio")
+        .all()
+    ) == ["gmail"]
+    assert (
+        dbsession.query(ProviderToolCatalog)
+        .filter_by(backend_id="composio", canonical_app_slug="slack")
+        .count()
+        == 0
+    )
+
+
+@pytest.mark.anyio
+async def test_full_sync_prunes_backend_catalog_rows(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    await _sync_integrations(client, app_slug="gmail", tool_name="search_messages")
+    await _sync_integrations(client, app_slug="slack", tool_name="send_message")
+
+    response = await _sync_integrations(
+        client,
+        app_slug="gmail",
+        tool_name="list_threads",
+        sync_mode="full",
+    )
+
+    assert response["prune_unlisted_apps"] is True
+    assert response["apps_pruned"] == 1
+    assert response["tools_pruned"] == 1
+    assert sorted(
+        app.canonical_app_slug
+        for app in dbsession.query(DynamicProviderApp)
+        .filter_by(backend_id="composio")
+        .all()
+    ) == ["gmail"]
 
 
 def test_backend_bootstrap_is_idempotent_and_does_not_seed_catalog(
@@ -218,43 +314,6 @@ def test_provider_catalog_unique_constraints(dbsession: Session) -> None:
     with pytest.raises(IntegrityError):
         dbsession.flush()
     dbsession.rollback()
-
-
-def test_tool_semantic_search_is_read_only_on_steady_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeTool:
-        tool_id = "composio:alpha:list_items"
-
-    class FakeEmbeddings:
-        def __init__(self) -> None:
-            self.search_calls = 0
-
-        def search(self, *args, **kwargs):
-            self.search_calls += 1
-            assert (
-                kwargs["namespace"] == operations.INTEGRATION_TOOL_EMBEDDING_NAMESPACE
-            )
-            assert kwargs["ref_ids"] == ["composio:alpha:list_items"]
-            return {"composio:alpha:list_items": (0.92, "pre-indexed match")}
-
-        def upsert(self, *args, **kwargs):
-            raise AssertionError("steady-state search must not upsert per tool")
-
-        def upsert_many(self, *args, **kwargs):
-            raise AssertionError("steady-state search must not batch upsert")
-
-    fake_embeddings = FakeEmbeddings()
-    monkeypatch.setattr(operations, "CATALOG_ARTIFACT_EMBEDDINGS", fake_embeddings)
-
-    scores = operations._artifact_tool_scores(
-        session=object(),
-        query_text="alpha list",
-        tools=[FakeTool()],
-    )
-
-    assert scores == {"composio:alpha:list_items": (0.92, "pre-indexed match")}
-    assert fake_embeddings.search_calls == 1
 
 
 async def test_bootstrap_state_admin_api_round_trips(client: AsyncClient) -> None:
@@ -430,6 +489,72 @@ def test_cloud_bootstrap_skips_unchanged_successful_sync() -> None:
         client.state_updates[0]["result"]["warning"]
         == "Manifest hash already applied; catalog sync skipped."
     )
+
+
+def test_cloud_bootstrap_passes_prune_unlisted_apps_to_sync() -> None:
+    manifest = {
+        "schema_version": 1,
+        "environment": "selfhost",
+        "providers": {
+            "composio": {
+                "status": "enabled",
+                "sync": {
+                    "mode": "partial",
+                    "app_slugs": ["GMAIL"],
+                    "prune_unlisted_apps": True,
+                },
+            },
+        },
+    }
+    plan = provider_plans(manifest)[0]
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.sync_payloads: list[dict] = []
+            self.state_updates: list[dict] = []
+
+        def request(self, method: str, path: str, payload=None):
+            if path == "/admin/integrations/backends":
+                return {}
+            assert path == "/admin/integrations/sync"
+            self.sync_payloads.append(dict(payload))
+            return {
+                "status": "success",
+                "apps_upserted": 1,
+                "tools_upserted": 1,
+                "apps": [{"canonical_app_slug": "gmail"}],
+                "tools": [
+                    {"canonical_app_slug": "gmail", "provider_tool_id": "gmail.search"},
+                ],
+                "matched_app_slugs": ["gmail"],
+                "cache_version": payload["cache_version"],
+            }
+
+        def bootstrap_state(self, *, environment: str, backend_id: str):
+            return None
+
+        def put_bootstrap_state(
+            self,
+            *,
+            environment,
+            plan,
+            status,
+            result=None,
+            error_message=None,
+        ):
+            self.state_updates.append({"status": status, "result": result})
+
+    client = FakeClient()
+    result = apply_plan(
+        client=client,
+        environment="selfhost",
+        plan=plan,
+    )
+
+    assert result == "synced"
+    assert client.sync_payloads[0]["prune_unlisted_apps"] is True
+    diagnostics = _sync_diagnostics(plan=plan, result=client.state_updates[0]["result"])
+    assert diagnostics["prune_unlisted_apps"] is True
 
 
 def test_cloud_bootstrap_full_skip_drops_stale_batch_diagnostics() -> None:
@@ -649,6 +774,9 @@ async def test_admin_backend_config_and_catalog_sync_routes(
     )
     assert sync_response["apps_upserted"] == 1
     assert sync_response["tools_upserted"] == 1
+    assert sync_response["apps"][0]["canonical_app_slug"] == "linear"
+    assert sync_response["tools"][0]["canonical_app_slug"] == "linear"
+    assert sync_response["tools"][0]["provider_tool_id"] == "linear.list_issues"
 
     bootstrap = await client.put(
         "/v0/admin/integrations/bootstrap-state",

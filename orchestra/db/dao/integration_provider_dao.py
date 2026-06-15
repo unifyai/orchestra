@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from orchestra.db.models.integration_provider_models import (
@@ -27,31 +27,6 @@ from orchestra.db.models.integration_provider_models import (
 )
 
 HIDDEN_CONNECTION_STATUSES = {"disconnected"}
-APP_STATUS_VALUES = (
-    "connected",
-    "configured",
-    "pending",
-    "missing_scope",
-    "missing_secrets",
-    "needs_reconnect",
-    "expired",
-    "revoked",
-    "error",
-    "not_connected",
-)
-APP_STATUS_GROUPS = {
-    "connected": ("connected", "configured"),
-    "needs_attention": (
-        "pending",
-        "missing_scope",
-        "missing_secrets",
-        "needs_reconnect",
-        "expired",
-        "revoked",
-        "error",
-    ),
-    "not_connected": ("not_connected",),
-}
 PENDING_CONNECTION_TIMEOUT_SECONDS = int(
     os.getenv("INTEGRATION_PENDING_TIMEOUT_SECONDS", "1800"),
 )
@@ -240,6 +215,52 @@ class IntegrationProviderDAO:
         self.session.flush()
         return tool
 
+    def prune_catalog_to_app_slugs(
+        self,
+        *,
+        backend_id: str,
+        canonical_app_slugs: Iterable[str],
+    ) -> dict[str, int]:
+        allowed = sorted({str(slug) for slug in canonical_app_slugs if str(slug)})
+        tool_query = self.session.query(ProviderToolCatalog).filter_by(
+            backend_id=backend_id,
+        )
+        app_query = self.session.query(DynamicProviderApp).filter_by(
+            backend_id=backend_id,
+        )
+        if allowed:
+            tool_query = tool_query.filter(
+                ~ProviderToolCatalog.canonical_app_slug.in_(allowed),
+            )
+            app_query = app_query.filter(
+                ~DynamicProviderApp.canonical_app_slug.in_(allowed),
+            )
+        tools_deleted = tool_query.delete(synchronize_session=False)
+        apps_deleted = app_query.delete(synchronize_session=False)
+        self.session.flush()
+        return {
+            "apps_pruned": int(apps_deleted),
+            "tools_pruned": int(tools_deleted),
+        }
+
+    def delete_catalog_tools_for_app_slugs(
+        self,
+        *,
+        backend_id: str,
+        canonical_app_slugs: Iterable[str],
+    ) -> int:
+        slugs = sorted({str(slug) for slug in canonical_app_slugs if str(slug)})
+        if not slugs:
+            return 0
+        deleted = (
+            self.session.query(ProviderToolCatalog)
+            .filter_by(backend_id=backend_id)
+            .filter(ProviderToolCatalog.canonical_app_slug.in_(slugs))
+            .delete(synchronize_session=False)
+        )
+        self.session.flush()
+        return int(deleted)
+
     def get_app_by_backend_provider(
         self,
         *,
@@ -314,304 +335,6 @@ class IntegrationProviderDAO:
             .one_or_none()
         )
 
-    def list_enabled_apps(self, *, query_text: str = "") -> list[DynamicProviderApp]:
-        return self._enabled_apps_query(query_text=query_text).all()
-
-    def count_enabled_apps(
-        self,
-        *,
-        query_text: str = "",
-        source_type: str | None = None,
-        owner: Any | None = None,
-        statuses: Iterable[str] | None = None,
-    ) -> int:
-        return int(
-            self._enabled_apps_query_for_owner(
-                query_text=query_text,
-                source_type=source_type,
-                owner=owner,
-                statuses=statuses,
-            )
-            .order_by(None)
-            .count(),
-        )
-
-    def list_enabled_apps_page(
-        self,
-        *,
-        query_text: str = "",
-        source_type: str | None = None,
-        owner: Any | None = None,
-        statuses: Iterable[str] | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[DynamicProviderApp]:
-        return (
-            self._enabled_apps_query_for_owner(
-                query_text=query_text,
-                source_type=source_type,
-                owner=owner,
-                statuses=statuses,
-            )
-            .order_by(
-                DynamicProviderApp.display_name.asc(),
-                DynamicProviderApp.id.asc(),
-            )
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
-
-    def app_catalog_facets(
-        self,
-        *,
-        query_text: str = "",
-        source_type: str | None = None,
-        owner: Any | None = None,
-    ) -> dict[str, Any]:
-        base_query, status_expr, source_expr = self._enabled_apps_status_query(
-            query_text=query_text,
-            source_type=source_type,
-            owner=owner,
-        )
-        total = int(base_query.order_by(None).count())
-        status_counts = {status: 0 for status in APP_STATUS_VALUES}
-        for status_value, count in (
-            base_query.with_entities(
-                status_expr.label("status"),
-                func.count(DynamicProviderApp.id),
-            )
-            .group_by(status_expr)
-            .all()
-        ):
-            if status_value in status_counts:
-                status_counts[str(status_value)] = int(count)
-
-        source_counts = {"native": 0, "third_party": 0}
-        for source_value, count in (
-            base_query.with_entities(
-                source_expr.label("source_type"),
-                func.count(DynamicProviderApp.id),
-            )
-            .group_by(source_expr)
-            .all()
-        ):
-            if source_value in source_counts:
-                source_counts[str(source_value)] = int(count)
-
-        return {
-            "total": total,
-            "source_type": source_counts,
-            "status": status_counts,
-            "status_group": {
-                group: sum(status_counts[status] for status in statuses)
-                for group, statuses in APP_STATUS_GROUPS.items()
-            },
-        }
-
-    def effective_app_statuses_by_slug(
-        self,
-        *,
-        owner: Any,
-        canonical_app_slugs: Iterable[str],
-    ) -> dict[str, str]:
-        slugs = list(dict.fromkeys(canonical_app_slugs))
-        if not slugs:
-            return {}
-        base_query, status_expr, _source_expr = self._enabled_apps_status_query(
-            query_text="",
-            source_type=None,
-            owner=owner,
-        )
-        rows = (
-            base_query.filter(DynamicProviderApp.canonical_app_slug.in_(slugs))
-            .with_entities(
-                DynamicProviderApp.canonical_app_slug,
-                status_expr.label("status"),
-            )
-            .all()
-        )
-        return {str(slug): str(status_value) for slug, status_value in rows}
-
-    def app_catalog_version(self) -> str | None:
-        value = self.session.query(func.max(DynamicProviderApp.cache_version)).scalar()
-        return str(value) if value else None
-
-    def _enabled_apps_query(
-        self,
-        *,
-        query_text: str = "",
-        source_type: str | None = None,
-    ) -> Query:
-        query = self.session.query(DynamicProviderApp).join(
-            IntegrationBackend,
-            DynamicProviderApp.backend_id == IntegrationBackend.backend_id,
-        )
-        query = query.filter(IntegrationBackend.status == "enabled")
-        if query_text:
-            pattern = f"%{query_text.lower()}%"
-            query = query.filter(
-                or_(
-                    DynamicProviderApp.provider_app_id.ilike(pattern),
-                    DynamicProviderApp.canonical_app_slug.ilike(pattern),
-                    DynamicProviderApp.display_name.ilike(pattern),
-                    DynamicProviderApp.description.ilike(pattern),
-                    DynamicProviderApp.category.ilike(pattern),
-                ),
-            )
-        if source_type:
-            source_field = DynamicProviderApp.raw_provider_metadata_json[
-                "source_type"
-            ].astext
-            is_native = or_(
-                DynamicProviderApp.backend_id == "unity_native",
-                source_field == "native",
-            )
-            if source_type == "native":
-                query = query.filter(is_native)
-            elif source_type == "third_party":
-                query = query.filter(
-                    and_(
-                        DynamicProviderApp.backend_id != "unity_native",
-                        or_(source_field.is_(None), source_field != "native"),
-                    ),
-                )
-        return query
-
-    def _source_type_expression(self):
-        source_field = DynamicProviderApp.raw_provider_metadata_json[
-            "source_type"
-        ].astext
-        return case(
-            (
-                or_(
-                    DynamicProviderApp.backend_id == "unity_native",
-                    source_field == "native",
-                ),
-                "native",
-            ),
-            else_="third_party",
-        )
-
-    def _effective_app_status_expression(self, latest_connections):
-        stale_pending_cutoff = datetime.utcnow() - timedelta(
-            seconds=PENDING_CONNECTION_TIMEOUT_SECONDS,
-        )
-        missing_scope_exists = (
-            self.session.query(ProviderToolCatalog.id)
-            .filter(
-                ProviderToolCatalog.canonical_app_slug
-                == DynamicProviderApp.canonical_app_slug,
-                ProviderToolCatalog.enabled_by_default.is_(True),
-                ~ProviderToolCatalog.required_scopes_json.op("<@")(
-                    latest_connections.c.granted_scopes_json,
-                ),
-            )
-            .exists()
-        )
-        connection_updated_at = func.coalesce(
-            latest_connections.c.updated_at,
-            latest_connections.c.created_at,
-        )
-        return case(
-            (latest_connections.c.connection_pk.is_(None), "not_connected"),
-            (
-                and_(
-                    latest_connections.c.status == "pending",
-                    connection_updated_at < stale_pending_cutoff,
-                ),
-                "error",
-            ),
-            (
-                latest_connections.c.status.in_(
-                    (
-                        "pending",
-                        "missing_secrets",
-                        "needs_reconnect",
-                        "expired",
-                        "revoked",
-                        "error",
-                    ),
-                ),
-                latest_connections.c.status,
-            ),
-            (
-                and_(
-                    latest_connections.c.status == "connected",
-                    latest_connections.c.reconnect_reason.isnot(None),
-                ),
-                "needs_reconnect",
-            ),
-            (
-                and_(
-                    latest_connections.c.status == "connected",
-                    missing_scope_exists,
-                ),
-                "missing_scope",
-            ),
-            (
-                and_(
-                    latest_connections.c.status == "connected",
-                    latest_connections.c.credential_storage == "secret_manager",
-                ),
-                "configured",
-            ),
-            (latest_connections.c.status == "connected", "connected"),
-            else_=latest_connections.c.status,
-        )
-
-    def _enabled_apps_status_query(
-        self,
-        *,
-        query_text: str = "",
-        source_type: str | None = None,
-        owner: Any | None = None,
-    ) -> tuple[Query, Any, Any]:
-        query = self._enabled_apps_query(
-            query_text=query_text,
-            source_type=source_type,
-        )
-        source_expr = self._source_type_expression()
-        if owner is None:
-            status_expr = case((DynamicProviderApp.id.isnot(None), "not_connected"))
-            return query, status_expr, source_expr
-        latest_connections = self._latest_owner_connections_subquery(owner)
-        query = query.outerjoin(
-            latest_connections,
-            DynamicProviderApp.canonical_app_slug
-            == latest_connections.c.canonical_app_slug,
-        )
-        query = query.filter(
-            (latest_connections.c.row_number == 1)
-            | (latest_connections.c.row_number.is_(None)),
-        )
-        return (
-            query,
-            self._effective_app_status_expression(latest_connections),
-            source_expr,
-        )
-
-    def _enabled_apps_query_for_owner(
-        self,
-        *,
-        query_text: str = "",
-        source_type: str | None = None,
-        owner: Any | None = None,
-        statuses: Iterable[str] | None = None,
-    ) -> Query:
-        query, status_expr, _source_expr = self._enabled_apps_status_query(
-            query_text=query_text,
-            source_type=source_type,
-            owner=owner,
-        )
-        status_values = list(dict.fromkeys(statuses or []))
-        if status_values:
-            query = query.filter(status_expr.in_(status_values))
-        return query
-
-    def list_all_apps(self) -> list[DynamicProviderApp]:
-        return self.session.query(DynamicProviderApp).all()
-
     def list_apps_by_slug(
         self,
         canonical_app_slugs: Iterable[str],
@@ -685,152 +408,6 @@ class IntegrationProviderDAO:
             ProviderToolCatalog.display_name.asc(),
         ).all()
 
-    def count_tools(
-        self,
-        *,
-        canonical_app_slug: str | None = None,
-    ) -> int:
-        return int(self._tools_query(canonical_app_slug=canonical_app_slug).count())
-
-    def list_tools_page(
-        self,
-        *,
-        canonical_app_slug: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[ProviderToolCatalog]:
-        query = self._tools_query(canonical_app_slug=canonical_app_slug)
-        return (
-            query.order_by(
-                ProviderToolCatalog.canonical_app_slug.asc(),
-                ProviderToolCatalog.display_name.asc(),
-                ProviderToolCatalog.id.asc(),
-            )
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
-
-    def list_tools_page_for_app_slugs(
-        self,
-        *,
-        app_slugs: Iterable[str],
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[ProviderToolCatalog]:
-        slugs = list(dict.fromkeys(app_slugs))
-        if not slugs:
-            return []
-        return (
-            self.session.query(ProviderToolCatalog)
-            .filter(ProviderToolCatalog.canonical_app_slug.in_(slugs))
-            .order_by(
-                ProviderToolCatalog.canonical_app_slug.asc(),
-                ProviderToolCatalog.display_name.asc(),
-                ProviderToolCatalog.id.asc(),
-            )
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
-
-    def connected_tool_app_slugs(
-        self,
-        *,
-        owner: Any,
-        canonical_app_slug: str | None = None,
-    ) -> list[str]:
-        query = self.owner_filter(self.session.query(IntegrationConnection), owner)
-        query = query.filter(IntegrationConnection.status == "connected")
-        if canonical_app_slug:
-            query = query.filter(
-                IntegrationConnection.canonical_app_slug == canonical_app_slug,
-            )
-        return [
-            slug
-            for (slug,) in query.with_entities(
-                IntegrationConnection.canonical_app_slug,
-            )
-            .distinct()
-            .all()
-        ]
-
-    def count_connected_ready_tools(
-        self,
-        *,
-        owner: Any,
-        canonical_app_slug: str | None = None,
-    ) -> int:
-        return int(
-            self._connected_ready_tools_query(
-                owner=owner,
-                canonical_app_slug=canonical_app_slug,
-            ).count(),
-        )
-
-    def list_connected_ready_tools_page(
-        self,
-        *,
-        owner: Any,
-        canonical_app_slug: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[ProviderToolCatalog]:
-        return (
-            self._connected_ready_tools_query(
-                owner=owner,
-                canonical_app_slug=canonical_app_slug,
-            )
-            .order_by(
-                ProviderToolCatalog.canonical_app_slug.asc(),
-                ProviderToolCatalog.display_name.asc(),
-                ProviderToolCatalog.id.asc(),
-            )
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
-
-    def count_tools_by_activation_state(
-        self,
-        *,
-        owner: Any,
-        activation_state: str,
-        canonical_app_slug: str | None = None,
-    ) -> int:
-        return int(
-            self._tools_by_activation_state_query(
-                owner=owner,
-                activation_state=activation_state,
-                canonical_app_slug=canonical_app_slug,
-            ).count(),
-        )
-
-    def list_tools_page_by_activation_state(
-        self,
-        *,
-        owner: Any,
-        activation_state: str,
-        canonical_app_slug: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[ProviderToolCatalog]:
-        return (
-            self._tools_by_activation_state_query(
-                owner=owner,
-                activation_state=activation_state,
-                canonical_app_slug=canonical_app_slug,
-            )
-            .order_by(
-                ProviderToolCatalog.canonical_app_slug.asc(),
-                ProviderToolCatalog.display_name.asc(),
-                ProviderToolCatalog.id.asc(),
-            )
-            .limit(limit)
-            .offset(offset)
-            .all()
-        )
-
     def _latest_owner_connections_subquery(self, owner: Any):
         row_number = (
             func.row_number()
@@ -856,90 +433,6 @@ class IntegrationProviderDAO:
             )
             .subquery()
         )
-
-    def _connected_ready_tools_query(
-        self,
-        *,
-        owner: Any,
-        canonical_app_slug: str | None = None,
-    ) -> Query:
-        latest_connections = self._latest_owner_connections_subquery(owner)
-        query = self.session.query(ProviderToolCatalog).join(
-            latest_connections,
-            ProviderToolCatalog.canonical_app_slug
-            == latest_connections.c.canonical_app_slug,
-        )
-        query = query.filter(
-            latest_connections.c.row_number == 1,
-            latest_connections.c.status == "connected",
-            ProviderToolCatalog.enabled_by_default.is_(True),
-            ProviderToolCatalog.required_scopes_json.op("<@")(
-                latest_connections.c.granted_scopes_json,
-            ),
-        )
-        if canonical_app_slug:
-            query = query.filter(
-                ProviderToolCatalog.canonical_app_slug == canonical_app_slug,
-            )
-        return query
-
-    def _tools_by_activation_state_query(
-        self,
-        *,
-        owner: Any,
-        activation_state: str,
-        canonical_app_slug: str | None = None,
-    ) -> Query:
-        if activation_state == "connected_ready":
-            return self._connected_ready_tools_query(
-                owner=owner,
-                canonical_app_slug=canonical_app_slug,
-            )
-        latest_connections = self._latest_owner_connections_subquery(owner)
-        query = self.session.query(ProviderToolCatalog).outerjoin(
-            latest_connections,
-            ProviderToolCatalog.canonical_app_slug
-            == latest_connections.c.canonical_app_slug,
-        )
-        query = query.filter(
-            (latest_connections.c.row_number == 1)
-            | (latest_connections.c.row_number.is_(None)),
-        )
-        if canonical_app_slug:
-            query = query.filter(
-                ProviderToolCatalog.canonical_app_slug == canonical_app_slug,
-            )
-        if activation_state == "disabled_by_policy":
-            return query.filter(ProviderToolCatalog.enabled_by_default.is_(False))
-        if activation_state == "not_connected":
-            return query.filter(
-                ProviderToolCatalog.enabled_by_default.is_(True),
-                or_(
-                    latest_connections.c.connection_pk.is_(None),
-                    latest_connections.c.status.in_(
-                        ("pending", "missing_secrets"),
-                    ),
-                ),
-            )
-        if activation_state == "expired":
-            return query.filter(
-                ProviderToolCatalog.enabled_by_default.is_(True),
-                latest_connections.c.status.in_(("expired", "revoked")),
-            )
-        if activation_state == "error":
-            return query.filter(
-                ProviderToolCatalog.enabled_by_default.is_(True),
-                latest_connections.c.status == "error",
-            )
-        if activation_state == "missing_scope":
-            return query.filter(
-                ProviderToolCatalog.enabled_by_default.is_(True),
-                latest_connections.c.status == "connected",
-                ~ProviderToolCatalog.required_scopes_json.op("<@")(
-                    latest_connections.c.granted_scopes_json,
-                ),
-            )
-        return query.filter(False)
 
     def _tools_query(
         self,

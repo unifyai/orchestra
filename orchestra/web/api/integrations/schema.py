@@ -31,8 +31,6 @@ ProviderAppStatus = Literal[
     "error",
     "not_connected",
 ]
-ProviderAppStatusGroup = Literal["connected", "needs_attention", "not_connected"]
-ProviderAppDetailLevel = Literal["full", "summary"]
 ActivationState = Literal[
     "connected_ready",
     "not_connected",
@@ -179,88 +177,6 @@ class DynamicIntegrationAppResponse(BaseModel):
     native_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ProviderAppGetRequest(BaseModel):
-    query: Optional[str] = None
-    source_type: Optional[IntegrationSourceType] = None
-    status: list[ProviderAppStatus] = Field(default_factory=list)
-    status_group: list[ProviderAppStatusGroup] = Field(default_factory=list)
-    detail_level: ProviderAppDetailLevel = "full"
-    owner_scope: OwnerScope = "assistant"
-    org_id: Optional[int] = None
-    team_id: Optional[int] = None
-    user_id: Optional[str] = None
-    assistant_id: Optional[int] = None
-    limit: int = Field(100, ge=1, le=500)
-    offset: int = Field(0, ge=0)
-
-
-class ProviderAppCatalogSourceTypeFacet(BaseModel):
-    native: int = 0
-    third_party: int = 0
-
-
-class ProviderAppCatalogStatusFacet(BaseModel):
-    connected: int = 0
-    configured: int = 0
-    pending: int = 0
-    missing_scope: int = 0
-    missing_secrets: int = 0
-    needs_reconnect: int = 0
-    expired: int = 0
-    revoked: int = 0
-    error: int = 0
-    not_connected: int = 0
-
-
-class ProviderAppCatalogStatusGroupFacet(BaseModel):
-    connected: int = 0
-    needs_attention: int = 0
-    not_connected: int = 0
-
-
-class ProviderAppCatalogFacets(BaseModel):
-    total: int = 0
-    source_type: ProviderAppCatalogSourceTypeFacet = Field(
-        default_factory=ProviderAppCatalogSourceTypeFacet,
-    )
-    status: ProviderAppCatalogStatusFacet = Field(
-        default_factory=ProviderAppCatalogStatusFacet,
-    )
-    status_group: ProviderAppCatalogStatusGroupFacet = Field(
-        default_factory=ProviderAppCatalogStatusGroupFacet,
-    )
-
-
-class ProviderAppGetResponse(BaseModel):
-    items: list[DynamicIntegrationAppResponse] = Field(default_factory=list)
-    total: int = 0
-    limit: int
-    offset: int
-    facets: ProviderAppCatalogFacets = Field(
-        default_factory=ProviderAppCatalogFacets,
-    )
-    catalog_version: Optional[str] = None
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class ProviderAppSearchRequest(BaseModel):
-    query: Optional[str] = None
-    source_type: Optional[IntegrationSourceType] = None
-    owner_scope: OwnerScope = "assistant"
-    org_id: Optional[int] = None
-    team_id: Optional[int] = None
-    user_id: Optional[str] = None
-    assistant_id: Optional[int] = None
-    limit: int = Field(10, ge=1, le=100)
-    offset: int = Field(0, ge=0)
-
-
-class ProviderAppSearchResult(DynamicIntegrationAppResponse):
-    supported: bool = True
-    score: float = 0.0
-    match_reason: str = ""
-
-
 class IntegrationConnectionResponse(BaseModel):
     connection_id: str
     owner_scope: OwnerScope
@@ -371,12 +287,17 @@ class IntegrationCatalogSyncRequest(BaseModel):
     include_all_apps: bool = False
     create_auth_configs: bool = True
     sync_tools: bool = True
+    prune_unlisted_apps: bool = False
 
 
 class IntegrationCatalogSyncResponse(BaseModel):
     status: BootstrapStatus = "success"
     apps_upserted: int
     tools_upserted: int
+    apps_pruned: int = 0
+    tools_pruned: int = 0
+    apps: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=list)
     skipped_apps: list[dict[str, str]] = Field(default_factory=list)
     requested_app_slugs: list[str] = Field(default_factory=list)
     matched_app_slugs: list[str] = Field(default_factory=list)
@@ -386,34 +307,7 @@ class IntegrationCatalogSyncResponse(BaseModel):
     auth_configs_created: int = 0
     auth_configs_reused: int = 0
     cache_version: str = "provider-sync-v1"
-
-
-class ProviderToolSearchRequest(BaseModel):
-    query: Optional[str] = None
-    owner_scope: OwnerScope = "assistant"
-    org_id: Optional[int] = None
-    team_id: Optional[int] = None
-    user_id: Optional[str] = None
-    assistant_id: Optional[int] = None
-    canonical_app_slug: Optional[str] = None
-    include_unconnected: bool = False
-    include_schema: bool = False
-    limit: int = Field(100, ge=1, le=500)
-    offset: int = Field(0, ge=0)
-
-
-class ProviderToolGetRequest(BaseModel):
-    owner_scope: OwnerScope = "assistant"
-    org_id: Optional[int] = None
-    team_id: Optional[int] = None
-    user_id: Optional[str] = None
-    assistant_id: Optional[int] = None
-    canonical_app_slug: Optional[str] = None
-    activation_state: Optional[ActivationState] = None
-    include_unconnected: bool = False
-    include_schema: bool = False
-    limit: int = Field(100, ge=1, le=500)
-    offset: int = Field(0, ge=0)
+    prune_unlisted_apps: bool = False
 
 
 class ProviderToolSearchResult(BaseModel):
@@ -441,37 +335,6 @@ class ProviderToolSearchResult(BaseModel):
     output_schema: Optional[dict[str, Any]] = None
     examples: Optional[list[dict[str, Any]]] = None
     score: float = 0.0
-
-
-class ProviderToolGetResponse(BaseModel):
-    items: list[ProviderToolSearchResult] = Field(default_factory=list)
-    total: int = 0
-    limit: int
-    offset: int
-
-
-class ProviderToolSchemaResponse(BaseModel):
-    tool_id: str
-    backend_id: str
-    provider_app_id: str
-    provider_tool_id: str
-    canonical_name: str
-    function_manager_name: str
-    app_slug: str
-    app_display_name: str
-    app_icon_url: Optional[str] = None
-    tool_display_name: str
-    description: str
-    input_schema: dict[str, Any]
-    output_schema: dict[str, Any]
-    required_scopes: list[str] = Field(default_factory=list)
-    action_class: ActionClass
-    behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
-    confirmation_required: bool = False
-    approval_level: ToolApprovalLevel = "auto"
-    examples: list[dict[str, Any]] = Field(default_factory=list)
-    activation_state: ActivationState
-    connection_id: Optional[str] = None
 
 
 class IntegrationToolPolicyItem(BaseModel):

@@ -3,7 +3,7 @@
 The public integration contract is the HTTP API in ``views.py``. This module is
 kept beside those routes to hold provider orchestration that is too large to
 inline in route functions: catalog sync normalization, provider connect URL
-construction, policy checks, semantic catalog scoring, and execution auditing.
+construction, policy checks, and execution auditing.
 Database persistence goes through ``IntegrationProviderDAO`` and external calls
 go through provider adapters.
 """
@@ -25,10 +25,6 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from sqlalchemy.orm import Session
 
-from orchestra.artifacts.embedding_runtime import (
-    CATALOG_SEARCH_KEY,
-    ArtifactEmbeddingRuntime,
-)
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.models.integration_provider_models import (
     DynamicProviderApp,
@@ -43,7 +39,6 @@ from orchestra.integrations.providers import (
     get_provider_adapter,
 )
 from orchestra.web.api.integrations.schema import (
-    DynamicIntegrationAppResponse,
     IntegrationAppDetailResponse,
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
@@ -53,44 +48,14 @@ from orchestra.web.api.integrations.schema import (
     IntegrationToolPolicyItem,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
-    ProviderAppGetRequest,
-    ProviderAppGetResponse,
-    ProviderAppSearchRequest,
-    ProviderAppSearchResult,
     ProviderToolConfirmationPayload,
-    ProviderToolGetRequest,
-    ProviderToolGetResponse,
     ProviderToolRunRequest,
     ProviderToolRunResponse,
-    ProviderToolSchemaResponse,
-    ProviderToolSearchRequest,
     ProviderToolSearchResult,
 )
 
 READY_STATUSES = {"connected"}
 EXPIRED_STATUSES = {"expired", "revoked", "error"}
-APP_STATUS_GROUP_STATUSES = {
-    "connected": ("connected", "configured"),
-    "needs_attention": (
-        "pending",
-        "missing_scope",
-        "missing_secrets",
-        "needs_reconnect",
-        "expired",
-        "revoked",
-        "error",
-    ),
-    "not_connected": ("not_connected",),
-}
-SemanticToolScoreProvider = Callable[
-    [Session, str, list[ProviderToolCatalog]],
-    dict[str, float | tuple[float, str]],
-]
-_SEMANTIC_TOOL_SCORE_PROVIDER: Optional[SemanticToolScoreProvider] = None
-CATALOG_ARTIFACT_EMBEDDINGS = ArtifactEmbeddingRuntime(key=CATALOG_SEARCH_KEY)
-INTEGRATION_APP_EMBEDDING_NAMESPACE = "integration_app"
-INTEGRATION_TOOL_EMBEDDING_NAMESPACE = "integration_tool"
-GLOBAL_CATALOG_SEMANTIC_SCORE_CUTOFF = 0.35
 logger = logging.getLogger(__name__)
 
 
@@ -501,6 +466,10 @@ def sync_integrations(
         status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
+        apps_pruned=summary["apps_pruned"],
+        tools_pruned=summary["tools_pruned"],
+        apps=list(body.apps),
+        tools=list(body.tools),
         requested_app_slugs=body.app_slugs,
         matched_app_slugs=[
             str(app.get("canonical_app_slug") or app.get("provider_app_id") or "")
@@ -509,7 +478,12 @@ def sync_integrations(
         ],
         sync_mode=body.sync_mode,
         cache_version=body.cache_version,
+        prune_unlisted_apps=_catalog_prune_requested(body),
     )
+
+
+def _catalog_prune_requested(body: IntegrationCatalogSyncRequest) -> bool:
+    return body.prune_unlisted_apps or body.sync_mode == "full"
 
 
 def _sync_catalog_rows(
@@ -523,8 +497,6 @@ def _sync_catalog_rows(
     apps_upserted = 0
     tools_upserted = 0
     action_previews_by_app: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    app_keys_to_index: set[tuple[str, str]] = set()
-    tool_ids_to_index: set[str] = set()
 
     for app_data in body.apps:
         provider_app_id = app_data["provider_app_id"]
@@ -577,8 +549,23 @@ def _sync_catalog_rows(
             canonical_app_slug=canonical_app_slug,
             values=values,
         )
-        app_keys_to_index.add((body.backend_id, provider_app_id))
         apps_upserted += 1
+
+    scoped_app_slugs = {
+        _slugify(slug)
+        for slug in body.app_slugs
+        if isinstance(slug, str) and slug.strip()
+    }
+    if not scoped_app_slugs:
+        scoped_app_slugs = {
+            _slugify(app.get("canonical_app_slug") or app.get("provider_app_id") or "")
+            for app in body.apps
+            if app.get("canonical_app_slug") or app.get("provider_app_id")
+        }
+    dao.delete_catalog_tools_for_app_slugs(
+        backend_id=body.backend_id,
+        canonical_app_slugs=scoped_app_slugs,
+    )
 
     for tool_data in body.tools:
         provider_app_id = tool_data["provider_app_id"]
@@ -652,7 +639,6 @@ def _sync_catalog_rows(
             },
         )
         tools_upserted += 1
-        tool_ids_to_index.add(tool_id)
 
     for (
         backend_id,
@@ -664,18 +650,35 @@ def _sync_catalog_rows(
         )
         if app:
             dao.set_app_action_previews(app, action_previews)
-            app_keys_to_index.add((backend_id, provider_app_id))
-
-    if app_keys_to_index:
-        session.flush()
-        apps_to_index = dao.catalog_apps_for_keys(app_keys_to_index)
-        _index_app_catalog_embeddings(session, apps_to_index)
-    if tool_ids_to_index:
-        session.flush()
-        tools_to_index = dao.catalog_tools_for_ids(tool_ids_to_index)
-        _index_tool_catalog_embeddings(session, tools_to_index)
+    apps_pruned = 0
+    tools_pruned = 0
+    if _catalog_prune_requested(body):
+        allowed_slugs = {
+            _slugify(slug)
+            for slug in body.app_slugs
+            if isinstance(slug, str) and slug.strip()
+        }
+        if not allowed_slugs:
+            allowed_slugs = {
+                _slugify(
+                    app.get("canonical_app_slug") or app.get("provider_app_id") or "",
+                )
+                for app in body.apps
+                if app.get("canonical_app_slug") or app.get("provider_app_id")
+            }
+        pruned = dao.prune_catalog_to_app_slugs(
+            backend_id=body.backend_id,
+            canonical_app_slugs=allowed_slugs,
+        )
+        apps_pruned = pruned["apps_pruned"]
+        tools_pruned = pruned["tools_pruned"]
     session.commit()
-    return {"apps_upserted": apps_upserted, "tools_upserted": tools_upserted}
+    return {
+        "apps_upserted": apps_upserted,
+        "tools_upserted": tools_upserted,
+        "apps_pruned": apps_pruned,
+        "tools_pruned": tools_pruned,
+    }
 
 
 def _composio_live_catalog_handler(
@@ -884,6 +887,10 @@ def _composio_live_catalog_handler(
         ),
         apps=apps,
         tools=tools,
+        app_slugs=[
+            _composio_canonical_app_slug(slug) for slug in selected_toolkit_slugs
+        ],
+        prune_unlisted_apps=_catalog_prune_requested(body),
     )
     summary = _sync_catalog_rows(
         session,
@@ -906,6 +913,10 @@ def _composio_live_catalog_handler(
         status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
+        apps_pruned=summary["apps_pruned"],
+        tools_pruned=summary["tools_pruned"],
+        apps=apps,
+        tools=tools,
         skipped_apps=skipped_apps,
         requested_app_slugs=requested_slugs,
         matched_app_slugs=[
@@ -918,6 +929,7 @@ def _composio_live_catalog_handler(
         auth_configs_created=auth_configs_created,
         auth_configs_reused=auth_configs_reused,
         cache_version=sync_body.cache_version,
+        prune_unlisted_apps=_catalog_prune_requested(body),
     )
 
 
@@ -1057,6 +1069,8 @@ def _pipedream_live_catalog_handler(
         ),
         apps=apps,
         tools=tools,
+        app_slugs=[_pipedream_app_slug(app) for app in selected_apps],
+        prune_unlisted_apps=_catalog_prune_requested(body),
     )
     summary = _sync_catalog_rows(
         session,
@@ -1066,11 +1080,16 @@ def _pipedream_live_catalog_handler(
         status="success",
         apps_upserted=summary["apps_upserted"],
         tools_upserted=summary["tools_upserted"],
+        apps_pruned=summary["apps_pruned"],
+        tools_pruned=summary["tools_pruned"],
+        apps=apps,
+        tools=tools,
         skipped_apps=skipped_apps,
         requested_app_slugs=sorted(requested_slugs),
         matched_app_slugs=[_pipedream_app_slug(app) for app in selected_apps],
         sync_mode=body.sync_mode or ("full" if body.include_all_apps else "partial"),
         cache_version=sync_body.cache_version,
+        prune_unlisted_apps=_catalog_prune_requested(body),
     )
 
 
@@ -1622,465 +1641,9 @@ def _app_source_label(app: DynamicProviderApp) -> str:
     return "Native" if _app_source_type(app) == "native" else "Third-party"
 
 
-def _app_embedding_ref_id(app: DynamicProviderApp) -> str:
-    return f"{app.backend_id}:{app.canonical_app_slug}"
-
-
-def _index_app_catalog_embeddings(
-    session: Session,
-    apps: list[DynamicProviderApp],
-) -> int:
-    """Batch-index app catalog rows for source-agnostic semantic discovery."""
-
-    if not apps:
-        return 0
-    _rows, changed_count = CATALOG_ARTIFACT_EMBEDDINGS.upsert_many(
-        session,
-        namespace=INTEGRATION_APP_EMBEDDING_NAMESPACE,
-        artifacts=[
-            {
-                "ref_id": _app_embedding_ref_id(app),
-                "source_text": _app_catalog_embedding_text(app),
-                "metadata": {
-                    "backend_id": app.backend_id,
-                    "provider_app_id": app.provider_app_id,
-                    "canonical_app_slug": app.canonical_app_slug,
-                    "display_name": app.display_name,
-                    "source_type": _app_source_type(app),
-                },
-            }
-            for app in apps
-        ],
-    )
-    return changed_count
-
-
-def _index_tool_catalog_embeddings(
-    session: Session,
-    tools: list[ProviderToolCatalog],
-) -> int:
-    """Batch-index provider tool rows outside the steady-state search path."""
-
-    if not tools:
-        return 0
-    dao = IntegrationProviderDAO(session)
-    apps = dao.list_apps_by_slug(tool.canonical_app_slug for tool in tools)
-    _rows, changed_count = CATALOG_ARTIFACT_EMBEDDINGS.upsert_many(
-        session,
-        namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
-        artifacts=[
-            {
-                "ref_id": tool.tool_id,
-                "source_text": _tool_catalog_embedding_text(
-                    tool,
-                    apps.get(tool.canonical_app_slug),
-                ),
-                "metadata": {
-                    "backend_id": tool.backend_id,
-                    "canonical_app_slug": tool.canonical_app_slug,
-                    "provider_tool_id": tool.provider_tool_id,
-                    "canonical_name": tool.canonical_name,
-                },
-            }
-            for tool in tools
-        ],
-    )
-    return changed_count
-
-
 def _active_backend_ids(session: Session) -> set[str]:
     seed_default_provider_catalog(session)
     return IntegrationProviderDAO(session).active_backend_ids()
-
-
-def _app_response(
-    session: Session,
-    *,
-    app: DynamicProviderApp,
-    owner: OwnerContext,
-    overlay: IntegrationOverlay | None,
-) -> DynamicIntegrationAppResponse:
-    conn = _best_connection(
-        session,
-        owner=owner,
-        canonical_app_slug=app.canonical_app_slug,
-    )
-    tool_count = IntegrationProviderDAO(session).tool_count_for_app(
-        app.canonical_app_slug,
-    )
-    return _app_response_from_preloaded(
-        app=app,
-        conn=conn,
-        overlay=overlay,
-        tool_count=tool_count,
-    )
-
-
-def _app_response_from_preloaded(
-    *,
-    app: DynamicProviderApp,
-    conn: IntegrationConnection | None,
-    overlay: IntegrationOverlay | None,
-    tool_count: int,
-    effective_status: str | None = None,
-    detail_level: str = "full",
-) -> DynamicIntegrationAppResponse:
-    metadata = _app_metadata(app)
-    source_type = _app_source_type(app)
-    include_full_details = detail_level == "full"
-    return DynamicIntegrationAppResponse(
-        backend_id=app.backend_id,
-        provider_app_id=app.provider_app_id,
-        canonical_app_slug=app.canonical_app_slug,
-        display_name=app.display_name,
-        source_type=source_type,
-        source_label=_app_source_label(app),
-        description=app.description,
-        category=app.category,
-        icon_url=app.icon_url,
-        auth_modes=app.auth_modes or [],
-        available_scopes=(
-            (app.available_scopes_json or []) if include_full_details else []
-        ),
-        available_actions=[],
-        tool_count=tool_count,
-        api_key_schema=metadata.get("api_key_schema"),
-        connection_status=effective_status or (conn.status if conn else None),
-        connection_id=conn.connection_id if conn else None,
-        external_account_label=conn.external_account_label if conn else None,
-        overlay=(
-            overlay.display_overrides_json
-            if overlay and (include_full_details or source_type != "native")
-            else {}
-        ),
-        native_metadata=(
-            metadata.get("native_metadata")
-            if source_type == "native" and include_full_details
-            else {}
-        ),
-    )
-
-
-def _score_app_match(app: DynamicProviderApp, query_text: str) -> tuple[float, str]:
-    normalized = query_text.strip().lower()
-    if not normalized:
-        return 1.0, "all supported integrations"
-    metadata = app.raw_provider_metadata_json or {}
-    tags = metadata.get("tags") if isinstance(metadata, dict) else None
-    fields = [
-        app.canonical_app_slug,
-        app.display_name,
-        app.description or "",
-        app.category or "",
-        app.provider_app_id,
-        app.backend_id,
-        " ".join(str(tag) for tag in tags) if isinstance(tags, list) else "",
-    ]
-    haystack = " ".join(str(field).lower() for field in fields)
-    slug = app.canonical_app_slug.lower()
-    display = app.display_name.lower()
-    if normalized == slug or normalized == display:
-        return 100.0, "exact app match"
-    if normalized in slug or normalized in display:
-        return 80.0, "app name match"
-    if normalized in haystack:
-        return 60.0, "catalog metadata match"
-    tokens = [
-        token
-        for token in normalized.replace("-", " ").replace("_", " ").split()
-        if token
-    ]
-    if not tokens:
-        return 0.0, ""
-    matched = [token for token in tokens if token in haystack]
-    if not matched:
-        return 0.0, ""
-    return 10.0 * len(matched) / len(tokens), f"matched terms: {', '.join(matched)}"
-
-
-def _json_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, dict):
-        return " ".join(f"{key} {_json_text(item)}" for key, item in value.items())
-    if isinstance(value, list):
-        return " ".join(_json_text(item) for item in value)
-    return str(value)
-
-
-def _app_catalog_embedding_text(app: DynamicProviderApp) -> str:
-    metadata = app.raw_provider_metadata_json or {}
-    native_metadata = (
-        metadata.get("native_metadata") if isinstance(metadata, dict) else {}
-    )
-    if not isinstance(native_metadata, dict):
-        native_metadata = {}
-    return " ".join(
-        str(part)
-        for part in [
-            app.canonical_app_slug,
-            app.display_name,
-            app.provider_app_id,
-            app.backend_id,
-            app.description or "",
-            app.category or "",
-            _json_text(app.auth_modes),
-            _json_text(app.available_scopes_json),
-            _json_text(app.available_actions_json),
-            _json_text(metadata.get("tags") if isinstance(metadata, dict) else ""),
-            _json_text(metadata.get("synonyms") if isinstance(metadata, dict) else ""),
-            _json_text(metadata.get("examples") if isinstance(metadata, dict) else ""),
-            _json_text(native_metadata.get("tier")),
-            _json_text(native_metadata.get("quality")),
-            _json_text(native_metadata.get("capabilities")),
-            _json_text(native_metadata.get("function_names")),
-            _json_text(native_metadata.get("guidance_titles")),
-            _json_text(native_metadata.get("required_secrets")),
-            _json_text(native_metadata.get("optional_secrets")),
-            _json_text(native_metadata.get("homepage")),
-        ]
-        if part
-    )
-
-
-def _tool_catalog_embedding_text(
-    tool: ProviderToolCatalog,
-    app: DynamicProviderApp | None = None,
-) -> str:
-    metadata = tool.provider_raw_metadata_json or {}
-    return " ".join(
-        str(part)
-        for part in [
-            tool.canonical_name,
-            tool.function_manager_name,
-            tool.tool_id,
-            tool.provider_tool_id,
-            tool.unify_tool_id,
-            tool.name,
-            tool.display_name,
-            tool.description,
-            tool.search_text,
-            tool.canonical_app_slug,
-            app.display_name if app else "",
-            app.description if app else "",
-            tool.backend_id,
-            tool.provider_app_id,
-            tool.category or "",
-            tool.action_class,
-            _json_text(tool.behavior_hints_json),
-            _json_text(tool.tags_json),
-            _json_text(tool.required_scopes_json),
-            _json_text(tool.data_categories_json),
-            _json_text(tool.input_schema_json),
-            _json_text(tool.output_schema_json),
-            _json_text(tool.examples_json),
-            _json_text(
-                metadata.get("example_prompts") if isinstance(metadata, dict) else "",
-            ),
-            _json_text(metadata.get("synonyms") if isinstance(metadata, dict) else ""),
-        ]
-        if part
-    )
-
-
-def _semantic_app_scores(
-    session: Session,
-    query_text: str,
-    apps: list[DynamicProviderApp],
-) -> dict[str, tuple[float, str]]:
-    if not query_text:
-        return {}
-    ref_ids = [_app_embedding_ref_id(app) for app in apps]
-    raw_scores = CATALOG_ARTIFACT_EMBEDDINGS.search(
-        session,
-        namespace=INTEGRATION_APP_EMBEDDING_NAMESPACE,
-        query_text=query_text,
-        ref_ids=ref_ids,
-        limit=len(apps) or 1,
-    )
-    if not raw_scores and apps:
-        # Catalog search should normally be read-only because sync pre-indexes
-        # apps. This fallback covers local/dev databases created before the
-        # batch indexer ran, without putting one embedding call per app on the
-        # steady-state search path.
-        _index_app_catalog_embeddings(session, apps)
-        session.flush()
-        raw_scores = CATALOG_ARTIFACT_EMBEDDINGS.search(
-            session,
-            namespace=INTEGRATION_APP_EMBEDDING_NAMESPACE,
-            query_text=query_text,
-            ref_ids=ref_ids,
-            limit=len(apps) or 1,
-        )
-    return {
-        ref_id: (score * 100.0, reason)
-        for ref_id, (score, reason) in raw_scores.items()
-        if score >= GLOBAL_CATALOG_SEMANTIC_SCORE_CUTOFF
-    }
-
-
-def _app_responses_from_preloaded(
-    *,
-    dao: IntegrationProviderDAO,
-    apps: list[DynamicProviderApp],
-    owner: OwnerContext,
-    overlays: dict[str, IntegrationOverlay],
-    detail_level: str = "full",
-) -> list[DynamicIntegrationAppResponse]:
-    slugs = [app.canonical_app_slug for app in apps]
-    tool_counts = dao.tool_counts_by_app(slugs)
-    connections = dao.best_connections_by_app(owner=owner, canonical_app_slugs=slugs)
-    effective_statuses = dao.effective_app_statuses_by_slug(
-        owner=owner,
-        canonical_app_slugs=slugs,
-    )
-    return [
-        _app_response_from_preloaded(
-            app=app,
-            conn=connections.get(app.canonical_app_slug),
-            overlay=overlays.get(app.canonical_app_slug),
-            tool_count=tool_counts.get(app.canonical_app_slug, 0),
-            effective_status=effective_statuses.get(
-                app.canonical_app_slug,
-                "not_connected",
-            ),
-            detail_level=detail_level,
-        )
-        for app in apps
-    ]
-
-
-def _expand_app_status_filters(
-    statuses: list[str],
-    status_groups: list[str],
-) -> list[str]:
-    expanded = list(statuses)
-    for group in status_groups:
-        expanded.extend(APP_STATUS_GROUP_STATUSES[group])
-    return list(dict.fromkeys(expanded))
-
-
-def get_apps(session: Session, body: ProviderAppGetRequest) -> ProviderAppGetResponse:
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    owner = OwnerContext(
-        owner_scope=body.owner_scope,
-        org_id=body.org_id,
-        team_id=body.team_id,
-        user_id=body.user_id,
-        assistant_id=body.assistant_id,
-    )
-    overlays = dao.list_overlays_by_slug()
-    status_filters = _expand_app_status_filters(body.status, body.status_group)
-    apps = dao.list_enabled_apps_page(
-        query_text=body.query or "",
-        source_type=body.source_type,
-        owner=owner,
-        statuses=status_filters,
-        limit=body.limit,
-        offset=body.offset,
-    )
-    items = _app_responses_from_preloaded(
-        dao=dao,
-        apps=apps,
-        owner=owner,
-        overlays=overlays,
-        detail_level=body.detail_level,
-    )
-    total = dao.count_enabled_apps(
-        query_text=body.query or "",
-        source_type=body.source_type,
-        owner=owner,
-        statuses=status_filters,
-    )
-    facets = dao.app_catalog_facets(
-        query_text=body.query or "",
-        source_type=body.source_type,
-        owner=owner,
-    )
-    return ProviderAppGetResponse(
-        items=items,
-        total=total,
-        limit=body.limit,
-        offset=body.offset,
-        facets=facets,
-        catalog_version=dao.app_catalog_version(),
-        generated_at=datetime.now(timezone.utc),
-    )
-
-
-def search_apps(
-    session: Session,
-    body: ProviderAppSearchRequest,
-) -> list[ProviderAppSearchResult]:
-    seed_default_provider_catalog(session)
-    query_text = (body.query or "").strip()
-    owner = OwnerContext(
-        owner_scope=body.owner_scope,
-        org_id=body.org_id,
-        team_id=body.team_id,
-        user_id=body.user_id,
-        assistant_id=body.assistant_id,
-    )
-    if not query_text:
-        page = get_apps(
-            session,
-            ProviderAppGetRequest(
-                query=None,
-                source_type=body.source_type,
-                owner_scope=body.owner_scope,
-                org_id=body.org_id,
-                team_id=body.team_id,
-                user_id=body.user_id,
-                assistant_id=body.assistant_id,
-                limit=body.limit,
-                offset=body.offset,
-            ),
-        )
-        return [
-            ProviderAppSearchResult(
-                **item.model_dump(),
-                supported=True,
-                score=1.0,
-                match_reason="all supported integrations",
-            )
-            for item in page.items
-        ]
-    dao = IntegrationProviderDAO(session)
-    overlays = dao.list_overlays_by_slug()
-    apps = dao.list_enabled_apps()
-    if body.source_type:
-        apps = [app for app in apps if _app_source_type(app) == body.source_type]
-    semantic_scores = _semantic_app_scores(session, query_text, apps)
-    scored: list[ProviderAppSearchResult] = []
-    for app in apps:
-        score, reason = _score_app_match(app, query_text)
-        semantic_score, semantic_reason = semantic_scores.get(
-            _app_embedding_ref_id(app),
-            (0.0, ""),
-        )
-        if query_text and score <= 0 and semantic_score <= 0:
-            continue
-        if semantic_score > 0:
-            score += semantic_score
-            if semantic_score >= score - semantic_score:
-                reason = semantic_reason
-        base = _app_response(
-            session,
-            app=app,
-            owner=owner,
-            overlay=overlays.get(app.canonical_app_slug),
-        )
-        scored.append(
-            ProviderAppSearchResult(
-                **base.model_dump(),
-                supported=True,
-                score=score,
-                match_reason=reason,
-            ),
-        )
-    scored.sort(key=lambda item: (-item.score, item.display_name.lower()))
-    return scored[body.offset : body.offset + body.limit]
 
 
 def get_app_detail(
@@ -2710,105 +2273,6 @@ def _tool_requires_confirmation(
     return bool(confirm_actions.intersection(_tool_keys(tool)))
 
 
-def _score_tool(
-    tool: ProviderToolCatalog,
-    query_text: str,
-    conn: Optional[IntegrationConnection],
-) -> tuple[float, str]:
-    if not query_text:
-        return float(tool.overlay_rank_boost or 0), "default catalog order"
-    tokens = {tok for tok in query_text.lower().replace("_", " ").split() if tok}
-    haystack = (tool.search_text or "").lower()
-    exact = 5.0 if query_text.lower() in haystack else 0.0
-    token_hits = sum(1 for token in tokens if token in haystack)
-    connected = 2.0 if conn and conn.status == "connected" else 0.0
-    score = exact + token_hits + connected + float(tool.overlay_rank_boost or 0)
-    if exact:
-        reason = "exact metadata match"
-    elif token_hits:
-        reason = f"{token_hits} keyword matches in normalized provider metadata"
-    else:
-        reason = "semantic-ready catalog candidate"
-    return score, reason
-
-
-def _lexical_signal(tool: ProviderToolCatalog, query_text: str) -> float:
-    if not query_text:
-        return 1.0
-    normalized_query = query_text.lower()
-    tokens = {tok for tok in normalized_query.replace("_", " ").split() if tok}
-    haystack = " ".join(
-        [
-            tool.search_text or "",
-            tool.canonical_name or "",
-            tool.display_name or "",
-            tool.description or "",
-            tool.canonical_app_slug or "",
-        ],
-    ).lower()
-    exact = 5.0 if normalized_query in haystack else 0.0
-    return exact + float(sum(1 for token in tokens if token in haystack))
-
-
-def _semantic_tool_scores(
-    session: Session,
-    query_text: str,
-    tools: list[ProviderToolCatalog],
-) -> dict[str, tuple[float, str]]:
-    if not query_text:
-        return {}
-    if _SEMANTIC_TOOL_SCORE_PROVIDER is not None:
-        raw_scores = _SEMANTIC_TOOL_SCORE_PROVIDER(session, query_text, tools) or {}
-    else:
-        raw_scores = _artifact_tool_scores(session, query_text, tools)
-    normalized: dict[str, tuple[float, str]] = {}
-    for tool_id, value in raw_scores.items():
-        if isinstance(value, tuple):
-            score, reason = value
-        else:
-            score = value
-            reason = "embedding similarity over provider tool metadata"
-        try:
-            normalized[tool_id] = (float(score), reason)
-        except (TypeError, ValueError):
-            continue
-    return normalized
-
-
-def _artifact_tool_scores(
-    session: Session,
-    query_text: str,
-    tools: list[ProviderToolCatalog],
-) -> dict[str, tuple[float, str]]:
-    if not tools:
-        return {}
-    raw_scores = CATALOG_ARTIFACT_EMBEDDINGS.search(
-        session,
-        namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
-        query_text=query_text,
-        ref_ids=[tool.tool_id for tool in tools],
-        limit=len(tools),
-    )
-    if not raw_scores:
-        # Catalog sync should normally pre-index provider tools. This fallback
-        # keeps older local/dev catalogs searchable without doing one embedding
-        # upsert per candidate on every search request.
-        _index_tool_catalog_embeddings(session, tools)
-        session.flush()
-        raw_scores = CATALOG_ARTIFACT_EMBEDDINGS.search(
-            session,
-            namespace=INTEGRATION_TOOL_EMBEDDING_NAMESPACE,
-            query_text=query_text,
-            ref_ids=[tool.tool_id for tool in tools],
-            limit=len(tools),
-        )
-    return {
-        tool_id: (score, reason)
-        for tool_id, (score, reason) in raw_scores.items()
-        if score >= GLOBAL_CATALOG_SEMANTIC_SCORE_CUTOFF
-    }
-
-
 def _tool_search_result(
     *,
     tool: ProviderToolCatalog,
@@ -2846,219 +2310,6 @@ def _tool_search_result(
         result.output_schema = tool.output_schema_json or {}
         result.examples = tool.examples_json or []
     return result
-
-
-def _tool_results_from_preloaded(
-    *,
-    tools: list[ProviderToolCatalog],
-    apps: dict[str, DynamicProviderApp],
-    connections: dict[str, IntegrationConnection],
-    match_reason: str,
-    include_schema: bool = False,
-) -> list[ProviderToolSearchResult]:
-    return [
-        _tool_search_result(
-            tool=tool,
-            app=apps.get(tool.canonical_app_slug),
-            conn=connections.get(tool.canonical_app_slug),
-            activation_state=_activation_state(
-                tool,
-                connections.get(tool.canonical_app_slug),
-            ),
-            match_reason=match_reason,
-            score=float(tool.overlay_rank_boost or 0),
-            include_schema=include_schema,
-        )
-        for tool in tools
-    ]
-
-
-def get_tools(
-    session: Session,
-    body: ProviderToolGetRequest,
-) -> ProviderToolGetResponse:
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    owner = OwnerContext(
-        owner_scope=body.owner_scope,
-        org_id=body.org_id,
-        team_id=body.team_id,
-        user_id=body.user_id,
-        assistant_id=body.assistant_id,
-    )
-    if body.include_unconnected and body.activation_state is None:
-        tools = dao.list_tools_page(
-            canonical_app_slug=body.canonical_app_slug,
-            limit=body.limit,
-            offset=body.offset,
-        )
-        slugs = [tool.canonical_app_slug for tool in tools]
-        apps = dao.list_apps_by_slug(slugs)
-        connections = dao.best_connections_by_app(
-            owner=owner,
-            canonical_app_slugs=slugs,
-        )
-        results = _tool_results_from_preloaded(
-            tools=tools,
-            apps=apps,
-            connections=connections,
-            match_reason="filtered provider tool",
-            include_schema=body.include_schema,
-        )
-        total = dao.count_tools(canonical_app_slug=body.canonical_app_slug)
-        return ProviderToolGetResponse(
-            items=results,
-            total=total,
-            limit=body.limit,
-            offset=body.offset,
-        )
-
-    activation_state = body.activation_state or "connected_ready"
-    tools = dao.list_tools_page_by_activation_state(
-        owner=owner,
-        activation_state=activation_state,
-        canonical_app_slug=body.canonical_app_slug,
-        limit=body.limit,
-        offset=body.offset,
-    )
-    slugs = [tool.canonical_app_slug for tool in tools]
-    apps = dao.list_apps_by_slug(slugs)
-    connections = dao.best_connections_by_app(
-        owner=owner,
-        canonical_app_slugs=slugs,
-    )
-    matched = _tool_results_from_preloaded(
-        tools=tools,
-        apps=apps,
-        connections=connections,
-        match_reason="filtered provider tool",
-        include_schema=body.include_schema,
-    )
-    total = dao.count_tools_by_activation_state(
-        owner=owner,
-        activation_state=activation_state,
-        canonical_app_slug=body.canonical_app_slug,
-    )
-    return ProviderToolGetResponse(
-        items=matched,
-        total=total,
-        limit=body.limit,
-        offset=body.offset,
-    )
-
-
-def search_tools(
-    session: Session,
-    body: ProviderToolSearchRequest,
-) -> list[ProviderToolSearchResult]:
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    owner = OwnerContext(
-        owner_scope=body.owner_scope,
-        org_id=body.org_id,
-        team_id=body.team_id,
-        user_id=body.user_id,
-        assistant_id=body.assistant_id,
-    )
-    query_text = (body.query or "").strip()
-    if not query_text:
-        return get_tools(
-            session,
-            ProviderToolGetRequest(
-                owner_scope=body.owner_scope,
-                org_id=body.org_id,
-                team_id=body.team_id,
-                user_id=body.user_id,
-                assistant_id=body.assistant_id,
-                canonical_app_slug=body.canonical_app_slug,
-                activation_state=None,
-                include_unconnected=body.include_unconnected,
-                include_schema=body.include_schema,
-                limit=body.limit,
-                offset=body.offset,
-            ),
-        ).items
-    tools = dao.list_tools(canonical_app_slug=body.canonical_app_slug)
-    semantic_scores = _semantic_tool_scores(session, query_text, tools)
-
-    apps = {app.canonical_app_slug: app for app in dao.list_all_apps()}
-    results: list[ProviderToolSearchResult] = []
-    for tool in tools:
-        conn = _best_connection(
-            session,
-            owner=owner,
-            canonical_app_slug=tool.canonical_app_slug,
-        )
-        activation_state = _activation_state(tool, conn)
-        if not body.include_unconnected and activation_state != "connected_ready":
-            continue
-        score, reason = _score_tool(tool, query_text, conn)
-        semantic_score, semantic_reason = semantic_scores.get(tool.tool_id, (0.0, ""))
-        if (
-            query_text
-            and _lexical_signal(tool, query_text) <= 0
-            and semantic_score <= 0
-        ):
-            continue
-        if semantic_score > 0:
-            score += semantic_score
-            if semantic_score >= score - semantic_score:
-                reason = semantic_reason
-        results.append(
-            _tool_search_result(
-                tool=tool,
-                app=apps.get(tool.canonical_app_slug),
-                conn=conn,
-                activation_state=activation_state,
-                match_reason=reason,
-                score=score,
-                include_schema=body.include_schema,
-            ),
-        )
-    sorted_results = sorted(results, key=lambda item: item.score, reverse=True)
-    return sorted_results[body.offset : body.offset + body.limit]
-
-
-def get_tool_schema(
-    session: Session,
-    *,
-    tool_id: str,
-    owner: OwnerContext,
-) -> ProviderToolSchemaResponse:
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    tool = dao.get_tool(tool_id)
-    if not tool:
-        raise ValueError(f"Unknown provider tool: {tool_id}")
-    conn = _best_connection(
-        session,
-        owner=owner,
-        canonical_app_slug=tool.canonical_app_slug,
-    )
-    app = dao.get_app_by_slug(tool.canonical_app_slug)
-    return ProviderToolSchemaResponse(
-        tool_id=tool.tool_id,
-        backend_id=tool.backend_id,
-        provider_app_id=tool.provider_app_id,
-        provider_tool_id=tool.provider_tool_id,
-        canonical_name=tool.canonical_name,
-        function_manager_name=tool.function_manager_name,
-        app_slug=tool.canonical_app_slug,
-        app_display_name=app.display_name if app else tool.canonical_app_slug,
-        app_icon_url=app.icon_url if app else None,
-        tool_display_name=tool.display_name,
-        description=tool.description,
-        input_schema=tool.input_schema_json or {},
-        output_schema=tool.output_schema_json or {},
-        required_scopes=tool.required_scopes_json or [],
-        action_class=tool.action_class,
-        behavior_hints=tool.behavior_hints_json or [],
-        confirmation_required=_tool_requires_confirmation(tool, conn, None),
-        approval_level=_effective_tool_policy_level(tool, conn),
-        examples=tool.examples_json or [],
-        activation_state=_activation_state(tool, conn),
-        connection_id=conn.connection_id if conn else None,
-    )
 
 
 def _redact_summary(payload: dict[str, Any]) -> str:
