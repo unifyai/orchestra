@@ -85,6 +85,7 @@ from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
+    emit_onboarding_step_started_event,
     emit_onboarding_step_skipped_event,
     emit_secret_landed_event,
     get_coordinator_state,
@@ -1510,6 +1511,7 @@ async def update_coordinator_state_endpoint(
         coordinator_id=coordinator_id,
         user_id=request.state.user_id,
     )
+    previous_state = get_coordinator_state(session, coordinator=coordinator)
     next_state = set_coordinator_state(
         session,
         coordinator=coordinator,
@@ -1520,6 +1522,19 @@ async def update_coordinator_state_endpoint(
         unskip_onboarding_step=update.unskip_onboarding_step,
         intro_watched=update.intro_watched,
     )
+    if (
+        update.onboarding_step
+        and next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+        and previous_state.get("onboarding_step") != update.onboarding_step
+    ):
+        completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
+        await emit_onboarding_step_started_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.onboarding_step,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
     if update.skip_onboarding_step:
         completed_step_ids = (
             derive_onboarding_progress(session, coordinator=coordinator)

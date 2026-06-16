@@ -20,6 +20,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.slack_dao import SlackDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
@@ -1176,7 +1177,9 @@ def set_coordinator_state(
             detail=f"invalid_coordinator_mode: {mode}",
         )
     if onboarding_step is not None and (
-        not isinstance(onboarding_step, str) or not onboarding_step.strip()
+        not isinstance(onboarding_step, str)
+        or not onboarding_step.strip()
+        or onboarding_step not in SKIPPABLE_ONBOARDING_STEP_SET
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1344,6 +1347,7 @@ COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
 SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
 SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
+SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1374,6 +1378,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_WORKSPACE_CONNECTED,
         SUBTYPE_INTEGRATION_CONNECTED,
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
+        SUBTYPE_ONBOARDING_STEP_STARTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1395,20 +1400,44 @@ _WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_", "AZURE_"
 _ACTION_EXCLUDED_MANAGERS: tuple[str, ...] = ("MemoryManager",)
 
 # Onboarding checklist step ids derivable from durable domain state.
-# ``meet`` (picker resolution) and ``hire-specialist`` (ends
-# onboarding) are deliberately absent: the former is session-local to
-# the console, the latter flips ``mode`` to ``working`` so derivation
-# never runs for it.
+# ``meet`` (picker resolution) is deliberately absent because it is
+# session-local to Console. ``hire-specialist`` ends onboarding by
+# flipping ``mode`` to ``working`` so derivation never runs for it.
+ONBOARDING_STEP_EMAIL_REPLY = "email-reply"
+ONBOARDING_STEP_WHATSAPP_NUMBER = "whatsapp-number"
+ONBOARDING_STEP_WHATSAPP_MESSAGE = "whatsapp-message"
+ONBOARDING_STEP_WHATSAPP_CALL = "whatsapp-call"
+ONBOARDING_STEP_PHONE_NUMBER = "phone-number"
+ONBOARDING_STEP_SMS_MESSAGE = "sms-message"
+ONBOARDING_STEP_PHONE_CALL = "phone-call"
+ONBOARDING_STEP_SLACK_CONNECT = "slack-connect"
+ONBOARDING_STEP_SLACK_MESSAGE = "slack-message"
+ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
+ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
 ONBOARDING_STEP_ACT = "act"
 ONBOARDING_STEP_SCHEDULE = "schedule"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
-SKIPPABLE_ONBOARDING_STEPS = (
+DERIVABLE_ONBOARDING_STEPS = (
+    ONBOARDING_STEP_EMAIL_REPLY,
+    ONBOARDING_STEP_WHATSAPP_NUMBER,
+    ONBOARDING_STEP_WHATSAPP_MESSAGE,
+    ONBOARDING_STEP_WHATSAPP_CALL,
+    ONBOARDING_STEP_PHONE_NUMBER,
+    ONBOARDING_STEP_SMS_MESSAGE,
+    ONBOARDING_STEP_PHONE_CALL,
+    ONBOARDING_STEP_SLACK_CONNECT,
+    ONBOARDING_STEP_SLACK_MESSAGE,
+    ONBOARDING_STEP_DISCORD_CONNECT,
+    ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
     ONBOARDING_STEP_ACT,
     ONBOARDING_STEP_SCHEDULE,
+)
+SKIPPABLE_ONBOARDING_STEPS = (
+    *DERIVABLE_ONBOARDING_STEPS,
     ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
@@ -1514,6 +1543,125 @@ def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
     return row is not None
 
 
+def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User | None:
+    return session.get(User, coordinator.user_id)
+
+
+def _has_user_whatsapp_number(session: Session, *, coordinator: Assistant) -> bool:
+    user = _user_for_coordinator(session, coordinator=coordinator)
+    return bool(user and user.whatsapp_number and user.whatsapp_number.strip())
+
+
+def _has_user_phone_number(session: Session, *, coordinator: Assistant) -> bool:
+    user = _user_for_coordinator(session, coordinator=coordinator)
+    return bool(user and user.phone_number and user.phone_number.strip())
+
+
+def _has_slack_install(session: Session, *, coordinator: Assistant) -> bool:
+    dao = SlackDAO(session)
+    install = (
+        dao.get_install_for_org(coordinator.organization_id)
+        if coordinator.organization_id is not None
+        else dao.get_install_for_user(coordinator.user_id)
+    )
+    return install is not None
+
+
+def _has_discord_connection(session: Session, *, coordinator: Assistant) -> bool:
+    user = _user_for_coordinator(session, coordinator=coordinator)
+    if not user or not user.discord_id or not user.discord_id.strip():
+        return False
+    contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        coordinator.agent_id,
+        "discord",
+    )
+    return bool(contact and contact.contact_value and contact.contact_value.strip())
+
+
+def _has_assistant_transcript_message(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    mediums: Sequence[str],
+) -> bool:
+    project = _project_for_coordinator(session, coordinator)
+    context = _get_context(
+        session,
+        project_id=project.id,
+        context_name=_coordinator_context_name(coordinator, COORDINATOR_TRANSCRIPTS_CONTEXT),
+    )
+    if context is None:
+        return False
+    row = session.scalar(
+        select(LogEvent.id)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data["medium"].astext.in_(tuple(mediums)),
+            LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
+            LogEvent.data["receiver_ids"].contains([PERSONAL_BOSS_CONTACT_ID]),
+        )
+        .limit(1),
+    )
+    return row is not None
+
+
+def _has_email_reply(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("email",),
+    )
+
+
+def _has_whatsapp_message(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("whatsapp_message",),
+    )
+
+
+def _has_whatsapp_call(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("whatsapp_call",),
+    )
+
+
+def _has_sms_message(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("sms_message",),
+    )
+
+
+def _has_phone_call(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("phone_call",),
+    )
+
+
+def _has_slack_message(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("slack_message", "slack_channel_message"),
+    )
+
+
+def _has_discord_message(session: Session, *, coordinator: Assistant) -> bool:
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=("discord_message", "discord_channel_message"),
+    )
+
+
 def derive_onboarding_progress(
     session: Session,
     *,
@@ -1532,6 +1680,17 @@ def derive_onboarding_progress(
     having fired this session.
     """
     checks: tuple[tuple[str, Any], ...] = (
+        (ONBOARDING_STEP_EMAIL_REPLY, _has_email_reply),
+        (ONBOARDING_STEP_WHATSAPP_NUMBER, _has_user_whatsapp_number),
+        (ONBOARDING_STEP_WHATSAPP_MESSAGE, _has_whatsapp_message),
+        (ONBOARDING_STEP_WHATSAPP_CALL, _has_whatsapp_call),
+        (ONBOARDING_STEP_PHONE_NUMBER, _has_user_phone_number),
+        (ONBOARDING_STEP_SMS_MESSAGE, _has_sms_message),
+        (ONBOARDING_STEP_PHONE_CALL, _has_phone_call),
+        (ONBOARDING_STEP_SLACK_CONNECT, _has_slack_install),
+        (ONBOARDING_STEP_SLACK_MESSAGE, _has_slack_message),
+        (ONBOARDING_STEP_DISCORD_CONNECT, _has_discord_connection),
+        (ONBOARDING_STEP_DISCORD_MESSAGE, _has_discord_message),
         (ONBOARDING_STEP_WORKSPACE, _has_workspace_email),
         (ONBOARDING_STEP_APPS, _has_app_secret),
         (ONBOARDING_STEP_ACT, _has_root_action),
@@ -1857,6 +2016,38 @@ async def emit_secret_landed_event(
         subtype=subtype,
         message=message,
         details={"secret_name": secret_name},
+    )
+
+
+async def emit_onboarding_step_started_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that the user selected one onboarding checklist step."""
+    completed = list(
+        completed_step_ids
+        or derive_onboarding_progress(session, coordinator=coordinator)
+    )
+    skipped = normalize_onboarding_step_ids(
+        skipped_step_ids
+        or get_coordinator_state(session, coordinator=coordinator).get(
+            "skipped_step_ids",
+        ),
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_STARTED,
+        message=f"User started the '{step_id}' onboarding step.",
+        details={
+            "step_id": step_id,
+            "completed_step_ids": completed,
+            "skipped_step_ids": skipped,
+        },
     )
 
 

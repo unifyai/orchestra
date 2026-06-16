@@ -677,10 +677,11 @@ class CoordinatorStateResponse(BaseModel):
     """Snapshot of the latest Coordinator/State row.
 
     ``completed_step_ids`` is not stored on the row — it is derived
-    from durable domain state on every read (workspace email contact,
-    integration secrets, action history, Tasks rows) so consumers see
-    steps completed in earlier sessions without any transition event.
-    Always ``[]`` outside onboarding mode, where derivation is skipped.
+    from durable domain state on every read (communication transcripts,
+    profile contact fields, Slack/Discord setup, workspace email contact,
+    integration secrets, action history, Tasks rows) so consumers see steps
+    completed in earlier sessions without any transition event. Always ``[]``
+    outside onboarding mode, where derivation is skipped.
     """
 
     coordinator_id: int
