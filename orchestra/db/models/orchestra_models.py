@@ -2231,6 +2231,40 @@ class AssistantSecret(Base):
     __table_args__ = (sa.PrimaryKeyConstraint("agent_id", "secret_name"),)
 
 
+class AssistantWorkspaceFileAccess(Base):
+    """Per-assistant, per-provider allowlist gating which Drive / SharePoint /
+    OneDrive files and folders a connected workspace account may access.
+
+    The policy is a set of explicit allow/deny ``decisions`` keyed by
+    ``(drive_id, item_id)`` plus a ``default_allow`` fallback.  Access for any
+    item is resolved by walking from the item up its parent chain: the nearest
+    ancestor (or the item itself) carrying an explicit decision wins; absent
+    any decision, ``default_allow`` applies.  Newly-added files therefore
+    inherit their parent folder's decision, with ``default_allow`` governing
+    items at otherwise-undecided locations.
+
+    Each ``decisions`` entry is a JSON object::
+
+        {"drive_id": str, "item_id": str, "allow": bool,
+         "kind": "folder" | "file", "name": str, "path": str}
+    """
+
+    __tablename__ = "assistant_workspace_file_access"
+
+    agent_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # "google" | "microsoft"
+    provider = Column(String, nullable=False)
+    default_allow = Column(Boolean, nullable=False, server_default=sa.text("false"))
+    decisions = Column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (sa.PrimaryKeyConstraint("agent_id", "provider"),)
+
+
 class OneTimeCreditGrantLink(Base):
     """
     Credit grant links that award credits when claimed.

@@ -32,6 +32,9 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+from orchestra.db.dao.assistant_workspace_file_access_dao import (
+    AssistantWorkspaceFileAccessDAO,
+)
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -166,6 +169,11 @@ from orchestra.web.api.assistant.schema import (
     VoiceDesignGeneratePreviewsRequest,
     VoiceGenerateRequest,
     VoiceRead,
+    WorkspaceFileAccessAdminResponse,
+    WorkspaceFileListResponse,
+    WorkspaceFileNode,
+    WorkspaceFilePolicy,
+    WorkspaceFilePolicyUpdate,
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_phone_number,
@@ -2989,6 +2997,305 @@ async def get_granted_features(
         )
 
     return InfoResponse(info=GrantedFeaturesResponse())
+
+
+# =========================================================================
+# Workspace file access (Drive / SharePoint / OneDrive allowlist)
+# =========================================================================
+
+
+def _load_assistant_for_file_access(
+    session: Session,
+    request: Request,
+    assistant_id: int,
+    *,
+    write: bool,
+):
+    """Load the assistant and enforce read/write RBAC for file-access ops."""
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant, user_id=user_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        permission = "assistant:write" if write else "assistant:read"
+        if not ra_dao.check_user_permission(
+            user_id, "assistant", assistant_id, permission
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this assistant.",
+            )
+    return assistant
+
+
+def _byod_account_email(session: Session, assistant_id: int) -> str | None:
+    """Return the BYOD (user-connected) email contact for the assistant."""
+    contact_dao = AssistantContactDAO(session)
+    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+    return next(
+        (
+            c.contact_value
+            for c in contacts
+            if c.contact_type == "email" and c.provisioned_by == "user"
+        ),
+        None,
+    )
+
+
+async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
+    """Proxy an unfiltered browse call to the Unity gateway channel."""
+    import httpx
+
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    if not comms_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Workspace browsing is not available on this deployment.",
+        )
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    base = "drive" if provider == "google" else "sharepoint"
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.get(
+            f"{comms_url}/{base}/{path}",
+            params=params,
+            headers={"Authorization": f"Bearer {admin_key}"},
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail="Failed to browse workspace files.",
+        )
+    return resp.json()
+
+
+def _ms_node(raw: dict, drive_id: str) -> WorkspaceFileNode:
+    """Normalize a Microsoft Graph item dict into a WorkspaceFileNode."""
+    return WorkspaceFileNode(
+        drive_id=drive_id,
+        item_id=str(raw.get("id") or ""),
+        name=raw.get("name") or "",
+        kind="folder" if raw.get("type") == "folder" else "file",
+        mime_type=raw.get("mime_type"),
+        web_url=raw.get("web_url"),
+        parent_id=None,
+    )
+
+
+def _google_node(raw: dict) -> WorkspaceFileNode:
+    """Build a WorkspaceFileNode from the already-normalized Drive channel dict."""
+    return WorkspaceFileNode(
+        drive_id=str(raw.get("drive_id") or ""),
+        item_id=str(raw.get("item_id") or ""),
+        name=raw.get("name") or "",
+        kind=raw.get("kind") or "file",
+        mime_type=raw.get("mime_type"),
+        web_url=raw.get("web_url"),
+        parent_id=raw.get("parent_id"),
+    )
+
+
+def _require_file_provider(provider: str) -> str:
+    if provider not in ("google", "microsoft"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="provider must be 'google' or 'microsoft'.",
+        )
+    return provider
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-files/roots",
+    response_model=InfoResponse[WorkspaceFileListResponse],
+    summary="List the connected account's top-level drives/corpora",
+    tags=["Assistant Management"],
+)
+async def list_workspace_file_roots(
+    assistant_id: int,
+    provider: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileListResponse]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=False)
+    email = _byod_account_email(session, assistant_id)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No connected account found for this assistant.",
+        )
+
+    if provider == "google":
+        data = await _gateway_browse("google", "roots", {"user_email": email})
+        items = [_google_node(n) for n in data.get("roots", [])]
+    else:
+        data = await _gateway_browse("microsoft", "drives", {"user_email": email})
+        items = [
+            WorkspaceFileNode(
+                drive_id=str(d.get("id") or ""),
+                item_id="root",
+                name=d.get("name") or "Drive",
+                kind="drive",
+                web_url=d.get("web_url"),
+            )
+            for d in data.get("drives", [])
+        ]
+    return InfoResponse(info=WorkspaceFileListResponse(items=items))
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-files/children",
+    response_model=InfoResponse[WorkspaceFileListResponse],
+    summary="List the children of a folder in the connected account",
+    tags=["Assistant Management"],
+)
+async def list_workspace_file_children(
+    assistant_id: int,
+    provider: str,
+    drive_id: str,
+    item_id: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileListResponse]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=False)
+    email = _byod_account_email(session, assistant_id)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No connected account found for this assistant.",
+        )
+
+    if provider == "google":
+        data = await _gateway_browse(
+            "google",
+            "children",
+            {"user_email": email, "drive_id": drive_id, "item_id": item_id},
+        )
+        items = [_google_node(n) for n in data.get("items", [])]
+    else:
+        params = {"user_email": email}
+        if item_id and item_id != "root":
+            params["item_id"] = item_id
+        data = await _gateway_browse(
+            "microsoft", f"drives/{drive_id}/items", params
+        )
+        items = [_ms_node(n, drive_id) for n in data.get("items", [])]
+    return InfoResponse(info=WorkspaceFileListResponse(items=items))
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-files/policy",
+    response_model=InfoResponse[WorkspaceFilePolicy],
+    summary="Get the file-access allowlist for a provider",
+    tags=["Assistant Management"],
+)
+async def get_workspace_file_policy(
+    assistant_id: int,
+    provider: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFilePolicy]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=False)
+
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    row = dao.get(assistant_id, provider)
+    if not row:
+        return InfoResponse(
+            info=WorkspaceFilePolicy(provider=provider, default_allow=False, decisions=[])
+        )
+    return InfoResponse(
+        info=WorkspaceFilePolicy(
+            provider=provider,
+            default_allow=row.default_allow,
+            decisions=row.decisions or [],
+        )
+    )
+
+
+@router.patch(
+    "/assistant/{assistant_id}/workspace-files/policy",
+    response_model=InfoResponse[WorkspaceFilePolicy],
+    summary="Replace the file-access allowlist for a provider",
+    tags=["Assistant Management"],
+)
+async def update_workspace_file_policy(
+    assistant_id: int,
+    provider: str,
+    body: WorkspaceFilePolicyUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFilePolicy]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=True)
+
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    decisions = [d.model_dump() for d in body.decisions]
+    row = dao.upsert(
+        agent_id=assistant_id,
+        provider=provider,
+        default_allow=body.default_allow,
+        decisions=decisions,
+    )
+    session.commit()
+
+    # Re-awaken so the runtime re-syncs the allowlist before its next file op.
+    try:
+        await reawaken_assistant(str(assistant_id))
+    except Exception as e:
+        logging.warning(
+            f"Failed to reawaken assistant {assistant_id} after file-policy update: {e}",
+        )
+
+    return InfoResponse(
+        info=WorkspaceFilePolicy(
+            provider=provider,
+            default_allow=row.default_allow,
+            decisions=row.decisions or [],
+        )
+    )
+
+
+@admin_router.get(
+    "/assistant/{assistant_id}/workspace-file-access",
+    response_model=InfoResponse[WorkspaceFileAccessAdminResponse],
+    summary="Admin read of all file-access policies for an assistant",
+    description=(
+        "Returns every configured per-provider file-access allowlist for the "
+        "assistant. Used by the assistant runtime to mirror the allowlist into "
+        "its enforcement layer."
+    ),
+    tags=["Assistant Management"],
+)
+async def admin_get_workspace_file_access(
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileAccessAdminResponse]:
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    policies: list[WorkspaceFilePolicy] = []
+    for provider in ("google", "microsoft"):
+        row = dao.get(assistant_id, provider)
+        if row:
+            policies.append(
+                WorkspaceFilePolicy(
+                    provider=provider,
+                    default_allow=row.default_allow,
+                    decisions=row.decisions or [],
+                )
+            )
+    return InfoResponse(info=WorkspaceFileAccessAdminResponse(policies=policies))
 
 
 # =========================================================================
