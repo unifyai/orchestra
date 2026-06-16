@@ -1,6 +1,6 @@
 """Make assistant contact value uniqueness predicate NULL-safe.
 
-Revision ID: fix_contact_value_index_predicate
+Revision ID: fix_contact_value_idx_predicate
 Revises: referral_program
 Create Date: 2026-06-19 04:00:00.000000
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "fix_contact_value_index_predicate"
+revision = "fix_contact_value_idx_predicate"
 down_revision = "referral_program"
 branch_labels = None
 depends_on = None
