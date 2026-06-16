@@ -9,6 +9,10 @@
 #
 # This eliminates network latency and staging server bottlenecks during testing.
 #
+# Scope: this is an INTERNAL dev/test harness for Orchestra alone. To run the
+# whole product locally (Orchestra + Unity gateway + Console + Coordinator), use
+# `unity stack up` from the unity repo — it invokes this script for you.
+#
 # Usage:
 #   ./local_orchestra.sh start    # Start and wait for ready (preserves data)
 #   ./local_orchestra.sh stop     # Stop local orchestra (preserves data)
