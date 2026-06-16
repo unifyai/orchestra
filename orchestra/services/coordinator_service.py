@@ -1588,7 +1588,9 @@ def _has_assistant_transcript_message(
     context = _get_context(
         session,
         project_id=project.id,
-        context_name=_coordinator_context_name(coordinator, COORDINATOR_TRANSCRIPTS_CONTEXT),
+        context_name=_coordinator_context_name(
+            coordinator, COORDINATOR_TRANSCRIPTS_CONTEXT
+        ),
     )
     if context is None:
         return False

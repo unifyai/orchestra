@@ -1535,7 +1535,9 @@ async def update_coordinator_state_endpoint(
         and next_state["mode"] == COORDINATOR_MODE_ONBOARDING
         and previous_state.get("onboarding_step") != update.onboarding_step
     ):
-        completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
+        completed_step_ids = derive_onboarding_progress(
+            session, coordinator=coordinator
+        )
         await emit_onboarding_step_started_event(
             session,
             coordinator=coordinator,
@@ -3188,9 +3190,7 @@ async def list_workspace_file_children(
         params = {"user_email": email}
         if item_id and item_id != "root":
             params["item_id"] = item_id
-        data = await _gateway_browse(
-            "microsoft", f"drives/{drive_id}/items", params
-        )
+        data = await _gateway_browse("microsoft", f"drives/{drive_id}/items", params)
         items = [_ms_node(n, drive_id) for n in data.get("items", [])]
     return InfoResponse(info=WorkspaceFileListResponse(items=items))
 
@@ -3214,7 +3214,9 @@ async def get_workspace_file_policy(
     row = dao.get(assistant_id, provider)
     if not row:
         return InfoResponse(
-            info=WorkspaceFilePolicy(provider=provider, default_allow=False, decisions=[])
+            info=WorkspaceFilePolicy(
+                provider=provider, default_allow=False, decisions=[]
+            )
         )
     return InfoResponse(
         info=WorkspaceFilePolicy(
