@@ -825,3 +825,165 @@ async def test_deprovision_assistant_contacts_never_calls_email_helpers(
 
     assert not hasattr(svc, "delete_email")
     assert not hasattr(svc, "delete_outlook_email")
+
+
+# ---------------------------------------------------------------------------
+# Single-delete: deferred context/log purge by path
+# ---------------------------------------------------------------------------
+
+
+def _seed_owner_and_project(dbsession, *, suffix="purge"):
+    """Create a user + BillingAccount + their Assistants project.
+
+    The assistant row itself is intentionally absent: by the time the worker
+    purges contexts, the delete endpoint has already removed the row. Contexts
+    are keyed by the ``{user_id}/{agent_id}`` path, not an FK to the row.
+    """
+    from decimal import Decimal
+
+    from orchestra.db.models.core_models import Project
+    from orchestra.db.models.orchestra_models import BillingAccount, User
+
+    ba = BillingAccount(credits=Decimal("1000"), account_status="ACTIVE")
+    dbsession.add(ba)
+    dbsession.flush()
+    uid = f"purge_user_{suffix}"
+    user = User(id=uid, email=f"{uid}@test.com", billing_account_id=ba.id)
+    dbsession.add(user)
+    dbsession.flush()
+    project = Project(user_id=uid, organization_id=None, name="Assistants")
+    dbsession.add(project)
+    dbsession.flush()
+    return user, project
+
+
+def _seed_context_with_log(dbsession, project, name):
+    """Create a context under *project* with one log event linked to it."""
+    from orchestra.db.models.core_models import Context, LogEvent, LogEventContext
+
+    context = Context(project_id=project.id, name=name)
+    dbsession.add(context)
+    dbsession.flush()
+    log = LogEvent(project_id=project.id, data={"message": "to purge"})
+    dbsession.add(log)
+    dbsession.flush()
+    dbsession.add(LogEventContext(log_event_id=log.id, context_id=context.id))
+    dbsession.flush()
+    return context
+
+
+@pytest.mark.anyio
+async def test_process_cleanup_purges_context_tree_by_path(dbsession):
+    """A purge_contexts task removes the assistant's {user}/{agent} context tree."""
+    from orchestra.db.models.core_models import Context
+
+    user, project = _seed_owner_and_project(dbsession)
+    agent_id = 987654  # row already deleted by the endpoint in real flows
+    prefix = f"{user.id}/{agent_id}"
+    _seed_context_with_log(dbsession, project, f"{prefix}/Knowledge")
+    _seed_context_with_log(dbsession, project, f"{prefix}/Guidance")
+
+    task = AssistantCleanupTask(
+        assistant_id=agent_id,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={
+            "contacts": [],
+            "user_id": user.id,
+            "organization_id": None,
+            "purge_contexts": True,
+        },
+        status="pending",
+    )
+    dbsession.add(task)
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision, patch(
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
+    ) as mock_bucket_cls:
+        mock_teardown.return_value = {"success": True, "steps": {}, "errors": []}
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+        mock_bucket = mock_bucket_cls.return_value
+        mock_bucket.delete_assistant_file.return_value = True
+        mock_bucket.delete_all_assistant_data.return_value = {
+            "media": 0,
+            "recordings": 0,
+            "attachments": 0,
+        }
+
+        result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task.id])
+
+    assert result["completed"] == 1, result
+    dbsession.expire_all()
+    remaining = (
+        dbsession.query(Context)
+        .filter(
+            Context.project_id == project.id,
+            Context.name.like(f"{prefix}/%"),
+        )
+        .count()
+    )
+    assert remaining == 0
+
+
+@pytest.mark.anyio
+async def test_process_cleanup_purge_retries_then_fails(dbsession):
+    """A purge_contexts task that keeps failing retries and then terminally fails
+    (surfaced via the task row / admin endpoint)."""
+    from orchestra.services.assistant_cleanup_service import MAX_CLEANUP_ATTEMPTS
+
+    user, _ = _seed_owner_and_project(dbsession, suffix="failing")
+
+    task = AssistantCleanupTask(
+        assistant_id=987655,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={
+            "contacts": [],
+            "user_id": user.id,
+            "organization_id": None,
+            "purge_contexts": True,
+        },
+        status="pending",
+        # One attempt below the cap so this run is terminal.
+        attempt_count=MAX_CLEANUP_ATTEMPTS - 1,
+    )
+    dbsession.add(task)
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision:
+        mock_teardown.return_value = {
+            "success": False,
+            "steps": {},
+            "errors": ["delete_pubsub_topic: request timed out"],
+        }
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+
+        result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task.id])
+
+    assert result["failed"] == 1, result
+    dbsession.expire_all()
+    refreshed_task = dbsession.get(AssistantCleanupTask, task.id)
+    assert refreshed_task.status == "failed"

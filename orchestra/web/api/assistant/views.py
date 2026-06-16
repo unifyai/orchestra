@@ -3372,23 +3372,25 @@ async def delete_assistant(
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
-    Delete an assistant and queue durable cleanup for external runtime resources.
+    Delete an assistant; defer the heavy context/log purge to the durable worker.
 
-    Contacts are deprovisioned inline (before the DB delete) so the same
-    transaction can soft-mark successes. Runtime teardown and GCS cleanup run
-    after the response is returned so the user is not blocked waiting for them.
-    Any steps that fail are recorded in the durable AssistantCleanupTask queue
-    and retried by the cleanup cron job.
+    The request does only bounded work: validate, purge team memberships,
+    deprovision contacts inline (so successes can be soft-marked in the same
+    transaction), drop demo metadata, and delete the assistant row. Because
+    contexts/logs are keyed by the ``{user_id}/{agent_id}`` *path* (not an FK to
+    the assistant row), the potentially huge purge of the assistant's context
+    tree is handed to the durable ``AssistantCleanupTask`` queue
+    (``purge_contexts=True``) instead of running inline — this keeps deletion
+    fast and non-blocking for data-heavy assistants.
 
-    For Assistants project logs, deleting the creator-scoped context tree also
-    removes matching entries from user aggregate siblings (``*/All/*``) via
-    sibling cleanup. The topmost ``All/*`` contexts are intentionally preserved
-    as protected archives for billing and reporting.
+    The worker (driven by the immediate post-response drain and the cleanup
+    cron) tears down runtime, deletes assistant GCS data, and purges the context
+    tree via ``ContextDAO.delete()`` (which strips ``*/All/*`` sibling
+    associations while preserving the topmost ``All/*`` archives). Any failed
+    step is retried; a terminally failed task is visible via the admin cleanup
+    endpoint.
     """
     dao = AssistantDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors: list[str] = []
 
@@ -3429,58 +3431,18 @@ async def delete_assistant(
 
         await purge_assistant_memberships(session, assistant=assistant)
 
-        try:
-            ASSISTANTS_PROJECT_NAME = "Assistants"
-            if organization_id is not None:
-                assistants_project = (
-                    session.query(Project)
-                    .filter(
-                        Project.organization_id == organization_id,
-                        Project.name == ASSISTANTS_PROJECT_NAME,
-                    )
-                    .first()
-                )
-            else:
-                assistants_project = project_dao.get_by_user_and_name(
-                    user_id=request.state.user_id,
-                    name=ASSISTANTS_PROJECT_NAME,
-                    organization_id=None,
-                )
-            if assistants_project:
-                assistant_context_id = str(assistant_id)
-                user_ctx = assistant.user_id
-                context_prefix = f"{user_ctx}/{assistant_context_id}"
-                contexts_to_delete = (
-                    session.query(Context)
-                    .filter(
-                        Context.project_id == assistants_project.id,
-                        or_(
-                            Context.name == context_prefix,
-                            Context.name.like(f"{context_prefix}/%"),
-                        ),
-                    )
-                    .all()
-                )
-                # ContextDAO.delete() handles lower-tier sibling cleanup for
-                # Assistants contexts. It removes assistant-specific entries
-                # from user aggregates (*/All/*) but intentionally leaves the
-                # topmost All/* archive intact.
-                for context_to_del in contexts_to_delete:
-                    context_dao.delete(context_to_del.id)
-        except Exception as e_ctx:
-            logging.error(
-                f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}",
-            )
-            cleanup_errors.append(
-                f"Failed to delete assistant context(s): {str(e_ctx)}",
-            )
-
         # Deprovision contacts inline so successes can be soft-deleted in the
         # same transaction.  Failures are captured in cleanup_spec and persisted
-        # in the durable task queue below for background retry.
+        # in the durable task queue below for background retry. The spec carries
+        # ``purge_contexts=True`` so the worker also purges the assistant's
+        # ``{user_id}/{agent_id}`` context tree (by path) after the row is gone.
         contact_dao = AssistantContactDAO(session)
         active_contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
-        cleanup_spec = build_cleanup_spec_from_assistant(assistant, active_contacts)
+        cleanup_spec = build_cleanup_spec_from_assistant(
+            assistant,
+            active_contacts,
+            purge_contexts=True,
+        )
 
         contact_result = await deprovision_assistant_contacts(
             session,
@@ -3517,7 +3479,7 @@ async def delete_assistant(
         session.commit()
 
         # Schedule an immediate post-response drain of the durable cleanup task
-        # queue. Assistant GCS deletion now lives inside that retryable path.
+        # queue (runtime teardown, GCS, and the context/log purge).
         session_factory = request.app.state.db_session_factory
         background_tasks.add_task(
             _cleanup_after_assistant_delete,

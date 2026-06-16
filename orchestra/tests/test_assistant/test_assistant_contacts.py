@@ -1275,18 +1275,13 @@ class TestDeleteAssistantSoftDeletesContacts:
         ).get_active_contacts_for_assistant(agent_id)
         assert len(contacts_before) >= 2
 
-        # Delete the assistant
+        # Delete the assistant. Contacts are deprovisioned inline and the row
+        # delete CASCADE-removes the AssistantContact rows.
         del_resp = await client.delete(
             f"/v0/assistant/{agent_id}",
             headers=HEADERS,
         )
         assert del_resp.status_code == status.HTTP_200_OK
-
-        # After CASCADE, rows are gone — this is expected since the FK is
-        # ON DELETE CASCADE. The soft_delete_all_contacts call in delete_assistant
-        # sets status='deleted' before the assistant row is removed, which means
-        # the soft-delete was executed. We verify via the response being 200.
-        # (The actual rows are cascade-deleted along with the assistant.)
 
 
 # ============================================================================

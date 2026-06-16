@@ -20,6 +20,58 @@ from orchestra.tests.utils import (
 )
 
 
+async def _run_cleanup_worker(dbsession, agent_id: int) -> dict:
+    """Drive the real cleanup worker for one assistant with runtime/contact/GCS
+    stubbed to succeed, so it performs the deferred context-purge phase.
+
+    The assistant row is already deleted synchronously by the endpoint; the
+    autouse fixture stubs the in-request background drain, so deletion tests that
+    assert the purge outcome must run the worker explicitly.
+    """
+    from orchestra.db.models.orchestra_models import AssistantCleanupTask
+    from orchestra.services import assistant_cleanup_service as cleanup_service
+
+    dbsession.expire_all()
+    task = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == int(agent_id))
+        .order_by(AssistantCleanupTask.created_at.desc())
+        .first()
+    )
+    assert task is not None, "expected a cleanup task to have been enqueued"
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+        patch(
+            "orchestra.services.assistant_cleanup_service.create_bucket_service",
+        ) as mock_bucket_cls,
+    ):
+        mock_teardown.return_value = {"success": True, "steps": {}, "errors": []}
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+        bucket = mock_bucket_cls.return_value
+        bucket.delete_assistant_file.return_value = True
+        bucket.delete_all_assistant_data.return_value = {
+            "media": 0,
+            "recordings": 0,
+            "attachments": 0,
+        }
+        return await cleanup_service.process_assistant_cleanup_tasks(
+            dbsession,
+            task_ids=[task.id],
+        )
+
+
 @pytest.fixture(autouse=True)
 def mock_assistant_infra_calls(request):
     """Automatically mock assistant infrastructure webhooks and staging for all tests."""
@@ -171,7 +223,7 @@ async def test_personal_assistant_delete(client: AsyncClient):
 
     # Delete
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=HEADERS)
-    assert delete_resp.status_code == 200
+    assert delete_resp.status_code == status.HTTP_200_OK
 
 
 # =============================================================================
@@ -1470,15 +1522,19 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
         logs_before.json()["count"] > 0
     ), "Logs should exist before assistant deletion"
 
-    # Delete the assistant
+    # Delete the assistant. The row is removed synchronously; the context purge
+    # is deferred to the worker, which we drive below.
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=org_headers)
-    assert delete_resp.status_code == 200
+    assert delete_resp.status_code == status.HTTP_200_OK
 
     # Verify assistant is no longer accessible
     list_resp = await client.get("/v0/assistant", headers=org_headers)
     assert list_resp.status_code == 200
     remaining_ids = {a["agent_id"] for a in list_resp.json()["info"]}
     assert agent_id not in remaining_ids, "Deleted assistant should not appear in list"
+
+    worker_result = await _run_cleanup_worker(dbsession, agent_id)
+    assert worker_result["completed"] == 1, worker_result
 
     # Verify context and logs are cleaned up
     logs_after = await client.get(
@@ -1578,13 +1634,17 @@ async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
             logs_before.json()["count"] > 0
         ), f"Log should exist in {ctx} before deletion"
 
-    # Delete the assistant
+    # Delete the assistant (row removed synchronously); drive the worker to
+    # perform the deferred context purge.
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=org_headers)
-    assert delete_resp.status_code == 200
+    assert delete_resp.status_code == status.HTTP_200_OK
 
     # Verify assistant is deleted
     list_resp = await client.get("/v0/assistant", headers=org_headers)
     assert agent_id not in {a["agent_id"] for a in list_resp.json()["info"]}
+
+    worker_result = await _run_cleanup_worker(dbsession, agent_id)
+    assert worker_result["completed"] == 1, worker_result
 
     # Verify tier3 context (User/Assistant/Transcripts) is deleted or empty
     logs_tier3 = await client.get(
@@ -1719,6 +1779,9 @@ async def test_delete_org_assistant_by_other_member_cleans_creator_scoped_logs(
         headers=member_org_headers,
     )
     assert delete_resp.status_code == status.HTTP_200_OK
+
+    worker_result = await _run_cleanup_worker(dbsession, agent_id)
+    assert worker_result["completed"] == 1, worker_result
 
     tier3_logs = await client.get(
         f"/v0/logs?project_name=Assistants&context={tier3_context}",

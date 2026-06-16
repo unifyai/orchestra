@@ -788,6 +788,21 @@ class TestSecretCleanupOnAssistantDeletion:
             )
             assert del_resp.status_code == status.HTTP_200_OK
 
+        # Secret deletion now happens in the durable worker, inside contact
+        # deprovision. Exercise that unit directly (the full worker also runs
+        # runtime/GCS/context purge, which is covered elsewhere).
+        from orchestra.services.assistant_cleanup_service import (
+            AssistantCleanupSpec,
+            deprovision_assistant_contacts,
+        )
+
+        dbsession.expire_all()
+        await deprovision_assistant_contacts(
+            dbsession,
+            [AssistantCleanupSpec(assistant_id=int(agent_id))],
+            soft_delete_successes=False,
+        )
+
         remaining = (
             dbsession.query(AssistantSecret)
             .filter(AssistantSecret.agent_id == agent_id)
