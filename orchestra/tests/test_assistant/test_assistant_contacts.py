@@ -5516,7 +5516,7 @@ class TestConnectEndpointOrg:
         resp = await client.post(
             f"/v0/assistant/{agent_id}/contact",
             json={"contact_type": "phone"},
-            headers=owner["headers"],
+            headers=org["headers"],
         )
 
         assert resp.status_code == status.HTTP_409_CONFLICT
@@ -5533,7 +5533,7 @@ class TestConnectEndpointOrg:
         repair path owns it, so removal would only re-provision later."""
         from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 
-        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+        _, org, agent_id, _, _ = await _setup_org_coordinator_with_members(
             client,
             dbsession,
         )
