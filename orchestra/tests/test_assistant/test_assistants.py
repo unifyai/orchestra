@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-from orchestra.db.models.orchestra_models import AssistantCleanupTask
+from orchestra.db.models.orchestra_models import Assistant, AssistantCleanupTask
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
@@ -388,6 +388,33 @@ async def test_delete_assistant_not_found(client: AsyncClient):
     resp = await client.delete("/v0/assistant/9999", headers=HEADERS)
     assert resp.status_code == 404
     assert resp.json().get("detail") == "Assistant not found."
+
+
+@pytest.mark.anyio
+async def test_delete_coordinator_rejected(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Coordinators are never deletable."""
+    # Resolve the API key's user, then insert a Coordinator row directly
+    # (coordinator-ness is fixed at insert time).
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    coordinator = Assistant(
+        user_id=user_id,
+        organization_id=None,
+        first_name="Marty",
+        is_coordinator=True,
+    )
+    dbsession.add(coordinator)
+    dbsession.commit()
+
+    resp = await client.delete(
+        f"/v0/assistant/{coordinator.agent_id}",
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_409_CONFLICT
+    assert resp.json().get("detail") == "cannot_delete_coordinator"
 
 
 @pytest.mark.anyio
@@ -1303,6 +1330,7 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
 @pytest.mark.anyio
 async def test_delete_assistant_deletes_contexts(
     client: AsyncClient,
+    dbsession: Session,
 ):
     # Create an assistant
     payload = {
@@ -1373,12 +1401,67 @@ async def test_delete_assistant_deletes_contexts(
         logs_before_delete.json()["count"] > 0
     ), "Context was not created properly before test."
 
-    # Delete the assistant
-    delete_resp = await client.delete(
-        f"/v0/assistant/{assistant_id}",
-        headers=HEADERS,
-    )
+    # Delete the assistant. The row is removed synchronously (200) but the
+    # context/log purge is deferred to the durable worker. Stub the in-request
+    # background drain so we can drive the worker deterministically below.
+    with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as mock_drain:
+        mock_drain.return_value = {
+            "processed": 0,
+            "completed": 0,
+            "retried": 0,
+            "failed": 0,
+            "errors": [],
+        }
+        delete_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}",
+            headers=HEADERS,
+        )
     assert delete_resp.status_code == 200, f"Delete failed: {delete_resp.text}"
+    # Row is gone immediately; contexts are purged by the worker below.
+    dbsession.expire_all()
+    assert dbsession.get(Assistant, int(assistant_id)) is None
+
+    # Now run the real worker with runtime/contact/GCS stubbed to succeed so it
+    # reaches and performs the context purge phase.
+    from orchestra.services import assistant_cleanup_service as cleanup_service
+
+    task = (
+        dbsession.query(AssistantCleanupTask)
+        .filter(AssistantCleanupTask.assistant_id == int(assistant_id))
+        .one()
+    )
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision, patch(
+        "orchestra.services.assistant_cleanup_service.create_bucket_service",
+    ) as MockBucketServiceClass:
+        mock_teardown.return_value = {"success": True, "steps": {}, "errors": []}
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+        bucket_instance = MockBucketServiceClass.return_value
+        bucket_instance.delete_assistant_file.return_value = True
+        bucket_instance.delete_all_assistant_data.return_value = {
+            "media": 0,
+            "recordings": 0,
+            "attachments": 0,
+        }
+        worker_result = await cleanup_service.process_assistant_cleanup_tasks(
+            dbsession,
+            task_ids=[task.id],
+        )
+
+    assert worker_result["completed"] == 1, worker_result
 
     # Verify the user/assistant context is now gone.
     # A successful deletion can result in either the context being empty (200 OK, count=0)
@@ -1959,6 +2042,13 @@ async def test_delete_assistant_processes_cleanup_tasks(
     cleanup_task = dbsession.query(AssistantCleanupTask).one()
     assert cleanup_task.assistant_id == assistant_id
     assert cleanup_task.status == "pending"
+    # The single-delete flow tasks the worker with the context purge and carries
+    # owner scope so it can locate the Assistants project by path.
+    assert cleanup_task.cleanup_payload["purge_contexts"] is True
+    assert cleanup_task.cleanup_payload["user_id"]
+    # The row itself is removed synchronously by the request.
+    dbsession.expire_all()
+    assert dbsession.get(Assistant, assistant_id) is None
 
 
 @pytest.mark.anyio

@@ -43,6 +43,7 @@ from orchestra.db.models.orchestra_models import (
     BillingAccount,
     ContactMembership,
     Organization,
+    SharedPoolNumber,
     Team,
     TeamAssistantMembership,
     User,
@@ -1274,18 +1275,13 @@ class TestDeleteAssistantSoftDeletesContacts:
         ).get_active_contacts_for_assistant(agent_id)
         assert len(contacts_before) >= 2
 
-        # Delete the assistant
+        # Delete the assistant. Contacts are deprovisioned inline and the row
+        # delete CASCADE-removes the AssistantContact rows.
         del_resp = await client.delete(
             f"/v0/assistant/{agent_id}",
             headers=HEADERS,
         )
         assert del_resp.status_code == status.HTTP_200_OK
-
-        # After CASCADE, rows are gone — this is expected since the FK is
-        # ON DELETE CASCADE. The soft_delete_all_contacts call in delete_assistant
-        # sets status='deleted' before the assistant row is removed, which means
-        # the soft-delete was executed. We verify via the response being 200.
-        # (The actual rows are cascade-deleted along with the assistant.)
 
 
 # ============================================================================
@@ -1991,6 +1987,165 @@ class TestListContactsEndpoint:
         assert discord_contacts[0]["contact_value"] == "1514612855071178964"
         assert discord_contacts[0]["provisioned_by"] == "platform"
         mock_notify.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_list_reconciles_drifted_coordinator_email(
+        self,
+        client: AsyncClient,
+        mock_all_infra,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Reading a Coordinator's contacts reconciles a universal contact whose
+        stored value has drifted from the configured value (self-heal on read).
+
+        Models the staging-email repoint: a Coordinator provisioned while the
+        shared mailbox was ``marty@unify.ai`` must pick up
+        ``staging-marty@unify.ai`` on the next read once the setting changes,
+        without re-running the onboarding provisioning call.
+        """
+        from orchestra.settings import settings
+
+        monkeypatch.setattr(
+            settings, "unity_coordinator_email_address", "marty@unify.ai"
+        )
+
+        credits_resp = await client.get("/v0/credits", headers=HEADERS)
+        user_id = credits_resp.json()["id"]
+
+        with patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic:
+            mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+            provision_resp = await client.post(
+                f"/v0/user/{user_id}/coordinator",
+                headers=HEADERS,
+            )
+        assert provision_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), provision_resp.json()
+        coordinator_id = int(provision_resp.json()["coordinator_id"])
+
+        before = await client.get(
+            f"/v0/assistant/{coordinator_id}/contacts",
+            headers=HEADERS,
+        )
+        assert before.status_code == status.HTTP_200_OK
+        before_email = [
+            c for c in before.json()["info"] if c["contact_type"] == "email"
+        ]
+        assert len(before_email) == 1
+        assert before_email[0]["contact_value"] == "marty@unify.ai"
+
+        # Repoint the shared Coordinator mailbox, then re-read: the stored email
+        # reconciles to the new configured address.
+        monkeypatch.setattr(
+            settings, "unity_coordinator_email_address", "staging-marty@unify.ai"
+        )
+
+        healed = await client.get(
+            f"/v0/assistant/{coordinator_id}/contacts",
+            headers=HEADERS,
+        )
+        assert healed.status_code == status.HTTP_200_OK, healed.json()
+        healed_email = [
+            c for c in healed.json()["info"] if c["contact_type"] == "email"
+        ]
+        assert len(healed_email) == 1
+        assert healed_email[0]["contact_value"] == "staging-marty@unify.ai"
+        assert healed_email[0]["provisioned_by"] == "platform"
+
+    @pytest.mark.anyio
+    async def test_list_reconciles_rotated_discord_token(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Reading a Coordinator's contacts reconciles a rotated Discord bot
+        token and re-pings Unity, even though the bot id (the stored contact
+        value) is unchanged.
+
+        The token lives on the shared ``shared_pool_numbers`` row rather than on
+        the per-Coordinator contact, so a token rotation never surfaces as
+        contact drift; the read-path pool reconcile is the only thing that picks
+        it up.
+        """
+        from orchestra.settings import settings
+
+        bot_id = "1514612855071178964"
+        monkeypatch.setattr(settings, "unity_coordinator_discord_id", bot_id)
+        monkeypatch.setattr(
+            settings, "unity_coordinator_discord_token", "token.original"
+        )
+
+        credits_resp = await client.get("/v0/credits", headers=HEADERS)
+        user_id = credits_resp.json()["id"]
+
+        with patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_create_pubsub_topic:
+            mock_create_pubsub_topic.return_value = {"success": True, "skipped": True}
+            provision_resp = await client.post(
+                f"/v0/user/{user_id}/coordinator",
+                headers=HEADERS,
+            )
+        assert provision_resp.status_code in (
+            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
+        ), provision_resp.json()
+        coordinator_id = int(provision_resp.json()["coordinator_id"])
+
+        # A read with the token unchanged must NOT re-ping Unity (no pool change).
+        with patch(
+            "orchestra.web.api.assistant.views.notify_comms_discord_sync",
+            new_callable=AsyncMock,
+        ) as mock_notify_noop:
+            steady = await client.get(
+                f"/v0/assistant/{coordinator_id}/contacts",
+                headers=HEADERS,
+            )
+        assert steady.status_code == status.HTTP_200_OK, steady.json()
+        mock_notify_noop.assert_not_awaited()
+
+        # Rotate the bot token, then re-read: the pool token reconciles and Unity
+        # is pinged so it re-pulls the new credentials.
+        monkeypatch.setattr(
+            settings, "unity_coordinator_discord_token", "token.rotated"
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.notify_comms_discord_sync",
+            new_callable=AsyncMock,
+        ) as mock_notify:
+            healed = await client.get(
+                f"/v0/assistant/{coordinator_id}/contacts",
+                headers=HEADERS,
+            )
+        assert healed.status_code == status.HTTP_200_OK, healed.json()
+        mock_notify.assert_awaited_once()
+
+        # Bot id (the stored contact value) is unchanged; the token moved on the
+        # shared pool row.
+        discord_contacts = [
+            c for c in healed.json()["info"] if c["contact_type"] == "discord"
+        ]
+        assert len(discord_contacts) == 1
+        assert discord_contacts[0]["contact_value"] == bot_id
+
+        pool = (
+            dbsession.query(SharedPoolNumber)
+            .filter(
+                SharedPoolNumber.platform == "discord",
+                SharedPoolNumber.number == bot_id,
+            )
+            .first()
+        )
+        assert pool is not None
+        assert pool.auth_token == "token.rotated"
 
 
 class TestUpdateContactEndpoint:

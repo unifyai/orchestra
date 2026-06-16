@@ -3,6 +3,7 @@ import base64
 import io
 import logging
 import math
+import re
 import time
 import urllib.request
 from decimal import Decimal
@@ -32,6 +33,9 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
+from orchestra.db.dao.assistant_workspace_file_access_dao import (
+    AssistantWorkspaceFileAccessDAO,
+)
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -60,7 +64,6 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
-    SharedPoolNumber,
     Team,
     TeamAssistantMembership,
     User,
@@ -87,6 +90,7 @@ from orchestra.services.coordinator_service import (
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
     emit_onboarding_step_skipped_event,
+    emit_onboarding_step_started_event,
     emit_secret_landed_event,
     get_coordinator_state,
     heal_coordinator_universal_contacts,
@@ -102,9 +106,12 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.services.universal_unity_contacts import (
+    UNIVERSAL_CONTACT_TYPES,
+    drifted_universal_coordinator_contact_types,
     missing_universal_coordinator_contact_types,
 )
 from orchestra.services.universal_unity_discord import (
+    ensure_universal_unity_discord_pool,
     get_universal_unity_discord_bot_id,
     notify_comms_discord_sync,
 )
@@ -163,6 +170,11 @@ from orchestra.web.api.assistant.schema import (
     VoiceDesignGeneratePreviewsRequest,
     VoiceGenerateRequest,
     VoiceRead,
+    WorkspaceFileAccessAdminResponse,
+    WorkspaceFileListResponse,
+    WorkspaceFileNode,
+    WorkspaceFilePolicy,
+    WorkspaceFilePolicyUpdate,
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_phone_number,
@@ -273,61 +285,85 @@ def _build_console_config_read(
 def _resolved_contact_ids_for_assistants(
     session: Session,
     assistant_ids: list[int],
+    *,
+    repair_missing_personal_overlays: bool = False,
 ) -> dict[int, ResolvedContactIds]:
     """Resolve assistant-self and boss contact ids for AssistantRead payloads."""
 
     if not assistant_ids:
         return {}
 
-    relationship_values = {
-        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-    }
-    rows = (
-        session.query(
-            ContactMembership.id,
-            ContactMembership.assistant_id,
-            ContactMembership.contact_id,
-            ContactMembership.relationship,
+    def load_resolved_contact_ids() -> dict[int, dict[str, int]]:
+        relationship_values = {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+        }
+        rows = (
+            session.query(
+                ContactMembership.id,
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+                ContactMembership.relationship,
+            )
+            .filter(
+                ContactMembership.assistant_id.in_(assistant_ids),
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                ContactMembership.relationship.in_(relationship_values),
+            )
+            .order_by(
+                ContactMembership.assistant_id,
+                ContactMembership.relationship,
+                ContactMembership.id,
+            )
+            .all()
         )
-        .filter(
-            ContactMembership.assistant_id.in_(assistant_ids),
-            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-            ContactMembership.relationship.in_(relationship_values),
-        )
-        .order_by(
-            ContactMembership.assistant_id,
-            ContactMembership.relationship,
-            ContactMembership.id,
-        )
-        .all()
-    )
 
-    resolved: dict[int, dict[str, int]] = {
-        assistant_id: {} for assistant_id in assistant_ids
-    }
-    seen: set[tuple[int, str]] = set()
-    for _, assistant_id, contact_id, relationship_name in rows:
-        key = (assistant_id, relationship_name)
-        if key in seen:
-            continue
-        seen.add(key)
+        resolved: dict[int, dict[str, int]] = {
+            assistant_id: {} for assistant_id in assistant_ids
+        }
+        seen: set[tuple[int, str]] = set()
+        for _, assistant_id, contact_id, relationship_name in rows:
+            key = (assistant_id, relationship_name)
+            if key in seen:
+                continue
+            seen.add(key)
 
-        if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
-            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_SELF] = contact_id
-        elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
-            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS] = contact_id
+            if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
+                resolved[assistant_id][
+                    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF
+                ] = contact_id
+            elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
+                resolved[assistant_id][
+                    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS
+                ] = contact_id
+        return resolved
 
-    missing_assistant_ids = [
-        assistant_id
-        for assistant_id, contact_ids in resolved.items()
-        if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
-        or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
-    ]
-    if missing_assistant_ids:
+    def missing_required_ids(
+        resolved_ids: dict[int, dict[str, int]],
+    ) -> list[int]:
+        return [
+            assistant_id
+            for assistant_id, contact_ids in resolved_ids.items()
+            if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+            or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+        ]
+
+    resolved = load_resolved_contact_ids()
+    missing_assistant_ids = missing_required_ids(resolved)
+    if missing_assistant_ids and repair_missing_personal_overlays:
         logging.warning(
-            "Missing personal contact overlays for assistants; using fallback contact ids: %s",
+            "Missing personal contact overlays for assistants; repairing: %s",
             missing_assistant_ids,
+        )
+        ensure_personal_contact_memberships(session, missing_assistant_ids)
+        resolved = load_resolved_contact_ids()
+
+    remaining_missing_assistant_ids = missing_required_ids(resolved)
+    if remaining_missing_assistant_ids:
+        logging.warning(
+            "Missing personal contact overlays for assistants after repair; "
+            "using fallback contact ids: %s",
+            remaining_missing_assistant_ids,
         )
 
     return {
@@ -709,59 +745,74 @@ def _self_heal_coordinator_contacts(
     contacts_by_assistant: dict[int, list],
     contact_dao: AssistantContactDAO,
 ) -> bool:
-    """Backfill universal contacts for the given Coordinators on read.
+    """Backfill and reconcile universal contacts for Coordinators on read.
 
     Coordinator contacts (email / phone / WhatsApp / Discord) are
     platform-managed pools provisioned at Coordinator creation. Coordinators
     that predate that rollout (or a newly added channel) otherwise only get them
     via the onboarding provisioning call, so a long-lived Coordinator can show
-    missing contacts indefinitely. Healing here, on the natural read path,
-    closes that gap without a console round-trip.
+    missing contacts indefinitely. Likewise, when a pool identifier is repointed
+    in settings (e.g. the shared Coordinator email moves to a new address), the
+    value stored on existing Coordinators would otherwise stay stale until the
+    next provisioning call. Healing here, on the natural read path, closes both
+    gaps without a console round-trip.
 
     ``coordinators`` must already be filtered to rows the requesting user owns
     and is authorized to provision (callers do their own ownership/permission
-    checks). Only channels actually configured for this deployment but absent on
-    the Coordinator are provisioned (so we never touch existing contacts or
-    chase a channel that isn't set up), and ``contacts_by_assistant`` is
-    refreshed in place so the freshly provisioned contacts surface in this same
+    checks). For each Coordinator we heal channels that are configured for this
+    deployment but either *missing* on the Coordinator or *drifted* from the
+    configured value; channels that aren't set up and non-universal (manually
+    set) contacts are left untouched. ``contacts_by_assistant`` is refreshed in
+    place so the freshly provisioned/reconciled contacts surface in this same
     response.
 
     Best-effort: any failure is swallowed (the next read retries) and the
     session is left usable for the rest of the response build.
 
     Returns ``True`` when Unity should be pinged to (re)sync the shared Discord
-    bot pool — i.e. this read seeded the universal Discord pool row for the
-    first time. Discord is the only channel that needs an out-of-band sync;
+    bot pool — i.e. this read created the pool row, reactivated it, or rotated
+    its bot token. Discord is the only channel that needs an out-of-band sync;
     Unity resolves email/phone/WhatsApp routing per message.
     """
     if not coordinators:
         return False
 
-    universal_discord_bot_id = get_universal_unity_discord_bot_id()
-    discord_pool_existed_before = bool(universal_discord_bot_id) and (
-        session.query(SharedPoolNumber)
-        .filter(
-            SharedPoolNumber.platform == "discord",
-            SharedPoolNumber.number == universal_discord_bot_id,
-        )
-        .first()
-        is not None
-    )
+    # Reconcile the shared Discord bot pool (id + token) once per pass. The pool
+    # is platform-global (one row, not per-Coordinator), so it lives outside the
+    # loop. ``changed`` captures creation, reactivation, and token rotation —
+    # every case where Unity must re-pull the bot credentials. Token rotations
+    # don't surface as a Coordinator contact drift (the contact stores the bot
+    # *id*, which is unchanged), so this is the only place they get healed.
+    discord_pool_changed = False
+    if get_universal_unity_discord_bot_id():
+        try:
+            _discord_pool, discord_pool_changed = ensure_universal_unity_discord_pool(
+                session
+            )
+        except Exception:
+            logging.warning(
+                "Coordinator Discord pool self-heal failed",
+                exc_info=True,
+            )
 
     healed_ids: list[int] = []
-    healed_discord = False
     for coordinator in coordinators:
-        present_types = [
-            c.contact_type for c in contacts_by_assistant.get(coordinator.agent_id, [])
-        ]
+        present_contacts = contacts_by_assistant.get(coordinator.agent_id, [])
+        present_types = [c.contact_type for c in present_contacts]
         missing = missing_universal_coordinator_contact_types(present_types)
-        if not missing:
+        drifted = drifted_universal_coordinator_contact_types(present_contacts)
+        to_heal = [
+            contact_type
+            for contact_type in UNIVERSAL_CONTACT_TYPES
+            if contact_type in set(missing) | set(drifted)
+        ]
+        if not to_heal:
             continue
         try:
             heal_coordinator_universal_contacts(
                 session,
                 coordinator=coordinator,
-                missing_contact_types=missing,
+                contact_types=to_heal,
             )
         except Exception:
             logging.warning(
@@ -771,10 +822,8 @@ def _self_heal_coordinator_contacts(
             )
             continue
         healed_ids.append(coordinator.agent_id)
-        if "discord" in missing:
-            healed_discord = True
 
-    if not healed_ids:
+    if not healed_ids and not discord_pool_changed:
         return False
 
     try:
@@ -788,15 +837,14 @@ def _self_heal_coordinator_contacts(
         return False
 
     # Surface the freshly provisioned contacts in this same response.
-    refreshed = contact_dao.get_active_contacts_for_assistants(healed_ids)
-    for healed_id in healed_ids:
-        contacts_by_assistant[healed_id] = []
-    for contact in refreshed:
-        contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
+    if healed_ids:
+        refreshed = contact_dao.get_active_contacts_for_assistants(healed_ids)
+        for healed_id in healed_ids:
+            contacts_by_assistant[healed_id] = []
+        for contact in refreshed:
+            contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
 
-    return bool(
-        universal_discord_bot_id and healed_discord and not discord_pool_existed_before
-    )
+    return discord_pool_changed
 
 
 @router.post(
@@ -1472,6 +1520,7 @@ async def update_coordinator_state_endpoint(
         coordinator_id=coordinator_id,
         user_id=request.state.user_id,
     )
+    previous_state = get_coordinator_state(session, coordinator=coordinator)
     next_state = set_coordinator_state(
         session,
         coordinator=coordinator,
@@ -1482,6 +1531,21 @@ async def update_coordinator_state_endpoint(
         unskip_onboarding_step=update.unskip_onboarding_step,
         intro_watched=update.intro_watched,
     )
+    if (
+        update.onboarding_step
+        and next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+        and previous_state.get("onboarding_step") != update.onboarding_step
+    ):
+        completed_step_ids = derive_onboarding_progress(
+            session, coordinator=coordinator
+        )
+        await emit_onboarding_step_started_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.onboarding_step,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
     if update.skip_onboarding_step:
         completed_step_ids = (
             derive_onboarding_progress(session, coordinator=coordinator)
@@ -2939,6 +3003,327 @@ async def get_granted_features(
 
 
 # =========================================================================
+# Workspace file access (Drive / SharePoint / OneDrive allowlist)
+# =========================================================================
+
+
+def _load_assistant_for_file_access(
+    session: Session,
+    request: Request,
+    assistant_id: int,
+    *,
+    write: bool,
+):
+    """Load the assistant and enforce read/write RBAC for file-access ops."""
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant, user_id=user_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    if organization_id is not None:
+        ra_dao = ResourceAccessDAO(session)
+        permission = "assistant:write" if write else "assistant:read"
+        if not ra_dao.check_user_permission(
+            user_id, "assistant", assistant_id, permission
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to access this assistant.",
+            )
+    return assistant
+
+
+def _byod_account_email(session: Session, assistant_id: int) -> str | None:
+    """Return the BYOD (user-connected) email contact for the assistant."""
+    contact_dao = AssistantContactDAO(session)
+    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+    return next(
+        (
+            c.contact_value
+            for c in contacts
+            if c.contact_type == "email" and c.provisioned_by == "user"
+        ),
+        None,
+    )
+
+
+# Drive/item identifiers are base64url-style tokens (Microsoft) or opaque ids
+# (Google). They must never carry URL-structural characters, since they are
+# interpolated into the gateway request path; anything outside this allowlist
+# could redirect the request to a different gateway route.
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9!$._~=+-]{1,1024}$")
+
+
+def _validate_workspace_id(value: str, field: str) -> str:
+    """Reject workspace identifiers that could escape the intended gateway path."""
+    if not _WORKSPACE_ID_RE.fullmatch(value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field}.",
+        )
+    return value
+
+
+async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
+    """Proxy an unfiltered browse call to the Unity gateway channel."""
+    import httpx
+
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    if not comms_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Workspace browsing is not available on this deployment.",
+        )
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    base = "drive" if provider == "google" else "sharepoint"
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.get(
+            f"{comms_url}/{base}/{path}",
+            params=params,
+            headers={"Authorization": f"Bearer {admin_key}"},
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail="Failed to browse workspace files.",
+        )
+    return resp.json()
+
+
+def _ms_node(raw: dict, drive_id: str) -> WorkspaceFileNode:
+    """Normalize a Microsoft Graph item dict into a WorkspaceFileNode."""
+    return WorkspaceFileNode(
+        drive_id=drive_id,
+        item_id=str(raw.get("id") or ""),
+        name=raw.get("name") or "",
+        kind="folder" if raw.get("type") == "folder" else "file",
+        mime_type=raw.get("mime_type"),
+        web_url=raw.get("web_url"),
+        parent_id=None,
+    )
+
+
+def _google_node(raw: dict) -> WorkspaceFileNode:
+    """Build a WorkspaceFileNode from the already-normalized Drive channel dict."""
+    return WorkspaceFileNode(
+        drive_id=str(raw.get("drive_id") or ""),
+        item_id=str(raw.get("item_id") or ""),
+        name=raw.get("name") or "",
+        kind=raw.get("kind") or "file",
+        mime_type=raw.get("mime_type"),
+        web_url=raw.get("web_url"),
+        parent_id=raw.get("parent_id"),
+    )
+
+
+def _require_file_provider(provider: str) -> str:
+    if provider not in ("google", "microsoft"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="provider must be 'google' or 'microsoft'.",
+        )
+    return provider
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-files/roots",
+    response_model=InfoResponse[WorkspaceFileListResponse],
+    summary="List the connected account's top-level drives/corpora",
+    tags=["Assistant Management"],
+)
+async def list_workspace_file_roots(
+    assistant_id: int,
+    provider: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileListResponse]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=False)
+    email = _byod_account_email(session, assistant_id)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No connected account found for this assistant.",
+        )
+
+    if provider == "google":
+        data = await _gateway_browse("google", "roots", {"user_email": email})
+        items = [_google_node(n) for n in data.get("roots", [])]
+    else:
+        data = await _gateway_browse("microsoft", "drives", {"user_email": email})
+        items = [
+            WorkspaceFileNode(
+                drive_id=str(d.get("id") or ""),
+                item_id="root",
+                name=d.get("name") or "Drive",
+                kind="drive",
+                web_url=d.get("web_url"),
+            )
+            for d in data.get("drives", [])
+        ]
+    return InfoResponse(info=WorkspaceFileListResponse(items=items))
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-files/children",
+    response_model=InfoResponse[WorkspaceFileListResponse],
+    summary="List the children of a folder in the connected account",
+    tags=["Assistant Management"],
+)
+async def list_workspace_file_children(
+    assistant_id: int,
+    provider: str,
+    drive_id: str,
+    item_id: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileListResponse]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=False)
+    drive_id = _validate_workspace_id(drive_id, "drive_id")
+    if item_id and item_id != "root":
+        item_id = _validate_workspace_id(item_id, "item_id")
+    email = _byod_account_email(session, assistant_id)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No connected account found for this assistant.",
+        )
+
+    if provider == "google":
+        data = await _gateway_browse(
+            "google",
+            "children",
+            {"user_email": email, "drive_id": drive_id, "item_id": item_id},
+        )
+        items = [_google_node(n) for n in data.get("items", [])]
+    else:
+        params = {"user_email": email}
+        if item_id and item_id != "root":
+            params["item_id"] = item_id
+        data = await _gateway_browse("microsoft", f"drives/{drive_id}/items", params)
+        items = [_ms_node(n, drive_id) for n in data.get("items", [])]
+    return InfoResponse(info=WorkspaceFileListResponse(items=items))
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-files/policy",
+    response_model=InfoResponse[WorkspaceFilePolicy],
+    summary="Get the file-access allowlist for a provider",
+    tags=["Assistant Management"],
+)
+async def get_workspace_file_policy(
+    assistant_id: int,
+    provider: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFilePolicy]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=False)
+
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    row = dao.get(assistant_id, provider)
+    if not row:
+        return InfoResponse(
+            info=WorkspaceFilePolicy(
+                provider=provider, default_allow=False, decisions=[]
+            )
+        )
+    return InfoResponse(
+        info=WorkspaceFilePolicy(
+            provider=provider,
+            default_allow=row.default_allow,
+            decisions=row.decisions or [],
+        )
+    )
+
+
+@router.patch(
+    "/assistant/{assistant_id}/workspace-files/policy",
+    response_model=InfoResponse[WorkspaceFilePolicy],
+    summary="Replace the file-access allowlist for a provider",
+    tags=["Assistant Management"],
+)
+async def update_workspace_file_policy(
+    assistant_id: int,
+    provider: str,
+    body: WorkspaceFilePolicyUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFilePolicy]:
+    _require_file_provider(provider)
+    _load_assistant_for_file_access(session, request, assistant_id, write=True)
+
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    decisions = [d.model_dump() for d in body.decisions]
+    row = dao.upsert(
+        agent_id=assistant_id,
+        provider=provider,
+        default_allow=body.default_allow,
+        decisions=decisions,
+    )
+    session.commit()
+
+    # Re-awaken so the runtime re-syncs the allowlist before its next file op.
+    try:
+        await reawaken_assistant(str(assistant_id))
+    except Exception:
+        logging.warning(
+            "Failed to reawaken assistant %s after file-policy update",
+            assistant_id,
+            exc_info=True,
+        )
+
+    return InfoResponse(
+        info=WorkspaceFilePolicy(
+            provider=provider,
+            default_allow=row.default_allow,
+            decisions=row.decisions or [],
+        )
+    )
+
+
+@admin_router.get(
+    "/assistant/{assistant_id}/workspace-file-access",
+    response_model=InfoResponse[WorkspaceFileAccessAdminResponse],
+    summary="Admin read of all file-access policies for an assistant",
+    description=(
+        "Returns every configured per-provider file-access allowlist for the "
+        "assistant. Used by the assistant runtime to mirror the allowlist into "
+        "its enforcement layer."
+    ),
+    tags=["Assistant Management"],
+)
+async def admin_get_workspace_file_access(
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileAccessAdminResponse]:
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    policies: list[WorkspaceFilePolicy] = []
+    for provider in ("google", "microsoft"):
+        row = dao.get(assistant_id, provider)
+        if row:
+            policies.append(
+                WorkspaceFilePolicy(
+                    provider=provider,
+                    default_allow=row.default_allow,
+                    decisions=row.decisions or [],
+                )
+            )
+    return InfoResponse(info=WorkspaceFileAccessAdminResponse(policies=policies))
+
+
+# =========================================================================
 # Secret CRUD (used by Communication to persist OAuth tokens)
 # =========================================================================
 
@@ -3334,23 +3719,25 @@ async def delete_assistant(
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
-    Delete an assistant and queue durable cleanup for external runtime resources.
+    Delete an assistant; defer the heavy context/log purge to the durable worker.
 
-    Contacts are deprovisioned inline (before the DB delete) so the same
-    transaction can soft-mark successes. Runtime teardown and GCS cleanup run
-    after the response is returned so the user is not blocked waiting for them.
-    Any steps that fail are recorded in the durable AssistantCleanupTask queue
-    and retried by the cleanup cron job.
+    The request does only bounded work: validate, purge team memberships,
+    deprovision contacts inline (so successes can be soft-marked in the same
+    transaction), drop demo metadata, and delete the assistant row. Because
+    contexts/logs are keyed by the ``{user_id}/{agent_id}`` *path* (not an FK to
+    the assistant row), the potentially huge purge of the assistant's context
+    tree is handed to the durable ``AssistantCleanupTask`` queue
+    (``purge_contexts=True``) instead of running inline — this keeps deletion
+    fast and non-blocking for data-heavy assistants.
 
-    For Assistants project logs, deleting the creator-scoped context tree also
-    removes matching entries from user aggregate siblings (``*/All/*``) via
-    sibling cleanup. The topmost ``All/*`` contexts are intentionally preserved
-    as protected archives for billing and reporting.
+    The worker (driven by the immediate post-response drain and the cleanup
+    cron) tears down runtime, deletes assistant GCS data, and purges the context
+    tree via ``ContextDAO.delete()`` (which strips ``*/All/*`` sibling
+    associations while preserving the topmost ``All/*`` archives). Any failed
+    step is retried; a terminally failed task is visible via the admin cleanup
+    endpoint.
     """
     dao = AssistantDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors: list[str] = []
 
@@ -3391,58 +3778,18 @@ async def delete_assistant(
 
         await purge_assistant_memberships(session, assistant=assistant)
 
-        try:
-            ASSISTANTS_PROJECT_NAME = "Assistants"
-            if organization_id is not None:
-                assistants_project = (
-                    session.query(Project)
-                    .filter(
-                        Project.organization_id == organization_id,
-                        Project.name == ASSISTANTS_PROJECT_NAME,
-                    )
-                    .first()
-                )
-            else:
-                assistants_project = project_dao.get_by_user_and_name(
-                    user_id=request.state.user_id,
-                    name=ASSISTANTS_PROJECT_NAME,
-                    organization_id=None,
-                )
-            if assistants_project:
-                assistant_context_id = str(assistant_id)
-                user_ctx = assistant.user_id
-                context_prefix = f"{user_ctx}/{assistant_context_id}"
-                contexts_to_delete = (
-                    session.query(Context)
-                    .filter(
-                        Context.project_id == assistants_project.id,
-                        or_(
-                            Context.name == context_prefix,
-                            Context.name.like(f"{context_prefix}/%"),
-                        ),
-                    )
-                    .all()
-                )
-                # ContextDAO.delete() handles lower-tier sibling cleanup for
-                # Assistants contexts. It removes assistant-specific entries
-                # from user aggregates (*/All/*) but intentionally leaves the
-                # topmost All/* archive intact.
-                for context_to_del in contexts_to_delete:
-                    context_dao.delete(context_to_del.id)
-        except Exception as e_ctx:
-            logging.error(
-                f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}",
-            )
-            cleanup_errors.append(
-                f"Failed to delete assistant context(s): {str(e_ctx)}",
-            )
-
         # Deprovision contacts inline so successes can be soft-deleted in the
         # same transaction.  Failures are captured in cleanup_spec and persisted
-        # in the durable task queue below for background retry.
+        # in the durable task queue below for background retry. The spec carries
+        # ``purge_contexts=True`` so the worker also purges the assistant's
+        # ``{user_id}/{agent_id}`` context tree (by path) after the row is gone.
         contact_dao = AssistantContactDAO(session)
         active_contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
-        cleanup_spec = build_cleanup_spec_from_assistant(assistant, active_contacts)
+        cleanup_spec = build_cleanup_spec_from_assistant(
+            assistant,
+            active_contacts,
+            purge_contexts=True,
+        )
 
         contact_result = await deprovision_assistant_contacts(
             session,
@@ -3479,7 +3826,7 @@ async def delete_assistant(
         session.commit()
 
         # Schedule an immediate post-response drain of the durable cleanup task
-        # queue. Assistant GCS deletion now lives inside that retryable path.
+        # queue (runtime teardown, GCS, and the context/log purge).
         session_factory = request.app.state.db_session_factory
         background_tasks.add_task(
             _cleanup_after_assistant_delete,
@@ -6520,6 +6867,7 @@ def admin_list_all_assistants(
             contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
                 session,
                 agent_ids,
+                repair_missing_personal_overlays=True,
             )
         contact_identity_roots_by_assistant = {}
         if not skip_contact_identity_roots:
@@ -6801,6 +7149,7 @@ def admin_list_assistants_for_user(
         contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
             session,
             assistant_ids,
+            repair_missing_personal_overlays=True,
         )
         contact_identity_roots_by_assistant = (
             _resolved_contact_identity_roots_for_assistants(

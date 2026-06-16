@@ -677,10 +677,11 @@ class CoordinatorStateResponse(BaseModel):
     """Snapshot of the latest Coordinator/State row.
 
     ``completed_step_ids`` is not stored on the row — it is derived
-    from durable domain state on every read (workspace email contact,
-    integration secrets, action history, Tasks rows) so consumers see
-    steps completed in earlier sessions without any transition event.
-    Always ``[]`` outside onboarding mode, where derivation is skipped.
+    from durable domain state on every read (communication transcripts,
+    profile contact fields, Slack/Discord setup, workspace email contact,
+    integration secrets, action history, Tasks rows) so consumers see steps
+    completed in earlier sessions without any transition event. Always ``[]``
+    outside onboarding mode, where derivation is skipped.
     """
 
     coordinator_id: int
@@ -1732,6 +1733,82 @@ class GrantedFeaturesResponse(BaseModel):
     required_features: List[str] = Field(
         [],
         description="Features that cannot be removed (Console should grey these out).",
+    )
+
+
+class WorkspaceFileNode(BaseModel):
+    """A single Drive / SharePoint / OneDrive item in a browse listing."""
+
+    drive_id: str = Field(..., description="Provider drive/corpus id.")
+    item_id: str = Field(..., description="Provider item id (folder or file).")
+    name: str = Field("", description="Display name.")
+    kind: Literal["drive", "folder", "file"] = Field(
+        "file",
+        description="Node kind: a drive root, a folder, or a leaf file.",
+    )
+    mime_type: Optional[str] = Field(None, description="MIME type, when known.")
+    web_url: Optional[str] = Field(None, description="Provider web URL, when known.")
+    parent_id: Optional[str] = Field(
+        None,
+        description="Parent item id within the same drive, when known.",
+    )
+
+
+class WorkspaceFileListResponse(BaseModel):
+    """Listing of workspace file nodes (roots, children, or search hits)."""
+
+    items: List[WorkspaceFileNode] = Field([], description="The listed nodes.")
+
+
+class WorkspaceFileDecision(BaseModel):
+    """An explicit allow/deny decision for one Drive/SharePoint item."""
+
+    drive_id: str = Field(..., description="Provider drive/corpus id.")
+    item_id: str = Field(..., description="Provider item id.")
+    allow: bool = Field(..., description="Whether access is allowed.")
+    kind: Literal["drive", "folder", "file"] = Field("folder", description="Node kind.")
+    name: str = Field("", description="Display name captured at selection time.")
+    path: str = Field("", description="Human-readable path captured at selection time.")
+
+
+class WorkspaceFilePolicy(BaseModel):
+    """The full file-access allowlist for one provider."""
+
+    provider: Literal["google", "microsoft"] = Field(..., description="OAuth provider.")
+    default_allow: bool = Field(
+        False,
+        description="Whether items without an explicit decision are accessible "
+        "(governs newly-added files at undecided locations).",
+    )
+    decisions: List[WorkspaceFileDecision] = Field(
+        [],
+        description="Explicit per-item allow/deny overrides.",
+    )
+
+
+class WorkspaceFilePolicyUpdate(BaseModel):
+    """Request body for ``PATCH /assistant/{id}/workspace-files/policy``."""
+
+    default_allow: bool = Field(
+        False,
+        description="Default access for items without an explicit decision.",
+    )
+    decisions: List[WorkspaceFileDecision] = Field(
+        [],
+        description="Explicit per-item allow/deny overrides.",
+    )
+
+
+class WorkspaceFileAccessAdminResponse(BaseModel):
+    """Admin read of every provider's file-access policy for an assistant.
+
+    Consumed by the assistant runtime (Unity) to mirror the allowlist into its
+    enforcement layer.
+    """
+
+    policies: List[WorkspaceFilePolicy] = Field(
+        [],
+        description="Configured per-provider allowlists (absent providers omitted).",
     )
 
 

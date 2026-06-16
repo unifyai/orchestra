@@ -22,6 +22,13 @@ If Unity is the runtime brain, Orchestra is the durable substrate: projects, con
 
 ## Quick Start
 
+> **Running the whole product locally?** Don't start here. Use **`unity stack up`**
+> from the [unity repo](https://github.com/unifyai/unity) (see its
+> [self-host docs](https://github.com/unifyai/unity/blob/staging/deploy/selfhost/README.md)) —
+> it starts Orchestra, the Unity gateway, Console, and your Coordinator together,
+> and drives Orchestra's `scripts/local.sh` for you. The steps below are for
+> developing/testing **Orchestra on its own**.
+
 For the smallest local development setup with PostgreSQL + pgvector:
 
 ```bash

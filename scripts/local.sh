@@ -9,6 +9,10 @@
 #
 # This eliminates network latency and staging server bottlenecks during testing.
 #
+# Scope: this is an INTERNAL dev/test harness for Orchestra alone. To run the
+# whole product locally (Orchestra + Unity gateway + Console + Coordinator), use
+# `unity stack up` from the unity repo — it invokes this script for you.
+#
 # Usage:
 #   ./local_orchestra.sh start    # Start and wait for ready (preserves data)
 #   ./local_orchestra.sh stop     # Stop local orchestra (preserves data)
@@ -27,9 +31,10 @@
 #   ORCHESTRA_WORKERS       Number of uvicorn workers (default: auto-detect from CPU cores)
 #   ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after N seconds of no requests (default: 600)
 #
-# Test user (always seeded for local development):
+# Test user (seeded by default for local development):
 #   ORCHESTRA_TEST_USER_ID  Test user ID (default: "test-user-001")
 #   ORCHESTRA_TEST_EMAIL    Test user email (default: "test@debug.local")
+#   ORCHESTRA_SKIP_TEST_USER  Set to 1 to skip local test-user seeding
 #   UNIFY_KEY               API key for test user (default: "local-test-api-key")
 #
 # On success, exports:
@@ -54,6 +59,9 @@ ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
 
 # Inactivity timeout (seconds) - server shuts down after this period of no requests
 ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-600}"
+
+# Local development seeds a test account unless a caller explicitly opts out.
+ORCHESTRA_SKIP_TEST_USER="${ORCHESTRA_SKIP_TEST_USER:-0}"
 
 # Derived names using prefix
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
@@ -501,6 +509,31 @@ run_migrations() {
   fi
 }
 
+ensure_test_user_coordinator() {
+  local test_user_id="$1"
+
+  log_info "Ensuring test user Coordinator..."
+
+  cd "$ORCHESTRA_REPO_PATH"
+
+  export ORCHESTRA_DB_HOST=localhost
+  export ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT"
+  export ORCHESTRA_DB_USER=orchestra
+  export ORCHESTRA_DB_PASS=orchestra
+  export ORCHESTRA_DB_BASE=orchestra
+
+  local python_cmd
+  python_cmd=$(get_venv_executable "$ORCHESTRA_REPO_PATH" "python")
+
+  if SELF_HOST=1 $python_cmd scripts/ensure_test_user_coordinator.py --user-id "$test_user_id" 2>&1; then
+    log_success "Test user Coordinator ready"
+    return 0
+  fi
+
+  log_error "Failed to provision test user Coordinator"
+  return 1
+}
+
 seed_test_user() {
   local test_user_id="${ORCHESTRA_TEST_USER_ID:-test-user-001}"
   local test_api_key="${UNIFY_KEY:-local-test-api-key}"
@@ -527,7 +560,8 @@ seed_test_user() {
 
   if [[ "$user_exists" == "1" ]]; then
     log_success "Test user already exists"
-    return 0
+    ensure_test_user_coordinator "$test_user_id"
+    return $?
   fi
 
   log_info "Creating test user..."
@@ -609,6 +643,9 @@ END
   if [[ $? -eq 0 ]]; then
     if ! seed_billing_defaults "$db_container"; then
       log_error "Failed to seed billing defaults"
+      return 1
+    fi
+    if ! ensure_test_user_coordinator "$test_user_id"; then
       return 1
     fi
     log_success "Test user created"
@@ -886,8 +923,9 @@ cmd_start() {
     return 1
   fi
 
-  # Always seed test user for local development (required for authentication)
-  if ! seed_test_user; then
+  if [[ "$ORCHESTRA_SKIP_TEST_USER" == "1" ]]; then
+    log_info "Skipping local test user seed (ORCHESTRA_SKIP_TEST_USER=1)"
+  elif ! seed_test_user; then
     log_warn "Failed to seed test user (tests may fail without auth)"
   fi
 
@@ -1032,6 +1070,7 @@ main() {
           --status) cmd="status"; shift ;;
           --check) cmd="check"; shift ;;
           --env) cmd="env"; shift ;;
+          --skip-test-user) ORCHESTRA_SKIP_TEST_USER=1; shift ;;
           *)
             log_error "Unknown flag: $1"
             echo "Run '$0 --help' for usage"
@@ -1094,9 +1133,10 @@ main() {
       echo "  ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)"
       echo "  ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after inactivity (default: 600)"
       echo ""
-      echo "Test User (always seeded on start/restart):"
+      echo "Test User (seeded by default on start/restart):"
       echo "  ORCHESTRA_TEST_USER_ID  Test user ID (default: 'test-user-001')"
       echo "  ORCHESTRA_TEST_EMAIL    Test user email (default: 'test@debug.local')"
+      echo "  ORCHESTRA_SKIP_TEST_USER Set to 1 to skip local test-user seeding"
       echo "  UNIFY_KEY               API key for test user (default: 'local-test-api-key')"
       echo ""
       echo "Examples:"

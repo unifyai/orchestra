@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     Assistant,
+    AssistantContact,
     AssistantSecret,
     BillingAccount,
     ContactMembership,
@@ -28,8 +30,11 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Organization,
     Project,
+    SlackInstall,
     User,
 )
+from orchestra.db.dao.user_dao import UserDAO
+from scripts.ensure_test_user_coordinator import ensure_test_user_coordinator
 from orchestra.services.coordinator_service import (
     COORDINATOR_DEFAULT_FIRST_NAME,
     COORDINATOR_DEFAULT_JOB_TITLE,
@@ -742,6 +747,38 @@ async def test_workspace_coordinator_backfill_marks_existing_user_intro_watched(
 
 
 @pytest.mark.anyio
+async def test_local_test_user_coordinator_helper_provisions_bare_user(
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local shell bootstrap repairs raw test users with a Coordinator."""
+    monkeypatch.delenv("SELF_HOST", raising=False)
+    user = UserDAO(dbsession).create(
+        email="local-test-user-coordinator@test.com",
+        name="Local",
+    )
+    dbsession.commit()
+
+    coordinator_id, created = await ensure_test_user_coordinator(
+        dbsession,
+        str(user.id),
+    )
+
+    assert created is True
+    assert os.environ.get("SELF_HOST") is None
+    coordinator = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.agent_id == coordinator_id,
+            Assistant.user_id == str(user.id),
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert coordinator is not None
+    assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
+
+
+@pytest.mark.anyio
 async def test_intro_watched_backfill_marks_existing_coordinator_state(
     client: AsyncClient,
     dbsession: Session,
@@ -909,22 +946,126 @@ async def test_coordinator_state_patch_records_onboarding_step(
     }, create.json()
     coordinator_id = int(create.json()["coordinator_id"])
 
-    patch = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"onboarding_step": "briefing"},
-        headers=owner["headers"],
-    )
-    assert patch.status_code == status.HTTP_200_OK, patch.json()
-    info = patch.json()["info"]
+    with patch(
+        "orchestra.web.api.assistant.views.emit_onboarding_step_started_event",
+        new=AsyncMock(return_value=True),
+    ) as emit:
+        patch_response = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"onboarding_step": "email-reply"},
+            headers=owner["headers"],
+        )
+    assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["step_id"] == "email-reply"
+    info = patch_response.json()["info"]
     assert info["mode"] == "onboarding"
-    assert info["onboarding_step"] == "briefing"
+    assert info["onboarding_step"] == "email-reply"
 
     follow_up = await client.get(
         f"/v0/assistant/{coordinator_id}/state",
         headers=owner["headers"],
     )
     assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
-    assert follow_up.json()["info"]["onboarding_step"] == "briefing"
+    assert follow_up.json()["info"]["onboarding_step"] == "email-reply"
+
+    invalid = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_step": "briefing"},
+        headers=owner["headers"],
+    )
+    assert invalid.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_derives_comms_steps_from_profile_and_transcripts(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Comms onboarding completion is derived from durable profile and transcript state."""
+    owner = await _create_user(client, "state-comms-derived")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    assert coordinator is not None
+
+    user = dbsession.get(User, owner["id"])
+    assert user is not None
+    user.phone_number = "+15550001111"
+    user.whatsapp_number = "+15550002222"
+    user.discord_id = "100000000000000001"
+    dbsession.add(
+        AssistantContact(
+            assistant_id=coordinator.agent_id,
+            contact_type="discord",
+            contact_value="200000000000000001",
+            provider="discord",
+            status="active",
+            provisioned_by="platform",
+        ),
+    )
+    dbsession.add(
+        SlackInstall(
+            user_id=owner["id"],
+            slack_team_id="T123",
+            slack_app_id="A123",
+            bot_user_id="U123",
+            bot_access_token="xoxb-test",
+        ),
+    )
+    dbsession.flush()
+
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    transcripts_context = _assistant_context_name(coordinator, "Transcripts")
+    for medium in (
+        "email",
+        "whatsapp_message",
+        "whatsapp_call",
+        "sms_message",
+        "phone_call",
+        "slack_message",
+        "discord_message",
+    ):
+        _insert_log(
+            dbsession,
+            project=project,
+            context_name=transcripts_context,
+            data={
+                "medium": medium,
+                "sender_id": 0,
+                "receiver_ids": [1],
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "content": f"{medium} proof",
+            },
+        )
+    dbsession.commit()
+
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    completed = response.json()["info"]["completed_step_ids"]
+    assert completed[:11] == [
+        "email-reply",
+        "whatsapp-number",
+        "whatsapp-message",
+        "whatsapp-call",
+        "phone-number",
+        "sms-message",
+        "phone-call",
+        "slack-connect",
+        "slack-message",
+        "discord-connect",
+        "discord-message",
+    ]
 
 
 @pytest.mark.anyio
@@ -1030,7 +1171,7 @@ async def test_coordinator_state_intro_watched_is_one_way_sticky(
     # An unrelated PATCH carries the flag forward untouched.
     step = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"onboarding_step": "briefing"},
+        json={"onboarding_step": "email-reply"},
         headers=owner["headers"],
     )
     assert step.status_code == status.HTTP_200_OK, step.json()

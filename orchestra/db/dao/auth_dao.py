@@ -840,18 +840,30 @@ class AuthDAO:
         secret = decrypt_secret(credential.credential_data)
         totp = pyotp.TOTP(secret)
 
-        if not totp.verify(code, valid_window=TOTP_VALID_WINDOW):
-            return False
-
-        # Replay protection
         now = datetime.now(timezone.utc)
         current_timestep = totp.timecode(now)
+        matched_timestep: int | None = None
+        for offset in range(-TOTP_VALID_WINDOW, TOTP_VALID_WINDOW + 1):
+            candidate_timestep = current_timestep + offset
+            if secrets.compare_digest(
+                str(totp.generate_otp(candidate_timestep)),
+                str(code),
+            ):
+                matched_timestep = candidate_timestep
+                break
+
+        if matched_timestep is None:
+            return False
+
         if credential.last_used_at:
             last_timestep = totp.timecode(credential.last_used_at)
-            if current_timestep <= last_timestep:
+            if matched_timestep <= last_timestep:
                 return False
 
-        credential.last_used_at = now
+        credential.last_used_at = datetime.fromtimestamp(
+            matched_timestep * totp.interval,
+            tz=timezone.utc,
+        )
         return True
 
     def delete_mfa_credential(self, credential: MFACredential) -> None:
