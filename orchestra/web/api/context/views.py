@@ -33,6 +33,7 @@ from orchestra.web.api.context.schema import (
     RenameContextRequest,
 )
 from orchestra.web.api.utils.builtins_project import (
+    BUILTINS_PROJECT_NAME,
     is_builtins_project_name,
     require_builtins_project_owner,
 )
@@ -57,7 +58,6 @@ def _require_builtins_context_writer(
         require_builtins_project_owner(
             project,
             user_id=user_id,
-            organization_id=organization_id,
             action=action,
         )
 
@@ -606,6 +606,11 @@ def delete_context(
         if not project:
             raise IndexError("Project not found")
         project_id = project.id
+        if is_builtins_project_name(project.name):
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{BUILTINS_PROJECT_NAME}' project is protected and cannot have its contexts deleted.",
+            )
         _require_builtins_context_writer(
             project=project,
             user_id=request_fastapi.state.user_id,
