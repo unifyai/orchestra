@@ -66,6 +66,10 @@ router = APIRouter(prefix="/integrations", tags=["Integrations"])
 admin_router = APIRouter(prefix="/integrations", tags=["Integration Admin"])
 
 
+def _tool_result_payload(result: ProviderToolSearchResult) -> dict:
+    return result.model_dump(exclude_none=True)
+
+
 def _owner_from_query(
     owner_scope: str = "assistant",
     org_id: int | None = None,
@@ -616,7 +620,9 @@ def list_provider_tools(
         items.append(item)
     total = len(items)
     return {
-        "items": items[offset : offset + limit],
+        "items": [
+            _tool_result_payload(item) for item in items[offset : offset + limit]
+        ],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -635,7 +641,7 @@ def search_provider_tools(
     include_schema: bool = False,
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_db_session),
-) -> list[ProviderToolSearchResult]:
+) -> list[dict]:
     owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
@@ -671,7 +677,7 @@ def search_provider_tools(
         results.append(item)
         if len(results) >= limit:
             break
-    return results
+    return [_tool_result_payload(result) for result in results]
 
 
 @router.get("/tools/{tool_id}/schema")
