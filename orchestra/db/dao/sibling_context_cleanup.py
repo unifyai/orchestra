@@ -30,6 +30,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of log-event ids bound into a single ``IN (...)`` lookup.
+# Data-heavy assistant contexts (e.g. ingested datasets) can carry millions of
+# log events; binding them all at once overflows the driver's bind-parameter
+# limit (pg8000 caps a statement at 65535 parameters) and yields pathologically
+# large statements on psycopg2. Chunking keeps each lookup bounded while the
+# merged result is identical to a single query.
+_LOG_ID_IN_CHUNK = 10000
+
 
 def get_assistants_sibling_context_info(
     session: Session,
@@ -88,24 +96,25 @@ def get_assistants_sibling_context_info(
         Returns:
             Dict mapping log_event_id to field value string.
         """
-        values = (
-            session.query(
-                LogEvent.id,
-                LogEvent.data[field_name].astext,
-            )
-            .filter(
-                LogEvent.id.in_(log_event_ids),
-                LogEvent.data.has_key(field_name),
-            )
-            .all()
-        )
-
         result = {}
-        for log_event_id, value in values:
-            if value:
-                if isinstance(value, str):
-                    value = value.strip('"')
-                result[log_event_id] = value
+        for _chunk_start in range(0, len(log_event_ids), _LOG_ID_IN_CHUNK):
+            _chunk = log_event_ids[_chunk_start : _chunk_start + _LOG_ID_IN_CHUNK]
+            values = (
+                session.query(
+                    LogEvent.id,
+                    LogEvent.data[field_name].astext,
+                )
+                .filter(
+                    LogEvent.id.in_(_chunk),
+                    LogEvent.data.has_key(field_name),
+                )
+                .all()
+            )
+            for log_event_id, value in values:
+                if value:
+                    if isinstance(value, str):
+                        value = value.strip('"')
+                    result[log_event_id] = value
         return result
 
     def _get_tier1_context_for_logs() -> Dict[int, str]:
@@ -118,27 +127,29 @@ def get_assistants_sibling_context_info(
         Returns:
             Dict mapping log_event_id to its Tier 1 context name.
         """
-        # Query all contexts that contain these logs
-        log_contexts = (
-            session.query(LogEventContext.log_event_id, Context.name)
-            .join(Context, Context.id == LogEventContext.context_id)
-            .filter(
-                LogEventContext.log_event_id.in_(log_event_ids),
-                Context.project_id == project_id,
-            )
-            .all()
-        )
-
         # For each log, find its Tier 1 context (shortest one containing "All")
         result: Dict[int, str] = {}
-        for log_id, ctx_name in log_contexts:
-            if "/All/" not in ctx_name and not ctx_name.startswith("All/"):
-                # No "All" in this context - not an aggregation context
-                continue
+        for _chunk_start in range(0, len(log_event_ids), _LOG_ID_IN_CHUNK):
+            _chunk = log_event_ids[_chunk_start : _chunk_start + _LOG_ID_IN_CHUNK]
+            # Query all contexts that contain these logs
+            log_contexts = (
+                session.query(LogEventContext.log_event_id, Context.name)
+                .join(Context, Context.id == LogEventContext.context_id)
+                .filter(
+                    LogEventContext.log_event_id.in_(_chunk),
+                    Context.project_id == project_id,
+                )
+                .all()
+            )
 
-            if log_id not in result or len(ctx_name) < len(result[log_id]):
-                # First match or shorter match - this is more likely Tier 1
-                result[log_id] = ctx_name
+            for log_id, ctx_name in log_contexts:
+                if "/All/" not in ctx_name and not ctx_name.startswith("All/"):
+                    # No "All" in this context - not an aggregation context
+                    continue
+
+                if log_id not in result or len(ctx_name) < len(result[log_id]):
+                    # First match or shorter match - this is more likely Tier 1
+                    result[log_id] = ctx_name
 
         return result
 

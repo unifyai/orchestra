@@ -987,3 +987,72 @@ async def test_process_cleanup_purge_retries_then_fails(dbsession):
     dbsession.expire_all()
     refreshed_task = dbsession.get(AssistantCleanupTask, task.id)
     assert refreshed_task.status == "failed"
+
+
+def test_context_delete_chunks_large_log_id_lookups(dbsession):
+    """ContextDAO.delete chunks its log-id ``IN (...)`` lookups.
+
+    Data-heavy contexts can hold millions of log events; binding them all into a
+    single ``IN`` overflows the driver bind-parameter limit (pg8000 caps a
+    statement at 65535 params) and is pathological on psycopg2. The deletion
+    path (sibling cleanup + GCS media scan) chunks these lookups. Run here with a
+    tiny chunk size so a small dataset spans several chunks, and assert the media
+    scan visits *every* log across all chunks (a regression to a single
+    un-merged query would only process the first chunk).
+    """
+    from unittest.mock import MagicMock, patch
+
+    from orchestra.db.dao import log_event_dao as led_module
+    from orchestra.db.dao import sibling_context_cleanup as sib_module
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.models.core_models import (
+        Context,
+        FieldType,
+        LogEvent,
+        LogEventContext,
+    )
+
+    user, project = _seed_owner_and_project(dbsession, suffix="chunk")
+    # An image field type makes the Phase 2 media scan run (and get chunked).
+    dbsession.add(
+        FieldType(project_id=project.id, field_name="img", field_type="image"),
+    )
+    dbsession.flush()
+
+    agent_id = 778899
+    prefix = f"{user.id}/{agent_id}"
+    context = Context(project_id=project.id, name=f"{prefix}/Data/Table")
+    dbsession.add(context)
+    dbsession.flush()
+
+    bucket_name = "test-media-bucket"
+    n_logs = 5
+    for i in range(n_logs):
+        log = LogEvent(
+            project_id=project.id,
+            data={"img": f"https://storage.googleapis.com/{bucket_name}/file_{i}.png"},
+        )
+        dbsession.add(log)
+        dbsession.flush()
+        dbsession.add(LogEventContext(log_event_id=log.id, context_id=context.id))
+    dbsession.flush()
+    context_id = context.id
+
+    mock_bucket = MagicMock()
+    mock_bucket.bucket_name = bucket_name
+
+    # Chunk size of 2 forces the 5 logs across 3 chunks in every IN-lookup.
+    with patch.object(
+        led_module.LogEventDAO, "bucket_service_factory", lambda: mock_bucket
+    ), patch.object(led_module, "_LOG_ID_IN_CHUNK", 2), patch.object(
+        sib_module, "_LOG_ID_IN_CHUNK", 2
+    ):
+        ContextDAO(dbsession).delete(context_id)
+
+    # Every log across all chunks was scanned and its media deleted.
+    assert mock_bucket.delete_media.call_count == n_logs
+    dbsession.expire_all()
+    assert dbsession.query(Context).filter_by(id=context_id).count() == 0
+    assert (
+        dbsession.query(LogEvent).filter(LogEvent.project_id == project.id).count() == 0
+    )

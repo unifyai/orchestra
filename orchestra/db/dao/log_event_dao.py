@@ -24,6 +24,13 @@ from orchestra.services.bucket_service import create_bucket_service
 
 logger = logging.getLogger(__name__)
 
+# Cap on log-event ids bound into a single ``IN (...)`` lookup. Data-heavy
+# contexts can hold millions of log events; binding them all at once overflows
+# the driver bind-parameter limit (pg8000 caps statements at 65535 parameters)
+# and is pathological on psycopg2. Chunking bounds each query without changing
+# the result.
+_LOG_ID_IN_CHUNK = 10000
+
 
 class OverwriteError(Exception):
     pass
@@ -465,25 +472,28 @@ class LogEventDAO:
         if not media_fields:
             return
 
-        log_events = (
-            self.session.query(LogEvent.id, LogEvent.data)
-            .filter(
-                LogEvent.id.in_(log_event_ids),
-                LogEvent.project_id == project_id,
-            )
-            .all()
-        )
-
         urls_to_delete = []
-        for log_event_id, data in log_events:
-            if not data:
-                continue
-            for field_name in media_fields:
-                value = data.get(field_name)
-                if isinstance(value, str):
-                    clean_value = value.strip("\"'")
-                    if clean_value.startswith(gcs_url_prefix):
-                        urls_to_delete.append((log_event_id, field_name, clean_value))
+        for _chunk_start in range(0, len(log_event_ids), _LOG_ID_IN_CHUNK):
+            _chunk = log_event_ids[_chunk_start : _chunk_start + _LOG_ID_IN_CHUNK]
+            log_events = (
+                self.session.query(LogEvent.id, LogEvent.data)
+                .filter(
+                    LogEvent.id.in_(_chunk),
+                    LogEvent.project_id == project_id,
+                )
+                .all()
+            )
+            for log_event_id, data in log_events:
+                if not data:
+                    continue
+                for field_name in media_fields:
+                    value = data.get(field_name)
+                    if isinstance(value, str):
+                        clean_value = value.strip("\"'")
+                        if clean_value.startswith(gcs_url_prefix):
+                            urls_to_delete.append(
+                                (log_event_id, field_name, clean_value)
+                            )
 
         if not urls_to_delete:
             return
