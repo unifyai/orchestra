@@ -3277,12 +3277,11 @@ async def update_workspace_file_policy(
     # Re-awaken so the runtime re-syncs the allowlist before its next file op.
     try:
         await reawaken_assistant(str(assistant_id))
-    except Exception as e:
-        sanitized_error = str(e).replace("\r", " ").replace("\n", " ")
+    except Exception:
         logging.warning(
-            "Failed to reawaken assistant %s after file-policy update: %s",
+            "Failed to reawaken assistant %s after file-policy update",
             assistant_id,
-            sanitized_error,
+            exc_info=True,
         )
 
     return InfoResponse(
