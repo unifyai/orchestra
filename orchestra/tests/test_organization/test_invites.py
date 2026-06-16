@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
@@ -966,6 +967,8 @@ async def test_e2e_invite_to_org_with_existing_billing(client: AsyncClient, dbse
 
     The new member should be able to use org's billing immediately.
     """
+    if not settings.stripe_secret_key:
+        pytest.skip("Stripe is not configured in this test environment.")
 
     owner = await create_test_user(client, "e2e_billing_org_owner@test.com")
     new_member = await create_test_user(client, "e2e_billing_new_member@test.com")

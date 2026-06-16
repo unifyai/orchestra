@@ -201,7 +201,8 @@ async def test_add_team_members(client: AsyncClient):
         headers=owner["headers"],
     )
     team = team_response.json()
-    assert len(team["members"]) == 2
+    assert len(team["members"]) == 3
+    assert owner["id"] in team["members"]
     assert user1["id"] in team["members"]
     assert user2["id"] in team["members"]
 

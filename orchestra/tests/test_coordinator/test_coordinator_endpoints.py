@@ -705,6 +705,16 @@ async def test_workspace_coordinator_backfill_marks_existing_user_intro_watched(
 ) -> None:
     """Admin backfill creates existing-user Coordinators with intro_watched set."""
     owner = await _create_user(client, "backfill-intro-watched")
+    existing = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert existing is not None
+    dbsession.delete(existing)
+    dbsession.commit()
 
     response = await client.post(
         "/v0/admin/coordinator/workspace/backfill",

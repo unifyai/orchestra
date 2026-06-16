@@ -5508,7 +5508,7 @@ class TestConnectEndpointOrg:
     ):
         """Manual contact creation on a Coordinator is rejected — the platform
         provisions its shared contacts via the ``ensure_coordinator_*`` path."""
-        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+        _, org, agent_id, _, _ = await _setup_org_coordinator_with_members(
             client,
             dbsession,
         )
@@ -5550,7 +5550,7 @@ class TestConnectEndpointOrg:
             "DELETE",
             f"/v0/assistant/{agent_id}/contact",
             json={"contact_type": "email"},
-            headers=owner["headers"],
+            headers=org["headers"],
         )
 
         assert resp.status_code == status.HTTP_409_CONFLICT
@@ -5567,7 +5567,7 @@ class TestConnectEndpointOrg:
         the connect gating stay deletable so they can be cleaned up."""
         from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 
-        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+        _, org, agent_id, _, _ = await _setup_org_coordinator_with_members(
             client,
             dbsession,
         )
@@ -5584,7 +5584,7 @@ class TestConnectEndpointOrg:
             "DELETE",
             f"/v0/assistant/{agent_id}/contact",
             json={"contact_type": "email"},
-            headers=owner["headers"],
+            headers=org["headers"],
         )
 
         assert resp.status_code == status.HTTP_200_OK
