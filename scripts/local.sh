@@ -501,6 +501,31 @@ run_migrations() {
   fi
 }
 
+ensure_test_user_coordinator() {
+  local test_user_id="$1"
+
+  log_info "Ensuring test user Coordinator..."
+
+  cd "$ORCHESTRA_REPO_PATH"
+
+  export ORCHESTRA_DB_HOST=localhost
+  export ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT"
+  export ORCHESTRA_DB_USER=orchestra
+  export ORCHESTRA_DB_PASS=orchestra
+  export ORCHESTRA_DB_BASE=orchestra
+
+  local python_cmd
+  python_cmd=$(get_venv_executable "$ORCHESTRA_REPO_PATH" "python")
+
+  if SELF_HOST=1 $python_cmd scripts/ensure_test_user_coordinator.py --user-id "$test_user_id" 2>&1; then
+    log_success "Test user Coordinator ready"
+    return 0
+  fi
+
+  log_error "Failed to provision test user Coordinator"
+  return 1
+}
+
 seed_test_user() {
   local test_user_id="${ORCHESTRA_TEST_USER_ID:-test-user-001}"
   local test_api_key="${UNIFY_KEY:-local-test-api-key}"
@@ -527,7 +552,8 @@ seed_test_user() {
 
   if [[ "$user_exists" == "1" ]]; then
     log_success "Test user already exists"
-    return 0
+    ensure_test_user_coordinator "$test_user_id"
+    return $?
   fi
 
   log_info "Creating test user..."
@@ -609,6 +635,9 @@ END
   if [[ $? -eq 0 ]]; then
     if ! seed_billing_defaults "$db_container"; then
       log_error "Failed to seed billing defaults"
+      return 1
+    fi
+    if ! ensure_test_user_coordinator "$test_user_id"; then
       return 1
     fi
     log_success "Test user created"

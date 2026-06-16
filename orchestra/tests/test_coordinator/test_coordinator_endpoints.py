@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,6 +31,8 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.db.dao.user_dao import UserDAO
+from scripts.ensure_test_user_coordinator import ensure_test_user_coordinator
 from orchestra.services.coordinator_service import (
     COORDINATOR_DEFAULT_FIRST_NAME,
     COORDINATOR_DEFAULT_JOB_TITLE,
@@ -739,6 +742,38 @@ async def test_workspace_coordinator_backfill_marks_existing_user_intro_watched(
     assert state.status_code == status.HTTP_200_OK, state.json()
     assert state.json()["info"]["mode"] == "onboarding"
     assert state.json()["info"]["intro_watched"] is True
+
+
+@pytest.mark.anyio
+async def test_local_test_user_coordinator_helper_provisions_bare_user(
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local shell bootstrap repairs raw test users with a Coordinator."""
+    monkeypatch.delenv("SELF_HOST", raising=False)
+    user = UserDAO(dbsession).create(
+        email="local-test-user-coordinator@test.com",
+        name="Local",
+    )
+    dbsession.commit()
+
+    coordinator_id, created = await ensure_test_user_coordinator(
+        dbsession,
+        str(user.id),
+    )
+
+    assert created is True
+    assert os.environ.get("SELF_HOST") is None
+    coordinator = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.agent_id == coordinator_id,
+            Assistant.user_id == str(user.id),
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert coordinator is not None
+    assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
 
 
 @pytest.mark.anyio
