@@ -281,55 +281,77 @@ def _resolved_contact_ids_for_assistants(
     if not assistant_ids:
         return {}
 
-    relationship_values = {
-        CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
-        CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-    }
-    rows = (
-        session.query(
-            ContactMembership.id,
-            ContactMembership.assistant_id,
-            ContactMembership.contact_id,
-            ContactMembership.relationship,
+    def load_resolved_contact_ids() -> dict[int, dict[str, int]]:
+        relationship_values = {
+            CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
+            CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
+        }
+        rows = (
+            session.query(
+                ContactMembership.id,
+                ContactMembership.assistant_id,
+                ContactMembership.contact_id,
+                ContactMembership.relationship,
+            )
+            .filter(
+                ContactMembership.assistant_id.in_(assistant_ids),
+                ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+                ContactMembership.relationship.in_(relationship_values),
+            )
+            .order_by(
+                ContactMembership.assistant_id,
+                ContactMembership.relationship,
+                ContactMembership.id,
+            )
+            .all()
         )
-        .filter(
-            ContactMembership.assistant_id.in_(assistant_ids),
-            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-            ContactMembership.relationship.in_(relationship_values),
-        )
-        .order_by(
-            ContactMembership.assistant_id,
-            ContactMembership.relationship,
-            ContactMembership.id,
-        )
-        .all()
-    )
 
-    resolved: dict[int, dict[str, int]] = {
-        assistant_id: {} for assistant_id in assistant_ids
-    }
-    seen: set[tuple[int, str]] = set()
-    for _, assistant_id, contact_id, relationship_name in rows:
-        key = (assistant_id, relationship_name)
-        if key in seen:
-            continue
-        seen.add(key)
+        resolved: dict[int, dict[str, int]] = {
+            assistant_id: {} for assistant_id in assistant_ids
+        }
+        seen: set[tuple[int, str]] = set()
+        for _, assistant_id, contact_id, relationship_name in rows:
+            key = (assistant_id, relationship_name)
+            if key in seen:
+                continue
+            seen.add(key)
 
-        if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
-            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_SELF] = contact_id
-        elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
-            resolved[assistant_id][CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS] = contact_id
+            if relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_SELF:
+                resolved[assistant_id][
+                    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF
+                ] = contact_id
+            elif relationship_name == CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS:
+                resolved[assistant_id][
+                    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS
+                ] = contact_id
+        return resolved
 
-    missing_assistant_ids = [
-        assistant_id
-        for assistant_id, contact_ids in resolved.items()
-        if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
-        or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
-    ]
+    def missing_required_ids(
+        resolved_ids: dict[int, dict[str, int]],
+    ) -> list[int]:
+        return [
+            assistant_id
+            for assistant_id, contact_ids in resolved_ids.items()
+            if CONTACT_MEMBERSHIP_RELATIONSHIP_SELF not in contact_ids
+            or CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS not in contact_ids
+        ]
+
+    resolved = load_resolved_contact_ids()
+    missing_assistant_ids = missing_required_ids(resolved)
     if missing_assistant_ids:
         logging.warning(
-            "Missing personal contact overlays for assistants; using fallback contact ids: %s",
+            "Missing personal contact overlays for assistants; repairing: %s",
             missing_assistant_ids,
+        )
+        ensure_personal_contact_memberships(session, missing_assistant_ids)
+        resolved = load_resolved_contact_ids()
+
+    remaining_missing_assistant_ids = missing_required_ids(resolved)
+    if remaining_missing_assistant_ids:
+        logging.warning(
+            "Missing personal contact overlays for assistants after repair; "
+            "using fallback contact ids: %s",
+            remaining_missing_assistant_ids,
         )
 
     return {
