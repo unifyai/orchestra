@@ -79,7 +79,7 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Update migration image'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - '-c'
   - |
@@ -110,61 +110,56 @@ steps:
       done
     }
     repair_traffic_state() {
-    SERVICE_JSON=/tmp/service.json
-    gcloud run services describe $_SERVICE_NAME \
-      --region=$_DEPLOY_REGION \
-      --platform=managed \
-      --format=json > "$$SERVICE_JSON"
-    python3 - "$$SERVICE_JSON" > /tmp/traffic-args.txt <<'PY'
-    import json
-    import sys
-
-    with open(sys.argv[1], encoding="utf-8") as service_file:
-        service = json.load(service_file)
-
-    revisions: list[str] = []
-    status_tags: dict[str, str] = {}
-    for entry in service.get("status", {}).get("traffic", []):
-        revision = entry.get("revisionName")
-        if not revision:
-            continue
-        percent = entry.get("percent")
-        if percent is not None and int(percent) > 0:
-            revisions.append(f"{revision}={int(percent)}")
-        tag = entry.get("tag")
-        if tag:
-            status_tags[tag] = revision
-
-    if not revisions:
-        raise SystemExit("No live traffic revision found to preserve")
-
-    spec_tags = {
-        entry["tag"]: entry.get("revisionName")
-        for entry in service.get("spec", {}).get("traffic", [])
-        if entry.get("tag")
-    }
-    update_tags = [
-        f"{tag}={revision}"
-        for tag, revision in sorted(status_tags.items())
-        if spec_tags.get(tag) != revision
-    ]
-    remove_tags = sorted(
-        tag for tag in spec_tags
-        if tag not in status_tags
-    )
-
-    print("--to-revisions=" + ",".join(revisions))
-    if update_tags:
-        print("--update-tags=" + ",".join(update_tags))
-    if remove_tags:
-        print("--remove-tags=" + ",".join(remove_tags))
-    PY
-    mapfile -t TRAFFIC_ARGS < /tmp/traffic-args.txt
-    run_cloud_run_with_retry gcloud run services update-traffic $_SERVICE_NAME \
-      --region=$_DEPLOY_REGION \
-      --platform=managed \
-      "$${TRAFFIC_ARGS[@]}" \
-      --quiet
+      local to_revisions=()
+      declare -A status_tags=()
+      declare -A spec_tags=()
+      while IFS='|' read -r rev pct tag; do
+        [ -z "$$rev" ] && continue
+        if [ -n "$$pct" ] && [ "$$pct" -gt 0 ] 2>/dev/null; then
+          to_revisions+=("$$rev=$$pct")
+        fi
+        [ -n "$$tag" ] && status_tags["$$tag"]="$$rev"
+      done < <(gcloud run services describe $_SERVICE_NAME \
+        --region=$_DEPLOY_REGION \
+        --platform=managed \
+        --flatten='status.traffic[]' \
+        --format='csv[no-heading,separator="|"](status.traffic.revisionName,status.traffic.percent,status.traffic.tag)')
+      if [ "$${#to_revisions[@]}" -eq 0 ]; then
+        echo "No live traffic revision found to preserve" >&2
+        return 1
+      fi
+      while IFS='|' read -r rev pct tag; do
+        [ -n "$$tag" ] && spec_tags["$$tag"]="$$rev"
+      done < <(gcloud run services describe $_SERVICE_NAME \
+        --region=$_DEPLOY_REGION \
+        --platform=managed \
+        --flatten='spec.traffic[]' \
+        --format='csv[no-heading,separator="|"](spec.traffic.revisionName,spec.traffic.percent,spec.traffic.tag)')
+      local update_tags=()
+      local remove_tags=()
+      local t
+      for t in "$${!status_tags[@]}"; do
+        if [ "$${spec_tags[$$t]:-}" != "$${status_tags[$$t]}" ]; then
+          update_tags+=("$$t=$${status_tags[$$t]}")
+        fi
+      done
+      for t in "$${!spec_tags[@]}"; do
+        if [ -z "$${status_tags[$$t]:-}" ]; then
+          remove_tags+=("$$t")
+        fi
+      done
+      local traffic_args=(--to-revisions="$$(IFS=,; echo "$${to_revisions[*]}")")
+      if [ "$${#update_tags[@]}" -gt 0 ]; then
+        traffic_args+=(--update-tags="$$(IFS=,; echo "$${update_tags[*]}")")
+      fi
+      if [ "$${#remove_tags[@]}" -gt 0 ]; then
+        traffic_args+=(--remove-tags="$$(IFS=,; echo "$${remove_tags[*]}")")
+      fi
+      run_cloud_run_with_retry gcloud run services update-traffic $_SERVICE_NAME \
+        --region=$_DEPLOY_REGION \
+        --platform=managed \
+        "$${traffic_args[@]}" \
+        --quiet
     }
     run_cloud_run_with_retry repair_traffic_state
   id: Repair Traffic State
