@@ -563,11 +563,6 @@ def _sync_catalog_rows(
             for app in body.apps
             if app.get("canonical_app_slug") or app.get("provider_app_id")
         }
-    dao.delete_catalog_tools_for_app_slugs(
-        backend_id=body.backend_id,
-        canonical_app_slugs=scoped_app_slugs,
-    )
-
     for tool_data in body.tools:
         provider_app_id = tool_data["provider_app_id"]
         canonical_app_slug = _slugify(
@@ -672,7 +667,7 @@ def _sync_catalog_rows(
             canonical_app_slugs=allowed_slugs,
         )
         apps_pruned = pruned["apps_pruned"]
-        tools_pruned = pruned["tools_pruned"]
+        tools_pruned += pruned["tools_pruned"]
     session.commit()
     return {
         "apps_upserted": apps_upserted,
@@ -1527,11 +1522,13 @@ def _best_connection(
     *,
     owner: OwnerContext,
     canonical_app_slug: str,
+    backend_id: str | None = None,
     connection_id: Optional[str] = None,
 ) -> Optional[IntegrationConnection]:
     conn = IntegrationProviderDAO(session).best_connection(
         owner=owner,
         canonical_app_slug=canonical_app_slug,
+        backend_id=backend_id,
         connection_id=connection_id,
     )
     session.flush()
@@ -1697,8 +1694,16 @@ def get_app_detail(
     if not app:
         raise ValueError(f"Unknown integration app: {canonical_app_slug}")
     overlay = dao.get_overlay(canonical_app_slug)
-    conn = _best_connection(session, owner=owner, canonical_app_slug=canonical_app_slug)
-    tools = dao.list_tools(canonical_app_slug=canonical_app_slug)
+    conn = _best_connection(
+        session,
+        owner=owner,
+        canonical_app_slug=canonical_app_slug,
+        backend_id=app.backend_id,
+    )
+    tools = dao.list_tools(
+        canonical_app_slug=canonical_app_slug,
+        backend_id=app.backend_id,
+    )
     derived_scopes = _derive_scopes(app, tools)
     tool_results = [
         _tool_to_search_result(
@@ -1766,7 +1771,10 @@ def start_connection(
         )
 
     chosen_auth_mode = auth_mode or ((app.auth_modes or ["oauth"])[0])
-    tools = dao.list_tools(canonical_app_slug=app.canonical_app_slug)
+    tools = dao.list_tools(
+        canonical_app_slug=app.canonical_app_slug,
+        backend_id=app.backend_id,
+    )
     effective_requested_scopes = _effective_requested_scopes(
         app,
         tools,
@@ -2024,7 +2032,10 @@ def get_connection_tool_policy(
         raise ValueError(f"Unknown connection: {connection_id}")
     _assert_connection_owner(dao, conn, owner)
     app = dao.get_app_by_slug(conn.canonical_app_slug, backend_id=conn.backend_id)
-    tools = dao.list_tools(canonical_app_slug=conn.canonical_app_slug)
+    tools = dao.list_tools(
+        canonical_app_slug=conn.canonical_app_slug,
+        backend_id=conn.backend_id,
+    )
     return IntegrationToolPolicyResponse(
         connection_id=conn.connection_id,
         canonical_app_slug=conn.canonical_app_slug,
@@ -2059,7 +2070,10 @@ def patch_connection_tool_policy(
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
     _assert_connection_owner(dao, conn, owner)
-    tools = dao.list_tools(canonical_app_slug=conn.canonical_app_slug)
+    tools = dao.list_tools(
+        canonical_app_slug=conn.canonical_app_slug,
+        backend_id=conn.backend_id,
+    )
     policy = {} if body.reset_to_defaults else dict(_connection_tool_policy(conn))
     tools_by_key: dict[str, ProviderToolCatalog] = {}
     for tool in tools:
@@ -2098,7 +2112,10 @@ def _set_policy_for_approval_scope(
             return False
         policy[audit.tool_id] = approval_level
     elif scope == "app_action_class":
-        tools = dao.list_tools(canonical_app_slug=audit.canonical_app_slug)
+        tools = dao.list_tools(
+            canonical_app_slug=audit.canonical_app_slug,
+            backend_id=audit.backend_id,
+        )
         for tool in tools:
             if tool.action_class == audit.action_class:
                 policy[tool.tool_id] = approval_level
@@ -2614,6 +2631,7 @@ def run_tool(
         session,
         owner=owner,
         canonical_app_slug=tool.canonical_app_slug,
+        backend_id=tool.backend_id,
         connection_id=body.connection_id,
     )
     activation_state = _activation_state(tool, conn)

@@ -121,6 +121,21 @@ class ProjectDAO:
         rows = self.session.execute(query)
         return rows.fetchall()
 
+    def get_canonical_project_by_name(self, name: str) -> Optional[Project]:
+        """Return the canonical project for a globally reserved name.
+
+        Public-read rows are preferred because platform catalogues such as
+        Builtins are expected to have exactly one public canonical project.
+        Ordering by id makes selection deterministic if stale duplicate rows
+        exist from earlier deployments.
+        """
+        query = (
+            select(Project)
+            .where(Project.name == name)
+            .order_by(Project.is_public_read.desc(), Project.id)
+        )
+        return self.session.execute(query).scalars().first()
+
     def update(
         self,
         id: int,
@@ -399,6 +414,25 @@ class ProjectDAO:
         Returns:
             List of projects the user has access to
         """
+        if name == "Builtins":
+            builtins_project = self.get_canonical_project_by_name("Builtins")
+            if (
+                builtins_project is not None
+                and builtins_project.user_id == user_id
+                and (id is None or id == builtins_project.id)
+            ):
+                return [(builtins_project,)]
+        elif id is not None:
+            requested_project = self.get(id)
+            if requested_project is not None and requested_project.name == "Builtins":
+                builtins_project = self.get_canonical_project_by_name("Builtins")
+                if (
+                    builtins_project is not None
+                    and builtins_project.user_id == user_id
+                    and id == builtins_project.id
+                ):
+                    return [(builtins_project,)]
+
         # Get project IDs the user has explicit access to via ResourceAccess
         # (either direct user grants or via team membership)
         team_memberships = (
@@ -482,6 +516,9 @@ class ProjectDAO:
         Returns:
             The project if found, None otherwise
         """
+        if name == "Builtins":
+            return self.get_canonical_project_by_name(name)
+
         projects = self.filter_by_user_access(
             user_id=user_id,
             organization_id=organization_id,

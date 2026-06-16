@@ -31,12 +31,31 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
     owner = await create_test_user(client, "builtins_seed_writer@test.com")
     outsider = await create_test_user(client, "builtins_seed_outsider@test.com")
 
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Builtins Seed Writer Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED, org_response.json()
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_response.json()['api_key']}",
+    }
+
     create_response = await client.post(
         "/v0/project",
         json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
         headers=owner["headers"],
     )
     assert create_response.status_code == status.HTTP_200_OK, create_response.json()
+
+    owner_duplicate_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
+        headers=owner["headers"],
+    )
+    assert owner_duplicate_create.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already exists" in owner_duplicate_create.json()["detail"]
 
     outsider_create = await client.post(
         "/v0/project",
@@ -52,6 +71,22 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
     )
     assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
 
+    owner_org_patch_response = await client.patch(
+        "/v0/project/Builtins",
+        json={"is_public_read": True},
+        headers=org_headers,
+    )
+    assert (
+        owner_org_patch_response.status_code == status.HTTP_200_OK
+    ), owner_org_patch_response.json()
+
+    outsider_patch_response = await client.patch(
+        "/v0/project/Builtins",
+        json={"is_public_read": True},
+        headers=outsider["headers"],
+    )
+    assert outsider_patch_response.status_code == status.HTTP_403_FORBIDDEN
+
     context_response = await client.post(
         "/v0/project/Builtins/contexts",
         json={
@@ -65,6 +100,34 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
     )
     assert context_response.status_code == status.HTTP_200_OK, context_response.json()
 
+    org_context_response = await client.post(
+        "/v0/project/Builtins/contexts",
+        json={
+            "name": "Smoke/BuiltinsSeed/org-key",
+            "description": "Builtins seed smoke context from org key.",
+            "is_versioned": False,
+            "allow_duplicates": True,
+            "unique_keys": None,
+        },
+        headers=org_headers,
+    )
+    assert (
+        org_context_response.status_code == status.HTTP_200_OK
+    ), org_context_response.json()
+
+    outsider_context_response = await client.post(
+        "/v0/project/Builtins/contexts",
+        json={
+            "name": "Smoke/BuiltinsSeed/outsider",
+            "description": "Outsider context should be rejected.",
+            "is_versioned": False,
+            "allow_duplicates": True,
+            "unique_keys": None,
+        },
+        headers=outsider["headers"],
+    )
+    assert outsider_context_response.status_code == status.HTTP_403_FORBIDDEN
+
     log_response = await client.post(
         "/v0/logs",
         json={
@@ -76,6 +139,41 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
     )
     assert log_response.status_code == status.HTTP_200_OK, log_response.json()
     log_id = log_response.json()["log_event_ids"][0]
+
+    org_log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/org-key",
+            "entries": {"smoke_id": "org-key", "value": "ok"},
+        },
+        headers=org_headers,
+    )
+    assert org_log_response.status_code == status.HTTP_200_OK, org_log_response.json()
+
+    outsider_log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/test",
+            "entries": {"smoke_id": "outsider", "value": "blocked"},
+        },
+        headers=outsider["headers"],
+    )
+    assert outsider_log_response.status_code == status.HTTP_403_FORBIDDEN
+
+    update_log_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": {"value": "updated"},
+            "overwrite": True,
+        },
+        headers=owner["headers"],
+    )
+    assert (
+        update_log_response.status_code == status.HTTP_200_OK
+    ), update_log_response.json()
 
     get_response = await client.get(
         "/v0/logs",
@@ -111,6 +209,54 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
         headers=owner["headers"],
     )
     assert delete_project_response.status_code == status.HTTP_403_FORBIDDEN
+
+    delete_context_response = await client.delete(
+        "/v0/project/Builtins/contexts/Smoke/BuiltinsSeed/test",
+        headers=owner["headers"],
+    )
+    assert delete_context_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_builtins_canonical_public_row_wins_over_duplicate_names(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "builtins_canonical_owner@test.com")
+    duplicate_owner = await create_test_user(
+        client,
+        "builtins_canonical_duplicate@test.com",
+    )
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    project_dao.create(
+        name="Builtins",
+        user_id=duplicate_owner["id"],
+        is_public_read=False,
+    )
+    project_dao.create(
+        name="Builtins",
+        user_id=owner["id"],
+        is_public_read=True,
+    )
+    dbsession.commit()
+
+    owner_duplicate_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
+        headers=owner["headers"],
+    )
+    assert owner_duplicate_create.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already exists" in owner_duplicate_create.json()["detail"]
+
+    duplicate_owner_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
+        headers=duplicate_owner["headers"],
+    )
+    assert duplicate_owner_create.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.anyio

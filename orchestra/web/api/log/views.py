@@ -148,7 +148,6 @@ def _check_project_write_permission(
         require_builtins_project_owner(
             project,
             user_id=user_id,
-            organization_id=organization_id,
             action="modified",
         )
     if organization_id is None:

@@ -1,14 +1,11 @@
 """Platform FastAPI application factory.
 
-Layers platform-only middleware (rate limiting, staging gate, Sentry) on top
-of the kernel middleware stack provided by orchestra, then mounts the
-full platform router.
+Layers platform-only middleware (staging gate, Sentry) on top of the kernel
+middleware stack provided by orchestra, then mounts the full platform router.
 """
 
 import json as _json
 import logging
-import time as _time
-from collections import defaultdict
 
 import sentry_sdk
 from fastapi import FastAPI
@@ -76,7 +73,7 @@ def get_app() -> FastAPI:
     This is the main factory function for the platform server. The kernel
     middleware (CORS, security headers, prometheus, request trace) is
     applied via `core_middlewares`; this function adds the platform-only
-    middleware (rate limiting, staging gate) and mounts the platform router.
+    middleware (staging gate) and mounts the platform router.
     """
     import os
 
@@ -135,43 +132,6 @@ def get_app() -> FastAPI:
     )
 
     core_middlewares(app)
-
-    class RateLimitMiddleware(BaseHTTPMiddleware):
-        """Limit requests per IP on sensitive paths (admin, webhooks, metrics)."""
-
-        def __init__(self, app, max_requests: int = 60, window_seconds: int = 60):
-            super().__init__(app)
-            self.max_requests = max_requests
-            self.window_seconds = window_seconds
-            self._requests: dict[str, list[float]] = defaultdict(list)
-
-        async def dispatch(self, request, call_next):
-            if settings.is_staging or settings.environment == "dev":
-                return await call_next(request)
-
-            path = request.url.path
-            if not (
-                path.startswith("/v0/admin")
-                or path == "/metrics"
-                or path.startswith("/v0/webhooks")
-            ):
-                return await call_next(request)
-
-            client_ip = request.client.host if request.client else "unknown"
-            now = _time.monotonic()
-            window_start = now - self.window_seconds
-            timestamps = self._requests[client_ip]
-            self._requests[client_ip] = [t for t in timestamps if t > window_start]
-            if len(self._requests[client_ip]) >= self.max_requests:
-                return JSONResponse(
-                    {"detail": "Rate limit exceeded"},
-                    status_code=429,
-                    headers={"Retry-After": str(self.window_seconds)},
-                )
-            self._requests[client_ip].append(now)
-            return await call_next(request)
-
-    app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
 
     from orchestra.web.api.dependencies import is_staging_allowed_email
 

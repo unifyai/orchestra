@@ -401,8 +401,12 @@ class IntegrationProviderDAO:
         self,
         *,
         canonical_app_slug: str | None = None,
+        backend_id: str | None = None,
     ) -> list[ProviderToolCatalog]:
-        query = self._tools_query(canonical_app_slug=canonical_app_slug)
+        query = self._tools_query(
+            canonical_app_slug=canonical_app_slug,
+            backend_id=backend_id,
+        )
         return query.order_by(
             ProviderToolCatalog.canonical_app_slug.asc(),
             ProviderToolCatalog.display_name.asc(),
@@ -438,10 +442,13 @@ class IntegrationProviderDAO:
         self,
         *,
         canonical_app_slug: str | None = None,
+        backend_id: str | None = None,
     ) -> Query:
         query = self.session.query(ProviderToolCatalog)
         if canonical_app_slug:
             query = query.filter_by(canonical_app_slug=canonical_app_slug)
+        if backend_id:
+            query = query.filter_by(backend_id=backend_id)
         return query
 
     def get_tool(self, tool_id: str) -> ProviderToolCatalog | None:
@@ -502,6 +509,7 @@ class IntegrationProviderDAO:
         *,
         owner: Any,
         canonical_app_slug: str,
+        backend_id: str | None = None,
         connection_id: str | None = None,
     ) -> IntegrationConnection | None:
         query = self.session.query(IntegrationConnection)
@@ -517,6 +525,8 @@ class IntegrationProviderDAO:
         query = self.owner_filter(query, owner).filter_by(
             canonical_app_slug=canonical_app_slug,
         )
+        if backend_id:
+            query = query.filter_by(backend_id=backend_id)
         query = query.filter(
             IntegrationConnection.status.notin_(HIDDEN_CONNECTION_STATUSES),
         )
