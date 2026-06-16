@@ -3,6 +3,7 @@ import base64
 import io
 import logging
 import math
+import re
 import time
 import urllib.request
 from decimal import Decimal
@@ -88,8 +89,8 @@ from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
-    emit_onboarding_step_started_event,
     emit_onboarding_step_skipped_event,
+    emit_onboarding_step_started_event,
     emit_secret_landed_event,
     get_coordinator_state,
     heal_coordinator_universal_contacts,
@@ -3056,6 +3057,23 @@ def _byod_account_email(session: Session, assistant_id: int) -> str | None:
     )
 
 
+# Drive/item identifiers are base64url-style tokens (Microsoft) or opaque ids
+# (Google). They must never carry URL-structural characters, since they are
+# interpolated into the gateway request path; anything outside this allowlist
+# could redirect the request to a different gateway route.
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9!$._~=+-]{1,1024}$")
+
+
+def _validate_workspace_id(value: str, field: str) -> str:
+    """Reject workspace identifiers that could escape the intended gateway path."""
+    if not _WORKSPACE_ID_RE.fullmatch(value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field}.",
+        )
+    return value
+
+
 async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
     """Proxy an unfiltered browse call to the Unity gateway channel."""
     import httpx
@@ -3172,6 +3190,9 @@ async def list_workspace_file_children(
 ) -> InfoResponse[WorkspaceFileListResponse]:
     _require_file_provider(provider)
     _load_assistant_for_file_access(session, request, assistant_id, write=False)
+    drive_id = _validate_workspace_id(drive_id, "drive_id")
+    if item_id and item_id != "root":
+        item_id = _validate_workspace_id(item_id, "item_id")
     email = _byod_account_email(session, assistant_id)
     if not email:
         raise HTTPException(
@@ -3257,8 +3278,11 @@ async def update_workspace_file_policy(
     try:
         await reawaken_assistant(str(assistant_id))
     except Exception as e:
+        sanitized_error = str(e).replace("\r", " ").replace("\n", " ")
         logging.warning(
-            f"Failed to reawaken assistant {assistant_id} after file-policy update: {e}",
+            "Failed to reawaken assistant %s after file-policy update: %s",
+            assistant_id,
+            sanitized_error,
         )
 
     return InfoResponse(
