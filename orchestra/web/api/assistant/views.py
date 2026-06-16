@@ -275,6 +275,8 @@ def _build_console_config_read(
 def _resolved_contact_ids_for_assistants(
     session: Session,
     assistant_ids: list[int],
+    *,
+    repair_missing_personal_overlays: bool = False,
 ) -> dict[int, ResolvedContactIds]:
     """Resolve assistant-self and boss contact ids for AssistantRead payloads."""
 
@@ -338,7 +340,7 @@ def _resolved_contact_ids_for_assistants(
 
     resolved = load_resolved_contact_ids()
     missing_assistant_ids = missing_required_ids(resolved)
-    if missing_assistant_ids:
+    if missing_assistant_ids and repair_missing_personal_overlays:
         logging.warning(
             "Missing personal contact overlays for assistants; repairing: %s",
             missing_assistant_ids,
@@ -6556,6 +6558,7 @@ def admin_list_all_assistants(
             contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
                 session,
                 agent_ids,
+                repair_missing_personal_overlays=True,
             )
         contact_identity_roots_by_assistant = {}
         if not skip_contact_identity_roots:
@@ -6837,6 +6840,7 @@ def admin_list_assistants_for_user(
         contact_ids_by_assistant = _resolved_contact_ids_for_assistants(
             session,
             assistant_ids,
+            repair_missing_personal_overlays=True,
         )
         contact_identity_roots_by_assistant = (
             _resolved_contact_identity_roots_for_assistants(
