@@ -351,21 +351,18 @@ class Settings(BaseSettings):
         "true",
     ).lower() not in ("0", "false", "no")
 
-    #: Referrer reward = ``referral_reward_pct`` × the referred friend's
-    #: first paid subscription invoice (USD), capped at
-    #: ``referral_reward_max_credits``. Paid in free (promotional) credits,
-    #: so the payout scales with realised revenue and stays a fraction of it.
-    referral_reward_pct: float = float(
-        os.environ.get("REFERRAL_REWARD_PCT", "0.10"),
-    )
-    referral_reward_max_credits: float = float(
-        os.environ.get("REFERRAL_REWARD_MAX_CREDITS", "50"),
+    #: Flat referrer reward (USD value; shown ×``display_credits_per_usd`` in
+    #: customer surfaces, so $100 → "40,000 credits"). Paid in free
+    #: (promotional) credits once the referred friend has subscribed and
+    #: spent ``referral_qualifying_spend`` of real money on the platform.
+    referral_reward_credits: float = float(
+        os.environ.get("REFERRAL_REWARD_CREDITS", "100"),
     )
 
     #: Flat bonus (USD-denominated credits) granted to the *referred* friend
-    #: once their first payment clears. Two-sided incentive; payment-gated.
+    #: once they qualify the reward. Two-sided incentive; spend-gated.
     referral_referee_bonus_credits: float = float(
-        os.environ.get("REFERRAL_REFEREE_BONUS_CREDITS", "10"),
+        os.environ.get("REFERRAL_REFEREE_BONUS_CREDITS", "50"),
     )
 
     #: Referral reward/bonus credits expire this many days after they are
@@ -374,10 +371,12 @@ class Settings(BaseSettings):
         os.environ.get("REFERRAL_REWARD_EXPIRY_DAYS", "90"),
     )
 
-    #: Only the friend's first payment counts, and only if it is at least
-    #: this many USD — stops $1 plans from farming rewards.
-    referral_min_qualifying_payment: float = float(
-        os.environ.get("REFERRAL_MIN_QUALIFYING_PAYMENT", "50"),
+    #: Cumulative real-money spend (USD) the referred friend must reach
+    #: *after* subscribing before the reward unlocks. Rewarding on realised
+    #: spend (not signup or a single invoice) keeps fake/low-value signups
+    #: from farming rewards.
+    referral_qualifying_spend: float = float(
+        os.environ.get("REFERRAL_QUALIFYING_SPEND", "100"),
     )
 
     #: Anti-abuse cap on how many referrals a single referrer can be

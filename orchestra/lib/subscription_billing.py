@@ -548,9 +548,12 @@ def apply_subscription_invoice_paid(
 
     session.flush()
 
-    # Referral reward: only the friend's *first* paid subscription invoice
-    # qualifies. Isolated so a referral failure can never break billing.
-    if invoice.get("billing_reason") == "subscription_create":
+    # Referral reward: evaluated on every paid subscription invoice (initial
+    # and renewal cycles) — the reward unlocks once the friend's cumulative
+    # real spend crosses the qualifying threshold, which may land on a later
+    # cycle for lower tiers. Idempotent on the attribution status. Isolated so
+    # a referral failure can never break billing.
+    if invoice.get("billing_reason") in ("subscription_create", "subscription_cycle"):
         try:
             from orchestra.lib.referrals import maybe_reward_referral
 

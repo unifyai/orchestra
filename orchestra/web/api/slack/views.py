@@ -87,6 +87,24 @@ class DispatchRequest(BaseModel):
     text: str
     thread_ts: Optional[str] = None
     event_ts: str
+    sender_email: Optional[str] = Field(
+        None,
+        description="Sender's Slack profile email, resolved by the gateway "
+        "on the second dispatch pass (org installs).",
+    )
+    sender_real_name: Optional[str] = Field(
+        None,
+        description="Sender's Slack real_name, if resolved.",
+    )
+    sender_display_name: Optional[str] = Field(
+        None,
+        description="Sender's Slack display_name, if resolved.",
+    )
+    sender_identity_provided: bool = Field(
+        False,
+        description="True once the gateway has attempted a users.info lookup "
+        "(even if empty), so coordinator routing does not loop.",
+    )
 
 
 class DispatchResponse(BaseModel):
@@ -106,6 +124,18 @@ class DispatchResponse(BaseModel):
     thread_ts_for_route: Optional[str] = None
     route_persisted: bool = False
     routing_metadata: dict[str, Any] = Field(default_factory=dict)
+    needs_sender_identity: bool = Field(
+        False,
+        description=(
+            "True when this is a provisional org-Coordinator route and the "
+            "gateway should resolve the sender's identity (users.info) and "
+            "re-dispatch with sender_identity_provided=True so the message "
+            "is pinned to the sender's own workspace Coordinator. The "
+            "returned assistant_id is already a valid recipient; a caller "
+            "that ignores this flag degrades gracefully to deterministic "
+            "org-Coordinator routing."
+        ),
+    )
 
 
 class ChannelBindingRequest(BaseModel):
@@ -308,32 +338,50 @@ def dispatch_inbound(
     out to the assistant's Pub/Sub topic and tag it with structured
     routing metadata.
     """
-    resolution = resolve_inbound(
-        session,
-        slack_team_id=body.slack_team_id,
-        channel_id=body.channel_id,
-        channel_type=body.channel_type,
-        sender_slack_user_id=body.sender_slack_user_id,
-        text=body.text,
-        thread_ts=body.thread_ts,
-        event_ts=body.event_ts,
-    )
-    if resolution is None:
-        session.commit()
-        return DispatchResponse(handled=False)
+    try:
+        resolution = resolve_inbound(
+            session,
+            slack_team_id=body.slack_team_id,
+            channel_id=body.channel_id,
+            channel_type=body.channel_type,
+            sender_slack_user_id=body.sender_slack_user_id,
+            text=body.text,
+            thread_ts=body.thread_ts,
+            event_ts=body.event_ts,
+            sender_email=body.sender_email,
+            sender_real_name=body.sender_real_name,
+            sender_display_name=body.sender_display_name,
+            sender_identity_provided=body.sender_identity_provided,
+        )
+        if resolution is None:
+            session.commit()
+            return DispatchResponse(handled=False)
 
-    session.commit()
-    return DispatchResponse(
-        handled=True,
-        install_id=resolution.install.id,
-        organization_id=resolution.install.organization_id,
-        user_id=resolution.install.user_id,
-        assistant_id=resolution.assistant_id,
-        bot_user_id=resolution.install.bot_user_id,
-        thread_ts_for_route=resolution.thread_ts_for_route,
-        route_persisted=resolution.route_persisted,
-        routing_metadata=resolution.routing_metadata,
-    )
+        session.commit()
+        return DispatchResponse(
+            handled=True,
+            install_id=resolution.install.id,
+            organization_id=resolution.install.organization_id,
+            user_id=resolution.install.user_id,
+            assistant_id=resolution.assistant_id,
+            bot_user_id=resolution.install.bot_user_id,
+            thread_ts_for_route=resolution.thread_ts_for_route,
+            route_persisted=resolution.route_persisted,
+            routing_metadata=resolution.routing_metadata,
+            needs_sender_identity=resolution.needs_sender_identity,
+        )
+    except Exception:
+        # Slack retries 5xx responses aggressively, so a routing fault must
+        # never escape as a 500 — that turns a single transient error into a
+        # redelivery storm. Log the full traceback (loud) and tell the
+        # gateway to drop this event instead.
+        logger.exception(
+            "slack dispatch failed for team=%s channel=%s; dropping event",
+            body.slack_team_id,
+            body.channel_id,
+        )
+        session.rollback()
+        return DispatchResponse(handled=False)
 
 
 # ---------------------------------------------------------------------------

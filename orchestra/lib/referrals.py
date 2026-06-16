@@ -2,17 +2,18 @@
 
 Economics & anti-abuse summary
 ------------------------------
-* **Pay on payment, not signup.** A reward is only ever granted when the
-  referred friend's *first* subscription invoice is paid
-  (``billing_reason=subscription_create``). Fake signups cost nothing.
-* **Reward is a fraction of realised revenue.** Referrer credit =
-  ``referral_reward_pct`` × the friend's first paid invoice, capped at
-  ``referral_reward_max_credits``. Two-sided: the friend also gets a flat
-  bonus. All payouts are *free, expiring* credits (in-platform value only).
+* **Pay on realised spend, not signup.** A reward is only ever granted once
+  the referred friend has subscribed and spent their first
+  ``referral_qualifying_spend`` USD of *real money* on the platform
+  (cumulative paid recharges). Fake/low-value signups cost nothing.
+* **Flat, two-sided reward.** Referrer credit = ``referral_reward_credits``
+  (a flat USD-denominated amount, e.g. $100 → 40,000 display credits); the
+  friend also gets a flat ``referral_referee_bonus_credits`` welcome bonus.
+  All payouts are *free, expiring* credits (in-platform value only).
 * **One reward per referee, ever.** Enforced by the unique constraint on
   ``referral_attribution.referee_user_id`` plus an idempotent, row-locked
   transition (``pending`` → ``rewarded``).
-* **Self-referral blocked**, minimum qualifying payment, per-referrer cap,
+* **Self-referral blocked**, qualifying-spend threshold, per-referrer cap,
   and the referee must not have paid before being attributed.
 * **Clawback** on refund / dispute reverses the granted credits.
 """
@@ -24,6 +25,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
@@ -158,6 +160,25 @@ def _has_paid(session: Session, billing_account_id: int) -> bool:
     return row is not None
 
 
+def _total_real_spend(session: Session, billing_account_id: int) -> Decimal:
+    """Cumulative real money (USD) spent on a billing account.
+
+    Sums every PAID, non-zero recharge — subscription invoices and any
+    pay-as-you-go top-ups alike. Free/promotional credit grants live in the
+    credit ledger, never as recharges, so they never inflate this figure.
+    """
+    total = (
+        session.query(func.coalesce(func.sum(Recharge.amount_usd), 0))
+        .filter(
+            Recharge.billing_account_id == billing_account_id,
+            Recharge.status == RechargeStatus.PAID,
+            Recharge.amount_usd > 0,
+        )
+        .scalar()
+    )
+    return Decimal(str(total or 0))
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Attribution (referee signs up via a link, then claims after first login)
 # ──────────────────────────────────────────────────────────────────────────
@@ -264,7 +285,7 @@ def attribute_referral(
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Reward (friend's first qualifying payment clears)
+# Reward (friend subscribes and reaches the qualifying real spend)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -273,11 +294,14 @@ def maybe_reward_referral(
     billing_account: BillingAccount,
     invoice: dict,
 ) -> Optional[Decimal]:
-    """Reward the referrer when a referred friend makes their first payment.
+    """Reward the referrer when a referred friend qualifies.
 
-    Call from the ``invoice.paid`` / ``subscription_create`` webhook path.
-    No-op (returns ``None``) unless every guard passes. The reward is in
-    free, expiring credits and is idempotent on the attribution status.
+    Call from the ``invoice.paid`` webhook path for any paid subscription
+    invoice (create or renewal cycle): the reward unlocks once the friend has
+    subscribed and their cumulative real-money spend crosses
+    ``referral_qualifying_spend``, which can land on a later cycle for lower
+    tiers. No-op (returns ``None``) unless every guard passes. The reward is
+    in free, expiring credits and is idempotent on the attribution status.
     """
     if not settings.referral_enabled:
         return None
@@ -298,20 +322,18 @@ def maybe_reward_referral(
         return None
     attribution = locked
 
-    # Minimum qualifying payment (USD).
-    amount_paid = invoice.get("amount_paid")
-    amount_usd = (
-        Decimal(str(amount_paid)) / Decimal("100")
-        if amount_paid is not None
-        else Decimal("0")
-    )
-    if amount_usd < Decimal(str(settings.referral_min_qualifying_payment)):
+    # Spend gate: the friend must have subscribed (this call runs off a paid
+    # subscription invoice) AND spent at least ``referral_qualifying_spend``
+    # of real money cumulatively. Stays pending until the threshold is met,
+    # so a lower tier qualifies on a later renewal cycle.
+    real_spend = _total_real_spend(session, billing_account.id)
+    if real_spend < Decimal(str(settings.referral_qualifying_spend)):
         logger.info(
             {
-                "message": "Referral first payment below qualifying minimum",
+                "message": "Referral real spend below qualifying threshold",
                 "referee_user_id": referee.id,
-                "amount_usd": float(amount_usd),
-                "min": settings.referral_min_qualifying_payment,
+                "real_spend_usd": float(real_spend),
+                "threshold": settings.referral_qualifying_spend,
             },
         )
         return None
@@ -342,11 +364,8 @@ def maybe_reward_referral(
     if reward_ba_id is None:
         return None
 
-    # Referrer reward = pct of the friend's first payment, capped.
-    reward = (amount_usd * Decimal(str(settings.referral_reward_pct))).quantize(
-        Decimal("0.01"),
-    )
-    reward = min(reward, Decimal(str(settings.referral_reward_max_credits)))
+    # Flat referrer reward + flat referee welcome bonus (both USD value).
+    reward = Decimal(str(settings.referral_reward_credits))
     referee_bonus = Decimal(str(settings.referral_referee_bonus_credits))
 
     expires_at = referral_reward_expiry()
@@ -372,7 +391,7 @@ def maybe_reward_referral(
             referee_bonus,
             grant_kind=GRANT_KIND_REFERRAL,
             expires_at=expires_at,
-            description="Referral welcome bonus (first payment)",
+            description="Referral welcome bonus (qualifying spend reached)",
             user_id=referee.id,
             detail_extra={
                 "referral_invoice_id": invoice_id,

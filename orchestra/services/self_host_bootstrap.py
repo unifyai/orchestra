@@ -95,9 +95,9 @@ def ensure_provider_integration_backends(session: Session) -> None:
 
     Composio executes live only when ``COMPOSIO_API_KEY`` is configured, so the
     backend row is enabled exactly when the key is present and disabled
-    otherwise. Catalog sync stays with the admin bootstrap script
-    (``scripts/cloud_bootstrap_provider_integrations.py``), which the compose
-    stack runs as a one-shot job against the running API.
+    otherwise. Provider catalog normalization stays with the admin bootstrap
+    script, and the compose stack then feeds its snapshot into Unity's Builtins
+    seeder so public app/tool discovery uses the shared Builtins project.
     """
     seed_default_provider_catalog(session)
     status = "enabled" if os.environ.get("COMPOSIO_API_KEY", "").strip() else "disabled"

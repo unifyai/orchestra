@@ -35,6 +35,7 @@ SYNC_PASSTHROUGH_FIELDS = {
     "include_all_apps",
     "create_auth_configs",
     "sync_tools",
+    "prune_unlisted_apps",
 }
 
 
@@ -270,6 +271,7 @@ class AdminClient:
             "sync_tools",
             "include_all_managed_apps",
             "include_all_apps",
+            "prune_unlisted_apps",
         ):
             if field in payload:
                 parts.append(f"{field}={payload[field]}")
@@ -350,6 +352,7 @@ def _sync_diagnostics(
     diagnostics: dict[str, Any] = {
         "sync_mode": sync_mode,
         "requested_app_slugs": list(sync_config.get("app_slugs") or []),
+        "prune_unlisted_apps": bool(sync_config.get("prune_unlisted_apps", False)),
     }
     if result:
         for field in (
@@ -359,6 +362,7 @@ def _sync_diagnostics(
             "auth_configs_created",
             "auth_configs_reused",
             "cache_version",
+            "prune_unlisted_apps",
         ):
             if field in result:
                 diagnostics[field] = result[field]
@@ -414,6 +418,14 @@ def _merge_sync_results(
     merged["skipped_apps"] = [
         *(merged.get("skipped_apps") or []),
         *(batch.get("skipped_apps") or []),
+    ]
+    merged["apps"] = [
+        *(merged.get("apps") or []),
+        *(batch.get("apps") or []),
+    ]
+    merged["tools"] = [
+        *(merged.get("tools") or []),
+        *(batch.get("tools") or []),
     ]
     matched = {
         str(slug)
@@ -505,6 +517,7 @@ def _batched_composio_sync(
             "app_slugs": [slug.upper() for slug in batch_slugs],
             "include_all_managed_apps": False,
             "sync_tools": True,
+            "prune_unlisted_apps": False,
         }
         batch_result = client.request(
             "POST",

@@ -67,6 +67,12 @@ from orchestra.web.api.project.schema import (
     TransferToOrganizationRequest,
 )
 from orchestra.web.api.users.views import generate_key
+from orchestra.web.api.utils.builtins_project import (
+    BUILTINS_PROJECT_NAME,
+    is_builtins_project_name,
+    reject_builtins_project_operation,
+    require_builtins_project_owner,
+)
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -679,6 +685,19 @@ def create_project(
 
     # Check if using an organization API key
     organization_id = getattr(request_fastapi.state, "organization_id", None)
+    if is_builtins_project_name(request.name):
+        existing_builtins_projects = project_dao.filter(name=request.name)
+        if existing_builtins_projects:
+            require_builtins_project_owner(
+                existing_builtins_projects[0][0],
+                user_id=request_fastapi.state.user_id,
+                organization_id=organization_id,
+                action="created",
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="A logging project with this name already exists.",
+            )
 
     try:
         if organization_id:
@@ -799,8 +818,8 @@ def delete_project_logs(
     """
     Deletes all logs in a project.
     """
-    # Check if trying to delete from protected projects (Unity, AssistantJobs)
-    if project.name in ["Unity", "AssistantJobs"]:
+    # Check if trying to delete from protected projects (Unity, AssistantJobs, Builtins)
+    if project.name in ["Unity", "AssistantJobs", BUILTINS_PROJECT_NAME]:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -854,8 +873,8 @@ def delete_project_contexts(
     Deletes all contexts and their associated logs from a project.
     The project's interfaces remain untouched.
     """
-    # Check if trying to delete from protected projects (Unity, AssistantJobs)
-    if project.name in ["Unity", "AssistantJobs"]:
+    # Check if trying to delete from protected projects (Unity, AssistantJobs, Builtins)
+    if project.name in ["Unity", "AssistantJobs", BUILTINS_PROJECT_NAME]:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -908,8 +927,8 @@ def delete_project(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
-    # Check if trying to delete the protected projects (Unity, AssistantJobs)
-    if project.name in ["Unity", "AssistantJobs"]:
+    # Check if trying to delete the protected projects (Unity, AssistantJobs, Builtins)
+    if project.name in ["Unity", "AssistantJobs", BUILTINS_PROJECT_NAME]:
         raise HTTPException(
             status_code=403,
             detail=f"The '{project.name}' project is protected and cannot be deleted.",
@@ -979,11 +998,18 @@ def update_project(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
-    # Check if trying to rename the protected Unity project
-    if project.name == "Unity" and request.name is not None:
+    # Check if trying to rename protected platform projects.
+    if project.name in ["Unity", BUILTINS_PROJECT_NAME] and request.name is not None:
         raise HTTPException(
             status_code=403,
-            detail="The 'Unity' project cannot be renamed.",
+            detail=f"The '{project.name}' project cannot be renamed.",
+        )
+    if is_builtins_project_name(project.name):
+        require_builtins_project_owner(
+            project,
+            user_id=request_fastapi.state.user_id,
+            organization_id=getattr(request_fastapi.state, "organization_id", None),
+            action="updated",
         )
 
     try:
@@ -1080,6 +1106,7 @@ def transfer_project_to_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project with id {project_id} not found",
         )
+    reject_builtins_project_operation(project.name, action="transferred")
 
     # Verify project is personal
     if project.organization_id is not None:
@@ -1244,6 +1271,7 @@ def transfer_project_to_personal(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project with id {project_id} not found",
         )
+    reject_builtins_project_operation(project.name, action="transferred")
 
     # Verify project is organizational
     if project.organization_id is None:
@@ -2429,6 +2457,7 @@ def admin_delete_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Project with id {project_id} not found",
         )
+    reject_builtins_project_operation(project.name, action="deleted")
 
     # Store info for response
     project_name = project.name

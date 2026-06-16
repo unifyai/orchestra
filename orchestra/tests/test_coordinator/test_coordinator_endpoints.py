@@ -460,11 +460,11 @@ async def test_transcript_seed_rejects_non_empty_exchange_history(
 
 
 @pytest.mark.anyio
-async def test_assistant_list_repairs_missing_coordinator_owner_contact_row(
+async def test_assistant_list_tolerates_missing_coordinator_owner_contact_row(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Assistant reads repair historical Coordinators missing chat contact rows."""
+    """Assistant reads do not repair historical Coordinators missing chat contact rows."""
     owner = await _create_user(client, "contact-repair")
     org_data = await _create_org(client, owner, "contact-repair")
     coordinator_id = int(org_data["coordinator_id"])
@@ -487,10 +487,44 @@ async def test_assistant_list_repairs_missing_coordinator_owner_contact_row(
     assert response.status_code == status.HTTP_200_OK, response.json()
     assert response.json()["info"][0]["self_contact_id"] == 0
     assert response.json()["info"][0]["boss_contact_id"] == 1
-    _assert_owner_contact_row(
+    assert (
+        _context(
+            dbsession,
+            project=project,
+            name=_assistant_context_name(coordinator, "Contacts"),
+        )
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_coordinator_opt_in_repairs_missing_owner_contact_row(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Explicit Coordinator provisioning repairs missing owner contact rows."""
+    owner = await _create_user(client, "contact-repair")
+    org_data = await _create_org(client, owner, "contact-repair")
+    coordinator_id = int(org_data["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    contacts = _context(
         dbsession,
-        coordinator=coordinator,
-        owner_user_id=owner["id"],
+        project=project,
+        name=_assistant_context_name(coordinator, "Contacts"),
+    )
+    assert contacts is not None
+    dbsession.delete(contacts)
+    dbsession.commit()
+
+    response = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    _assert_owner_contact_row(
+        dbsession, coordinator=coordinator, owner_user_id=owner["id"]
     )
 
 
@@ -638,6 +672,113 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     # platform-provisioned universal Unity email contact must NOT
     # count as a connected workspace.
     assert payload["completed_step_ids"] == []
+
+
+@pytest.mark.anyio
+async def test_assistant_list_does_not_bootstrap_coordinator_owner_contact_row(
+    client: AsyncClient,
+) -> None:
+    """Assistant list reads must not acquire owner-contact write locks."""
+    owner = await _create_user(client, "list-read-only-owner-row")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+
+    with patch(
+        "orchestra.web.api.assistant.views.ensure_owner_contact_row",
+        side_effect=AssertionError("list must not bootstrap owner contacts"),
+    ):
+        response = await client.get("/v0/assistant?demo=true", headers=owner["headers"])
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+
+
+@pytest.mark.anyio
+async def test_workspace_coordinator_backfill_marks_existing_user_intro_watched(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Admin backfill creates existing-user Coordinators with intro_watched set."""
+    owner = await _create_user(client, "backfill-intro-watched")
+    existing = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert existing is not None
+    dbsession.delete(existing)
+    dbsession.commit()
+
+    response = await client.post(
+        "/v0/admin/coordinator/workspace/backfill",
+        params={"dry_run": "false", "limit": 5000},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    coordinator = dbsession.scalar(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    )
+    assert coordinator is not None
+
+    state = await client.get(
+        f"/v0/assistant/{coordinator.agent_id}/state",
+        headers=owner["headers"],
+    )
+    assert state.status_code == status.HTTP_200_OK, state.json()
+    assert state.json()["info"]["mode"] == "onboarding"
+    assert state.json()["info"]["intro_watched"] is True
+
+
+@pytest.mark.anyio
+async def test_intro_watched_backfill_marks_existing_coordinator_state(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Existing Coordinator state is marked watched without changing mode."""
+    owner = await _create_user(client, "intro-state-backfill")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    initial = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert initial.status_code == status.HTTP_200_OK, initial.json()
+    assert initial.json()["info"]["intro_watched"] is False
+
+    response = await client.post(
+        "/v0/admin/coordinator/intro-watched/backfill",
+        params={"dry_run": "false", "limit": 5000},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+
+    follow_up = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
+    assert follow_up.json()["info"]["mode"] == "onboarding"
+    assert follow_up.json()["info"]["intro_watched"] is True
 
 
 @pytest.mark.anyio

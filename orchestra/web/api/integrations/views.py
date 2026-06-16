@@ -10,30 +10,27 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.integration_provider_models import DynamicProviderApp
 from orchestra.web.api.integrations.operations import (
     OwnerContext,
+    _activation_state,
+    _best_connection,
+    _tool_search_result,
     approve_tool_execution,
     cancel_connection,
     complete_connection,
     complete_connection_by_provider_connection_id,
     deny_tool_execution,
     disconnect_connection,
-    get_app_detail,
-    get_apps,
     get_connection_tool_policy,
-    get_tool_schema,
-    get_tools,
     list_connections,
     patch_connection_tool_policy,
     reconnect_connection,
     run_tool,
-    search_apps,
-    search_tools,
     seed_default_provider_catalog,
     start_connection,
 )
@@ -42,7 +39,6 @@ from orchestra.web.api.integrations.operations import (
 )
 from orchestra.web.api.integrations.operations import test_connection, update_connection
 from orchestra.web.api.integrations.schema import (
-    IntegrationAppDetailResponse,
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
@@ -62,58 +58,17 @@ from orchestra.web.api.integrations.schema import (
     IntegrationToolExecutionApprovalResponse,
     IntegrationToolPolicyPatchRequest,
     IntegrationToolPolicyResponse,
-    ProviderAppDetailLevel,
-    ProviderAppGetRequest,
-    ProviderAppGetResponse,
-    ProviderAppSearchRequest,
-    ProviderAppSearchResult,
-    ProviderAppStatus,
-    ProviderAppStatusGroup,
-    ProviderToolGetRequest,
-    ProviderToolGetResponse,
     ProviderToolRunRequest,
     ProviderToolRunResponse,
-    ProviderToolSchemaResponse,
-    ProviderToolSearchRequest,
     ProviderToolSearchResult,
 )
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 admin_router = APIRouter(prefix="/integrations", tags=["Integration Admin"])
 
-_APP_STATUS_ADAPTER = TypeAdapter(list[ProviderAppStatus])
-_APP_STATUS_GROUP_ADAPTER = TypeAdapter(list[ProviderAppStatusGroup])
 
-
-def _split_query_list(values: list[str] | None) -> list[str]:
-    if not values:
-        return []
-    parsed: list[str] = []
-    for value in values:
-        parsed.extend(part.strip() for part in value.split(",") if part.strip())
-    return parsed
-
-
-def _validate_app_statuses(values: list[str] | None) -> list[ProviderAppStatus]:
-    try:
-        return _APP_STATUS_ADAPTER.validate_python(_split_query_list(values))
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors(),
-        ) from exc
-
-
-def _validate_app_status_groups(
-    values: list[str] | None,
-) -> list[ProviderAppStatusGroup]:
-    try:
-        return _APP_STATUS_GROUP_ADAPTER.validate_python(_split_query_list(values))
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=exc.errors(),
-        ) from exc
+def _tool_result_payload(result: ProviderToolSearchResult) -> dict:
+    return result.model_dump(exclude_none=True)
 
 
 def _owner_from_query(
@@ -155,6 +110,86 @@ def _optional_owner_from_query(
         user_id,
         assistant_id,
     )
+
+
+def _app_status(conn, tools) -> str:
+    if conn is None:
+        return "not_connected"
+    if conn.status == "pending":
+        return "pending"
+    if conn.status != "connected":
+        return conn.status
+    if conn.credential_storage == "secret_manager":
+        return "configured"
+    granted = set(conn.granted_scopes_json or [])
+    for tool in tools:
+        required = set(tool.required_scopes_json or [])
+        if required and not required.issubset(granted):
+            return "missing_scope"
+    return "connected"
+
+
+def _app_status_group(status_value: str) -> str:
+    if status_value in {"connected", "configured"}:
+        return "connected"
+    if status_value in {"pending", "missing_scope", "expired", "error"}:
+        return "needs_attention"
+    return "not_connected"
+
+
+def _app_payload(
+    dao: IntegrationProviderDAO,
+    app: DynamicProviderApp,
+    conn,
+    *,
+    detail_level: str,
+) -> dict:
+    tools = dao.list_tools(canonical_app_slug=app.canonical_app_slug)
+    status_value = _app_status(conn, tools)
+    payload = {
+        "backend_id": app.backend_id,
+        "provider_app_id": app.provider_app_id,
+        "canonical_app_slug": app.canonical_app_slug,
+        "display_name": app.display_name,
+        "source_type": (
+            "native"
+            if (
+                app.backend_id == "unity_native"
+                or (
+                    isinstance(app.raw_provider_metadata_json, dict)
+                    and app.raw_provider_metadata_json.get("source_type") == "native"
+                )
+            )
+            else "third_party"
+        ),
+        "source_label": "Native" if app.backend_id == "unity_native" else "Third-party",
+        "description": app.description,
+        "category": app.category,
+        "icon_url": app.icon_url,
+        "auth_modes": app.auth_modes or [],
+        "tool_count": len(tools),
+        "connection_status": status_value,
+        "connection_id": conn.connection_id if conn else None,
+        "external_account_label": conn.external_account_label if conn else None,
+        "overlay": {},
+        "native_metadata": {},
+    }
+    if detail_level != "summary":
+        payload["available_scopes"] = []
+        payload["available_actions"] = [
+            {
+                "tool_id": tool.tool_id,
+                "name": tool.name,
+                "display_name": tool.display_name,
+                "activation_state": _activation_state(tool, conn),
+                "action_class": tool.action_class,
+            }
+            for tool in tools
+        ]
+    else:
+        payload["available_scopes"] = []
+        payload["available_actions"] = []
+    return payload
 
 
 def _bootstrap_state_response(state) -> IntegrationBootstrapStateResponse:
@@ -373,106 +408,110 @@ def sync_integrations(
 
 
 @router.get("/apps")
-def get_integration_apps(
-    query: str | None = Query(None),
+def list_integration_apps(
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    query: str = "",
     source_type: str | None = None,
     status: list[str] | None = Query(None),
-    status_group: list[str] | None = Query(None),
-    detail_level: ProviderAppDetailLevel = Query("full"),
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    limit: int = Query(100, ge=1, le=500),
+    status_group: str | None = None,
+    detail_level: str = "full",
+    limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
-) -> ProviderAppGetResponse:
-    return get_apps(
-        session,
-        ProviderAppGetRequest(
-            query=query,
-            source_type=source_type,
-            status=_validate_app_statuses(status),
-            status_group=_validate_app_status_groups(status_group),
-            detail_level=detail_level,
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            limit=limit,
-            offset=offset,
-        ),
-    )
+) -> dict:
+    from fastapi import status as http_status
 
-
-@router.get("/apps/search")
-def search_integration_apps(
-    query: str | None = Query(None),
-    source_type: str | None = None,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    limit: int = Query(10, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> list[ProviderAppSearchResult]:
-    return search_apps(
-        session,
-        ProviderAppSearchRequest(
-            query=query,
-            source_type=source_type,
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/apps/{canonical_app_slug}")
-def get_integration_app_detail(
-    canonical_app_slug: str,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    session: Session = Depends(get_db_session),
-) -> IntegrationAppDetailResponse:
-    try:
-        return get_app_detail(
-            session,
-            canonical_app_slug=canonical_app_slug,
-            owner=_owner_from_query(
-                owner_scope,
-                org_id,
-                team_id,
-                user_id,
-                assistant_id,
-            ),
+    valid_statuses = {
+        "connected",
+        "configured",
+        "pending",
+        "missing_scope",
+        "not_connected",
+        "expired",
+        "error",
+    }
+    valid_groups = {"connected", "needs_attention", "not_connected"}
+    requested_statuses: set[str] = set()
+    for raw_status in status or []:
+        requested_statuses.update(
+            part.strip() for part in raw_status.split(",") if part.strip()
         )
-    except ValueError as exc:
+    if requested_statuses.difference(valid_statuses):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    except PermissionError as exc:
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid_status",
+        )
+    if status_group is not None and status_group not in valid_groups:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="invalid_status_group",
+        )
+
+    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
+    apps = (
+        session.query(DynamicProviderApp)
+        .order_by(DynamicProviderApp.display_name.asc())
+        .all()
+    )
+    query_norm = query.strip().lower()
+    all_items: list[dict] = []
+    for app in apps:
+        conn = _best_connection(
+            session, owner=owner, canonical_app_slug=app.canonical_app_slug
+        )
+        item = _app_payload(dao, app, conn, detail_level=detail_level)
+        all_items.append(item)
+
+    facets = {
+        "total": len(all_items),
+        "source_type": {
+            "native": sum(1 for item in all_items if item["source_type"] == "native"),
+            "third_party": sum(
+                1 for item in all_items if item["source_type"] == "third_party"
+            ),
+        },
+        "status": {status_name: 0 for status_name in valid_statuses},
+        "status_group": {group_name: 0 for group_name in valid_groups},
+    }
+    for item in all_items:
+        facets["status"][item["connection_status"]] = (
+            facets["status"].get(item["connection_status"], 0) + 1
+        )
+        group = _app_status_group(item["connection_status"])
+        facets["status_group"][group] = facets["status_group"].get(group, 0) + 1
+
+    filtered = []
+    for item in all_items:
+        if source_type and item["source_type"] != source_type:
+            continue
+        if requested_statuses and item["connection_status"] not in requested_statuses:
+            continue
+        if (
+            status_group
+            and _app_status_group(item["connection_status"]) != status_group
+        ):
+            continue
+        if (
+            query_norm
+            and query_norm
+            not in f"{item['display_name']} {item['canonical_app_slug']}".lower()
+        ):
+            continue
+        filtered.append(item)
+
+    return {
+        "items": filtered[offset : offset + limit],
+        "total": len(filtered),
+        "limit": limit,
+        "offset": offset,
+        "facets": facets,
+    }
 
 
 @router.get("/connections")
@@ -731,6 +770,131 @@ def patch_integration_tool_policy(
         ) from exc
 
 
+@router.get("/tools")
+def list_provider_tools(
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    canonical_app_slug: str | None = None,
+    activation_state: str | None = None,
+    include_schema: bool = False,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
+    tools = dao.list_tools(canonical_app_slug=canonical_app_slug)
+    items: list[ProviderToolSearchResult] = []
+    for tool in tools:
+        app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
+        conn = _best_connection(
+            session, owner=owner, canonical_app_slug=tool.canonical_app_slug
+        )
+        item = _tool_search_result(
+            tool=tool,
+            app=app,
+            conn=conn,
+            activation_state=_activation_state(tool, conn),
+            match_reason="list",
+            score=1.0,
+            include_schema=include_schema,
+        )
+        if activation_state and item.activation_state != activation_state:
+            continue
+        items.append(item)
+    total = len(items)
+    return {
+        "items": [
+            _tool_result_payload(item) for item in items[offset : offset + limit]
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/tools/search")
+def search_provider_tools(
+    query: str = Query(""),
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    include_unconnected: bool = False,
+    include_schema: bool = False,
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_db_session),
+) -> list[dict]:
+    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
+    query_norm = query.strip().lower()
+    results: list[ProviderToolSearchResult] = []
+    for tool in dao.list_tools():
+        app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
+        haystack = " ".join(
+            [
+                tool.name,
+                tool.display_name,
+                tool.description,
+                tool.canonical_app_slug,
+                app.display_name if app else "",
+            ],
+        ).lower()
+        if query_norm and query_norm not in haystack:
+            continue
+        conn = _best_connection(
+            session, owner=owner, canonical_app_slug=tool.canonical_app_slug
+        )
+        item = _tool_search_result(
+            tool=tool,
+            app=app,
+            conn=conn,
+            activation_state=_activation_state(tool, conn),
+            match_reason="search",
+            score=1.0,
+            include_schema=include_schema,
+        )
+        if not include_unconnected and item.activation_state == "not_connected":
+            continue
+        results.append(item)
+        if len(results) >= limit:
+            break
+    return [_tool_result_payload(result) for result in results]
+
+
+@router.get("/tools/{tool_id}/schema")
+def get_provider_tool_schema(
+    tool_id: str,
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    tool = IntegrationProviderDAO(session).get_tool(tool_id)
+    if not tool:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown provider tool: {tool_id}",
+        )
+    return {
+        "tool_id": tool.tool_id,
+        "canonical_name": tool.canonical_name,
+        "input_schema": tool.input_schema_json or {},
+        "output_schema": tool.output_schema_json or {},
+        "examples": tool.examples_json or [],
+    }
+
+
 @router.post(
     "/tool-executions/{audit_id}/approve",
     response_model=IntegrationToolExecutionApprovalResponse,
@@ -773,101 +937,6 @@ def deny_integration_tool_execution(
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        ) from exc
-
-
-@router.get("/tools/search", response_model_exclude_none=True)
-def search_provider_tools(
-    query: str | None = Query(None),
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    canonical_app_slug: str | None = None,
-    include_unconnected: bool = False,
-    include_schema: bool = False,
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> list[ProviderToolSearchResult]:
-    return search_tools(
-        session,
-        ProviderToolSearchRequest(
-            query=query,
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            canonical_app_slug=canonical_app_slug,
-            include_unconnected=include_unconnected,
-            include_schema=include_schema,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/tools", response_model_exclude_none=True)
-def get_provider_tools(
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    canonical_app_slug: str | None = None,
-    activation_state: str | None = None,
-    include_unconnected: bool = False,
-    include_schema: bool = False,
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
-) -> ProviderToolGetResponse:
-    return get_tools(
-        session,
-        ProviderToolGetRequest(
-            owner_scope=owner_scope,
-            org_id=org_id,
-            team_id=team_id,
-            user_id=user_id,
-            assistant_id=assistant_id,
-            canonical_app_slug=canonical_app_slug,
-            activation_state=activation_state,
-            include_unconnected=include_unconnected,
-            include_schema=include_schema,
-            limit=limit,
-            offset=offset,
-        ),
-    )
-
-
-@router.get("/tools/{tool_id}/schema")
-def read_provider_tool_schema(
-    tool_id: str,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    session: Session = Depends(get_db_session),
-) -> ProviderToolSchemaResponse:
-    try:
-        return get_tool_schema(
-            session,
-            tool_id=tool_id,
-            owner=_owner_from_query(
-                owner_scope,
-                org_id,
-                team_id,
-                user_id,
-                assistant_id,
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
 

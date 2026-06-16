@@ -665,11 +665,11 @@ class TestEmailTemplates:
         body = build_coordinator_welcome_email(owner_first_name="Olivia")
         normalized = re.sub(r"\s+", " ", body.lower())
 
-        assert "unity" in WELCOME_SUBJECT.lower()
-        assert "i'm unity" in normalized
+        assert "unify" in WELCOME_SUBJECT.lower()
+        assert "i'm marty" in normalized
         assert "hi olivia," in normalized
         assert "https://console.unify.ai/" in body
-        assert "— unity" in normalized
+        assert "— marty" in normalized
 
     def test_welcome_email_handles_missing_first_name(self):
         from orchestra.routines.inactivity_notifications import (

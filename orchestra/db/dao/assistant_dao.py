@@ -228,28 +228,51 @@ class AssistantDAO:
         organization_id: Optional[int] = None,
         user_id: Optional[str] = None,
     ) -> Optional[Assistant]:
-        """Return the Coordinator assistant for an owner scope, if any.
+        """Return a Coordinator assistant, scoped by owner.
 
         The Coordinator handles cross-assistant administrative traffic
         (Slack DMs to unknown contacts, ambiguous ``@app <token>``
-        mentions, org-wide announcements). Exactly one of
-        ``organization_id`` or ``user_id`` must be supplied:
+        mentions, org-wide announcements). A Coordinator is personal to a
+        user even inside an organization: an org holds one workspace
+        Coordinator *per member*, so the only unambiguous lookup is by a
+        specific ``(user_id, organization_id)`` membership.
 
-        * ``organization_id`` — the org's coordinator (one per org
-          thanks to ``ux_assistants_one_workspace_coordinator_per_membership``).
-        * ``user_id`` — the user's personal coordinator (one per user
-          among assistants with ``organization_id IS NULL``).
+        At least one of ``organization_id`` or ``user_id`` must be
+        supplied:
+
+        * ``user_id`` + ``organization_id`` — that member's workspace
+          Coordinator. Unique per
+          ``ux_assistants_one_workspace_coordinator_per_membership``.
+        * ``user_id`` only — the user's personal Coordinator. Unique per
+          ``ux_assistants_one_personal_coordinator_per_user`` (assistants
+          with ``organization_id IS NULL``).
+        * ``organization_id`` only — a Coordinator within the org. Since
+          an org can hold one per member, this returns the lowest
+          ``agent_id`` match deterministically rather than assuming a
+          single row.
         """
-        _require_assistant_scope(organization_id, user_id)
+        if organization_id is None and user_id is None:
+            raise ValueError(
+                "Provide organization_id, user_id, or both "
+                f"(got organization_id={organization_id!r}, user_id={user_id!r}).",
+            )
         stmt = select(Assistant).where(Assistant.is_coordinator.is_(True))
-        if organization_id is not None:
-            stmt = stmt.where(Assistant.organization_id == organization_id)
-        else:
+        if user_id is not None and organization_id is not None:
+            stmt = stmt.where(
+                Assistant.user_id == user_id,
+                Assistant.organization_id == organization_id,
+            )
+            return self.session.execute(stmt).scalar_one_or_none()
+        if user_id is not None:
             stmt = stmt.where(
                 Assistant.user_id == user_id,
                 Assistant.organization_id.is_(None),
             )
-        return self.session.execute(stmt).scalar_one_or_none()
+            return self.session.execute(stmt).scalar_one_or_none()
+        stmt = stmt.where(Assistant.organization_id == organization_id).order_by(
+            Assistant.agent_id.asc(),
+        )
+        return self.session.execute(stmt).scalars().first()
 
     def resolve_token(
         self,

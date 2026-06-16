@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -35,6 +36,7 @@ from orchestra.db.models.orchestra_models import (
     DM_ROOT_SENTINEL,
     Assistant,
     SlackInstall,
+    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,25 @@ _TOKEN_EDGE_PUNCT = ',.;:!?"`()[]{}<>'
 def _clean_word(word: str) -> str:
     """Strip surrounding punctuation from a single addressing word."""
     return word.strip(_TOKEN_EDGE_PUNCT)
+
+
+@dataclass
+class SenderIdentity:
+    """Best-effort identity of the human who sent an inbound Slack event.
+
+    The gateway populates this on the *second* dispatch pass — after a
+    ``users.info`` lookup against the workspace bot token — so an org
+    install can route an untokened DM or an ambiguous mention to the
+    sender's *own* workspace Coordinator. On the first pass ``provided``
+    is ``False``: the dispatcher routes provisionally to the org's
+    deterministic Coordinator and asks the caller to re-dispatch with
+    identity for per-member precision.
+    """
+
+    provided: bool = False
+    email: Optional[str] = None
+    real_name: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 @dataclass
@@ -87,6 +108,15 @@ class SlackInboundResolution:
         ``{"reason": "ambiguous_token", "token": "alex", "candidates": [...]}``
         ``{"reason": "initial_dm"}``
         ``{"reason": "channel_binding"}``
+    """
+
+    needs_sender_identity: bool = False
+    """True when this is a *provisional* coordinator route for an org
+    install and the caller should re-dispatch with the sender's identity
+    (email / name) so the message can be pinned to the sender's own
+    workspace Coordinator. The provisional ``assistant_id`` is still a
+    valid recipient, so a caller that ignores this flag degrades to
+    deterministic org-Coordinator routing rather than dropping the event.
     """
 
 
@@ -177,6 +207,10 @@ def resolve_inbound(
     text: str,
     thread_ts: Optional[str],
     event_ts: str,
+    sender_email: Optional[str] = None,
+    sender_real_name: Optional[str] = None,
+    sender_display_name: Optional[str] = None,
+    sender_identity_provided: bool = False,
 ) -> Optional[SlackInboundResolution]:
     """Route a single inbound Slack event.
 
@@ -187,9 +221,18 @@ def resolve_inbound(
     :param event_ts: The event's own ``ts``. Used as the route key when
         the event is itself the thread root (i.e. the first explicit
         ``@app <token>`` in a top-level message that starts a thread).
+    :param sender_email: Sender's Slack profile email, if the gateway has
+        resolved it (org installs, second dispatch pass).
+    :param sender_real_name: Sender's Slack ``real_name``, if resolved.
+    :param sender_display_name: Sender's Slack ``display_name``, if resolved.
+    :param sender_identity_provided: ``True`` once the gateway has attempted
+        a ``users.info`` lookup (even if it yielded nothing). Distinguishes
+        the first dispatch pass from the second so coordinator routing does
+        not loop asking for identity that cannot be obtained.
 
     Returns ``None`` when no assistant should receive the event (e.g.
-    untokened message in a channel with no binding).
+    untokened message in a channel with no binding, or an install with no
+    Coordinator).
     """
     slack_dao = SlackDAO(session)
     install = slack_dao.get_install_by_team(slack_team_id)
@@ -199,6 +242,13 @@ def resolve_inbound(
     if sender_slack_user_id == install.bot_user_id:
         # Echoes of the bot's own messages — never route back.
         return None
+
+    identity = SenderIdentity(
+        provided=sender_identity_provided,
+        email=sender_email,
+        real_name=sender_real_name,
+        display_name=sender_display_name,
+    )
 
     is_dm = channel_type == "im"
     rest = _extract_rest(text, install.bot_user_id)
@@ -210,6 +260,7 @@ def resolve_inbound(
             install=install,
             channel_id=channel_id,
             rest=rest,
+            identity=identity,
         )
 
     return _resolve_channel(
@@ -220,29 +271,117 @@ def resolve_inbound(
         rest=rest,
         thread_ts=thread_ts,
         event_ts=event_ts,
+        identity=identity,
     )
 
 
-def _coordinator_or_fail(
+def _normalize_name(name: str) -> str:
+    """Lower-case and strip accents/punctuation for tolerant name compares."""
+    if not name:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    cleaned = re.sub(r"[^\w\s]", " ", stripped).lower()
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _coordinator_owners(session: Session, organization_id: int) -> list[User]:
+    """Users who own a Coordinator assistant in this organization.
+
+    These are the only members a sender can be pinned to by identity:
+    each holds exactly one workspace Coordinator (unique per the
+    ``(user_id, organization_id)`` membership index), so resolving the
+    sender to one of them yields an unambiguous Coordinator.
+    """
+    return (
+        session.query(User)
+        .join(Assistant, Assistant.user_id == User.id)
+        .filter(
+            Assistant.organization_id == organization_id,
+            Assistant.is_coordinator.is_(True),
+        )
+        .all()
+    )
+
+
+def _resolve_member_user_id(
+    session: Session,
+    organization_id: int,
+    identity: SenderIdentity,
+) -> Optional[str]:
+    """Map a Slack sender to the org member who owns their Coordinator.
+
+    Mirrors the contact-matching ladder used for inbound senders: an exact
+    email match wins, otherwise a unique full-name match (either ordering)
+    on the member's profile name. Ambiguous name matches are refused so we
+    never route to the wrong person.
+    """
+    owners = _coordinator_owners(session, organization_id)
+    if not owners:
+        return None
+
+    email = (identity.email or "").strip().lower()
+    if email:
+        for owner in owners:
+            if (owner.email or "").strip().lower() == email:
+                return owner.id
+
+    for raw_name in (identity.real_name, identity.display_name):
+        target = _normalize_name(raw_name or "")
+        if not target:
+            continue
+        matches = [
+            owner.id
+            for owner in owners
+            if target
+            in (
+                _normalize_name(f"{owner.name or ''} {owner.last_name or ''}"),
+                _normalize_name(f"{owner.last_name or ''} {owner.name or ''}"),
+            )
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _resolve_coordinator(
     session: Session,
     install: SlackInstall,
-) -> Assistant:
-    coordinator = AssistantDAO(session).coordinator(**_scope_kwargs(install))
-    if coordinator is None:
-        # The install was provisioned without an owner-scope coordinator.
-        # The OAuth flow is responsible for ensuring one exists; if it
-        # doesn't, the dispatcher cannot route untokened or ambiguous
-        # traffic and we should fail loudly.
-        owner = (
-            f"org {install.organization_id}"
-            if install.organization_id is not None
-            else f"user {install.user_id!r}"
-        )
-        raise RuntimeError(
-            f"Slack install {install.id} ({owner}) has no Coordinator "
-            "assistant; cannot route ambiguous traffic.",
-        )
-    return coordinator
+    identity: SenderIdentity,
+) -> tuple[Optional[Assistant], bool]:
+    """Resolve the Coordinator for untokened / ambiguous traffic.
+
+    Returns ``(coordinator, needs_sender_identity)``:
+
+    * **Personal install** — the user's single personal Coordinator,
+      sender-independent. Never needs identity.
+    * **Org install, identity provided** — the sender's *own* workspace
+      Coordinator when the sender maps to a member who owns one; otherwise
+      the org's deterministic Coordinator as a safe fallback.
+    * **Org install, identity not yet provided** — the org's deterministic
+      Coordinator with ``needs_sender_identity=True`` so the caller can
+      re-dispatch with the sender's identity for per-member precision.
+
+    A ``None`` coordinator means the install has none at all; the caller
+    drops the event rather than crashing.
+    """
+    dao = AssistantDAO(session)
+    if install.organization_id is None:
+        return dao.coordinator(user_id=install.user_id), False
+
+    organization_id = install.organization_id
+    if identity.provided:
+        member_user_id = _resolve_member_user_id(session, organization_id, identity)
+        if member_user_id is not None:
+            member_coordinator = dao.coordinator(
+                user_id=member_user_id,
+                organization_id=organization_id,
+            )
+            if member_coordinator is not None:
+                return member_coordinator, False
+        return dao.coordinator(organization_id=organization_id), False
+
+    return dao.coordinator(organization_id=organization_id), True
 
 
 def _resolve_dm(
@@ -252,7 +391,8 @@ def _resolve_dm(
     install: SlackInstall,
     channel_id: str,
     rest: Optional[str],
-) -> SlackInboundResolution:
+    identity: SenderIdentity,
+) -> Optional[SlackInboundResolution]:
     if rest is not None:
         candidates, token = _resolve_addressing(session, install, rest)
         if len(candidates) == 1:
@@ -266,19 +406,26 @@ def _resolve_dm(
                 routing_metadata={"reason": "token_addressed", "token": token},
             )
 
-        coordinator = _coordinator_or_fail(session, install)
+        coordinator, needs_identity = _resolve_coordinator(session, install, identity)
+        if coordinator is None:
+            return None
         meta: dict[str, Any] = {
             "reason": "unknown_token" if not candidates else "ambiguous_token",
             "token": token,
         }
         if candidates:
             meta["candidates"] = [_assistant_label(a) for a in candidates]
+        if not needs_identity:
+            # Final coordinator route: pin the DM so follow-ups skip the
+            # (potentially Slack-API-backed) identity lookup.
+            slack_dao.upsert_dm_route(install.id, channel_id, coordinator.agent_id)
         return SlackInboundResolution(
             install=install,
             assistant_id=coordinator.agent_id,
             thread_ts_for_route=DM_ROOT_SENTINEL,
-            route_persisted=False,
+            route_persisted=not needs_identity,
             routing_metadata=meta,
+            needs_sender_identity=needs_identity,
         )
 
     existing = slack_dao.get_dm_route(install.id, channel_id)
@@ -291,13 +438,18 @@ def _resolve_dm(
             route_persisted=True,
         )
 
-    coordinator = _coordinator_or_fail(session, install)
+    coordinator, needs_identity = _resolve_coordinator(session, install, identity)
+    if coordinator is None:
+        return None
+    if not needs_identity:
+        slack_dao.upsert_dm_route(install.id, channel_id, coordinator.agent_id)
     return SlackInboundResolution(
         install=install,
         assistant_id=coordinator.agent_id,
         thread_ts_for_route=DM_ROOT_SENTINEL,
-        route_persisted=False,
+        route_persisted=not needs_identity,
         routing_metadata={"reason": "initial_dm"},
+        needs_sender_identity=needs_identity,
     )
 
 
@@ -310,6 +462,7 @@ def _resolve_channel(
     rest: Optional[str],
     thread_ts: Optional[str],
     event_ts: str,
+    identity: SenderIdentity,
 ) -> Optional[SlackInboundResolution]:
     # The thread root we use as the route key. If the event is itself
     # a top-level message that starts a new thread (via an explicit
@@ -335,7 +488,13 @@ def _resolve_channel(
                 routing_metadata={"reason": "token_addressed", "token": token},
             )
 
-        coordinator = _coordinator_or_fail(session, install)
+        coordinator, needs_identity = _resolve_coordinator(session, install, identity)
+        if coordinator is None:
+            return None
+        # The coordinator takes the thread so it can clarify in place. A
+        # provisional (needs-identity) route is still persisted; a second
+        # dispatch with the sender's identity re-pins it to the sender's
+        # own workspace Coordinator if that differs.
         slack_dao.upsert_thread_route(
             install.id,
             channel_id,
@@ -354,6 +513,7 @@ def _resolve_channel(
             thread_ts_for_route=route_key,
             route_persisted=True,
             routing_metadata=meta,
+            needs_sender_identity=needs_identity,
         )
 
     if thread_ts is not None:

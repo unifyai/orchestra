@@ -16,8 +16,6 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.db.models.orchestra_models import (
-    CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
-    CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     ContactMembership,
     Organization,
@@ -195,13 +193,13 @@ class TestDemoAssistantListFiltering:
         assert "info" in resp.json()
 
     @pytest.mark.anyio
-    async def test_list_with_demo_repairs_missing_personal_contact_overlays(
+    async def test_list_with_demo_uses_fallback_contact_ids_for_missing_personal_overlays(
         self,
         client: AsyncClient,
         dbsession,
         source_assistant: dict,
     ):
-        """List reads repair historical assistants missing personal overlays."""
+        """List reads tolerate historical assistants missing personal overlays."""
         agent_id = int(source_assistant["agent_id"])
         (
             dbsession.query(ContactMembership)
@@ -233,10 +231,7 @@ class TestDemoAssistantListFiltering:
             )
             .all()
         )
-        assert {(row.contact_id, row.relationship) for row in rows} == {
-            (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
-            (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
-        }
+        assert rows == []
 
     @pytest.mark.anyio
     async def test_list_with_demo_only(

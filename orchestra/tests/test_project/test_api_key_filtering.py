@@ -23,6 +23,97 @@ from orchestra.tests.utils import create_test_user
 
 
 @pytest.mark.anyio
+async def test_builtins_seed_surfaces_allow_personal_writer(
+    client: AsyncClient,
+    dbsession,
+):
+    """Builtins can be converged through the same APIs used by the seed script."""
+    owner = await create_test_user(client, "builtins_seed_writer@test.com")
+    outsider = await create_test_user(client, "builtins_seed_outsider@test.com")
+
+    create_response = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
+        headers=owner["headers"],
+    )
+    assert create_response.status_code == status.HTTP_200_OK, create_response.json()
+
+    outsider_create = await client.post(
+        "/v0/project",
+        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
+        headers=outsider["headers"],
+    )
+    assert outsider_create.status_code == status.HTTP_403_FORBIDDEN
+
+    patch_response = await client.patch(
+        "/v0/project/Builtins",
+        json={"is_public_read": True},
+        headers=owner["headers"],
+    )
+    assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
+
+    context_response = await client.post(
+        "/v0/project/Builtins/contexts",
+        json={
+            "name": "Smoke/BuiltinsSeed/test",
+            "description": "Builtins seed smoke context.",
+            "is_versioned": False,
+            "allow_duplicates": True,
+            "unique_keys": None,
+        },
+        headers=owner["headers"],
+    )
+    assert context_response.status_code == status.HTTP_200_OK, context_response.json()
+
+    log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/test",
+            "entries": {"smoke_id": "test", "value": "ok"},
+        },
+        headers=owner["headers"],
+    )
+    assert log_response.status_code == status.HTTP_200_OK, log_response.json()
+    log_id = log_response.json()["log_event_ids"][0]
+
+    get_response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/test",
+            "filter_expr": 'smoke_id == "test"',
+            "limit": 1,
+        },
+        headers=owner["headers"],
+    )
+    assert get_response.status_code == status.HTTP_200_OK, get_response.json()
+
+    delete_log_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project_name": "Builtins",
+            "context": "Smoke/BuiltinsSeed/test",
+            "ids_and_fields": [[log_id, None]],
+            "source_type": "all",
+            "delete_empty_logs": True,
+            "delete_empty_fields": True,
+        },
+        headers=owner["headers"],
+    )
+    assert (
+        delete_log_response.status_code == status.HTTP_200_OK
+    ), delete_log_response.json()
+
+    delete_project_response = await client.delete(
+        "/v0/project/Builtins",
+        headers=owner["headers"],
+    )
+    assert delete_project_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
 async def test_list_projects_personal_api_key_shows_only_personal(
     client: AsyncClient,
     dbsession,
