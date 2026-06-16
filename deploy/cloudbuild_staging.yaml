@@ -79,7 +79,7 @@ steps:
   entrypoint: gcloud
   waitFor:
   - 'Update migration image'
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   args:
   - '-c'
   - |
