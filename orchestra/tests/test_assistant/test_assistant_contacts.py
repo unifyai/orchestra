@@ -5477,7 +5477,7 @@ class TestConnectEndpointOrg:
     ):
         """Even the owner can't BYOD-connect a Coordinator — contacts are
         platform-managed (shared universal pools)."""
-        owner, _, agent_id, _, _ = await _setup_org_coordinator_with_members(
+        _, org, agent_id, _, _ = await _setup_org_coordinator_with_members(
             client,
             dbsession,
         )
@@ -5493,7 +5493,7 @@ class TestConnectEndpointOrg:
             resp = await client.post(
                 f"/v0/assistant/{agent_id}/connect",
                 json={"provider": "google", "features": ["email"]},
-                headers=owner["headers"],
+                headers=org["headers"],
             )
 
         assert resp.status_code == status.HTTP_409_CONFLICT

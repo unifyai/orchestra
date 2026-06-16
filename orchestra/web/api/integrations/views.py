@@ -16,6 +16,9 @@ from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.integrations.operations import (
     OwnerContext,
+    _activation_state,
+    _best_connection,
+    _tool_search_result,
     approve_tool_execution,
     cancel_connection,
     complete_connection,
@@ -56,6 +59,7 @@ from orchestra.web.api.integrations.schema import (
     IntegrationToolPolicyResponse,
     ProviderToolRunRequest,
     ProviderToolRunResponse,
+    ProviderToolSearchResult,
 )
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
@@ -572,6 +576,129 @@ def patch_integration_tool_policy(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
+
+
+@router.get("/tools")
+def list_provider_tools(
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    canonical_app_slug: str | None = None,
+    activation_state: str | None = None,
+    include_schema: bool = False,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
+    tools = dao.list_tools(canonical_app_slug=canonical_app_slug)
+    items: list[ProviderToolSearchResult] = []
+    for tool in tools:
+        app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
+        conn = _best_connection(
+            session, owner=owner, canonical_app_slug=tool.canonical_app_slug
+        )
+        item = _tool_search_result(
+            tool=tool,
+            app=app,
+            conn=conn,
+            activation_state=_activation_state(tool, conn),
+            match_reason="list",
+            score=1.0,
+            include_schema=include_schema,
+        )
+        if activation_state and item.activation_state != activation_state:
+            continue
+        items.append(item)
+    total = len(items)
+    return {
+        "items": items[offset : offset + limit],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/tools/search")
+def search_provider_tools(
+    query: str = Query(""),
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    include_unconnected: bool = False,
+    include_schema: bool = False,
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_db_session),
+) -> list[ProviderToolSearchResult]:
+    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    dao = IntegrationProviderDAO(session)
+    query_norm = query.strip().lower()
+    results: list[ProviderToolSearchResult] = []
+    for tool in dao.list_tools():
+        app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
+        haystack = " ".join(
+            [
+                tool.name,
+                tool.display_name,
+                tool.description,
+                tool.canonical_app_slug,
+                app.display_name if app else "",
+            ],
+        ).lower()
+        if query_norm and query_norm not in haystack:
+            continue
+        conn = _best_connection(
+            session, owner=owner, canonical_app_slug=tool.canonical_app_slug
+        )
+        item = _tool_search_result(
+            tool=tool,
+            app=app,
+            conn=conn,
+            activation_state=_activation_state(tool, conn),
+            match_reason="search",
+            score=1.0,
+            include_schema=include_schema,
+        )
+        if not include_unconnected and item.activation_state == "not_connected":
+            continue
+        results.append(item)
+        if len(results) >= limit:
+            break
+    return results
+
+
+@router.get("/tools/{tool_id}/schema")
+def get_provider_tool_schema(
+    tool_id: str,
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
+    seed_default_provider_catalog(session)
+    tool = IntegrationProviderDAO(session).get_tool(tool_id)
+    if not tool:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown provider tool: {tool_id}",
+        )
+    return {
+        "tool_id": tool.tool_id,
+        "canonical_name": tool.canonical_name,
+        "input_schema": tool.input_schema_json or {},
+        "output_schema": tool.output_schema_json or {},
+        "examples": tool.examples_json or [],
+    }
 
 
 @router.post(
