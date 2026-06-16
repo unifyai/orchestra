@@ -60,7 +60,6 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     OrganizationMember,
     Project,
-    SharedPoolNumber,
     Team,
     TeamAssistantMembership,
     User,
@@ -102,9 +101,12 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.services.universal_unity_contacts import (
+    UNIVERSAL_CONTACT_TYPES,
+    drifted_universal_coordinator_contact_types,
     missing_universal_coordinator_contact_types,
 )
 from orchestra.services.universal_unity_discord import (
+    ensure_universal_unity_discord_pool,
     get_universal_unity_discord_bot_id,
     notify_comms_discord_sync,
 )
@@ -709,59 +711,74 @@ def _self_heal_coordinator_contacts(
     contacts_by_assistant: dict[int, list],
     contact_dao: AssistantContactDAO,
 ) -> bool:
-    """Backfill universal contacts for the given Coordinators on read.
+    """Backfill and reconcile universal contacts for Coordinators on read.
 
     Coordinator contacts (email / phone / WhatsApp / Discord) are
     platform-managed pools provisioned at Coordinator creation. Coordinators
     that predate that rollout (or a newly added channel) otherwise only get them
     via the onboarding provisioning call, so a long-lived Coordinator can show
-    missing contacts indefinitely. Healing here, on the natural read path,
-    closes that gap without a console round-trip.
+    missing contacts indefinitely. Likewise, when a pool identifier is repointed
+    in settings (e.g. the shared Coordinator email moves to a new address), the
+    value stored on existing Coordinators would otherwise stay stale until the
+    next provisioning call. Healing here, on the natural read path, closes both
+    gaps without a console round-trip.
 
     ``coordinators`` must already be filtered to rows the requesting user owns
     and is authorized to provision (callers do their own ownership/permission
-    checks). Only channels actually configured for this deployment but absent on
-    the Coordinator are provisioned (so we never touch existing contacts or
-    chase a channel that isn't set up), and ``contacts_by_assistant`` is
-    refreshed in place so the freshly provisioned contacts surface in this same
+    checks). For each Coordinator we heal channels that are configured for this
+    deployment but either *missing* on the Coordinator or *drifted* from the
+    configured value; channels that aren't set up and non-universal (manually
+    set) contacts are left untouched. ``contacts_by_assistant`` is refreshed in
+    place so the freshly provisioned/reconciled contacts surface in this same
     response.
 
     Best-effort: any failure is swallowed (the next read retries) and the
     session is left usable for the rest of the response build.
 
     Returns ``True`` when Unity should be pinged to (re)sync the shared Discord
-    bot pool — i.e. this read seeded the universal Discord pool row for the
-    first time. Discord is the only channel that needs an out-of-band sync;
+    bot pool — i.e. this read created the pool row, reactivated it, or rotated
+    its bot token. Discord is the only channel that needs an out-of-band sync;
     Unity resolves email/phone/WhatsApp routing per message.
     """
     if not coordinators:
         return False
 
-    universal_discord_bot_id = get_universal_unity_discord_bot_id()
-    discord_pool_existed_before = bool(universal_discord_bot_id) and (
-        session.query(SharedPoolNumber)
-        .filter(
-            SharedPoolNumber.platform == "discord",
-            SharedPoolNumber.number == universal_discord_bot_id,
-        )
-        .first()
-        is not None
-    )
+    # Reconcile the shared Discord bot pool (id + token) once per pass. The pool
+    # is platform-global (one row, not per-Coordinator), so it lives outside the
+    # loop. ``changed`` captures creation, reactivation, and token rotation —
+    # every case where Unity must re-pull the bot credentials. Token rotations
+    # don't surface as a Coordinator contact drift (the contact stores the bot
+    # *id*, which is unchanged), so this is the only place they get healed.
+    discord_pool_changed = False
+    if get_universal_unity_discord_bot_id():
+        try:
+            _discord_pool, discord_pool_changed = ensure_universal_unity_discord_pool(
+                session
+            )
+        except Exception:
+            logging.warning(
+                "Coordinator Discord pool self-heal failed",
+                exc_info=True,
+            )
 
     healed_ids: list[int] = []
-    healed_discord = False
     for coordinator in coordinators:
-        present_types = [
-            c.contact_type for c in contacts_by_assistant.get(coordinator.agent_id, [])
-        ]
+        present_contacts = contacts_by_assistant.get(coordinator.agent_id, [])
+        present_types = [c.contact_type for c in present_contacts]
         missing = missing_universal_coordinator_contact_types(present_types)
-        if not missing:
+        drifted = drifted_universal_coordinator_contact_types(present_contacts)
+        to_heal = [
+            contact_type
+            for contact_type in UNIVERSAL_CONTACT_TYPES
+            if contact_type in set(missing) | set(drifted)
+        ]
+        if not to_heal:
             continue
         try:
             heal_coordinator_universal_contacts(
                 session,
                 coordinator=coordinator,
-                missing_contact_types=missing,
+                contact_types=to_heal,
             )
         except Exception:
             logging.warning(
@@ -771,10 +788,8 @@ def _self_heal_coordinator_contacts(
             )
             continue
         healed_ids.append(coordinator.agent_id)
-        if "discord" in missing:
-            healed_discord = True
 
-    if not healed_ids:
+    if not healed_ids and not discord_pool_changed:
         return False
 
     try:
@@ -788,15 +803,14 @@ def _self_heal_coordinator_contacts(
         return False
 
     # Surface the freshly provisioned contacts in this same response.
-    refreshed = contact_dao.get_active_contacts_for_assistants(healed_ids)
-    for healed_id in healed_ids:
-        contacts_by_assistant[healed_id] = []
-    for contact in refreshed:
-        contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
+    if healed_ids:
+        refreshed = contact_dao.get_active_contacts_for_assistants(healed_ids)
+        for healed_id in healed_ids:
+            contacts_by_assistant[healed_id] = []
+        for contact in refreshed:
+            contacts_by_assistant.setdefault(contact.assistant_id, []).append(contact)
 
-    return bool(
-        universal_discord_bot_id and healed_discord and not discord_pool_existed_before
-    )
+    return discord_pool_changed
 
 
 @router.post(

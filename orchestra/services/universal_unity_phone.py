@@ -158,8 +158,34 @@ def ensure_coordinator_universal_phone_contact(
     existing = _existing_universal_phone_contact(session, coordinator=coordinator)
     if existing is not None and preferred_country is None:
         existing_country = _normalize_country(existing.country_code)
-        if existing_country and get_universal_unity_phone_number(existing_country):
-            ensure_universal_unity_phone_pool(session, country=existing_country)
+        configured_number = (
+            get_universal_unity_phone_number(existing_country)
+            if existing_country
+            else None
+        )
+        # Keep the Coordinator on its assigned country as long as that country
+        # is still offered. If the number for that country was rotated in
+        # settings, reconcile the stored value in place (preserving country)
+        # rather than reselecting a — possibly different — country.
+        if configured_number:
+            pool = ensure_universal_unity_phone_pool(session, country=existing_country)
+            if pool is not None and existing.contact_value != configured_number:
+                reconciled = AssistantContactDAO(session).upsert_assistant_contact(
+                    assistant_id=coordinator.agent_id,
+                    contact_type="phone",
+                    contact_value=configured_number,
+                    provider="twilio",
+                    provisioned_by="platform",
+                    country_code=existing_country,
+                    metadata={
+                        **UNIVERSAL_UNITY_PHONE_METADATA,
+                        "country": existing_country,
+                        "assignment_source": "reconcile",
+                        "shared_pool_number_id": pool.id,
+                    },
+                )
+                session.flush()
+                return reconciled
             return existing
 
     user_phone_number = (

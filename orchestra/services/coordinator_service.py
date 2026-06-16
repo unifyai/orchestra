@@ -327,16 +327,18 @@ def heal_coordinator_universal_contacts(
     session: Session,
     *,
     coordinator: Assistant,
-    missing_contact_types: Sequence[str],
+    contact_types: Sequence[str],
 ) -> None:
-    """Provision only the named universal contacts on a Coordinator.
+    """Provision or reconcile the named universal contacts on a Coordinator.
 
     A focused, idempotent subset of :func:`_repair_existing_coordinator_state`
-    used by the read path to backfill Coordinators that predate the
-    universal-contact rollout (or a newly added channel). Only the channels in
-    ``missing_contact_types`` are touched, so existing contacts are never
-    re-provisioned. Each ``ensure_*`` call is itself a no-op when the contact
-    already exists.
+    used by the read path to (a) backfill Coordinators that predate the
+    universal-contact rollout (or a newly added channel) and (b) reconcile
+    contacts whose stored value has drifted from the value currently
+    configured for this deployment. Only the channels in ``contact_types`` are
+    touched; each ``ensure_*`` call is idempotent — it re-points the contact at
+    the configured value when it differs and is a no-op when it already
+    matches.
 
     The phone backfill uses the platform default country rather than the
     visitor's geo (the read request doesn't carry it); new Coordinators still
@@ -345,14 +347,14 @@ def heal_coordinator_universal_contacts(
     if not coordinator.is_coordinator:
         return
 
-    missing = set(missing_contact_types)
-    if "email" in missing:
+    requested = set(contact_types)
+    if "email" in requested:
         ensure_coordinator_universal_email_contact(session, coordinator=coordinator)
-    if "whatsapp" in missing:
+    if "whatsapp" in requested:
         ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
-    if "discord" in missing:
+    if "discord" in requested:
         ensure_coordinator_universal_discord_contact(session, coordinator=coordinator)
-    if "phone" in missing:
+    if "phone" in requested:
         ensure_coordinator_universal_phone_contact(
             session,
             coordinator=coordinator,
