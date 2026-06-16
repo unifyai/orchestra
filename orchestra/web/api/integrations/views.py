@@ -144,24 +144,21 @@ def _app_payload(
     *,
     detail_level: str,
 ) -> dict:
-    tools = dao.list_tools(canonical_app_slug=app.canonical_app_slug)
+    tools = dao.list_tools(
+        canonical_app_slug=app.canonical_app_slug,
+        backend_id=app.backend_id,
+    )
     status_value = _app_status(conn, tools)
+    raw_metadata = app.raw_provider_metadata_json or {}
+    is_native = app.backend_id == "unity_native" or (
+        isinstance(raw_metadata, dict) and raw_metadata.get("source_type") == "native"
+    )
     payload = {
         "backend_id": app.backend_id,
         "provider_app_id": app.provider_app_id,
         "canonical_app_slug": app.canonical_app_slug,
         "display_name": app.display_name,
-        "source_type": (
-            "native"
-            if (
-                app.backend_id == "unity_native"
-                or (
-                    isinstance(app.raw_provider_metadata_json, dict)
-                    and app.raw_provider_metadata_json.get("source_type") == "native"
-                )
-            )
-            else "third_party"
-        ),
+        "source_type": "native" if is_native else "third_party",
         "source_label": "Native" if app.backend_id == "unity_native" else "Third-party",
         "description": app.description,
         "category": app.category,
@@ -172,7 +169,11 @@ def _app_payload(
         "connection_id": conn.connection_id if conn else None,
         "external_account_label": conn.external_account_label if conn else None,
         "overlay": {},
-        "native_metadata": {},
+        "native_metadata": (
+            raw_metadata.get("native_metadata", {})
+            if is_native and isinstance(raw_metadata, dict)
+            else {}
+        ),
     }
     if detail_level != "summary":
         payload["available_scopes"] = []
@@ -454,6 +455,7 @@ def list_integration_apps(
     owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
+    enabled_backend_ids = dao.active_backend_ids()
     apps = (
         session.query(DynamicProviderApp)
         .order_by(DynamicProviderApp.display_name.asc())
@@ -462,24 +464,43 @@ def list_integration_apps(
     query_norm = query.strip().lower()
     all_items: list[dict] = []
     for app in apps:
+        if app.backend_id not in enabled_backend_ids:
+            continue
         conn = _best_connection(
-            session, owner=owner, canonical_app_slug=app.canonical_app_slug
+            session,
+            owner=owner,
+            canonical_app_slug=app.canonical_app_slug,
+            backend_id=app.backend_id,
         )
         item = _app_payload(dao, app, conn, detail_level=detail_level)
         all_items.append(item)
 
+    base_filtered = []
+    for item in all_items:
+        if source_type and item["source_type"] != source_type:
+            continue
+        if (
+            query_norm
+            and query_norm
+            not in f"{item['display_name']} {item['canonical_app_slug']}".lower()
+        ):
+            continue
+        base_filtered.append(item)
+
     facets = {
-        "total": len(all_items),
+        "total": len(base_filtered),
         "source_type": {
-            "native": sum(1 for item in all_items if item["source_type"] == "native"),
+            "native": sum(
+                1 for item in base_filtered if item["source_type"] == "native"
+            ),
             "third_party": sum(
-                1 for item in all_items if item["source_type"] == "third_party"
+                1 for item in base_filtered if item["source_type"] == "third_party"
             ),
         },
         "status": {status_name: 0 for status_name in valid_statuses},
         "status_group": {group_name: 0 for group_name in valid_groups},
     }
-    for item in all_items:
+    for item in base_filtered:
         facets["status"][item["connection_status"]] = (
             facets["status"].get(item["connection_status"], 0) + 1
         )
@@ -487,20 +508,12 @@ def list_integration_apps(
         facets["status_group"][group] = facets["status_group"].get(group, 0) + 1
 
     filtered = []
-    for item in all_items:
-        if source_type and item["source_type"] != source_type:
-            continue
+    for item in base_filtered:
         if requested_statuses and item["connection_status"] not in requested_statuses:
             continue
         if (
             status_group
             and _app_status_group(item["connection_status"]) != status_group
-        ):
-            continue
-        if (
-            query_norm
-            and query_norm
-            not in f"{item['display_name']} {item['canonical_app_slug']}".lower()
         ):
             continue
         filtered.append(item)
@@ -512,6 +525,31 @@ def list_integration_apps(
         "offset": offset,
         "facets": facets,
     }
+
+
+@router.get("/apps/search")
+def search_integration_apps(
+    query: str = Query(""),
+    source_type: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_db_session),
+) -> list[dict]:
+    page = list_integration_apps(
+        owner_scope="assistant",
+        org_id=None,
+        team_id=None,
+        user_id=None,
+        assistant_id=None,
+        query=query,
+        source_type=source_type,
+        status=None,
+        status_group=None,
+        detail_level="summary",
+        limit=limit,
+        offset=0,
+        session=session,
+    )
+    return page["items"]
 
 
 @router.get("/connections")
@@ -787,12 +825,18 @@ def list_provider_tools(
     owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
+    enabled_backend_ids = dao.active_backend_ids()
     tools = dao.list_tools(canonical_app_slug=canonical_app_slug)
     items: list[ProviderToolSearchResult] = []
     for tool in tools:
+        if tool.backend_id not in enabled_backend_ids:
+            continue
         app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
         conn = _best_connection(
-            session, owner=owner, canonical_app_slug=tool.canonical_app_slug
+            session,
+            owner=owner,
+            canonical_app_slug=tool.canonical_app_slug,
+            backend_id=tool.backend_id,
         )
         item = _tool_search_result(
             tool=tool,
@@ -833,9 +877,12 @@ def search_provider_tools(
     owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
+    enabled_backend_ids = dao.active_backend_ids()
     query_norm = query.strip().lower()
     results: list[ProviderToolSearchResult] = []
     for tool in dao.list_tools():
+        if tool.backend_id not in enabled_backend_ids:
+            continue
         app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
         haystack = " ".join(
             [
@@ -849,7 +896,10 @@ def search_provider_tools(
         if query_norm and query_norm not in haystack:
             continue
         conn = _best_connection(
-            session, owner=owner, canonical_app_slug=tool.canonical_app_slug
+            session,
+            owner=owner,
+            canonical_app_slug=tool.canonical_app_slug,
+            backend_id=tool.backend_id,
         )
         item = _tool_search_result(
             tool=tool,

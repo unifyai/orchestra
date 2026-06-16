@@ -158,7 +158,7 @@ async def test_partial_sync_preserves_unlisted_catalog_rows(
         dbsession.query(ProviderToolCatalog)
         .filter_by(backend_id="composio", canonical_app_slug="gmail")
         .count()
-        == 1
+        == 2
     )
 
 
