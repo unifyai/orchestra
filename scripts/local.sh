@@ -27,9 +27,10 @@
 #   ORCHESTRA_WORKERS       Number of uvicorn workers (default: auto-detect from CPU cores)
 #   ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after N seconds of no requests (default: 600)
 #
-# Test user (always seeded for local development):
+# Test user (seeded by default for local development):
 #   ORCHESTRA_TEST_USER_ID  Test user ID (default: "test-user-001")
 #   ORCHESTRA_TEST_EMAIL    Test user email (default: "test@debug.local")
+#   ORCHESTRA_SKIP_TEST_USER  Set to 1 to skip local test-user seeding
 #   UNIFY_KEY               API key for test user (default: "local-test-api-key")
 #
 # On success, exports:
@@ -54,6 +55,9 @@ ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
 
 # Inactivity timeout (seconds) - server shuts down after this period of no requests
 ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-600}"
+
+# Local development seeds a test account unless a caller explicitly opts out.
+ORCHESTRA_SKIP_TEST_USER="${ORCHESTRA_SKIP_TEST_USER:-0}"
 
 # Derived names using prefix
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
@@ -915,8 +919,9 @@ cmd_start() {
     return 1
   fi
 
-  # Always seed test user for local development (required for authentication)
-  if ! seed_test_user; then
+  if [[ "$ORCHESTRA_SKIP_TEST_USER" == "1" ]]; then
+    log_info "Skipping local test user seed (ORCHESTRA_SKIP_TEST_USER=1)"
+  elif ! seed_test_user; then
     log_warn "Failed to seed test user (tests may fail without auth)"
   fi
 
@@ -1061,6 +1066,7 @@ main() {
           --status) cmd="status"; shift ;;
           --check) cmd="check"; shift ;;
           --env) cmd="env"; shift ;;
+          --skip-test-user) ORCHESTRA_SKIP_TEST_USER=1; shift ;;
           *)
             log_error "Unknown flag: $1"
             echo "Run '$0 --help' for usage"
@@ -1123,9 +1129,10 @@ main() {
       echo "  ORCHESTRA_OTEL_LOG_DIR  Directory for OpenTelemetry traces (optional)"
       echo "  ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS  Shutdown after inactivity (default: 600)"
       echo ""
-      echo "Test User (always seeded on start/restart):"
+      echo "Test User (seeded by default on start/restart):"
       echo "  ORCHESTRA_TEST_USER_ID  Test user ID (default: 'test-user-001')"
       echo "  ORCHESTRA_TEST_EMAIL    Test user email (default: 'test@debug.local')"
+      echo "  ORCHESTRA_SKIP_TEST_USER Set to 1 to skip local test-user seeding"
       echo "  UNIFY_KEY               API key for test user (default: 'local-test-api-key')"
       echo ""
       echo "Examples:"
