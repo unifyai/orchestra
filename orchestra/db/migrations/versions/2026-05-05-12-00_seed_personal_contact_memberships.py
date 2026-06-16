@@ -78,7 +78,7 @@ def upgrade() -> None:
             assistant_id,
             contact_id,
             target_scope,
-            target_team_id,
+            target_space_id,
             relationship,
             should_respond,
             response_policy,
