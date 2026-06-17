@@ -1003,6 +1003,7 @@ def create_from_logs(
                                     )
 
                                     embedding_obj = Embedding(
+                                        project_id=project_obj.id,
                                         ref_id=log_event_id,
                                         key=body.key,
                                         model=DEFAULT_IMAGE_EMBEDDING_MODEL,
@@ -1871,11 +1872,11 @@ def _atomic_upsert_mode(
         session.execute(
             text(
                 """
-                INSERT INTO log_event_context (log_event_id, context_id)
-                VALUES (:log_id, :context_id)
+                INSERT INTO log_event_context (project_id, log_event_id, context_id)
+                VALUES (:project_id, :log_id, :context_id)
                 """,
             ),
-            {"log_id": log_id, "context_id": context_id},
+            {"project_id": project_id, "log_id": log_id, "context_id": context_id},
         )
 
     mirrored_contexts = []
@@ -1933,11 +1934,15 @@ def _atomic_upsert_mode(
                     session.execute(
                         text(
                             """
-                            INSERT INTO log_event_context (log_event_id, context_id)
-                            VALUES (:log_id, :context_id)
+                            INSERT INTO log_event_context (project_id, log_event_id, context_id)
+                            VALUES (:project_id, :log_id, :context_id)
                             """,
                         ),
-                        {"log_id": log_id, "context_id": archive_context_id},
+                        {
+                            "project_id": project_id,
+                            "log_id": log_id,
+                            "context_id": archive_context_id,
+                        },
                     )
 
                 mirrored_contexts.append(archive_context)
@@ -3010,6 +3015,7 @@ def _delete_logs(
         if logs_to_delete:
             # Embedding cleanup before hard delete (see LogEventDAO.delete)
             from orchestra.db.dao.embedding_dao import EmbeddingDAO
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
             embedding_dao = EmbeddingDAO(session)
             embedding_dao.cancel_queue(
@@ -3018,6 +3024,11 @@ def _delete_logs(
             )
             embedding_dao.soft_delete(log_event_ids=logs_to_delete)
             embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+            # log_unique_constraint no longer cascades with log_event (FK dropped
+            # for partitioning); clear its rows so deleting+recreating a unique
+            # machine row (e.g. activation reprojection) does not hit a stale
+            # uniqueness conflict.
+            UniqueConstraintDAO(session).remove_constraints_for_logs(logs_to_delete)
 
             deleted_count = (
                 session.query(LogEvent)
@@ -3184,6 +3195,7 @@ def _delete_logs(
             if logs_to_delete:
                 # Embedding cleanup before hard delete (see LogEventDAO.delete)
                 from orchestra.db.dao.embedding_dao import EmbeddingDAO
+                from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 
                 embedding_dao = EmbeddingDAO(session)
                 embedding_dao.cancel_queue(
@@ -3192,6 +3204,11 @@ def _delete_logs(
                 )
                 embedding_dao.soft_delete(log_event_ids=logs_to_delete)
                 embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+                # log_unique_constraint no longer cascades with log_event (FK
+                # dropped for partitioning); clear its rows explicitly.
+                UniqueConstraintDAO(session).remove_constraints_for_logs(
+                    logs_to_delete,
+                )
 
                 deleted_count = (
                     session.query(LogEvent)

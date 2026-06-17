@@ -2360,6 +2360,7 @@ def admin_duplicate_project(
             ):
                 lec_values.append(
                     {
+                        "project_id": new_project.id,
                         "log_event_id": log_event_id_map[lec.log_event_id],
                         "context_id": context_id_map[lec.context_id],
                     },

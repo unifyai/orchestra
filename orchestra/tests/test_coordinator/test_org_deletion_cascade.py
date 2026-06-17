@@ -237,7 +237,11 @@ def _add_context_log(
     dbsession.add(log_event)
     dbsession.flush()
     dbsession.add(
-        LogEventContext(log_event_id=log_event.id, context_id=context.id),
+        LogEventContext(
+            project_id=project.id,
+            log_event_id=log_event.id,
+            context_id=context.id,
+        ),
     )
     dbsession.flush()
     return log_event

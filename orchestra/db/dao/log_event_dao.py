@@ -18,6 +18,7 @@ from orchestra.db.models.core_models import (
     FieldType,
     LogEvent,
     LogEventContext,
+    LogUniqueConstraint,
     Project,
 )
 from orchestra.services.bucket_service import create_bucket_service
@@ -133,6 +134,7 @@ class LogEventDAO:
             # Associate logs with context
             associations = [
                 LogEventContext(
+                    project_id=project_id,
                     log_event_id=log_event_id,
                     context_id=context_id,
                 )
@@ -1638,6 +1640,7 @@ class LogEventDAO:
                         if is_image_embedding:
                             embedding_objects.append(
                                 Embedding(
+                                    project_id=template.project_id,
                                     ref_id=log_event_id,
                                     key=template.key,
                                     model=DEFAULT_IMAGE_EMBEDDING_MODEL,
@@ -1750,7 +1753,9 @@ class LogEventDAO:
         if project_id:
             query = query.where(LogEvent.project_id == project_id)
         if context_id:
-            query = query.join(LogEventContext).where(
+            query = query.join(
+                LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            ).where(
                 LogEventContext.context_id == context_id,
             )
 
@@ -1791,8 +1796,10 @@ class LogEventDAO:
 
             # Embedding cleanup before hard delete: cancel pending queue items
             # (prevents worker race conditions), soft-delete embeddings (excludes
-            # from HNSW search immediately), and null ref_ids (avoids per-row
-            # SET NULL trigger overhead when log_event rows are deleted).
+            # them from HNSW search immediately and marks them for the index-
+            # maintenance worker to reclaim), and null their now-dangling ref_ids
+            # (the embedding->log_event FK was removed for partitioning, so the
+            # delete below no longer touches the embedding table itself).
             from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(self.session)
@@ -1803,6 +1810,13 @@ class LogEventDAO:
             # First, delete the association rows referencing these log events
             self.session.query(LogEventContext).filter(
                 LogEventContext.log_event_id.in_(ids),
+            ).delete(synchronize_session=False)
+
+            # The log_unique_constraint -> log_event FK was removed for
+            # partitioning, so its rows are no longer cascade-deleted; remove
+            # them explicitly to avoid orphaned uniqueness rows.
+            self.session.query(LogUniqueConstraint).filter(
+                LogUniqueConstraint.log_event_id.in_(ids),
             ).delete(synchronize_session=False)
 
             # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)

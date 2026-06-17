@@ -101,6 +101,7 @@ class ReadyQueueItem(NamedTuple):
     key: str
     model: str
     generated_vector: list
+    project_id: int
 
 
 # SQL query for atomic claiming with FOR UPDATE SKIP LOCKED
@@ -117,7 +118,7 @@ SET status = 'inserting',
     processing_started_at = NOW()
 FROM claimable c
 WHERE q.id = c.id
-RETURNING q.id, q.ref_id, q.key, q.model, q.generated_vector
+RETURNING q.id, q.ref_id, q.key, q.model, q.generated_vector, q.project_id
 """
 
 
@@ -211,6 +212,7 @@ def claim_ready_batch(session: Session, limit: int) -> List[ReadyQueueItem]:
                 key=row[2],
                 model=row[3],
                 generated_vector=vector,
+                project_id=row[5],
             ),
         )
     return items
@@ -246,6 +248,7 @@ def bulk_insert_to_embedding_table(
     # Prepare embedding objects for bulk insert
     embedding_dicts = [
         {
+            "project_id": item.project_id,
             "ref_id": item.ref_id,
             "key": item.key,
             "model": item.model,

@@ -105,6 +105,7 @@ steps:
 images:
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
 - $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:latest
+timeout: 14400s
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET

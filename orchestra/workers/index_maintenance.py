@@ -63,6 +63,13 @@ from typing import List, Literal
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from orchestra.db.partitioning import (
+    find_promotion_candidates,
+    is_partitioned,
+    promote_project_to_partition,
+    table_storage_units,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -165,10 +172,25 @@ def get_raw_connection(session: Session):
 
 
 def get_index_size(conn, index_name: str) -> int:
-    """Get size of an index in bytes."""
+    """Get size of an index in bytes.
+
+    For a partitioned index ``pg_relation_size`` of the parent is 0 (no storage),
+    so sum the child index segments; falls back to the direct size for a plain
+    index.
+    """
     try:
         result = conn.execute(
-            text(f"SELECT pg_relation_size('{index_name}')"),
+            text(
+                """
+                SELECT COALESCE(
+                    (SELECT SUM(pg_relation_size(inhrelid))
+                     FROM pg_inherits WHERE inhparent = to_regclass(:idx)),
+                    pg_relation_size(to_regclass(:idx)),
+                    0
+                )
+                """,
+            ),
+            {"idx": index_name},
         ).scalar()
         return result or 0
     except Exception:
@@ -191,6 +213,47 @@ def get_total_embedding_count(conn) -> int:
         text("SELECT COUNT(*) FROM embedding"),
     ).scalar()
     return result or 0
+
+
+def embedding_leaf_tables(conn) -> List[str]:
+    """Physical tables holding embedding rows.
+
+    Child partitions when ``embedding`` is partitioned, else ``['embedding']``.
+    Maintenance (cleanup/VACUUM/REINDEX) must operate on these leaf relations:
+    ``ctid`` is per-physical-table and ``REINDEX CONCURRENTLY`` is not supported
+    on a partitioned parent.
+    """
+    return table_storage_units(conn, "embedding")
+
+
+def hnsw_leaf_indexes(conn) -> List[tuple]:
+    """Return ``(index_name, table_name)`` for every leaf HNSW index on embedding.
+
+    Restricted to the ``embedding`` family so other HNSW indexes (e.g. artifact
+    embeddings) are left untouched. Works for both the partitioned layout (one
+    index per partition) and the legacy single-table layout.
+    """
+    leaves = embedding_leaf_tables(conn)
+    if not leaves:
+        return []
+    rows = conn.execute(
+        text(
+            """
+            SELECT c.relname AS index_name, t.relname AS table_name
+            FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indexrelid
+            JOIN pg_class t ON t.oid = i.indrelid
+            JOIN pg_am am ON am.oid = c.relam
+            WHERE am.amname = 'hnsw'
+              AND c.relkind = 'i'
+              AND t.relkind = 'r'
+              AND t.relname = ANY(:leaves)
+            ORDER BY t.relname, c.relname
+            """,
+        ),
+        {"leaves": leaves},
+    ).fetchall()
+    return [(row[0], row[1]) for row in rows]
 
 
 def check_index_exists(conn, index_name: str) -> bool:
@@ -217,17 +280,22 @@ def get_invalid_indexes(conn) -> List[str]:
     or REINDEX CONCURRENTLY operations.
     """
     try:
+        leaves = embedding_leaf_tables(conn)
+        if not leaves:
+            return []
         result = conn.execute(
             text(
                 """
-                SELECT i.indexname
-                FROM pg_indexes i
-                JOIN pg_class c ON c.relname = i.indexname
-                JOIN pg_index idx ON idx.indexrelid = c.oid
-                WHERE i.tablename = 'embedding'
+                SELECT c.relname
+                FROM pg_index idx
+                JOIN pg_class c ON c.oid = idx.indexrelid
+                JOIN pg_class t ON t.oid = idx.indrelid
+                WHERE t.relname = ANY(:leaves)
+                  AND c.relkind = 'i'
                   AND idx.indisvalid = false
             """,
             ),
+            {"leaves": leaves},
         )
         return [row[0] for row in result.fetchall()]
     except Exception:
@@ -292,60 +360,68 @@ def batched_delete_soft_deleted(
 
     effective_budget = time_budget_seconds if time_budget_seconds > 0 else float("inf")
 
+    # ctid is per physical table, so iterate the leaf partitions (one relation
+    # for a non-partitioned embedding table) rather than the partitioned parent.
+    leaves = embedding_leaf_tables(conn)
+
     logger.info(
-        f"Starting batched deletion of soft-deleted/orphaned embeddings "
+        f"Starting batched deletion of soft-deleted/orphaned embeddings across "
+        f"{len(leaves)} partition(s) "
         f"(batch_size={BATCH_DELETE_SIZE}, time_budget={time_budget_seconds}s)",
     )
 
-    while batch_count < MAX_DELETE_BATCHES:
-        # Check shutdown flag
-        if shutdown_flag:
-            logger.info("Shutdown requested, stopping batched delete")
-            stopped_early = True
-            stop_reason = "shutdown_requested"
+    for leaf in leaves:
+        if stopped_early:
             break
+        while batch_count < MAX_DELETE_BATCHES:
+            if shutdown_flag:
+                logger.info("Shutdown requested, stopping batched delete")
+                stopped_early = True
+                stop_reason = "shutdown_requested"
+                break
 
-        # Check time budget (with safety margin for batch completion)
-        elapsed = time.time() - start_time
-        if elapsed >= effective_budget - 30:  # 30s margin per batch
-            logger.info(
-                f"Time budget approaching ({elapsed:.1f}s / {effective_budget}s), "
-                f"stopping to leave time for other phases",
-            )
-            stopped_early = True
-            stop_reason = "time_budget_exceeded"
-            break
-
-        # Delete a batch using ctid for efficient row identification
-        # Include both soft-deleted (is_deleted = true) AND orphaned (ref_id IS NULL)
-        result = conn.execute(
-            text(
-                """
-                WITH to_delete AS (
-                    SELECT ctid FROM embedding
-                    WHERE is_deleted = true OR ref_id IS NULL
-                    LIMIT :batch_size
+            elapsed = time.time() - start_time
+            if elapsed >= effective_budget - 30:  # 30s margin per batch
+                logger.info(
+                    f"Time budget approaching ({elapsed:.1f}s / {effective_budget}s), "
+                    f"stopping to leave time for other phases",
                 )
-                DELETE FROM embedding
-                WHERE ctid IN (SELECT ctid FROM to_delete)
-            """,
-            ),
-            {"batch_size": BATCH_DELETE_SIZE},
-        )
+                stopped_early = True
+                stop_reason = "time_budget_exceeded"
+                break
 
-        deleted_in_batch = result.rowcount
-        if deleted_in_batch == 0:
-            stop_reason = "all_deleted"
-            break
-
-        total_deleted += deleted_in_batch
-        batch_count += 1
-
-        if batch_count % 10 == 0:
-            logger.info(
-                f"Deleted {total_deleted} rows so far "
-                f"({batch_count} batches, {time.time() - start_time:.1f}s elapsed)",
+            # Delete a batch using ctid (valid within this single leaf relation).
+            # Includes soft-deleted (is_deleted = true) AND orphaned (ref_id NULL).
+            result = conn.execute(
+                text(
+                    f"""
+                    WITH to_delete AS (
+                        SELECT ctid FROM "{leaf}"
+                        WHERE is_deleted = true OR ref_id IS NULL
+                        LIMIT :batch_size
+                    )
+                    DELETE FROM "{leaf}"
+                    WHERE ctid IN (SELECT ctid FROM to_delete)
+                """,
+                ),
+                {"batch_size": BATCH_DELETE_SIZE},
             )
+
+            deleted_in_batch = result.rowcount
+            if deleted_in_batch == 0:
+                break  # this leaf is drained; move to the next
+
+            total_deleted += deleted_in_batch
+            batch_count += 1
+
+            if batch_count % 10 == 0:
+                logger.info(
+                    f"Deleted {total_deleted} rows so far "
+                    f"({batch_count} batches, {time.time() - start_time:.1f}s elapsed)",
+                )
+
+    if not stopped_early and stop_reason is None:
+        stop_reason = "all_deleted"
 
     if batch_count >= MAX_DELETE_BATCHES:
         stopped_early = True
@@ -367,103 +443,94 @@ def batched_delete_soft_deleted(
     }
 
 
+def _ensure_legacy_hnsw_indexes(conn) -> None:
+    """Self-heal the HNSW indexes on a non-partitioned (legacy) embedding table.
+
+    On the partitioned layout the per-partition indexes are owned by the parent
+    partitioned index (created by the migration/runbook/ATTACH), so the worker
+    only reindexes them; it does not create them. This create-if-missing path is
+    only for the legacy single-table layout.
+    """
+    if is_partitioned(conn, "embedding"):
+        return
+    for index_info in HNSW_INDEXES:
+        if check_index_exists(conn, index_info["name"]):
+            continue
+        logger.warning(
+            f"Index {index_info['name']} missing on legacy embedding table, "
+            f"creating it...",
+        )
+        conn.execute(
+            text(
+                f"""
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_info['name']}
+                ON embedding USING hnsw
+                    ((vector::vector({index_info['dimensions']})) vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+                WHERE model = '{index_info['model']}' AND is_deleted = false
+            """,
+            ),
+        )
+
+
 def reindex_hnsw_indexes(conn) -> dict:
     """
-    Reindex HNSW indexes using REINDEX CONCURRENTLY.
+    Reindex every leaf HNSW index using REINDEX INDEX CONCURRENTLY.
 
-    Unlike DROP/CREATE, REINDEX CONCURRENTLY:
-    - Keeps the old index usable during the rebuild
-    - Atomically swaps in the new index when ready
-    - Only then removes the old index data
+    REINDEX CONCURRENTLY is not supported on a partitioned (parent) index, so we
+    rebuild each leaf-partition index individually. REINDEX CONCURRENTLY keeps
+    the old index usable during the rebuild and atomically swaps the new one in.
+    A failed leaf is left for the next run / invalid-index cleanup rather than
+    risking a non-concurrent recreate that would lock the partition.
 
     Returns:
-        Dictionary with reindex metrics per index
+        Dictionary with reindex metrics per leaf index
     """
-    results = {}
+    results: dict = {}
 
-    for index_info in HNSW_INDEXES:
-        index_name = index_info["name"]
-        model = index_info["model"]
-        dims = index_info["dimensions"]
+    _ensure_legacy_hnsw_indexes(conn)
 
-        logger.info(f"Reindexing {index_name} for model {model}")
+    leaf_indexes = hnsw_leaf_indexes(conn)
+    logger.info(f"Reindexing {len(leaf_indexes)} leaf HNSW index(es)")
 
+    for index_name, table_name in leaf_indexes:
+        logger.info(f"Reindexing {index_name} (partition {table_name})")
         try:
-            if not check_index_exists(conn, index_name):
-                logger.warning(f"Index {index_name} does not exist, creating it...")
-                start = time.time()
-                conn.execute(
-                    text(
-                        f"""
-                        CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
-                        ON embedding USING hnsw ((vector::vector({dims})) vector_cosine_ops)
-                        WITH (m = 16, ef_construction = 64)
-                        WHERE model = '{model}' AND is_deleted = false
-                    """,
-                    ),
-                )
-                results[index_name] = {
-                    "action": "created",
-                    "duration": round(time.time() - start, 2),
-                    "success": True,
-                }
-            else:
-                start = time.time()
-                conn.execute(
-                    text(f"REINDEX INDEX CONCURRENTLY {index_name}"),
-                )
-                results[index_name] = {
-                    "action": "reindexed",
-                    "duration": round(time.time() - start, 2),
-                    "success": True,
-                }
-
+            start = time.time()
+            conn.execute(text(f'REINDEX INDEX CONCURRENTLY "{index_name}"'))
+            results[index_name] = {
+                "action": "reindexed",
+                "table": table_name,
+                "duration": round(time.time() - start, 2),
+                "success": True,
+            }
             logger.info(
-                f"Successfully {results[index_name]['action']} {index_name} "
+                f"Successfully reindexed {index_name} "
                 f"in {results[index_name]['duration']:.2f}s",
             )
-
         except Exception as e:
             logger.error(f"Failed to reindex {index_name}: {e}", exc_info=True)
             results[index_name] = {
                 "action": "failed",
+                "table": table_name,
                 "error": str(e),
                 "success": False,
             }
-
-            # Try to recreate if reindex failed
-            try:
-                logger.info(f"Attempting to recreate {index_name} after failure...")
-                conn.execute(
-                    text(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name}"),
-                )
-                conn.execute(
-                    text(
-                        f"""
-                        CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
-                        ON embedding USING hnsw ((vector::vector({dims})) vector_cosine_ops)
-                        WITH (m = 16, ef_construction = 64)
-                        WHERE model = '{model}' AND is_deleted = false
-                    """,
-                    ),
-                )
-                results[index_name]["recovery"] = "recreated"
-                logger.info(f"Successfully recreated {index_name} after failure")
-            except Exception as recovery_error:
-                logger.error(
-                    f"Failed to recreate {index_name}: {recovery_error}",
-                    exc_info=True,
-                )
-                results[index_name]["recovery"] = f"failed: {recovery_error}"
 
     return results
 
 
 def run_vacuum(conn) -> float:
-    """Run VACUUM on embedding table. Returns duration in seconds."""
-    logger.info("Running VACUUM on embedding table...")
+    """VACUUM the embedding partitions individually. Returns total seconds.
+
+    Per-partition VACUUM keeps a single giant partition from blocking the rest
+    and lets dead tuples from per-partition cleanup be reclaimed independently.
+    """
+    leaves = embedding_leaf_tables(conn)
+    logger.info(f"Running VACUUM on {len(leaves)} embedding partition(s)...")
     start = time.time()
-    conn.execute(text("VACUUM embedding"))
+    for leaf in leaves:
+        conn.execute(text(f'VACUUM "{leaf}"'))
     duration = time.time() - start
     logger.info(f"VACUUM completed in {duration:.2f}s")
     return round(duration, 2)
@@ -708,6 +775,91 @@ def run_index_maintenance(
     return metrics
 
 
+# Minimum log_event rows for a project in DEFAULT to earn its own partition.
+DEFAULT_PROMOTION_THRESHOLD = 500_000
+
+
+def run_partition_provisioning(
+    session: Session,
+    threshold: int = DEFAULT_PROMOTION_THRESHOLD,
+    max_promotions: int = 1,
+    dry_run: bool = False,
+) -> dict:
+    """Promote large DEFAULT-partition projects into dedicated partitions.
+
+    A project is promoted by moving its rows out of the DEFAULT partition into a
+    new dedicated partition (which then carries its own GIN/HNSW indexes), so a
+    later deletion of that project becomes an O(1) ``DROP PARTITION``. The move
+    is per-row, so promotion runs proactively at a threshold rather than once a
+    project is already enormous. ``max_promotions`` bounds the work per run since
+    each promotion (especially the HNSW build on ATTACH) is expensive.
+    """
+    metrics: dict = {
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "threshold": threshold,
+        "max_promotions": max_promotions,
+        "dry_run": dry_run,
+        "candidates": [],
+        "promoted": {},
+        "success": False,
+        "error": None,
+    }
+    try:
+        with session.get_bind().connect() as probe:
+            if not is_partitioned(probe, "log_event"):
+                logger.info(
+                    "log_event is not partitioned; skipping partition provisioning",
+                )
+                metrics["success"] = True
+                metrics["skipped"] = True
+                return metrics
+            candidates = find_promotion_candidates(probe, threshold)
+
+        metrics["candidates"] = candidates
+        logger.info(
+            f"Partition provisioning: {len(candidates)} project(s) over "
+            f"threshold {threshold}; promoting up to {max_promotions}",
+        )
+
+        for project_id, row_count in candidates[:max_promotions]:
+            if shutdown_flag:
+                break
+            if dry_run:
+                logger.info(
+                    f"[dry-run] would promote project {project_id} ({row_count} rows)",
+                )
+                metrics["promoted"][project_id] = {
+                    "row_count": row_count,
+                    "dry_run": True,
+                }
+                continue
+            logger.info(f"Promoting project {project_id} ({row_count} rows)...")
+            start = time.time()
+            conn = session.get_bind().connect()
+            try:
+                with conn.begin():
+                    created = promote_project_to_partition(conn, project_id)
+                metrics["promoted"][project_id] = {
+                    "row_count": row_count,
+                    "partitions": created,
+                    "duration": round(time.time() - start, 2),
+                }
+                logger.info(
+                    f"Promoted project {project_id} in "
+                    f"{metrics['promoted'][project_id]['duration']:.1f}s: {created}",
+                )
+            finally:
+                conn.close()
+
+        metrics["success"] = True
+    except Exception as e:
+        logger.error(f"Partition provisioning failed: {e}", exc_info=True)
+        metrics["error"] = str(e)
+        metrics["success"] = False
+    metrics["end_time"] = datetime.now(timezone.utc).isoformat()
+    return metrics
+
+
 # Backward compatibility alias
 def rebuild_hnsw_indexes(session: Session) -> dict:
     """Legacy function - use run_index_maintenance() instead."""
@@ -753,6 +905,30 @@ def main():
 
     try:
         session = get_db_session()
+
+        # Partition provisioning runs as its own mode (promotes large DEFAULT
+        # projects into dedicated partitions); it is orthogonal to HNSW upkeep.
+        if mode == "promote":
+            threshold = int(
+                os.environ.get(
+                    "MAINTENANCE_PROMOTION_THRESHOLD",
+                    str(DEFAULT_PROMOTION_THRESHOLD),
+                ),
+            )
+            max_promotions = int(os.environ.get("MAINTENANCE_MAX_PROMOTIONS", "1"))
+            dry_run = os.environ.get("MAINTENANCE_DRY_RUN", "false").lower() == "true"
+            metrics = run_partition_provisioning(
+                session,
+                threshold=threshold,
+                max_promotions=max_promotions,
+                dry_run=dry_run,
+            )
+            if metrics["success"]:
+                logger.info(f"Provisioning completed: promoted={metrics['promoted']}")
+                sys.exit(0)
+            logger.error(f"Provisioning failed: {metrics['error']}")
+            sys.exit(1)
+
         metrics = run_index_maintenance(
             session,
             mode=mode,

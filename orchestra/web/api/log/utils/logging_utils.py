@@ -858,7 +858,9 @@ def _get_logs_query(
                 detail=f"Context '{context}' not found",
             )
         context_id = context_obj[0][0].id
-        query = query.join(LogEventContext).filter(
+        query = query.join(
+            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+        ).filter(
             LogEventContext.context_id == context_id,
         )
     else:
@@ -868,7 +870,9 @@ def _get_logs_query(
             context_id = context_obj[0][0].id
             # Also filter by context membership for default context
             # This ensures logs removed from default context aren't returned
-            query = query.join(LogEventContext).filter(
+            query = query.join(
+                LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            ).filter(
                 LogEventContext.context_id == context_id,
             )
         else:
@@ -1245,6 +1249,9 @@ def _get_logs_query(
                         type_coerce(dist, Float).label("dist"),
                     )
                     .where(
+                        # Constrain to this project's partition so the planner
+                        # prunes to a single per-partition HNSW index.
+                        Embedding.project_id == project_id,
                         Embedding.key == lhs_key,
                         model_filter,
                         Embedding.is_deleted == False,  # noqa: E712
@@ -3876,6 +3883,7 @@ def _create_logs_from_joined_rows(
         # Create LogEventContext association
         log_event_contexts.append(
             LogEventContext(
+                project_id=log_event.project_id,
                 log_event_id=log_event.id,
                 context_id=context_id,
             ),
@@ -4112,6 +4120,7 @@ def _create_logs_from_joined_rows(
     if embeddings_to_create:
         for emb_data in embeddings_to_create:
             embedding = Embedding(
+                project_id=project_id,
                 ref_id=emb_data["log_event_id"],
                 key=emb_data["key"],
                 model=emb_data["model"],

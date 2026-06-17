@@ -88,6 +88,18 @@ def delete_orphaned_log_events(
             reason="Context deleted",
         )
         embedding_dao.soft_delete(log_event_ids=orphaned_ids)
+        # The embedding -> log_event FK was removed for partitioning, so deleting
+        # the log events below no longer nulls these ref_ids; do it explicitly.
+        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+
+    # The log_unique_constraint -> log_event FK was also removed for partitioning
+    # (log_event's PK is now composite), so the constraint rows are no longer
+    # cascade-deleted with their log events; remove them explicitly to avoid
+    # orphaned uniqueness rows that would block future re-inserts.
+    session.execute(
+        text("DELETE FROM log_unique_constraint WHERE log_event_id = ANY(:ids)"),
+        {"ids": orphaned_ids},
+    )
 
     session.execute(
         text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
@@ -3090,6 +3102,9 @@ class ContextDAO:
                         soft_deleted = embedding_dao.soft_delete(
                             log_event_ids=orphaned_ids,
                         )
+                        # FK to log_event was dropped for partitioning, so the
+                        # orphan log deletion below won't null these ref_ids.
+                        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
 
                         if soft_deleted > 0 or cancelled > 0:
                             logger.info(
@@ -3097,6 +3112,17 @@ class ContextDAO:
                                 f"soft-deleted {soft_deleted} embeddings for "
                                 f"{len(orphaned_ids)} orphaned logs",
                             )
+
+                        # log_unique_constraint no longer cascades with log_event
+                        # (FK dropped for partitioning); clear its rows first so
+                        # no orphaned uniqueness rows survive the log deletion.
+                        self.session.execute(
+                            text(
+                                "DELETE FROM log_unique_constraint "
+                                "WHERE log_event_id = ANY(:ids)",
+                            ),
+                            {"ids": orphaned_ids},
+                        )
 
                         # Batched orphan log deletion with SKIP LOCKED.
                         # SKIP LOCKED avoids blocking on rows locked by
@@ -3313,6 +3339,7 @@ class ContextDAO:
             # Create associations between log events and context
             for log_event in log_events:
                 association = LogEventContext(
+                    project_id=log_event.project_id,
                     log_event_id=log_event.id,
                     context_id=context_id,
                 )
@@ -3639,6 +3666,7 @@ class ContextDAO:
 
                 # Create association between the new log event and context
                 association = LogEventContext(
+                    project_id=new_log_event.project_id,
                     log_event_id=new_log_event.id,
                     context_id=context_id,
                 )
@@ -3973,7 +4001,11 @@ class ContextDAO:
         # 5. Bulk insert LogEventContext associations
         if new_log_event_ids:
             assoc_values = [
-                {"log_event_id": le_id, "context_id": context_id}
+                {
+                    "project_id": context.project_id,
+                    "log_event_id": le_id,
+                    "context_id": context_id,
+                }
                 for le_id in new_log_event_ids
             ]
             stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
@@ -4052,7 +4084,11 @@ class ContextDAO:
                 id_map[le.id] = new_ids[i]
 
             lec_values = [
-                {"log_event_id": new_id, "context_id": target_context_id}
+                {
+                    "project_id": target_project_id,
+                    "log_event_id": new_id,
+                    "context_id": target_context_id,
+                }
                 for new_id in new_ids
             ]
             self.session.execute(pg_insert(LogEventContext).values(lec_values))
@@ -4182,6 +4218,13 @@ class ContextDAO:
 
         now = datetime.now(timezone.utc)
         old_ids = list(id_map.keys())
+        # embedding_queue is partitioned by project_id (denormalized from the
+        # referenced log_event); resolve each new log event's project.
+        new_id_to_project = dict(
+            self.session.query(LogEvent.id, LogEvent.project_id)
+            .filter(LogEvent.id.in_(list(id_map.values())))
+            .all(),
+        )
         total = 0
 
         for offset in range(0, len(old_ids), batch_size):
@@ -4200,6 +4243,7 @@ class ContextDAO:
 
             values = [
                 {
+                    "project_id": new_id_to_project[id_map[emb.ref_id]],
                     "ref_id": id_map[emb.ref_id],
                     "key": emb.key,
                     "text": "[copied]",
@@ -4210,7 +4254,7 @@ class ContextDAO:
                     "created_at": now,
                 }
                 for emb in source_embeddings
-                if emb.ref_id in id_map
+                if emb.ref_id in id_map and id_map[emb.ref_id] in new_id_to_project
             ]
 
             if values:

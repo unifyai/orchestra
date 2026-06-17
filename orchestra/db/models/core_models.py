@@ -89,22 +89,33 @@ class ProjectVersion(Base):
 
 
 class LogEventContext(Base):
-    """Association table for the many-to-many relationship between LogEvent and Context."""
+    """Association table for the many-to-many relationship between LogEvent and Context.
+
+    Partitioned by LIST (project_id) so a project's associations are dropped with
+    the project's log_event partition. ``project_id`` is denormalized from
+    ``log_event`` and is part of the composite primary key (required by the
+    partition key). The FK to ``log_event`` is intentionally dropped: ``log_event``
+    is partitioned with a composite PK ``(project_id, id)``, so a single-column FK
+    can no longer reference it, and partition drops must not be blocked by FK
+    references. Integrity of (log_event_id -> log_event) is maintained by the
+    application and by coordinated partition drops.
+    """
 
     __tablename__ = "log_event_context"
 
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
+    project_id = Column(Integer, nullable=False, primary_key=True)
+    log_event_id = Column(Integer, primary_key=True)
     context_id = Column(
         Integer,
         ForeignKey("context.id", ondelete="CASCADE"),
         primary_key=True,
     )
 
-    __table_args__ = (Index("idx_log_event_context_context_id", "context_id"),)
+    __table_args__ = (
+        Index("idx_log_event_context_context_id", "context_id"),
+        Index("idx_log_event_context_log_event_id", "log_event_id"),
+        {"postgresql_partition_by": "LIST (project_id)"},
+    )
 
 
 class Context(Base):
@@ -135,8 +146,10 @@ class Context(Base):
     log_events = relationship(
         "LogEvent",
         secondary="log_event_context",
+        primaryjoin="Context.id == foreign(LogEventContext.context_id)",
+        secondaryjoin="LogEvent.id == foreign(LogEventContext.log_event_id)",
         back_populates="contexts",
-        passive_deletes=True,
+        viewonly=True,
     )
 
     @property
@@ -214,13 +227,17 @@ class ContextVersion(Base):
 class LogEvent(Base):
     __tablename__ = "log_event"
 
-    id = Column(Integer, primary_key=True)
+    # Partitioned by LIST (project_id): the partition key must be part of the
+    # primary key, so the PK is composite (project_id, id). ``id`` keeps its own
+    # sequence (globally unique) so existing single-column id lookups still work;
+    # tenant deletion drops a whole partition instead of per-row index churn.
     project_id = Column(
         Integer,
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
+        primary_key=True,
     )
+    id = Column(Integer, primary_key=True, autoincrement=True)
     data = Column(JSONB, nullable=False, server_default=text("'{}'"))
     # Stores original insertion order of nested dictionary keys.
     key_order = Column(JSONB, nullable=True)
@@ -229,13 +246,16 @@ class LogEvent(Base):
     contexts = relationship(
         "Context",
         secondary="log_event_context",
+        primaryjoin="LogEvent.id == foreign(LogEventContext.log_event_id)",
+        secondaryjoin="Context.id == foreign(LogEventContext.context_id)",
         back_populates="log_events",
-        passive_deletes=True,
+        viewonly=True,
     )
 
     __table_args__ = (
         Index("idx_log_event_project_id_id", "project_id", "id"),
         Index("idx_log_event_data", "data", postgresql_using="gin"),
+        {"postgresql_partition_by": "LIST (project_id)"},
     )
 
 
@@ -311,11 +331,10 @@ class LogUniqueConstraint(Base):
     context_id = Column(Integer, nullable=False)
     field_name = Column(String, nullable=False)
     value_hash = Column(String(32), nullable=False)
-    log_event_id = Column(
-        BigInteger,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # FK to log_event dropped: log_event now has a composite PK (project_id, id)
+    # and is partitioned, so a single-column FK can no longer reference it.
+    # Orphan rows are cleaned by the application / coordinated partition drops.
+    log_event_id = Column(BigInteger, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
@@ -391,15 +410,16 @@ class Embedding(Base):
 
     __tablename__ = "embedding"
 
-    id = Column(Integer, primary_key=True)
-    # ref_id uses SET NULL instead of CASCADE to preserve soft-deleted embeddings.
-    # When a LogEvent is deleted, ref_id becomes NULL but the embedding row stays
-    # until index maintenance cleans it up (avoiding HNSW index surgery on delete).
-    ref_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    # Partitioned by LIST (project_id): project_id is denormalized from the
+    # referenced log_event so embeddings (and their per-partition HNSW indexes)
+    # are dropped instantly with the project's partition. project_id is part of
+    # the composite PK (required by the partition key). The FK to log_event is
+    # dropped (log_event now has a composite PK and partition drops must not be
+    # blocked); ref_id remains a plain column. Soft-delete + index_maintenance
+    # still reclaim rows for non-partition-drop deletions.
+    project_id = Column(Integer, nullable=False, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ref_id = Column(Integer, nullable=True)
     model = Column(String, nullable=False)
     key = Column(String, nullable=False)
     vector = Column(Vector(), nullable=False)
@@ -407,7 +427,7 @@ class Embedding(Base):
     is_deleted = Column(Boolean, nullable=False, server_default=sa.text("false"))
 
     __table_args__ = (
-        UniqueConstraint("ref_id", "model", "key", name="uq_embedding"),
+        UniqueConstraint("project_id", "ref_id", "model", "key", name="uq_embedding"),
         Index(
             "idx_embedding_ref",
             "ref_id",
@@ -442,6 +462,7 @@ class Embedding(Base):
                 "model = 'multimodalembedding@001' AND is_deleted = false",
             ),
         ),
+        {"postgresql_partition_by": "LIST (project_id)"},
     )
 
 
@@ -467,12 +488,12 @@ class EmbeddingQueue(Base):
 
     __tablename__ = "embedding_queue"
 
-    id = Column(Integer, primary_key=True)
-    ref_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # Partitioned by LIST (project_id) (denormalized from log_event); project_id
+    # is part of the composite PK. FK to log_event dropped (composite-PK parent /
+    # partition-drop friendliness); ref_id remains a plain column.
+    project_id = Column(Integer, nullable=False, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ref_id = Column(Integer, nullable=False)
     key = Column(String, nullable=False)
     text = Column(String, nullable=False)
     model = Column(String, nullable=False)
@@ -487,7 +508,9 @@ class EmbeddingQueue(Base):
     vector_generated_at = Column(TIMESTAMP, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
+        UniqueConstraint(
+            "project_id", "ref_id", "key", "model", name="uq_embedding_queue"
+        ),
         sa.CheckConstraint(
             "status IN ('pending', 'generating', 'vector_ready', 'inserting', "
             "'completed', 'failed', 'cancelled')",
@@ -505,4 +528,5 @@ class EmbeddingQueue(Base):
             "created_at",
             postgresql_where=sa.text("status = 'vector_ready'"),
         ),
+        {"postgresql_partition_by": "LIST (project_id)"},
     )

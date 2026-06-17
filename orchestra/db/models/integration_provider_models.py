@@ -1,8 +1,9 @@
-"""Provider-backed integration catalog, connection, and audit models.
+"""Provider-backed integration control-plane models.
 
-These models are the provider-neutral integration control-plane tables. They
-describe integration backends, dynamic app/tool catalogs, connection state, and
-runtime audit records without mirroring every provider app into unity-deploy.
+Builtins project contexts are the durable app/tool catalog. ``DynamicProviderApp``
+and ``ProviderToolCatalog`` remain as legacy compatibility projections for API
+clients that still read the DB-backed catalog. Connection, auth, overlay, policy,
+approval, and audit rows remain active production state.
 """
 
 from __future__ import annotations
@@ -96,7 +97,11 @@ class IntegrationBootstrapState(Base):
 
 
 class DynamicProviderApp(Base):
-    """Cached app metadata fetched from provider catalogs plus Unify overlays."""
+    """Legacy compatibility projection of provider app catalog metadata.
+
+    Do not build new durable sync state on this table. New app catalog
+    materialization should target ``Builtins/Integrations/Apps``.
+    """
 
     __tablename__ = "dynamic_provider_apps"
 
@@ -147,7 +152,11 @@ class DynamicProviderApp(Base):
 
 
 class ProviderToolCatalog(Base):
-    """Searchable normalized projection of provider actions/tools."""
+    """Legacy compatibility projection of provider action/tool metadata.
+
+    Do not build new durable sync state on this table. New tool catalog
+    materialization should target ``Builtins/Integrations/Tools``.
+    """
 
     __tablename__ = "provider_tool_catalog"
 
