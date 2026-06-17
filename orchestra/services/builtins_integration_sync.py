@@ -1122,7 +1122,12 @@ def upsert_context_rows(
                 owner_key=owner_key_value,
             )
             association = association.on_conflict_do_nothing(
-                index_elements=["project_id", "owner_key", "log_event_id", "context_id"],
+                index_elements=[
+                    "project_id",
+                    "owner_key",
+                    "log_event_id",
+                    "context_id",
+                ],
             )
             session.execute(association)
             inserted_constraint = _insert_new_constraint(
@@ -1187,7 +1192,12 @@ def upsert_context_rows(
                 owner_key=owner_key_value,
             )
             association = association.on_conflict_do_nothing(
-                index_elements=["project_id", "owner_key", "log_event_id", "context_id"],
+                index_elements=[
+                    "project_id",
+                    "owner_key",
+                    "log_event_id",
+                    "context_id",
+                ],
             )
             session.execute(association)
             _upsert_constraint(
