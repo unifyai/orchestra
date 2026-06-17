@@ -223,6 +223,63 @@ class ProjectDAO:
             project = self.session.query(Project).filter_by(id=id).one()
             project_name = project.name  # Store for logging (survives commits)
 
+            # Fast path: a giant project that owns its own partitions is deleted
+            # by dropping those partitions (O(1), no per-row GIN/HNSW index
+            # maintenance) instead of the batched row-level cascade below.
+            from orchestra.db.partitioning import (
+                drop_project_partitions,
+                project_has_dedicated_partition,
+            )
+
+            if project_has_dedicated_partition(self.session.connection(), id):
+                logger.info(
+                    f"Fast partition-drop deletion of project {id} "
+                    f"('{project_name}')",
+                )
+                log_event_dao = LogEventDAO(self.session, self.context_dao)
+                # GCS media still has to be removed up front: dropping the
+                # log_event partition deletes the DB rows but not the cloud
+                # objects they reference (a no-op early-return for data-only
+                # projects with no media field types).
+                offset = 0
+                while True:
+                    batch_ids = [
+                        row[0]
+                        for row in self.session.execute(
+                            text(
+                                """
+                                SELECT id FROM log_event
+                                WHERE project_id = :project_id
+                                ORDER BY id
+                                LIMIT :limit OFFSET :offset
+                                """,
+                            ),
+                            {"project_id": id, "limit": batch_size, "offset": offset},
+                        ).fetchall()
+                    ]
+                    if not batch_ids:
+                        break
+                    log_event_dao._bulk_delete_gcs_media(batch_ids, id)
+                    offset += batch_size
+
+                dropped = drop_project_partitions(self.session.connection(), id)
+                self.session.commit()
+
+                # Delete the project row; the small metadata tables (context,
+                # *_version, field_type, ...) cascade. log_event_context for this
+                # project went with its dropped partition, so the context cascade
+                # has no join rows to remove.
+                project = self.session.query(Project).filter_by(id=id).first()
+                if project:
+                    self.session.delete(project)
+                    self.session.commit()
+
+                logger.info(
+                    f"Project {id} ('{project_name}') deleted via partition drop: "
+                    f"{dropped}",
+                )
+                return
+
             logger.info(
                 f"Starting batched deletion of project {id} ('{project_name}') "
                 f"with batch_size={batch_size}",
@@ -290,8 +347,11 @@ class ProjectDAO:
 
             while True:
                 # SKIP LOCKED avoids blocking on rows held by embedding workers.
-                # soft_delete (Phase 1) already set is_deleted=true, so the FK
-                # SET NULL cascade here only touches fast B-tree indexes.
+                # The embedding.ref_id -> log_event FK was removed when the
+                # tables were partitioned, so deleting a log_event no longer
+                # cascades into the embedding HNSW indexes at all; the matching
+                # embeddings were soft-deleted in Phase 1 and are physically
+                # reclaimed later by the index-maintenance worker.
                 result = self.session.execute(
                     text(
                         """

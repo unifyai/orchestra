@@ -153,6 +153,81 @@ def ensure_partitions(
     create_default_partition(conn, table)
 
 
+def project_has_dedicated_partition(conn: Connection, project_id: int) -> bool:
+    """True if ``project_id`` owns its own (giant) partition rather than DEFAULT.
+
+    ``log_event`` is the anchor of the partitioned family -- a giant project is
+    always promoted across the whole family together (migration / runbook /
+    maintenance worker), so the presence of its ``log_event`` partition implies
+    the rest exist too.
+    """
+    return relation_exists(conn, dedicated_partition_name("log_event", project_id))
+
+
+def drop_project_partitions(conn: Connection, project_id: int) -> list[str]:
+    """Detach and drop every dedicated partition owned by ``project_id``.
+
+    This is the O(1) tenant-deletion primitive: a giant project's rows (and
+    their per-partition GIN/HNSW index segments) are removed as a metadata
+    operation, with no per-row index maintenance. A no-op for a project that
+    lives in the DEFAULT partition (returns an empty list), so callers can
+    invoke it unconditionally and fall back to row-level deletion when nothing
+    was dropped.
+    """
+    dropped: list[str] = []
+    for table in PARTITIONED_TABLES:
+        partition = dedicated_partition_name(table, project_id)
+        if not relation_exists(conn, partition):
+            continue
+        conn.execute(text(f'ALTER TABLE "{table}" DETACH PARTITION "{partition}"'))
+        conn.execute(text(f'DROP TABLE IF EXISTS "{partition}"'))
+        dropped.append(partition)
+    return dropped
+
+
+def drop_partitions_for_owned_projects(
+    conn: Connection,
+    *,
+    user_id: str | None = None,
+    organization_id: int | None = None,
+) -> dict[int, list[str]]:
+    """Drop dedicated partitions for every giant project owned by a user/org.
+
+    Called just before a user/organization cascade-delete so the heavy projects
+    are removed via O(1) partition drops; the subsequent cascade then only has
+    to delete the small metadata (and the row-level data of any non-giant
+    projects, which live in the DEFAULT partition and are cheap). Returns a map
+    of project_id -> dropped partition names for logging.
+    """
+    if user_id is not None:
+        rows = (
+            conn.execute(
+                text("SELECT id FROM project WHERE user_id = :u"),
+                {"u": user_id},
+            )
+            .scalars()
+            .all()
+        )
+    elif organization_id is not None:
+        rows = (
+            conn.execute(
+                text("SELECT id FROM project WHERE organization_id = :o"),
+                {"o": organization_id},
+            )
+            .scalars()
+            .all()
+        )
+    else:
+        return {}
+
+    dropped: dict[int, list[str]] = {}
+    for project_id in rows:
+        parts = drop_project_partitions(conn, project_id)
+        if parts:
+            dropped[project_id] = parts
+    return dropped
+
+
 def child_partitions(conn: Connection, table: str) -> list[str]:
     """Return the names of all child partitions currently attached to ``table``."""
     rows = conn.execute(

@@ -695,6 +695,22 @@ async def delete_organization(
                 )
             ]
 
+        # Drop dedicated partitions of the org's giant projects before the
+        # cascade so their log/embedding data is removed in O(1) rather than
+        # row-by-row through the project -> log_event cascade.
+        from orchestra.db.partitioning import drop_partitions_for_owned_projects
+
+        dropped_partitions = drop_partitions_for_owned_projects(
+            session.connection(),
+            organization_id=organization_id,
+        )
+        if dropped_partitions:
+            logger.info(
+                "Dropped partitions for org %s giant projects: %s",
+                organization_id,
+                dropped_partitions,
+            )
+
         org_dao.delete(organization_id)
         session.commit()
     except Exception as e:
