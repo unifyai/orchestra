@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from scripts.ensure_test_user_coordinator import ensure_test_user_coordinator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -16,6 +17,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
@@ -33,8 +35,6 @@ from orchestra.db.models.orchestra_models import (
     SlackInstall,
     User,
 )
-from orchestra.db.dao.user_dao import UserDAO
-from scripts.ensure_test_user_coordinator import ensure_test_user_coordinator
 from orchestra.services.coordinator_service import (
     COORDINATOR_DEFAULT_FIRST_NAME,
     COORDINATOR_DEFAULT_JOB_TITLE,
@@ -190,7 +190,11 @@ def _insert_log(
     dbsession.add(log_event)
     dbsession.flush()
     dbsession.add(
-        LogEventContext(log_event_id=log_event.id, context_id=context.id),
+        LogEventContext(
+            project_id=project.id,
+            log_event_id=log_event.id,
+            context_id=context.id,
+        ),
     )
     dbsession.flush()
 

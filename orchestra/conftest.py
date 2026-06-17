@@ -1805,6 +1805,7 @@ def large_repairs_dataset(
                 created_event_ids.append(log_event.id)
                 session.add(
                     LogEventContext(
+                        project_id=log_event.project_id,
                         log_event_id=log_event.id,
                         context_id=context_id,
                     ),

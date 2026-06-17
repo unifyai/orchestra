@@ -57,6 +57,7 @@ def _create_context(
         session.flush()
         session.add(
             LogEventContext(
+                project_id=project.id,
                 log_event_id=log_event.id,
                 context_id=context.id,
             ),

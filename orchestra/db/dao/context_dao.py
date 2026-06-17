@@ -3975,7 +3975,11 @@ class ContextDAO:
         # 5. Bulk insert LogEventContext associations
         if new_log_event_ids:
             assoc_values = [
-                {"log_event_id": le_id, "context_id": context_id}
+                {
+                    "project_id": context.project_id,
+                    "log_event_id": le_id,
+                    "context_id": context_id,
+                }
                 for le_id in new_log_event_ids
             ]
             stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
@@ -4054,7 +4058,11 @@ class ContextDAO:
                 id_map[le.id] = new_ids[i]
 
             lec_values = [
-                {"log_event_id": new_id, "context_id": target_context_id}
+                {
+                    "project_id": target_project_id,
+                    "log_event_id": new_id,
+                    "context_id": target_context_id,
+                }
                 for new_id in new_ids
             ]
             self.session.execute(pg_insert(LogEventContext).values(lec_values))
