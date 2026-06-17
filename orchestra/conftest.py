@@ -146,19 +146,11 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     # builds only the partitioned parents; create a DEFAULT partition per table so
     # tests can insert rows for any project without provisioning a dedicated
     # per-project partition.
+    from orchestra.db.partitioning import PARTITIONED_TABLES, ensure_partitions
+
     with engine.begin() as conn:
-        for _ptable in (
-            "log_event",
-            "log_event_context",
-            "embedding",
-            "embedding_queue",
-        ):
-            conn.execute(
-                text(
-                    f"CREATE TABLE IF NOT EXISTS {_ptable}_default "
-                    f"PARTITION OF {_ptable} DEFAULT",
-                ),
-            )
+        for _ptable in PARTITIONED_TABLES:
+            ensure_partitions(conn, _ptable)
     with engine.begin() as conn:
         # Create the hamming_distance function for tests
         conn.execute(
