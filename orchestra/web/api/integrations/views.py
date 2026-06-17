@@ -7,9 +7,10 @@ discovery, provider tool search, schema lookup, and governed invocation.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -39,6 +40,8 @@ from orchestra.web.api.integrations.operations import (
 )
 from orchestra.web.api.integrations.operations import test_connection, update_connection
 from orchestra.web.api.integrations.schema import (
+    BuiltinsIntegrationSyncRequest,
+    BuiltinsIntegrationSyncResponse,
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
@@ -406,6 +409,57 @@ def sync_integrations(
     """
 
     return sync_integrations_operation(session, body)
+
+
+@admin_router.post("/builtins-sync/start")
+def start_builtins_integration_sync(
+    request: Request,
+    body: BuiltinsIntegrationSyncRequest,
+) -> BuiltinsIntegrationSyncResponse:
+    """Run the Builtins-context catalog materializer.
+
+    This inline API path is for local/admin fallback only. Hosted production
+    deployments should execute the standalone worker in a Cloud Run Job. Set
+    ``ORCHESTRA_BUILTINS_SYNC_INLINE_ENABLED=false`` to fail this endpoint
+    loudly instead of routing heavy sync work into the API process.
+    """
+
+    try:
+        if os.getenv("ORCHESTRA_BUILTINS_SYNC_INLINE_ENABLED", "true").lower() in {
+            "0",
+            "false",
+            "no",
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Inline Builtins integrations artifact seeding is disabled. Select and run "
+                    "the configured deployment executor instead."
+                ),
+            )
+        from orchestra.services.builtins_integration_sync import (
+            BuiltinsSyncRequest,
+            run_builtins_sync,
+        )
+
+        sync_request = BuiltinsSyncRequest.from_payload(body.model_dump())
+        result = run_builtins_sync(
+            request.app.state.db_session_factory,
+            sync_request,
+        )
+        return BuiltinsIntegrationSyncResponse(**result.to_payload())
+    except HTTPException:
+        raise
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/apps")

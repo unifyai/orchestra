@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 BackendKind = Literal["composio", "pipedream", "first_party", "custom"]
 BackendStatus = Literal["enabled", "disabled"]
-BootstrapStatus = Literal["pending", "skipped", "success", "failed"]
+BootstrapStatus = Literal["pending", "running", "skipped", "success", "failed"]
 ConnectionStatus = Literal[
     "connected",
     "pending",
@@ -308,6 +308,47 @@ class IntegrationCatalogSyncResponse(BaseModel):
     auth_configs_reused: int = 0
     cache_version: str = "provider-sync-v1"
     prune_unlisted_apps: bool = False
+
+
+class BuiltinsIntegrationSyncRequest(BaseModel):
+    """Start or run a Builtins-context-backed provider catalog sync."""
+
+    backend_id: str
+    environment: str = "selfhost"
+    desired_hash: str
+    cache_version: str
+    mode: Literal["apps", "tools", "all"] = "all"
+    app_slugs: list[str] = Field(default_factory=list)
+    prune_unlisted_apps: bool = False
+    checkpoint_key: Optional[str] = None
+    sync_payload: dict[str, Any] = Field(default_factory=dict)
+    desired_config: dict[str, Any] = Field(default_factory=dict)
+    run_id: Optional[str] = None
+    request_uri: Optional[str] = None
+    batch_size: int = Field(25, ge=1, le=500)
+    workers: int = Field(4, ge=1, le=64)
+
+
+class BuiltinsIntegrationSyncResponse(BaseModel):
+    status: BootstrapStatus = "success"
+    run_id: Optional[str] = None
+    desired_hash: Optional[str] = None
+    request_uri: Optional[str] = None
+    apps_upserted: int = 0
+    tools_upserted: int = 0
+    apps_inserted: int = 0
+    apps_updated: int = 0
+    tools_inserted: int = 0
+    tools_updated: int = 0
+    apps_pruned: int = 0
+    tools_pruned: int = 0
+    skipped_batches: int = 0
+    completed_batches: int = 0
+    matched_app_slugs: list[str] = Field(default_factory=list)
+    skipped_apps: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    elapsed_seconds: Optional[float] = None
 
 
 class ProviderToolSearchResult(BaseModel):
