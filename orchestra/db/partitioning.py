@@ -472,10 +472,12 @@ OWNER_SUB_TABLES: tuple[str, ...] = (
     "embedding",
 )
 # Composite PKs once owner_key participates (it must, to sub-partition by it).
+# owner_key is last to match the model's column-declaration order, so a fresh
+# create_all and the migration produce an identical primary key.
 _OWNER_SUB_PK: dict[str, list[str]] = {
-    "log_event": ["project_id", "owner_key", "id"],
-    "log_event_context": ["project_id", "owner_key", "log_event_id", "context_id"],
-    "embedding": ["project_id", "owner_key", "id"],
+    "log_event": ["project_id", "id", "owner_key"],
+    "log_event_context": ["project_id", "log_event_id", "context_id", "owner_key"],
+    "embedding": ["project_id", "id", "owner_key"],
 }
 
 
@@ -527,6 +529,56 @@ def add_owner_key_to_keys(conn: Connection, table: str) -> None:
             f'ALTER TABLE "{table}" ADD PRIMARY KEY ({", ".join(_OWNER_SUB_PK[table])})',
         ),
     )
+
+
+def owner_key_in_pk(conn: Connection, table: str) -> bool:
+    """True if ``owner_key`` is already part of ``table``'s primary key."""
+    return bool(
+        conn.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM pg_constraint c "
+                "JOIN pg_attribute a ON a.attrelid = c.conrelid "
+                "AND a.attnum = ANY(c.conkey) "
+                "WHERE c.conrelid = to_regclass(:t) AND c.contype = 'p' "
+                "AND a.attname = 'owner_key')",
+            ),
+            {"t": table},
+        ).scalar(),
+    )
+
+
+def remove_owner_key_from_keys(conn: Connection, table: str) -> None:
+    """Inverse of :func:`add_owner_key_to_keys` (PK/unique drop owner_key)."""
+    for conname, condef in conn.execute(
+        text(
+            "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid = to_regclass(:t) AND contype = 'u'",
+        ),
+        {"t": table},
+    ).all():
+        cols = [
+            x.strip()
+            for x in condef[condef.index("(") + 1 : condef.rindex(")")].split(",")
+        ]
+        new_cols = [x for x in cols if x != "owner_key"]
+        conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{conname}"'))
+        conn.execute(
+            text(
+                f'ALTER TABLE "{table}" ADD CONSTRAINT "{conname}" '
+                f'UNIQUE ({", ".join(new_cols)})',
+            ),
+        )
+    pkname = conn.execute(
+        text(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = to_regclass(:t) AND contype = 'p'",
+        ),
+        {"t": table},
+    ).scalar()
+    pk_cols = [c for c in _OWNER_SUB_PK[table] if c != "owner_key"]
+    conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{pkname}"'))
+    conn.execute(text(f'ALTER TABLE "{table}" ADD PRIMARY KEY ({", ".join(pk_cols)})'))
+    conn.execute(text(f'ALTER TABLE "{table}" ALTER COLUMN owner_key DROP NOT NULL'))
 
 
 def sub_partition_project_by_owner(conn: Connection, project_id: int) -> None:

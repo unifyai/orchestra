@@ -113,7 +113,7 @@ class LogEventContext(Base):
     # Owning scope of the referenced log_event (see orchestra.db.scope). Carried
     # on every association (including those into aggregation views) so all of an
     # assistant/team's associations live in its sub-partition and drop together.
-    owner_key = Column(String, nullable=True)
+    owner_key = Column(String, nullable=False, primary_key=True)
 
     __table_args__ = (
         Index("idx_log_event_context_context_id", "context_id"),
@@ -265,7 +265,7 @@ class LogEvent(Base):
     # Owning scope (see orchestra.db.scope): the assistant/team whose context
     # created this log. The LIST sub-partition key the shared Assistants project
     # is divided by, enabling O(1) per-assistant / per-team deletion.
-    owner_key = Column(String, nullable=True)
+    owner_key = Column(String, nullable=False, primary_key=True)
     contexts = relationship(
         "Context",
         secondary="log_event_context",
@@ -451,10 +451,17 @@ class Embedding(Base):
     # Owning scope of the referenced log_event (see orchestra.db.scope); the
     # LIST sub-partition key so an assistant/team's vectors (and their HNSW
     # index segment) drop with its partition.
-    owner_key = Column(String, nullable=True)
+    owner_key = Column(String, nullable=False, primary_key=True)
 
     __table_args__ = (
-        UniqueConstraint("project_id", "ref_id", "model", "key", name="uq_embedding"),
+        UniqueConstraint(
+            "project_id",
+            "owner_key",
+            "ref_id",
+            "model",
+            "key",
+            name="uq_embedding",
+        ),
         Index(
             "idx_embedding_ref",
             "ref_id",

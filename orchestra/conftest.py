@@ -1794,6 +1794,7 @@ def large_repairs_dataset(
                     data=data,
                     created_at=ts,
                     updated_at=ts,
+                    owner_key="sys",
                 )
                 log_events.append(log_event)
 
@@ -1808,6 +1809,7 @@ def large_repairs_dataset(
                         project_id=log_event.project_id,
                         log_event_id=log_event.id,
                         context_id=context_id,
+                        owner_key="sys",
                     ),
                 )
 

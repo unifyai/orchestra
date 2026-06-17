@@ -52,11 +52,12 @@ def _create_context(
     session.flush()
 
     for row in rows:
-        log_event = LogEvent(project_id=project.id, data=row)
+        log_event = LogEvent(owner_key="sys", project_id=project.id, data=row)
         session.add(log_event)
         session.flush()
         session.add(
             LogEventContext(
+                owner_key="sys",
                 project_id=project.id,
                 log_event_id=log_event.id,
                 context_id=context.id,
@@ -198,7 +199,7 @@ def test_context_counter_conflict_retry_advances_past_stale_value(
             next_value=1,
         ),
     )
-    new_log = LogEvent(project_id=project.id, data={})
+    new_log = LogEvent(owner_key="sys", project_id=project.id, data={})
     dbsession.add(new_log)
     dbsession.flush()
 
