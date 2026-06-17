@@ -94,6 +94,94 @@ def owner_from_context_name(name: str) -> Owner:
     return Owner(OwnerScope.SYSTEM, None)
 
 
+def owner_key(scope: OwnerScope, owner_id: int | None) -> str:
+    """Single-column partition key encoding an owner.
+
+    ``a{agent_id}`` / ``t{team_id}`` for assistant/team owners; ``sys`` for
+    everything without a per-owner deletion identity (aggregation views never
+    own logs, system/builtins data). This is the LIST sub-partition key the
+    shared Assistants project is divided by.
+    """
+    if scope == OwnerScope.ASSISTANT and owner_id is not None:
+        return f"a{owner_id}"
+    if scope == OwnerScope.TEAM and owner_id is not None:
+        return f"t{owner_id}"
+    return "sys"
+
+
+def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
+    """Denormalize each log's owning scope onto the heavy tables as ``owner_key``.
+
+    A log's owner is its *creating* context (the assistant/team one), not the
+    aggregation views it is also referenced into -- so the join filters to
+    ``owner_scope IN ('assistant','team')``. Logs with no owning context fall
+    back to ``'sys'``. ``log_event_context`` and ``embedding`` inherit their
+    log's ``owner_key`` so every association/vector lands in the same
+    sub-partition and drops together. Batched by id; only NULL rows are touched,
+    so it is idempotent and resumable.
+    """
+    # 1) log_event from its owning (assistant/team) context.
+    max_le = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM log_event")).scalar()
+    lo = 0
+    while lo < max_le:
+        hi = lo + batch
+        conn.execute(
+            text(
+                """
+                UPDATE log_event le SET owner_key = sub.ok
+                FROM (
+                    SELECT DISTINCT ON (lec.log_event_id) lec.log_event_id AS leid,
+                        CASE c.owner_scope
+                            WHEN 'assistant' THEN 'a' || c.owner_id
+                            WHEN 'team' THEN 't' || c.owner_id
+                        END AS ok
+                    FROM log_event_context lec
+                    JOIN context c ON c.id = lec.context_id
+                    WHERE c.owner_scope IN ('assistant', 'team')
+                      AND lec.log_event_id > :lo AND lec.log_event_id <= :hi
+                ) sub
+                WHERE le.id = sub.leid AND le.owner_key IS NULL
+                """,
+            ),
+            {"lo": lo, "hi": hi},
+        )
+        lo = hi
+    conn.execute(
+        text("UPDATE log_event SET owner_key = 'sys' WHERE owner_key IS NULL"),
+    )
+
+    # 2) log_event_context inherits its log's owner_key.
+    lo = 0
+    while lo < max_le:
+        hi = lo + batch
+        conn.execute(
+            text(
+                "UPDATE log_event_context lec SET owner_key = le.owner_key "
+                "FROM log_event le WHERE le.id = lec.log_event_id "
+                "AND lec.log_event_id > :lo AND lec.log_event_id <= :hi "
+                "AND lec.owner_key IS NULL",
+            ),
+            {"lo": lo, "hi": hi},
+        )
+        lo = hi
+
+    # 3) embedding inherits its referenced log's owner_key (ref_id -> log_event).
+    max_emb = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM embedding")).scalar()
+    lo = 0
+    while lo < max_emb:
+        hi = lo + batch
+        conn.execute(
+            text(
+                "UPDATE embedding e SET owner_key = le.owner_key "
+                "FROM log_event le WHERE le.id = e.ref_id "
+                "AND e.id > :lo AND e.id <= :hi AND e.owner_key IS NULL",
+            ),
+            {"lo": lo, "hi": hi},
+        )
+        lo = hi
+    conn.execute(text("UPDATE embedding SET owner_key = 'sys' WHERE owner_key IS NULL"))
+
+
 def backfill_context_owners(conn: Connection, batch: int = 5000) -> int:
     """Classify every not-yet-classified context from its name.
 
