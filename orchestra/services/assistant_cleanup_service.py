@@ -416,22 +416,6 @@ def _purge_assistant_contexts(
             "errors": [],
         }
 
-    # Drop the assistant's heavy-table data (log_event / log_event_context /
-    # embedding, including its by-reference rows in aggregation views) in one
-    # shot up front: an O(1) partition drop if this owner was promoted to its
-    # own sub-partition, otherwise a single owner_key-scoped DELETE. The
-    # per-context loop below then only has to clear the now-empty context
-    # metadata (field types, counters, the Context rows themselves).
-    from orchestra.db.partitioning import drop_owner
-    from orchestra.db.scope import OwnerScope
-    from orchestra.db.scope import owner_key as _owner_key
-
-    drop_owner(
-        session.connection(),
-        project.id,
-        _owner_key(OwnerScope.ASSISTANT, int(spec.assistant_id)),
-    )
-
     prefix = f"{spec.user_id}/{spec.assistant_id}"
 
     def _remaining_contexts() -> list[Context]:
