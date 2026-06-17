@@ -18,6 +18,7 @@ from orchestra.db.models.core_models import (
     FieldType,
     LogEvent,
     LogEventContext,
+    LogUniqueConstraint,
     Project,
 )
 from orchestra.services.bucket_service import create_bucket_service
@@ -1809,6 +1810,13 @@ class LogEventDAO:
             # First, delete the association rows referencing these log events
             self.session.query(LogEventContext).filter(
                 LogEventContext.log_event_id.in_(ids),
+            ).delete(synchronize_session=False)
+
+            # The log_unique_constraint -> log_event FK was removed for
+            # partitioning, so its rows are no longer cascade-deleted; remove
+            # them explicitly to avoid orphaned uniqueness rows.
+            self.session.query(LogUniqueConstraint).filter(
+                LogUniqueConstraint.log_event_id.in_(ids),
             ).delete(synchronize_session=False)
 
             # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)

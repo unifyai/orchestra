@@ -263,6 +263,16 @@ class ProjectDAO:
                     offset += batch_size
 
                 dropped = drop_project_partitions(self.session.connection(), id)
+                # log_unique_constraint is keyed by context_id with no FK to
+                # context/project, so it is not removed by the project cascade;
+                # clear this project's rows explicitly.
+                self.session.execute(
+                    text(
+                        "DELETE FROM log_unique_constraint WHERE context_id IN "
+                        "(SELECT id FROM context WHERE project_id = :pid)",
+                    ),
+                    {"pid": id},
+                )
                 self.session.commit()
 
                 # Delete the project row; the small metadata tables (context,
@@ -423,6 +433,18 @@ class ProjectDAO:
                 logger.info(
                     f"Phase 3: Deleted {total_log_events_deleted} log_events in batches",
                 )
+
+            # log_unique_constraint is keyed by context_id with no FK to
+            # context/project, so the project cascade does not remove it; clear
+            # this project's rows explicitly before deleting the project.
+            self.session.execute(
+                text(
+                    "DELETE FROM log_unique_constraint WHERE context_id IN "
+                    "(SELECT id FROM context WHERE project_id = :pid)",
+                ),
+                {"pid": id},
+            )
+            self.session.commit()
 
             # Phase 4: Delete the project (now fast, no children left)
             # Re-fetch project to ensure it's attached to current session

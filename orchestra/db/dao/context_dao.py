@@ -88,6 +88,18 @@ def delete_orphaned_log_events(
             reason="Context deleted",
         )
         embedding_dao.soft_delete(log_event_ids=orphaned_ids)
+        # The embedding -> log_event FK was removed for partitioning, so deleting
+        # the log events below no longer nulls these ref_ids; do it explicitly.
+        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+
+    # The log_unique_constraint -> log_event FK was also removed for partitioning
+    # (log_event's PK is now composite), so the constraint rows are no longer
+    # cascade-deleted with their log events; remove them explicitly to avoid
+    # orphaned uniqueness rows that would block future re-inserts.
+    session.execute(
+        text("DELETE FROM log_unique_constraint WHERE log_event_id = ANY(:ids)"),
+        {"ids": orphaned_ids},
+    )
 
     session.execute(
         text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
@@ -3090,6 +3102,9 @@ class ContextDAO:
                         soft_deleted = embedding_dao.soft_delete(
                             log_event_ids=orphaned_ids,
                         )
+                        # FK to log_event was dropped for partitioning, so the
+                        # orphan log deletion below won't null these ref_ids.
+                        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
 
                         if soft_deleted > 0 or cancelled > 0:
                             logger.info(
@@ -3097,6 +3112,17 @@ class ContextDAO:
                                 f"soft-deleted {soft_deleted} embeddings for "
                                 f"{len(orphaned_ids)} orphaned logs",
                             )
+
+                        # log_unique_constraint no longer cascades with log_event
+                        # (FK dropped for partitioning); clear its rows first so
+                        # no orphaned uniqueness rows survive the log deletion.
+                        self.session.execute(
+                            text(
+                                "DELETE FROM log_unique_constraint "
+                                "WHERE log_event_id = ANY(:ids)",
+                            ),
+                            {"ids": orphaned_ids},
+                        )
 
                         # Batched orphan log deletion with SKIP LOCKED.
                         # SKIP LOCKED avoids blocking on rows locked by
