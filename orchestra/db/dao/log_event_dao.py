@@ -111,6 +111,11 @@ class LogEventDAO:
         """
         ts = datetime.now(timezone.utc)
 
+        # Owning scope of these logs (denormalized for owner sub-partitioning).
+        from orchestra.db.scope import owner_key_for_context
+
+        ok = owner_key_for_context(self.session, context_id) if context_id else "sys"
+
         # Build list of row dictionaries for bulk INSERT
         # Both created_at and updated_at are set to same timestamp on creation
         # updated_at will be updated on subsequent modifications
@@ -120,6 +125,7 @@ class LogEventDAO:
                 "created_at": ts,
                 "updated_at": ts,
                 "data": {},  # Initialize empty JSONB
+                "owner_key": ok,
             }
             for _ in range(count)
         ]
@@ -137,6 +143,7 @@ class LogEventDAO:
                     project_id=project_id,
                     log_event_id=log_event_id,
                     context_id=context_id,
+                    owner_key=ok,
                 )
                 for log_event_id in log_event_ids
             ]

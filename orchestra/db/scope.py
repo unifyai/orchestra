@@ -109,6 +109,21 @@ def owner_key(scope: OwnerScope, owner_id: int | None) -> str:
     return "sys"
 
 
+def owner_key_for_context(conn: Connection, context_id: int) -> str:
+    """Resolve the ``owner_key`` for a context (its logs inherit this).
+
+    Reads the context's stored ``owner_scope`` / ``owner_id`` (set on creation).
+    Falls back to ``'sys'`` for missing/unclassified contexts.
+    """
+    row = conn.execute(
+        text("SELECT owner_scope, owner_id FROM context WHERE id = :cid"),
+        {"cid": context_id},
+    ).one_or_none()
+    if row is None or row[0] is None:
+        return "sys"
+    return owner_key(OwnerScope(row[0]), row[1])
+
+
 def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
     """Denormalize each log's owning scope onto the heavy tables as ``owner_key``.
 
