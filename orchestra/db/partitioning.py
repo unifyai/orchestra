@@ -440,6 +440,25 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
             text(f'ALTER TABLE "{table}" ATTACH PARTITION "{default}" DEFAULT'),
         )
 
+        # meta.create() minted a fresh identity sequence for the parent's ``id``
+        # (the legacy sequence name was still held by the renamed default), so it
+        # restarts at 1 while the attached data carries the legacy id range.
+        # Advance it past the existing max so inserts via the parent don't
+        # collide with existing rows.
+        seq = conn.execute(
+            text("SELECT pg_get_serial_sequence(:t, 'id')"),
+            {"t": table},
+        ).scalar()
+        if seq is not None:
+            max_id = conn.execute(
+                text(f'SELECT max(id) FROM "{table}"'),
+            ).scalar()
+            if max_id is not None:
+                conn.execute(
+                    text("SELECT setval(:s, :m, true)"),
+                    {"s": seq, "m": int(max_id)},
+                )
+
 
 def child_partitions(conn: Connection, table: str) -> list[str]:
     """Return the names of all child partitions currently attached to ``table``."""
