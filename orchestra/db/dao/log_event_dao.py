@@ -1639,6 +1639,13 @@ class LogEventDAO:
             is_image_embedding = "embed_image(" in template.equation
             embedding_objects: list = []
 
+            from orchestra.db.scope import owner_key_for_context
+
+            template_owner_key = owner_key_for_context(
+                self.session,
+                template.context_id,
+            )
+
             for log_event_id, value in computed_values:
                 try:
                     if isinstance(value, np.ndarray):
@@ -1652,6 +1659,7 @@ class LogEventDAO:
                                     key=template.key,
                                     model=DEFAULT_IMAGE_EMBEDDING_MODEL,
                                     vector=value,
+                                    owner_key=template_owner_key,
                                 ),
                             )
                     else:

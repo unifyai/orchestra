@@ -3855,6 +3855,11 @@ def _create_logs_from_joined_rows(
     for ft in fts_target:
         target_ft_cache[ft.field_name] = ft
 
+    # Owning scope of all logs written to this context (for sub-partitioning).
+    from orchestra.db.scope import owner_key_for_context
+
+    owner_key_value = owner_key_for_context(session, context_id)
+
     # Process each row
     for row in result_rows:
         # Extract merged JSONB data
@@ -3868,6 +3873,7 @@ def _create_logs_from_joined_rows(
             data=merged_data,  # Direct JSONB assignment
             created_at=now,
             updated_at=now,
+            owner_key=owner_key_value,
         )
         log_events.append(log_event)
         session.add(log_event)
@@ -3886,6 +3892,7 @@ def _create_logs_from_joined_rows(
                 project_id=log_event.project_id,
                 log_event_id=log_event.id,
                 context_id=context_id,
+                owner_key=owner_key_value,
             ),
         )
 
@@ -4125,6 +4132,7 @@ def _create_logs_from_joined_rows(
                 key=emb_data["key"],
                 model=emb_data["model"],
                 vector=emb_data["vector"],
+                owner_key=owner_key_value,
             )
             session.add(embedding)
 

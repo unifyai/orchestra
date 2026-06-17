@@ -1082,6 +1082,9 @@ def upsert_context_rows(
     inserted = 0
     updated = 0
     now = datetime.now(timezone.utc)
+    from orchestra.db.scope import owner_key_for_context
+
+    owner_key_value = owner_key_for_context(session, context_id)
     id_to_text: dict[int, str] = {}
     for row in rows_by_key.values():
         key_values = {column: row[column] for column in key_columns}
@@ -1099,8 +1102,8 @@ def upsert_context_rows(
             new_log_event_id = session.execute(
                 text(
                     """
-                    INSERT INTO log_event (project_id, data, created_at, updated_at)
-                    VALUES (:project_id, CAST(:data AS jsonb), :created_at, :updated_at)
+                    INSERT INTO log_event (project_id, data, created_at, updated_at, owner_key)
+                    VALUES (:project_id, CAST(:data AS jsonb), :created_at, :updated_at, :owner_key)
                     RETURNING id
                     """,
                 ),
@@ -1109,12 +1112,14 @@ def upsert_context_rows(
                     "data": data_json,
                     "created_at": now,
                     "updated_at": now,
+                    "owner_key": owner_key_value,
                 },
             ).scalar_one()
             association = pg_insert(LogEventContext).values(
                 project_id=project_id,
                 log_event_id=new_log_event_id,
                 context_id=context_id,
+                owner_key=owner_key_value,
             )
             association = association.on_conflict_do_nothing(
                 index_elements=["project_id", "log_event_id", "context_id"],
@@ -1179,6 +1184,7 @@ def upsert_context_rows(
                 project_id=project_id,
                 log_event_id=log_event_id,
                 context_id=context_id,
+                owner_key=owner_key_value,
             )
             association = association.on_conflict_do_nothing(
                 index_elements=["project_id", "log_event_id", "context_id"],

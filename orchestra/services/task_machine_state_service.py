@@ -1987,12 +1987,16 @@ def _upsert_machine_row(
         return _MachineRowUpsertResult(row=existing, created=False)
 
     now = datetime.now(timezone.utc)
+    from orchestra.db.scope import owner_key_for_context
+
+    ok = owner_key_for_context(session, context_id)
     log_event = LogEvent(
         project_id=project_id,
         data=dict(payload),
         key_order=_extract_key_order(dict(payload)),
         created_at=now,
         updated_at=now,
+        owner_key=ok,
     )
     session.add(log_event)
     session.flush()
@@ -2002,6 +2006,7 @@ def _upsert_machine_row(
             project_id=project_id,
             log_event_id=log_event.id,
             context_id=context_id,
+            owner_key=ok,
         ),
     )
     session.flush()

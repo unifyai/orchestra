@@ -3353,12 +3353,15 @@ class ContextDAO:
                             f"Duplicate log entry detected. Context '{context.name}' does not allow duplicates.",
                         )
 
-            # Create associations between log events and context
+            # Create associations between log events and context. The owner is
+            # the LOG's owning scope (this may be an aggregation/cross context),
+            # so the association lands in the log owner's sub-partition.
             for log_event in log_events:
                 association = LogEventContext(
                     project_id=log_event.project_id,
                     log_event_id=log_event.id,
                     context_id=context_id,
+                    owner_key=log_event.owner_key,
                 )
                 self.session.add(association)
 
@@ -3675,6 +3678,7 @@ class ContextDAO:
                     "updated_at": current_time,
                     "data": original_log_event.data,
                     "key_order": original_log_event.key_order,
+                    "owner_key": original_log_event.owner_key,
                 }
 
                 new_log_event = LogEvent(**new_log_event_data)
@@ -3686,6 +3690,7 @@ class ContextDAO:
                     project_id=new_log_event.project_id,
                     log_event_id=new_log_event.id,
                     context_id=context_id,
+                    owner_key=new_log_event.owner_key,
                 )
                 self.session.add(association)
             # Commit all changes
@@ -3995,6 +4000,10 @@ class ContextDAO:
         if not log_event_versions:
             return
 
+        from orchestra.db.scope import owner_key_for_context
+
+        ok = owner_key_for_context(self.session, context_id)
+
         # 4. Bulk insert new LogEvents with RETURNING to get IDs
         stmt = (
             pg_insert(LogEvent)
@@ -4006,6 +4015,7 @@ class ContextDAO:
                         "key_order": lev.key_order,
                         "created_at": lev.created_at,
                         "updated_at": lev.updated_at,
+                        "owner_key": ok,
                     }
                     for lev in log_event_versions
                 ],
@@ -4022,6 +4032,7 @@ class ContextDAO:
                     "project_id": context.project_id,
                     "log_event_id": le_id,
                     "context_id": context_id,
+                    "owner_key": ok,
                 }
                 for le_id in new_log_event_ids
             ]
@@ -4083,6 +4094,10 @@ class ContextDAO:
                 .all()
             )
 
+            from orchestra.db.scope import owner_key_for_context
+
+            ok = owner_key_for_context(self.session, target_context_id)
+
             le_values = [
                 {
                     "project_id": target_project_id,
@@ -4090,6 +4105,7 @@ class ContextDAO:
                     "key_order": le.key_order,
                     "created_at": now,
                     "updated_at": now,
+                    "owner_key": ok,
                 }
                 for le in source_events
             ]
@@ -4105,6 +4121,7 @@ class ContextDAO:
                     "project_id": target_project_id,
                     "log_event_id": new_id,
                     "context_id": target_context_id,
+                    "owner_key": ok,
                 }
                 for new_id in new_ids
             ]

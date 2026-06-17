@@ -998,6 +998,7 @@ def create_from_logs(
                                 # handlers, or both store here).
                                 is_image_embedding = "embed_image(" in body.equation
                                 if is_image_embedding:
+                                    from orchestra.db.scope import owner_key_for_log
                                     from orchestra.web.api.log.python2SQL.helpers import (
                                         DEFAULT_IMAGE_EMBEDDING_MODEL,
                                     )
@@ -1008,6 +1009,10 @@ def create_from_logs(
                                         key=body.key,
                                         model=DEFAULT_IMAGE_EMBEDDING_MODEL,
                                         vector=value,
+                                        owner_key=owner_key_for_log(
+                                            session,
+                                            log_event_id,
+                                        ),
                                     )
                                     embedding_objects.append(embedding_obj)
                             else:
@@ -1847,10 +1852,12 @@ def _atomic_upsert_mode(
         initial_data_with_field = dict(body.initial_data)
         initial_data_with_field[field_name] = operand
 
+        from orchestra.db.scope import owner_key_for_context
+
         insert_sql = text(
             f"""
-            INSERT INTO log_event (project_id, data, created_at, updated_at)
-            VALUES (:project_id, CAST(:initial_data AS jsonb), :now, :now)
+            INSERT INTO log_event (project_id, data, created_at, updated_at, owner_key)
+            VALUES (:project_id, CAST(:initial_data AS jsonb), :now, :now, :owner_key)
             RETURNING id, (data->>'{field_name}')::numeric as new_value
             """,
         )
@@ -1861,6 +1868,7 @@ def _atomic_upsert_mode(
                 "project_id": project_id,
                 "initial_data": json.dumps(initial_data_with_field),
                 "now": datetime.now(timezone.utc),
+                "owner_key": owner_key_for_context(session, context_id),
             },
         ).fetchone()
 
@@ -1872,8 +1880,9 @@ def _atomic_upsert_mode(
         session.execute(
             text(
                 """
-                INSERT INTO log_event_context (project_id, log_event_id, context_id)
-                VALUES (:project_id, :log_id, :context_id)
+                INSERT INTO log_event_context (project_id, log_event_id, context_id, owner_key)
+                VALUES (:project_id, :log_id, :context_id,
+                        (SELECT owner_key FROM log_event WHERE id = :log_id))
                 """,
             ),
             {"project_id": project_id, "log_id": log_id, "context_id": context_id},
@@ -1934,8 +1943,9 @@ def _atomic_upsert_mode(
                     session.execute(
                         text(
                             """
-                            INSERT INTO log_event_context (project_id, log_event_id, context_id)
-                            VALUES (:project_id, :log_id, :context_id)
+                            INSERT INTO log_event_context (project_id, log_event_id, context_id, owner_key)
+                            VALUES (:project_id, :log_id, :context_id,
+                                    (SELECT owner_key FROM log_event WHERE id = :log_id))
                             """,
                         ),
                         {

@@ -124,6 +124,15 @@ def owner_key_for_context(conn: Connection, context_id: int) -> str:
     return owner_key(OwnerScope(row[0]), row[1])
 
 
+def owner_key_for_log(conn: Connection, log_event_id: int) -> str:
+    """Resolve the ``owner_key`` of a log event (its embeddings inherit this)."""
+    val = conn.execute(
+        text("SELECT owner_key FROM log_event WHERE id = :i"),
+        {"i": log_event_id},
+    ).scalar()
+    return val or "sys"
+
+
 def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
     """Denormalize each log's owning scope onto the heavy tables as ``owner_key``.
 
