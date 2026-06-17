@@ -15,7 +15,7 @@ Idempotent across both starting states:
   ``owner_id`` for every existing context from its name.
 
 Revision ID: context_ownership_scope
-Revises: partition_kernel_by_project
+Revises: drop_legacy_integration_catalog
 Create Date: 2026-06-22 00:00:00.000000
 """
 
@@ -24,7 +24,7 @@ from alembic import op
 from orchestra.db.scope import backfill_context_owners
 
 revision = "context_ownership_scope"
-down_revision = "partition_kernel_by_project"
+down_revision = "drop_legacy_integration_catalog"
 branch_labels = None
 depends_on = None
 

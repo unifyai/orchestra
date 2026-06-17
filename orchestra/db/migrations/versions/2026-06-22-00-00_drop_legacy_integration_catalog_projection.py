@@ -1,6 +1,6 @@
 """Drop retired integration catalog projection tables.
 
-Revision ID: drop_legacy_integration_catalog_projection
+Revision ID: drop_legacy_integration_catalog
 Revises: partition_kernel_by_project
 Create Date: 2026-06-22 00:00:00.000000
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "drop_legacy_integration_catalog_projection"
+revision = "drop_legacy_integration_catalog"
 down_revision = "partition_kernel_by_project"
 branch_labels = None
 depends_on = None
