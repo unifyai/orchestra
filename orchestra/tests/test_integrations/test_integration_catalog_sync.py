@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import status
 from httpx import AsyncClient
-from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.orm import Session, sessionmaker
 
+from orchestra.db.models.core_models import Project
 from orchestra.db.models.integration_provider_models import (
     DynamicProviderApp,
     ProviderToolCatalog,
@@ -18,8 +23,34 @@ from orchestra.db.models.integration_provider_models import (
 from orchestra.integrations.providers.base import ProviderExecutionRequest
 from orchestra.integrations.providers.composio import ComposioProviderAdapter
 from orchestra.integrations.providers.pagination import ProviderPaginationError
+from orchestra.services import builtins_integration_sync
+from orchestra.services.builtins_integration_sync import (
+    COMPOSITE_KEY_FIELD,
+    BuiltinsSyncRequest,
+    ensure_builtins_catalog_contexts,
+    run_builtins_sync,
+    upsert_context_rows,
+    write_bootstrap_state,
+)
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 from orchestra.web.api.integrations import operations
+from orchestra.workers import builtins_artifacts_seed_job
+
+
+def _self_host_runner_module():
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "run_builtins_artifacts_seed_self_host.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "run_builtins_artifacts_seed_self_host",
+        path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class FakeResponse:
@@ -220,6 +251,548 @@ class FakePipedreamCatalogAdapter:
                 },
             },
         ][:limit]
+
+
+def _ensure_builtins_project(
+    session: Session,
+    *,
+    user_id: str = "builtins-test",
+) -> None:
+    existing = (
+        session.query(Project)
+        .filter(Project.name == "Builtins", Project.user_id == user_id)
+        .one_or_none()
+    )
+    if existing is None:
+        session.add(
+            Project(
+                user_id=user_id,
+                name="Builtins",
+                is_public_read=True,
+            ),
+        )
+    session.commit()
+
+
+def test_builtins_context_upsert_updates_duplicate_function_id(
+    dbsession: Session,
+) -> None:
+    _ensure_builtins_project(dbsession)
+    contexts = ensure_builtins_catalog_contexts(dbsession)
+    project = contexts["project"]
+    tools_context = contexts["tools"]
+
+    first = {
+        "function_id": 400625911,
+        "name": "primitives.integrations.gmail.old",
+        "docstring": "old",
+        "metadata": {"source": "provider_backed"},
+    }
+    second = {
+        **first,
+        "name": "primitives.integrations.gmail.new",
+        "docstring": "new",
+    }
+
+    assert (
+        upsert_context_rows(
+            dbsession,
+            project_id=project.id,
+            context_id=tools_context.id,
+            key_columns=["function_id"],
+            rows=[first],
+        )["inserted"]
+        == 1
+    )
+    assert (
+        upsert_context_rows(
+            dbsession,
+            project_id=project.id,
+            context_id=tools_context.id,
+            key_columns=["function_id"],
+            rows=[second],
+        )["updated"]
+        == 1
+    )
+    dbsession.commit()
+
+    rows = dbsession.execute(
+        text(
+            """
+            SELECT le.data
+            FROM log_event le
+            JOIN log_event_context lec ON lec.log_event_id = le.id
+            WHERE lec.context_id = :context_id
+              AND le.data ->> 'function_id' = '400625911'
+            """,
+        ),
+        {"context_id": tools_context.id},
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0]["docstring"] == "new"
+
+
+def test_builtins_context_upsert_converges_under_parallel_same_key_writes(
+    _engine,
+) -> None:
+    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+    with SessionLocal() as session:
+        _ensure_builtins_project(session, user_id="builtins-parallel-test")
+        contexts = ensure_builtins_catalog_contexts(session)
+        project_id = contexts["project"].id
+        tools_context_id = contexts["tools"].id
+
+    def write_version(version: int) -> None:
+        with SessionLocal() as session:
+            upsert_context_rows(
+                session,
+                project_id=project_id,
+                context_id=tools_context_id,
+                key_columns=["function_id"],
+                rows=[
+                    {
+                        "function_id": 400625912,
+                        "name": "primitives.integrations.gmail.race",
+                        "docstring": f"version-{version}",
+                    },
+                ],
+            )
+            session.commit()
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(write_version, range(8)))
+
+    with SessionLocal() as session:
+        count = session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM log_event le
+                JOIN log_event_context lec ON lec.log_event_id = le.id
+                WHERE lec.context_id = :context_id
+                  AND le.data ->> 'function_id' = '400625912'
+                """,
+            ),
+            {"context_id": tools_context_id},
+        ).scalar_one()
+    assert count == 1
+
+
+def test_builtins_context_upsert_handles_parallel_distinct_function_ids(
+    _engine,
+) -> None:
+    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+    function_ids = list(range(400626000, 400626080))
+    with SessionLocal() as session:
+        _ensure_builtins_project(session, user_id="builtins-parallel-distinct-test")
+        contexts = ensure_builtins_catalog_contexts(session)
+        project_id = contexts["project"].id
+        tools_context_id = contexts["tools"].id
+
+    def write_batch(ids: list[int], generation: int) -> None:
+        with SessionLocal() as session:
+            upsert_context_rows(
+                session,
+                project_id=project_id,
+                context_id=tools_context_id,
+                key_columns=["function_id"],
+                rows=[
+                    {
+                        "function_id": function_id,
+                        "name": f"primitives.integrations.gmail.tool_{function_id}",
+                        "docstring": f"generation-{generation}",
+                    }
+                    for function_id in ids
+                ],
+            )
+            session.commit()
+
+    batches = [
+        function_ids[index : index + 10] for index in range(0, len(function_ids), 10)
+    ]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda ids: write_batch(ids, 1), batches))
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda ids: write_batch(ids, 2), batches))
+
+    with SessionLocal() as session:
+        rows = session.execute(
+            text(
+                """
+                SELECT le.data ->> 'function_id' AS function_id,
+                       COUNT(*) AS row_count,
+                       MAX(le.data ->> 'docstring') AS docstring
+                FROM log_event le
+                JOIN log_event_context lec ON lec.log_event_id = le.id
+                WHERE lec.context_id = :context_id
+                  AND le.data ->> 'function_id' = ANY(:function_ids)
+                GROUP BY le.data ->> 'function_id'
+                """,
+            ),
+            {
+                "context_id": tools_context_id,
+                "function_ids": [str(function_id) for function_id in function_ids],
+            },
+        ).fetchall()
+        association_count = session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM log_event_context lec
+                JOIN log_event le ON le.id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND le.data ->> 'function_id' = ANY(:function_ids)
+                """,
+            ),
+            {
+                "context_id": tools_context_id,
+                "function_ids": [str(function_id) for function_id in function_ids],
+            },
+        ).scalar_one()
+        unique_count = session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM log_unique_constraint luc
+                JOIN log_event le ON le.id = luc.log_event_id
+                WHERE luc.context_id = :context_id
+                  AND luc.field_name = :field_name
+                  AND le.data ->> 'function_id' = ANY(:function_ids)
+                """,
+            ),
+            {
+                "context_id": tools_context_id,
+                "field_name": COMPOSITE_KEY_FIELD,
+                "function_ids": [str(function_id) for function_id in function_ids],
+            },
+        ).scalar_one()
+
+    assert len(rows) == len(function_ids)
+    assert {int(row.function_id) for row in rows} == set(function_ids)
+    assert {row.row_count for row in rows} == {1}
+    assert {row.docstring for row in rows} == {"generation-2"}
+    assert association_count == len(function_ids)
+    assert unique_count == len(function_ids)
+
+
+def test_builtins_sync_skips_completed_tool_batch_before_provider_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    _engine,
+) -> None:
+    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+    with SessionLocal() as session:
+        _ensure_builtins_project(session, user_id="builtins-checkpoint-test")
+
+    fetch_calls: list[tuple[bool, tuple[str, ...]]] = []
+
+    def fake_fetch(session: Session, body):
+        fetch_calls.append((bool(body.sync_tools), tuple(body.app_slugs)))
+        if not body.sync_tools:
+            return builtins_integration_sync.ProviderCatalogFetchResult(
+                apps=[
+                    {
+                        "backend_id": "composio",
+                        "provider_app_id": "GMAIL",
+                        "canonical_app_slug": "gmail",
+                        "display_name": "Gmail",
+                        "description": "Mail.",
+                    },
+                ],
+                tools=[],
+                skipped_apps=[],
+                requested_app_slugs=[],
+                matched_app_slugs=["gmail"],
+                sync_mode="full",
+                cache_version="cache-v1",
+            )
+        return builtins_integration_sync.ProviderCatalogFetchResult(
+            apps=[],
+            tools=[
+                {
+                    "backend_id": "composio",
+                    "provider_app_id": "GMAIL",
+                    "canonical_app_slug": "gmail",
+                    "provider_tool_id": "GMAIL_FETCH",
+                    "name": "fetch",
+                    "display_name": "Fetch",
+                    "description": "Fetch mail.",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                },
+            ],
+            skipped_apps=[],
+            requested_app_slugs=list(body.app_slugs),
+            matched_app_slugs=["gmail"],
+            sync_mode="partial",
+            cache_version="cache-v1",
+        )
+
+    monkeypatch.setattr(builtins_integration_sync, "fetch_provider_catalog", fake_fetch)
+    monkeypatch.setattr(
+        builtins_integration_sync,
+        "_update_legacy_catalog_projection",
+        lambda *args, **kwargs: {"apps_upserted": 0, "tools_upserted": 0},
+    )
+
+    request = BuiltinsSyncRequest(
+        backend_id="composio",
+        environment="test",
+        desired_hash="desired-1",
+        cache_version="cache-v1",
+        sync_payload={
+            "backend_id": "composio",
+            "sync_mode": "full",
+            "include_all_managed_apps": True,
+            "sync_tools": True,
+        },
+        batch_size=1,
+        workers=1,
+    )
+
+    first = run_builtins_sync(SessionLocal, request)
+    second = run_builtins_sync(SessionLocal, request)
+
+    assert first.completed_batches == 1
+    assert second.skipped_batches == 1
+    assert fetch_calls == [
+        (False, ()),
+        (True, ("GMAIL",)),
+        (False, ()),
+    ]
+
+
+def test_builtins_sync_prunes_stale_builtins_app_and_tool_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    dbsession: Session,
+    _engine,
+) -> None:
+    _ensure_builtins_project(dbsession, user_id="builtins-prune-test")
+    contexts = ensure_builtins_catalog_contexts(dbsession)
+    project = contexts["project"]
+    upsert_context_rows(
+        dbsession,
+        project_id=project.id,
+        context_id=contexts["apps"].id,
+        key_columns=["app_id"],
+        rows=[
+            {
+                "app_id": 991001,
+                "backend_id": "composio",
+                "canonical_app_slug": "stale_app",
+                "display_name": "Stale App",
+            },
+        ],
+    )
+    upsert_context_rows(
+        dbsession,
+        project_id=project.id,
+        context_id=contexts["tools"].id,
+        key_columns=["function_id"],
+        rows=[
+            {
+                "function_id": 991002,
+                "backend_id": "composio",
+                "name": "primitives.integrations.gmail.stale",
+                "metadata": {
+                    "integration": {
+                        "app_slug": "gmail",
+                    },
+                },
+            },
+        ],
+    )
+    dbsession.commit()
+    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+    def fake_fetch(session: Session, body):
+        if not body.sync_tools:
+            return builtins_integration_sync.ProviderCatalogFetchResult(
+                apps=[
+                    {
+                        "backend_id": "composio",
+                        "provider_app_id": "GMAIL",
+                        "canonical_app_slug": "gmail",
+                        "display_name": "Gmail",
+                        "description": "Mail.",
+                    },
+                ],
+                tools=[],
+                skipped_apps=[],
+                requested_app_slugs=[],
+                matched_app_slugs=["gmail"],
+                sync_mode="full",
+                cache_version="cache-prune-v1",
+            )
+        return builtins_integration_sync.ProviderCatalogFetchResult(
+            apps=[],
+            tools=[
+                {
+                    "backend_id": "composio",
+                    "provider_app_id": "GMAIL",
+                    "canonical_app_slug": "gmail",
+                    "provider_tool_id": "GMAIL_FETCH",
+                    "name": "fetch",
+                    "display_name": "Fetch",
+                    "description": "Fetch mail.",
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                },
+            ],
+            skipped_apps=[],
+            requested_app_slugs=list(body.app_slugs),
+            matched_app_slugs=["gmail"],
+            sync_mode="partial",
+            cache_version="cache-prune-v1",
+        )
+
+    monkeypatch.setattr(builtins_integration_sync, "fetch_provider_catalog", fake_fetch)
+    monkeypatch.setattr(
+        builtins_integration_sync,
+        "_update_legacy_catalog_projection",
+        lambda *args, **kwargs: {"apps_upserted": 0, "tools_upserted": 0},
+    )
+
+    result = run_builtins_sync(
+        SessionLocal,
+        BuiltinsSyncRequest(
+            backend_id="composio",
+            environment="test",
+            desired_hash="desired-prune-1",
+            cache_version="cache-prune-v1",
+            prune_unlisted_apps=True,
+            sync_payload={
+                "backend_id": "composio",
+                "sync_mode": "full",
+                "include_all_managed_apps": True,
+                "sync_tools": True,
+            },
+            batch_size=1,
+            workers=1,
+        ),
+    )
+
+    assert result.apps_pruned == 1
+    assert result.tools_pruned == 1
+    remaining = dbsession.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM log_event le
+            JOIN log_event_context lec ON lec.log_event_id = le.id
+            WHERE lec.context_id IN (:apps_context_id, :tools_context_id)
+              AND (
+                  le.data ->> 'app_id' = '991001'
+                  OR le.data ->> 'function_id' = '991002'
+              )
+            """,
+        ),
+        {
+            "apps_context_id": contexts["apps"].id,
+            "tools_context_id": contexts["tools"].id,
+        },
+    ).scalar_one()
+    assert remaining == 0
+
+
+def test_builtins_worker_loads_request_file_without_gcp(tmp_path) -> None:
+    request_file = tmp_path / "request.json"
+    request_file.write_text(
+        json.dumps(
+            {
+                "backend_id": "composio",
+                "environment": "selfhost",
+                "desired_hash": "desired-worker-file",
+                "cache_version": "cache-worker-file",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    args = builtins_artifacts_seed_job._parse_args(
+        ["--request-file", str(request_file)],
+    )
+    payload = builtins_artifacts_seed_job._load_request_payload(args)
+
+    assert payload["backend_id"] == "composio"
+    assert payload["desired_hash"] == "desired-worker-file"
+
+
+def test_builtins_worker_bootstrap_state_writer_records_failure(
+    dbsession: Session,
+) -> None:
+    request = BuiltinsSyncRequest(
+        backend_id="composio",
+        environment="selfhost",
+        desired_hash="desired-failed-run",
+        cache_version="cache-failed-run",
+        desired_config={"sync": {"mode": "partial"}},
+        run_id="run-failed-1",
+    )
+
+    write_bootstrap_state(
+        dbsession,
+        request=request,
+        status="failed",
+        error="forced failure",
+    )
+    dbsession.commit()
+
+    row = dbsession.execute(
+        text(
+            """
+            SELECT desired_hash, last_status, last_error, last_sync_diagnostics_json
+            FROM integration_bootstrap_state
+            WHERE environment = 'selfhost' AND backend_id = 'composio'
+            """,
+        ),
+    ).one()
+    assert row.desired_hash == "desired-failed-run"
+    assert row.last_status == "failed"
+    assert row.last_error == "forced failure"
+    assert row.last_sync_diagnostics_json["run_id"] == "run-failed-1"
+
+
+def test_self_host_runner_builds_direct_worker_request_without_gcp_dependency() -> None:
+    module = _self_host_runner_module()
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "run_builtins_artifacts_seed_self_host.py"
+    ).read_text(encoding="utf-8")
+    assert "google.cloud" not in source
+    assert "gcloud" not in source
+    assert "gs://" not in source
+
+    manifest = {
+        "schema_version": 1,
+        "environment": "selfhost",
+        "providers": {
+            "composio": {
+                "status": "enabled",
+                "sync": {
+                    "mode": "partial",
+                    "app_slugs": ["gmail"],
+                    "prune_unlisted_apps": True,
+                },
+            },
+        },
+    }
+
+    request = module.build_request_from_manifest(
+        manifest,
+        backend_id="composio",
+        workers=2,
+        batch_size=7,
+    )
+
+    assert request["environment"] == "selfhost"
+    assert request["desired_hash"]
+    assert request["cache_version"].startswith("public-builtins-selfhost-composio-")
+    assert request["sync_payload"]["app_slugs"] == ["gmail"]
+    assert request["prune_unlisted_apps"] is True
+    assert request["workers"] == 2
+    assert request["batch_size"] == 7
 
 
 def test_composio_full_sync_handler_does_not_eagerly_create_auth_configs(
