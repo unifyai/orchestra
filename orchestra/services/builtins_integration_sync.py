@@ -1112,11 +1112,12 @@ def upsert_context_rows(
                 },
             ).scalar_one()
             association = pg_insert(LogEventContext).values(
+                project_id=project_id,
                 log_event_id=new_log_event_id,
                 context_id=context_id,
             )
             association = association.on_conflict_do_nothing(
-                index_elements=["log_event_id", "context_id"],
+                index_elements=["project_id", "log_event_id", "context_id"],
             )
             session.execute(association)
             inserted_constraint = _insert_new_constraint(
@@ -1175,11 +1176,12 @@ def upsert_context_rows(
             )
             updated += 1
             association = pg_insert(LogEventContext).values(
+                project_id=project_id,
                 log_event_id=log_event_id,
                 context_id=context_id,
             )
             association = association.on_conflict_do_nothing(
-                index_elements=["log_event_id", "context_id"],
+                index_elements=["project_id", "log_event_id", "context_id"],
             )
             session.execute(association)
             _upsert_constraint(
