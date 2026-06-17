@@ -1083,27 +1083,34 @@ def main():
                 max_promotions=max_promotions,
                 dry_run=dry_run,
             )
-            # Owner sub-partitioning of the shared Assistants project runs in the
-            # same pass (orthogonal to plain project promotion).
-            owner_metrics = run_owner_partition_provisioning(
-                session,
-                project_threshold=threshold,
-                owner_threshold=owner_threshold,
-                max_promotions=max_promotions,
-                dry_run=dry_run,
-            )
+            # Owner sub-partitioning of the shared Assistants project is opt-in:
+            # its payoff is an O(1) per-owner DROP PARTITION, which is not yet
+            # wired into the archive-protected assistant/team deletion flows, so
+            # the (index-building) provisioning stays dormant until enabled.
+            owner_metrics: dict = {"success": True, "skipped": True}
+            if (
+                os.environ.get("MAINTENANCE_OWNER_PROVISIONING", "false").lower()
+                == "true"
+            ):
+                owner_metrics = run_owner_partition_provisioning(
+                    session,
+                    project_threshold=threshold,
+                    owner_threshold=owner_threshold,
+                    max_promotions=max_promotions,
+                    dry_run=dry_run,
+                )
             metrics["owner_provisioning"] = owner_metrics
             if metrics["success"] and owner_metrics["success"]:
                 logger.info(
                     "Provisioning completed: promoted=%s owners_promoted=%s",
                     metrics["promoted"],
-                    owner_metrics["owners_promoted"],
+                    owner_metrics.get("owners_promoted", {}),
                 )
                 sys.exit(0)
             logger.error(
                 "Provisioning failed: project=%s owner=%s",
                 metrics["error"],
-                owner_metrics["error"],
+                owner_metrics.get("error"),
             )
             sys.exit(1)
 
