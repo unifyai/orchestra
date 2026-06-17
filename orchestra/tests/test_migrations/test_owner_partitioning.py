@@ -19,6 +19,7 @@ from sqlalchemy import text
 from orchestra.db.partitioning import (
     OWNER_SUB_TABLES,
     drop_owner,
+    find_owner_promotion_candidates,
     promote_owner,
     sub_partition_project_by_owner,
 )
@@ -96,6 +97,10 @@ def test_owner_partition_lifecycle(dbsession) -> None:
     # Carve the project into an owner-keyed sub-partition; rows are preserved.
     sub_partition_project_by_owner(conn, PID)
     assert _counts(conn) == {"a1": 3, "a2": 2, "sys": 1}
+
+    # Only owners over the threshold are promotion candidates; sys is excluded.
+    assert find_owner_promotion_candidates(conn, PID, 3) == [("a1", 3)]
+    assert find_owner_promotion_candidates(conn, PID, 2) == [("a1", 3), ("a2", 2)]
 
     # Promote a1 into its own sub-partition (precondition for an O(1) drop).
     created = promote_owner(conn, PID, "a1")

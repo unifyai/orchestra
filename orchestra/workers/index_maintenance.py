@@ -64,9 +64,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.partitioning import (
+    dedicated_partition_name,
+    default_partition_name,
+    find_owner_promotion_candidates,
     find_promotion_candidates,
     is_partitioned,
+    promote_owner,
     promote_project_to_partition,
+    sub_partition_project_by_owner,
+    table_relkind,
     table_storage_units,
 )
 
@@ -778,6 +784,149 @@ def run_index_maintenance(
 # Minimum log_event rows for a project in DEFAULT to earn its own partition.
 DEFAULT_PROMOTION_THRESHOLD = 500_000
 
+# Minimum log_event rows for one owner inside the Assistants project to earn its
+# own sub-partition (so its deletion becomes an O(1) DROP PARTITION).
+DEFAULT_OWNER_PROMOTION_THRESHOLD = 100_000
+
+ASSISTANTS_PROJECT_NAME = "Assistants"
+
+
+def _assistants_project_ids(conn) -> list[int]:
+    """Return all ``Assistants`` project ids (the owner sub-partition targets)."""
+    return [
+        int(r[0])
+        for r in conn.execute(
+            text("SELECT id FROM project WHERE name = :n"),
+            {"n": ASSISTANTS_PROJECT_NAME},
+        ).all()
+    ]
+
+
+def run_owner_partition_provisioning(
+    session: Session,
+    project_threshold: int = DEFAULT_PROMOTION_THRESHOLD,
+    owner_threshold: int = DEFAULT_OWNER_PROMOTION_THRESHOLD,
+    max_promotions: int = 5,
+    dry_run: bool = False,
+) -> dict:
+    """Owner sub-partition the shared Assistants project and promote big owners.
+
+    Two convergent steps, idempotent across runs:
+
+    1. While an Assistants project's rows still live in the top-level DEFAULT and
+       exceed ``project_threshold``, carve it into a ``PARTITION BY LIST
+       (owner_key)`` dedicated partition (one-time per-row move, like project
+       promotion).
+    2. Once owner sub-partitioned, promote each owner whose row count exceeds
+       ``owner_threshold`` into its own sub-partition, so an assistant/team
+       deletion becomes an O(1) ``DROP PARTITION`` instead of a row delete.
+
+    ``max_promotions`` bounds the (expensive, index-building) owner promotions
+    per run. A project already plain-promoted to a non-owner dedicated partition
+    is skipped with a warning (it needs an operational conversion).
+    """
+    metrics: dict = {
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "project_threshold": project_threshold,
+        "owner_threshold": owner_threshold,
+        "max_promotions": max_promotions,
+        "dry_run": dry_run,
+        "sub_partitioned": [],
+        "owners_promoted": {},
+        "skipped_plain_dedicated": [],
+        "success": False,
+        "error": None,
+    }
+    try:
+        with session.get_bind().connect() as probe:
+            if not is_partitioned(probe, "log_event"):
+                metrics["success"] = True
+                metrics["skipped"] = True
+                return metrics
+            assistants_pids = _assistants_project_ids(probe)
+            default_part = default_partition_name("log_event")
+
+        promotions_done = 0
+        for pid in assistants_pids:
+            if shutdown_flag or promotions_done >= max_promotions:
+                break
+            with session.get_bind().connect() as probe:
+                relkind = table_relkind(
+                    probe,
+                    dedicated_partition_name("log_event", pid),
+                )
+
+            if relkind is None:
+                # Rows still in the top DEFAULT: owner sub-partition once big.
+                with session.get_bind().connect() as probe:
+                    count = probe.execute(
+                        text(
+                            f'SELECT count(*) FROM "{default_part}" '
+                            f"WHERE project_id = :p",
+                        ),
+                        {"p": pid},
+                    ).scalar()
+                if count < project_threshold:
+                    continue
+                if dry_run:
+                    metrics["sub_partitioned"].append(
+                        {"project_id": pid, "dry_run": True}
+                    )
+                    continue
+                conn = session.get_bind().connect()
+                try:
+                    with conn.begin():
+                        sub_partition_project_by_owner(conn, pid)
+                    metrics["sub_partitioned"].append({"project_id": pid})
+                finally:
+                    conn.close()
+            elif relkind == "p":
+                # Already owner sub-partitioned: promote the heavy owners.
+                with session.get_bind().connect() as probe:
+                    candidates = find_owner_promotion_candidates(
+                        probe,
+                        pid,
+                        owner_threshold,
+                    )
+                promoted: dict = {}
+                for owner_key, row_count in candidates:
+                    if shutdown_flag or promotions_done >= max_promotions:
+                        break
+                    if dry_run:
+                        promoted[owner_key] = {"row_count": row_count, "dry_run": True}
+                        promotions_done += 1
+                        continue
+                    conn = session.get_bind().connect()
+                    try:
+                        with conn.begin():
+                            created = promote_owner(conn, pid, owner_key)
+                        promoted[owner_key] = {
+                            "row_count": row_count,
+                            "partitions": created,
+                        }
+                    finally:
+                        conn.close()
+                    promotions_done += 1
+                if promoted:
+                    metrics["owners_promoted"][pid] = promoted
+            else:
+                # Plain (non-owner) dedicated partition: cannot owner sub-partition
+                # in place; needs an operational conversion.
+                logger.warning(
+                    "Assistants project %s is a plain dedicated partition; "
+                    "owner sub-partitioning needs operational conversion",
+                    pid,
+                )
+                metrics["skipped_plain_dedicated"].append(pid)
+
+        metrics["success"] = True
+    except Exception as e:
+        logger.error(f"Owner partition provisioning failed: {e}", exc_info=True)
+        metrics["error"] = str(e)
+        metrics["success"] = False
+    metrics["end_time"] = datetime.now(timezone.utc).isoformat()
+    return metrics
+
 
 def run_partition_provisioning(
     session: Session,
@@ -814,6 +963,11 @@ def run_partition_provisioning(
                 metrics["skipped"] = True
                 return metrics
             candidates = find_promotion_candidates(probe, threshold)
+            # The shared Assistants project is owner sub-partitioned instead of
+            # plain-promoted (see run_owner_partition_provisioning); never carve
+            # it into a non-owner dedicated partition or that path is blocked.
+            assistants_pids = set(_assistants_project_ids(probe))
+        candidates = [c for c in candidates if c[0] not in assistants_pids]
 
         metrics["candidates"] = candidates
         logger.info(
@@ -917,16 +1071,40 @@ def main():
             )
             max_promotions = int(os.environ.get("MAINTENANCE_MAX_PROMOTIONS", "1"))
             dry_run = os.environ.get("MAINTENANCE_DRY_RUN", "false").lower() == "true"
+            owner_threshold = int(
+                os.environ.get(
+                    "MAINTENANCE_OWNER_PROMOTION_THRESHOLD",
+                    str(DEFAULT_OWNER_PROMOTION_THRESHOLD),
+                ),
+            )
             metrics = run_partition_provisioning(
                 session,
                 threshold=threshold,
                 max_promotions=max_promotions,
                 dry_run=dry_run,
             )
-            if metrics["success"]:
-                logger.info(f"Provisioning completed: promoted={metrics['promoted']}")
+            # Owner sub-partitioning of the shared Assistants project runs in the
+            # same pass (orthogonal to plain project promotion).
+            owner_metrics = run_owner_partition_provisioning(
+                session,
+                project_threshold=threshold,
+                owner_threshold=owner_threshold,
+                max_promotions=max_promotions,
+                dry_run=dry_run,
+            )
+            metrics["owner_provisioning"] = owner_metrics
+            if metrics["success"] and owner_metrics["success"]:
+                logger.info(
+                    "Provisioning completed: promoted=%s owners_promoted=%s",
+                    metrics["promoted"],
+                    owner_metrics["owners_promoted"],
+                )
                 sys.exit(0)
-            logger.error(f"Provisioning failed: {metrics['error']}")
+            logger.error(
+                "Provisioning failed: project=%s owner=%s",
+                metrics["error"],
+                owner_metrics["error"],
+            )
             sys.exit(1)
 
         metrics = run_index_maintenance(

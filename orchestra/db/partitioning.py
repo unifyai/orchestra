@@ -742,6 +742,33 @@ def find_promotion_candidates(
     return [(int(r[0]), int(r[1])) for r in rows]
 
 
+def find_owner_promotion_candidates(
+    conn: Connection,
+    project_id: int,
+    threshold: int,
+) -> list[tuple[str, int]]:
+    """Owners big enough to deserve their own sub-partition within a project.
+
+    Counted against the project's owner sub-DEFAULT only (so already-promoted
+    owners are naturally excluded), and ``sys`` is skipped -- it is the
+    unclassified/system bucket, not a per-owner deletion unit. Returns
+    ``(owner_key, row_count)`` pairs sorted by size desc. Empty when the project
+    has not been owner sub-partitioned yet.
+    """
+    sub_default = f"{dedicated_partition_name('log_event', project_id)}_default"
+    if not relation_exists(conn, sub_default):
+        return []
+    rows = conn.execute(
+        text(
+            f'SELECT owner_key, count(*) AS c FROM "{sub_default}" '
+            f"WHERE owner_key <> 'sys' "
+            f"GROUP BY owner_key HAVING count(*) >= :t ORDER BY c DESC",
+        ),
+        {"t": threshold},
+    ).all()
+    return [(str(r[0]), int(r[1])) for r in rows]
+
+
 def promote_project_to_partition(
     conn: Connection,
     project_id: int,
