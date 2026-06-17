@@ -1,20 +1,16 @@
 """
 Shared sibling context cleanup logic for Assistants/UnityTests projects.
 
-Handles the 3-tier context hierarchy used in Assistants projects:
-- Tier 1: All/<SubContext> (global aggregate) - PROTECTED ARCHIVE
+Handles the legacy aggregation tiers some Assistants-project logs still live in:
+- Tier 1: All/<SubContext> (global aggregate)
 - Tier 2: <User>/All/<SubContext> (user aggregate)
 - Tier 3: <User>/<Assistant>/<SubContext> (user + assistant specific)
 
-When deleting logs/contexts from one tier, the same logs should be
-removed from sibling tiers to maintain consistency.
-
-ARCHIVE PROTECTION:
-- Topmost archive contexts (All/*) are protected from cascading deletions
-  originating from lower-tier contexts (Tier 2 or Tier 3).
-- This preserves historical data for billing and reporting.
-- Deleting from All/* itself still cascades to lower tiers normally.
-- Intermediate contexts (*/All/*) are NOT protected.
+When deleting logs/contexts from one tier, the same logs are removed from the
+sibling tiers so a log never outlives its owning context. Deletion cascades
+uniformly across all tiers; the topmost All/* archive is no longer preserved
+(the aggregation-context concept is being retired in favour of client-side
+fan-out, so a log's only durable home is its owning assistant/team context).
 """
 
 import logging
@@ -81,14 +77,6 @@ def get_assistants_sibling_context_info(
     """
     if not log_event_ids or not context_name:
         return {}
-
-    def _is_topmost_archive(name: str) -> bool:
-        """Check if context is a topmost archive (All/* only, NOT */All/*).
-
-        Topmost archives are protected from cascading deletions originating
-        from lower-tier contexts.
-        """
-        return name.startswith("All/")
 
     def _get_log_field_values(field_name: str) -> Dict[int, str]:
         """Get field values for all log events from LogEvent.data JSONB column.
@@ -183,8 +171,6 @@ def get_assistants_sibling_context_info(
     user_values = _get_log_field_values("_user")
     assistant_values = _get_log_field_values("_assistant")
 
-    current_is_archive = _is_topmost_archive(context_name)
-
     # ── Step 3: Construct all candidate sibling names (Python-only, no DB) ──
     candidate_names: Set[str] = set()
     log_sibling_names: Dict[int, List[str]] = {}
@@ -219,16 +205,13 @@ def get_assistants_sibling_context_info(
                 else None
             )
 
-        # Find sibling contexts (excluding the current context)
+        # Find sibling contexts (excluding the current context). Deletion
+        # cascades uniformly across all tiers -- the topmost All/* archive is no
+        # longer preserved (aggregation contexts are being retired; a log's only
+        # durable home is its owning assistant/team context).
         siblings_for_log: List[str] = []
         for sibling_name in [tier1_name, tier2_name, tier3_name]:
             if sibling_name and sibling_name != context_name:
-                # ARCHIVE PROTECTION: When deleting from a non-archive context,
-                # skip cascade to topmost archive (All/*) contexts.
-                # This preserves historical data in the archive.
-                sibling_is_archive = _is_topmost_archive(sibling_name)
-                if not current_is_archive and sibling_is_archive:
-                    continue
                 siblings_for_log.append(sibling_name)
                 candidate_names.add(sibling_name)
 

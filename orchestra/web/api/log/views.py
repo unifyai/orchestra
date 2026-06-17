@@ -26,7 +26,6 @@ from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.context_naming import is_team_context_name
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
@@ -1888,82 +1887,16 @@ def _atomic_upsert_mode(
             {"project_id": project_id, "log_id": log_id, "context_id": context_id},
         )
 
-    mirrored_contexts = []
-
-    # If add_to_all_context=true, mirror non-team contexts to the archive context
-    if body.add_to_all_context and is_team_context_name(body.context):
-        logger.debug(
-            "Skipping archive mirror for shared-team context.",
-            extra={"mirror_skipped": True, "context_name": body.context},
-        )
-    elif body.add_to_all_context:
-        context_parts = body.context.split("/")
-
-        if "_user" in body.initial_data and "_assistant" in body.initial_data:
-            user_ctx = str(body.initial_data.get("_user", ""))
-            assistant_ctx = str(body.initial_data.get("_assistant", ""))
-
-            user_idx = None
-            assistant_idx = None
-            for i, part in enumerate(context_parts):
-                if part == user_ctx and user_idx is None:
-                    user_idx = i
-                elif part == assistant_ctx and user_idx is not None:
-                    assistant_idx = i
-                    break
-
-            if user_idx is not None and assistant_idx is not None:
-                prefix_parts = context_parts[:user_idx]
-                subcontext_parts = context_parts[assistant_idx + 1 :]
-
-                if prefix_parts:
-                    archive_context = (
-                        "/".join(prefix_parts) + "/All/" + "/".join(subcontext_parts)
-                    )
-                else:
-                    archive_context = "All/" + "/".join(subcontext_parts)
-
-                archive_context_id = context_dao.get_or_create(
-                    project_id=project_id,
-                    name=archive_context,
-                    unique_keys=body.unique_keys,
-                )
-
-                existing_link = session.execute(
-                    text(
-                        """
-                        SELECT 1 FROM log_event_context
-                        WHERE log_event_id = :log_id AND context_id = :context_id
-                        """,
-                    ),
-                    {"log_id": log_id, "context_id": archive_context_id},
-                ).fetchone()
-
-                if not existing_link:
-                    session.execute(
-                        text(
-                            """
-                            INSERT INTO log_event_context (project_id, log_event_id, context_id, owner_key)
-                            VALUES (:project_id, :log_id, :context_id,
-                                    (SELECT owner_key FROM log_event WHERE id = :log_id))
-                            """,
-                        ),
-                        {
-                            "project_id": project_id,
-                            "log_id": log_id,
-                            "context_id": archive_context_id,
-                        },
-                    )
-
-                mirrored_contexts.append(archive_context)
-
     session.commit()
 
+    # ``add_to_all_context`` is accepted for backward compatibility but no longer
+    # mirrors into All/* aggregation contexts (that concept has been retired): a
+    # log's only durable home is its owning assistant/team context.
     return AtomicFieldUpdateResponse(
         new_value=new_value,
         log_id=log_id,
         created=created,
-        mirrored_contexts=mirrored_contexts if mirrored_contexts else None,
+        mirrored_contexts=None,
     )
 
 

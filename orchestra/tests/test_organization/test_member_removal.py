@@ -1044,7 +1044,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     When member is removed and their unshared assistant is deleted:
     - Assistant-specific contexts (Tier 3) should be deleted
     - Tier 2 user aggregates should be cleaned via sibling cleanup
-    - Tier 1 All/* should remain as the protected archive
+    - Tier 1 All/* should also be cleaned (uniform cascade, no archive protection)
     """
     owner = await create_test_user(
         client,
@@ -1174,15 +1174,15 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
                 log["id"] for log in logs_resp.json()["logs"]
             ], f"Log should be cleaned from {ctx}"
 
-    # Archive protection: log remains in topmost All/* context for historical record
+    # Uniform cascade: log is also removed from topmost All/* context
     logs_resp = await client.get(
         f"/v0/logs?project_name=Assistants&context={tier1_context}",
         headers=org_headers,
     )
     assert logs_resp.status_code == 200
-    assert log_id in [
+    assert log_id not in [
         log["id"] for log in logs_resp.json()["logs"]
-    ], f"Log should remain in archive {tier1_context}"
+    ], f"Log should be removed from {tier1_context} (uniform cascade, no archive protection)"
 
 
 @pytest.mark.anyio
@@ -1194,8 +1194,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     Test that logs from OTHER assistants in shared contexts are preserved.
 
     When member A is removed and their assistant is deleted:
-    - Member A's assistant logs should be removed from Tier 2 and Tier 3
-    - Member A's topmost All/* archive copy should remain
+    - Member A's assistant logs should be removed from all tiers (uniform cascade, no archive protection)
     - Member B's assistant logs in shared All/* contexts should NOT be affected
     """
     owner = await create_test_user(
@@ -1371,8 +1370,8 @@ async def test_member_removal_preserves_other_assistant_logs(
     # Verify Assistant B still exists
     assert assistant_dao.get_assistant_by_agent_id(agent_id_b) is not None
 
-    # Verify log A is removed from tier2 (User/All/*) but remains in tier1 (All/*)
-    # due to archive protection - topmost All/* contexts are preserved as historical records
+    # Verify log A is removed from tier2 (User/All/*) and tier1 (All/*)
+    # under uniform cascade (no archive protection)
     logs_resp = await client.get(
         f"/v0/logs?project_name=Assistants&context={tier2_context}",
         headers=org_headers,
@@ -1382,14 +1381,16 @@ async def test_member_removal_preserves_other_assistant_logs(
     assert log_id_a not in log_ids, f"Log A should be removed from {tier2_context}"
     assert log_id_b in log_ids, f"Log B should still exist in {tier2_context}"
 
-    # Archive protection: log A remains in topmost All/* context for historical record
+    # Uniform cascade: log A is also removed from topmost All/* context
     logs_resp = await client.get(
         f"/v0/logs?project_name=Assistants&context={tier1_context}",
         headers=org_headers,
     )
     assert logs_resp.status_code == 200
     log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-    assert log_id_a in log_ids, f"Log A should remain in archive {tier1_context}"
+    assert (
+        log_id_a not in log_ids
+    ), f"Log A should be removed from {tier1_context} (uniform cascade, no archive protection)"
     assert log_id_b in log_ids, f"Log B should still exist in {tier1_context}"
 
     # Verify Assistant B's Tier 3 context is untouched
