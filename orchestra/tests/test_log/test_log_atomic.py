@@ -390,7 +390,10 @@ async def test_atomic_upsert_update_existing_log(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_atomic_upsert_with_archive_context(client: AsyncClient):
-    """Test atomic upsert mirrors to archive context when add_to_all_context=true."""
+    """add_to_all_context no longer mirrors: All/* aggregation has been retired.
+
+    The flag is still accepted (backward compatibility) but is a no-op.
+    """
     project_name = "atomic-upsert-archive-test"
     await _create_project(client, project_name)
 
@@ -417,7 +420,7 @@ async def test_atomic_upsert_with_archive_context(client: AsyncClient):
     data = response.json()
     assert data["created"] is True
     assert data["new_value"] == 25.00
-    assert "All/Spending/Monthly" in data["mirrored_contexts"]
+    assert data["mirrored_contexts"] is None
 
 
 @pytest.mark.anyio
