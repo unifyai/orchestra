@@ -1270,6 +1270,11 @@ def _provider_connect_url(
                     raise ValueError(
                         f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
                     )
+                if app:
+                    app.raw_provider_metadata_json = {
+                        **(app.raw_provider_metadata_json or {}),
+                        "auth_config_id": str(auth_config_id),
+                    }
             try:
                 connect_url, connected_account_id, error = adapter.create_auth_link(
                     user_id=external_user_id,
