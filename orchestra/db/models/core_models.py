@@ -141,6 +141,13 @@ class Context(Base):
     auto_counting = Column(JSONB, nullable=False, server_default="{}")
     foreign_keys = Column(JSONB, nullable=False, server_default="[]")
     current_commit_hash = Column(String, nullable=True)
+    # Ownership scope: the entity whose data this context holds and the unit of
+    # bulk deletion (see orchestra.db.scope). ``owner_scope`` is one of
+    # assistant/team/aggregation/system; ``owner_id`` is the agent_id (assistant)
+    # or team_id (team), else NULL. Logs created here denormalize this owner onto
+    # the heavy tables so an assistant/team can be dropped as a partition.
+    owner_scope = Column(String, nullable=True)
+    owner_id = Column(Integer, nullable=True)
 
     project = relationship("Project", back_populates="contexts")
     log_events = relationship(
@@ -164,6 +171,14 @@ class Context(Base):
         sa.CheckConstraint(
             "char_length(description) <= 256",
             name="ck_context_description_len",
+        ),
+        # Find all contexts owned by a given assistant/team within a project.
+        Index(
+            "idx_context_owner",
+            "project_id",
+            "owner_scope",
+            "owner_id",
+            postgresql_where=text("owner_id IS NOT NULL"),
         ),
     )
 
