@@ -335,6 +335,25 @@ def _align_partition_column_types(
             )
 
 
+def _drop_extra_columns(
+    conn: Connection,
+    parent: str,
+    partition: str,
+) -> None:
+    """Drop columns on the partition that are absent from the parent before ATTACH.
+
+    Legacy tables can carry leftover columns not present in the model (e.g. a
+    retired ``tmp_*`` scratch column). ATTACH PARTITION rejects a partition that
+    has any column the parent lacks ("The new partition may contain only the
+    columns present in parent"), so drop the drift. Columns the model adds but
+    the legacy table lacks are handled by the phase-2 backfill, not here.
+    """
+    parent_cols = set(_column_names(conn, parent))
+    for name in _column_names(conn, partition):
+        if name not in parent_cols:
+            conn.execute(text(f'ALTER TABLE "{partition}" DROP COLUMN "{name}"'))
+
+
 def convert_legacy_to_partitioned(conn: Connection) -> None:
     """Convert the populated, non-partitioned kernel tables to partitioned form.
 
@@ -412,8 +431,10 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
 
         conn.execute(text(f'ALTER TABLE "{table}" RENAME TO "{default}"'))
         meta.tables[table].create(bind=conn)
-        # Converge any drifted column types (e.g. text vs varchar) to the
-        # model-derived parent so ATTACH's exact-type check passes.
+        # Converge the legacy table to the model-derived parent so ATTACH's
+        # exact-shape check passes: drop leftover columns the model no longer
+        # has, then align any drifted column types (e.g. text vs varchar).
+        _drop_extra_columns(conn, table, default)
         _align_partition_column_types(conn, table, default)
         conn.execute(
             text(f'ALTER TABLE "{table}" ATTACH PARTITION "{default}" DEFAULT'),
