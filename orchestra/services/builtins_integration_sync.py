@@ -1558,34 +1558,6 @@ def _build_sync_payload(
     return IntegrationCatalogSyncRequest(**payload)
 
 
-def _update_legacy_catalog_projection(
-    session: Session,
-    *,
-    request: BuiltinsSyncRequest,
-    apps: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
-    app_slugs: list[str],
-    prune_unlisted_apps: bool,
-) -> dict[str, int]:
-    """Refresh legacy DB app/tool rows as a compatibility projection."""
-
-    if not apps and not tools:
-        return {"apps_upserted": 0, "tools_upserted": 0}
-    from orchestra.web.api.integrations.operations import _sync_catalog_rows
-
-    return _sync_catalog_rows(
-        session,
-        IntegrationCatalogSyncRequest(
-            backend_id=request.backend_id,
-            cache_version=request.cache_version,
-            apps=apps,
-            tools=tools,
-            app_slugs=app_slugs,
-            prune_unlisted_apps=prune_unlisted_apps,
-        ),
-    )
-
-
 def _materialize_apps(
     session: Session,
     *,
@@ -1758,14 +1730,6 @@ def run_builtins_sync(
         app_fetch = _fetch_provider_catalog_with_retry(session, app_body)
         contexts = ensure_builtins_catalog_contexts(session)
         project = contexts["project"]
-        legacy_app_counts = _update_legacy_catalog_projection(
-            session,
-            request=request,
-            apps=app_fetch.apps,
-            tools=[],
-            app_slugs=app_fetch.matched_app_slugs,
-            prune_unlisted_apps=request.prune_unlisted_apps,
-        )
         app_counts = _materialize_apps(
             session,
             project_id=project.id,
@@ -1789,7 +1753,6 @@ def run_builtins_sync(
                 "cache_version": app_fetch.cache_version,
                 "auth_configs_created": app_fetch.auth_configs_created,
                 "auth_configs_reused": app_fetch.auth_configs_reused,
-                "legacy_apps_upserted": legacy_app_counts.get("apps_upserted", 0),
                 "app_phase_seconds": round(time.perf_counter() - app_started_at, 3),
             },
         )
@@ -1876,14 +1839,6 @@ def run_builtins_sync(
                     app_slugs=[slug.upper() for slug in batch_slugs],
                 )
                 fetch = _fetch_provider_catalog_with_retry(session, body)
-                legacy_counts = _update_legacy_catalog_projection(
-                    session,
-                    request=request,
-                    apps=[],
-                    tools=fetch.tools,
-                    app_slugs=fetch.matched_app_slugs,
-                    prune_unlisted_apps=False,
-                )
                 counts = _materialize_tools(
                     session,
                     project_id=project.id,
@@ -1936,7 +1891,6 @@ def run_builtins_sync(
                     "updated": counts["updated"],
                     "total": counts["total"],
                     "pruned": counts.get("pruned", 0),
-                    "legacy_tools_upserted": legacy_counts.get("tools_upserted", 0),
                     "matched_app_slugs": fetch.matched_app_slugs,
                     "skipped_apps": fetch.skipped_apps,
                     "elapsed_seconds": elapsed,

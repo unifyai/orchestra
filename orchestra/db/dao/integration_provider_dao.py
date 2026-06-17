@@ -13,17 +13,15 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Query, Session
 
 from orchestra.db.models.integration_provider_models import (
-    DynamicProviderApp,
     IntegrationBackend,
     IntegrationBootstrapState,
     IntegrationConnection,
     IntegrationOverlay,
     ProviderActionAudit,
-    ProviderToolCatalog,
 )
 
 HIDDEN_CONNECTION_STATUSES = {"disconnected"}
@@ -166,162 +164,6 @@ class IntegrationProviderDAO:
             .all()
         }
 
-    # App and tool catalog
-    def upsert_catalog_app(
-        self,
-        *,
-        backend_id: str,
-        provider_app_id: str,
-        canonical_app_slug: str,
-        values: dict[str, Any],
-    ) -> DynamicProviderApp:
-        app = (
-            self.session.query(DynamicProviderApp)
-            .filter(
-                DynamicProviderApp.backend_id == backend_id,
-                or_(
-                    DynamicProviderApp.provider_app_id == provider_app_id,
-                    DynamicProviderApp.canonical_app_slug == canonical_app_slug,
-                ),
-            )
-            .one_or_none()
-        )
-        if app:
-            for key, value in values.items():
-                setattr(app, key, value)
-        else:
-            app = DynamicProviderApp(**values)
-            self.session.add(app)
-        self.session.flush()
-        return app
-
-    def upsert_catalog_tool(
-        self,
-        *,
-        tool_id: str,
-        values: dict[str, Any],
-    ) -> ProviderToolCatalog:
-        tool = (
-            self.session.query(ProviderToolCatalog)
-            .filter_by(tool_id=tool_id)
-            .one_or_none()
-        )
-        if tool:
-            for key, value in values.items():
-                setattr(tool, key, value)
-        else:
-            tool = ProviderToolCatalog(**values)
-            self.session.add(tool)
-        self.session.flush()
-        return tool
-
-    def prune_catalog_to_app_slugs(
-        self,
-        *,
-        backend_id: str,
-        canonical_app_slugs: Iterable[str],
-    ) -> dict[str, int]:
-        allowed = sorted({str(slug) for slug in canonical_app_slugs if str(slug)})
-        tool_query = self.session.query(ProviderToolCatalog).filter_by(
-            backend_id=backend_id,
-        )
-        app_query = self.session.query(DynamicProviderApp).filter_by(
-            backend_id=backend_id,
-        )
-        if allowed:
-            tool_query = tool_query.filter(
-                ~ProviderToolCatalog.canonical_app_slug.in_(allowed),
-            )
-            app_query = app_query.filter(
-                ~DynamicProviderApp.canonical_app_slug.in_(allowed),
-            )
-        tools_deleted = tool_query.delete(synchronize_session=False)
-        apps_deleted = app_query.delete(synchronize_session=False)
-        self.session.flush()
-        return {
-            "apps_pruned": int(apps_deleted),
-            "tools_pruned": int(tools_deleted),
-        }
-
-    def delete_catalog_tools_for_app_slugs(
-        self,
-        *,
-        backend_id: str,
-        canonical_app_slugs: Iterable[str],
-    ) -> int:
-        slugs = sorted({str(slug) for slug in canonical_app_slugs if str(slug)})
-        if not slugs:
-            return 0
-        deleted = (
-            self.session.query(ProviderToolCatalog)
-            .filter_by(backend_id=backend_id)
-            .filter(ProviderToolCatalog.canonical_app_slug.in_(slugs))
-            .delete(synchronize_session=False)
-        )
-        self.session.flush()
-        return int(deleted)
-
-    def get_app_by_backend_provider(
-        self,
-        *,
-        backend_id: str,
-        provider_app_id: str,
-    ) -> DynamicProviderApp | None:
-        return (
-            self.session.query(DynamicProviderApp)
-            .filter_by(backend_id=backend_id, provider_app_id=provider_app_id)
-            .one_or_none()
-        )
-
-    def get_app_by_slug(
-        self,
-        canonical_app_slug: str,
-        *,
-        backend_id: str | None = None,
-    ) -> DynamicProviderApp | None:
-        query = self.session.query(DynamicProviderApp).filter_by(
-            canonical_app_slug=canonical_app_slug,
-        )
-        if backend_id:
-            query = query.filter_by(backend_id=backend_id)
-        return query.order_by(DynamicProviderApp.backend_id.asc()).first()
-
-    def set_app_action_previews(
-        self,
-        app: DynamicProviderApp,
-        action_previews: list[dict[str, Any]],
-    ) -> None:
-        app.available_actions_json = action_previews
-        self.session.flush()
-
-    def catalog_apps_for_keys(
-        self,
-        keys: Iterable[tuple[str, str]],
-    ) -> list[DynamicProviderApp]:
-        apps: list[DynamicProviderApp] = []
-        for backend_id, provider_app_id in keys:
-            app = self.get_app_by_backend_provider(
-                backend_id=backend_id,
-                provider_app_id=provider_app_id,
-            )
-            if app:
-                apps.append(app)
-        return apps
-
-    def catalog_tools_for_ids(
-        self,
-        tool_ids: Iterable[str],
-    ) -> list[ProviderToolCatalog]:
-        ids = list(dict.fromkeys(tool_ids))
-        if not ids:
-            return []
-        return (
-            self.session.query(ProviderToolCatalog)
-            .filter(ProviderToolCatalog.tool_id.in_(ids))
-            .order_by(ProviderToolCatalog.id.asc())
-            .all()
-        )
-
     def list_overlays_by_slug(self) -> dict[str, IntegrationOverlay]:
         return {
             overlay.canonical_app_slug: overlay
@@ -334,83 +176,6 @@ class IntegrationProviderDAO:
             .filter_by(canonical_app_slug=canonical_app_slug)
             .one_or_none()
         )
-
-    def list_apps_by_slug(
-        self,
-        canonical_app_slugs: Iterable[str],
-    ) -> dict[str, DynamicProviderApp]:
-        slugs = list(dict.fromkeys(canonical_app_slugs))
-        if not slugs:
-            return {}
-        return {
-            app.canonical_app_slug: app
-            for app in self.session.query(DynamicProviderApp)
-            .filter(DynamicProviderApp.canonical_app_slug.in_(slugs))
-            .order_by(DynamicProviderApp.backend_id.asc())
-            .all()
-        }
-
-    def catalog_counts_by_backend(self) -> dict[str, dict[str, int]]:
-        counts: dict[str, dict[str, int]] = {}
-        for backend_id, count in (
-            self.session.query(
-                DynamicProviderApp.backend_id,
-                func.count(DynamicProviderApp.id),
-            )
-            .group_by(DynamicProviderApp.backend_id)
-            .all()
-        ):
-            counts.setdefault(backend_id, {})["apps"] = int(count)
-        for backend_id, count in (
-            self.session.query(
-                ProviderToolCatalog.backend_id,
-                func.count(ProviderToolCatalog.id),
-            )
-            .group_by(ProviderToolCatalog.backend_id)
-            .all()
-        ):
-            counts.setdefault(backend_id, {})["tools"] = int(count)
-        return counts
-
-    def tool_count_for_app(self, canonical_app_slug: str) -> int:
-        return (
-            self.session.query(ProviderToolCatalog)
-            .filter_by(canonical_app_slug=canonical_app_slug)
-            .count()
-        )
-
-    def tool_counts_by_app(
-        self,
-        canonical_app_slugs: Iterable[str],
-    ) -> dict[str, int]:
-        slugs = list(dict.fromkeys(canonical_app_slugs))
-        if not slugs:
-            return {}
-        return {
-            slug: int(count)
-            for slug, count in self.session.query(
-                ProviderToolCatalog.canonical_app_slug,
-                func.count(ProviderToolCatalog.id),
-            )
-            .filter(ProviderToolCatalog.canonical_app_slug.in_(slugs))
-            .group_by(ProviderToolCatalog.canonical_app_slug)
-            .all()
-        }
-
-    def list_tools(
-        self,
-        *,
-        canonical_app_slug: str | None = None,
-        backend_id: str | None = None,
-    ) -> list[ProviderToolCatalog]:
-        query = self._tools_query(
-            canonical_app_slug=canonical_app_slug,
-            backend_id=backend_id,
-        )
-        return query.order_by(
-            ProviderToolCatalog.canonical_app_slug.asc(),
-            ProviderToolCatalog.display_name.asc(),
-        ).all()
 
     def _latest_owner_connections_subquery(self, owner: Any):
         row_number = (
@@ -436,26 +201,6 @@ class IntegrationProviderDAO:
                 row_number,
             )
             .subquery()
-        )
-
-    def _tools_query(
-        self,
-        *,
-        canonical_app_slug: str | None = None,
-        backend_id: str | None = None,
-    ) -> Query:
-        query = self.session.query(ProviderToolCatalog)
-        if canonical_app_slug:
-            query = query.filter_by(canonical_app_slug=canonical_app_slug)
-        if backend_id:
-            query = query.filter_by(backend_id=backend_id)
-        return query
-
-    def get_tool(self, tool_id: str) -> ProviderToolCatalog | None:
-        return (
-            self.session.query(ProviderToolCatalog)
-            .filter_by(tool_id=tool_id)
-            .one_or_none()
         )
 
     # Connections and policy state

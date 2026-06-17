@@ -16,10 +16,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.core_models import Project
-from orchestra.db.models.integration_provider_models import (
-    DynamicProviderApp,
-    ProviderToolCatalog,
-)
 from orchestra.integrations.providers.base import ProviderExecutionRequest
 from orchestra.integrations.providers.composio import ComposioProviderAdapter
 from orchestra.integrations.providers.pagination import ProviderPaginationError
@@ -529,11 +525,6 @@ def test_builtins_sync_skips_completed_tool_batch_before_provider_fetch(
         )
 
     monkeypatch.setattr(builtins_integration_sync, "fetch_provider_catalog", fake_fetch)
-    monkeypatch.setattr(
-        builtins_integration_sync,
-        "_update_legacy_catalog_projection",
-        lambda *args, **kwargs: {"apps_upserted": 0, "tools_upserted": 0},
-    )
 
     request = BuiltinsSyncRequest(
         backend_id="composio",
@@ -647,11 +638,6 @@ def test_builtins_sync_prunes_stale_builtins_app_and_tool_rows(
         )
 
     monkeypatch.setattr(builtins_integration_sync, "fetch_provider_catalog", fake_fetch)
-    monkeypatch.setattr(
-        builtins_integration_sync,
-        "_update_legacy_catalog_projection",
-        lambda *args, **kwargs: {"apps_upserted": 0, "tools_upserted": 0},
-    )
 
     result = run_builtins_sync(
         SessionLocal,
@@ -1257,279 +1243,15 @@ def test_composio_execute_preserves_provider_error_body(
 
 
 @pytest.mark.anyio
-async def test_sync_route_imports_all_composio_apps_without_default_allowlist(
-    client: AsyncClient,
-    dbsession: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "orchestra.web.api.integrations.operations.get_provider_adapter",
-        lambda *_args, **_kwargs: FakeComposioCatalogAdapter(),
-    )
-
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "composio",
-            "tool_limit_per_app": 10,
-            "create_auth_configs": True,
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json()["apps_upserted"] == 2
-    assert response.json()["tools_upserted"] == 3
-    assert response.json()["skipped_apps"] == []
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="discord")
-        .one()
-    )
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="google_drive")
-        .one()
-    )
-    discord_send_message = (
-        dbsession.query(ProviderToolCatalog)
-        .filter_by(canonical_name="primitives.integrations.discord.send_message")
-        .one()
-    )
-    assert discord_send_message.confirmation_required is True
-    assert discord_send_message.action_class == "write"
-    assert discord_send_message.behavior_hints_json == [
-        "mutates_state",
-        "external",
-        "creates_resource",
-    ]
-    discord_list_guilds = (
-        dbsession.query(ProviderToolCatalog)
-        .filter_by(canonical_name="primitives.integrations.discord.list_my_guilds")
-        .one()
-    )
-    assert discord_list_guilds.confirmation_required is False
-    assert discord_list_guilds.action_class == "read"
-    assert discord_list_guilds.behavior_hints_json == ["read_only", "external"]
-
-
-@pytest.mark.anyio
-async def test_sync_route_honors_explicit_composio_subset_and_reports_missing(
-    client: AsyncClient,
-    dbsession: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "orchestra.web.api.integrations.operations.get_provider_adapter",
-        lambda *_args, **_kwargs: FakeComposioCatalogAdapter(),
-    )
-
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "composio",
-            "app_slugs": ["DISCORD", "UNKNOWN_APP"],
-            "tool_limit_per_app": 1,
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json()["apps_upserted"] == 1
-    assert response.json()["tools_upserted"] == 1
-    assert response.json()["skipped_apps"] == [
-        {"slug": "UNKNOWN_APP", "reason": "not_found"},
-    ]
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="discord")
-        .one()
-    )
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="google_drive")
-        .one_or_none()
-        is None
-    )
-
-
-@pytest.mark.anyio
-async def test_composio_full_sync_does_not_eagerly_create_auth_configs(
-    client: AsyncClient,
-    dbsession: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class NoEagerAuthConfigAdapter(FakeComposioCatalogAdapterWithAuthConfigFailure):
-        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
-            raise AssertionError("full sync should not create Composio auth configs")
-
-    monkeypatch.setattr(
-        "orchestra.web.api.integrations.operations.get_provider_adapter",
-        lambda *_args, **_kwargs: NoEagerAuthConfigAdapter(),
-    )
-
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "composio",
-            "sync_mode": "full",
-            "include_all_managed_apps": True,
-            "create_auth_configs": True,
-            "tool_limit_per_app": 1,
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    payload = response.json()
-    assert payload["status"] == "success"
-    assert payload["apps_upserted"] == 2
-    assert payload["tools_upserted"] == 2
-    assert sorted(payload["matched_app_slugs"]) == ["broken", "discord"]
-    assert payload["skipped_apps"] == []
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="discord")
-        .one()
-    )
-    assert (
-        dbsession.query(DynamicProviderApp).filter_by(canonical_app_slug="broken").one()
-    )
-
-
-@pytest.mark.anyio
-async def test_composio_partial_sync_skips_auth_config_failures(
-    client: AsyncClient,
-    dbsession: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "orchestra.web.api.integrations.operations.get_provider_adapter",
-        lambda *_args, **_kwargs: FakeComposioCatalogAdapterWithAuthConfigFailure(),
-    )
-
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "composio",
-            "app_slugs": ["DISCORD", "BROKEN"],
-            "sync_mode": "partial",
-            "create_auth_configs": True,
-            "tool_limit_per_app": 1,
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    payload = response.json()
-    assert payload["status"] == "success"
-    assert payload["apps_upserted"] == 1
-    assert payload["tools_upserted"] == 1
-    assert payload["matched_app_slugs"] == ["discord"]
-    assert payload["skipped_apps"] == [
-        {
-            "slug": "BROKEN",
-            "reason": "auth_config_failed",
-            "message": "Composio rejected managed auth config",
-        },
-    ]
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="discord")
-        .one()
-    )
-    assert (
-        dbsession.query(DynamicProviderApp)
-        .filter_by(canonical_app_slug="broken")
-        .one_or_none()
-        is None
-    )
-
-
-@pytest.mark.anyio
-async def test_sync_route_imports_pipedream_apps_and_actions(
-    client: AsyncClient,
-    dbsession: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "orchestra.web.api.integrations.operations.get_provider_adapter",
-        lambda *_args, **_kwargs: FakePipedreamCatalogAdapter(),
-    )
-
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "pipedream",
-            "app_slugs": ["slack", "missing"],
-            "component_limit_per_app": 10,
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json()["apps_upserted"] == 1
-    assert response.json()["tools_upserted"] == 1
-    assert response.json()["skipped_apps"] == [
-        {"slug": "missing", "reason": "not_found"},
-    ]
-    assert (
-        dbsession.query(DynamicProviderApp).filter_by(canonical_app_slug="slack").one()
-    )
-    tool = (
-        dbsession.query(ProviderToolCatalog)
-        .filter_by(canonical_name="primitives.integrations.slack.send_message")
-        .one()
-    )
-    assert tool.confirmation_required is True
-    assert tool.action_class == "write"
-    assert tool.behavior_hints_json == ["mutates_state", "external"]
-
-
-@pytest.mark.anyio
-async def test_sync_route_marks_all_missing_pipedream_subset_failed(
-    client: AsyncClient,
-    dbsession: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "orchestra.web.api.integrations.operations.get_provider_adapter",
-        lambda *_args, **_kwargs: FakePipedreamCatalogAdapter(),
-    )
-
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "pipedream",
-            "app_slugs": ["missing"],
-            "sync_mode": "partial",
-            "component_limit_per_app": 10,
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    payload = response.json()
-    assert payload["status"] == "failed"
-    assert payload["apps_upserted"] == 0
-    assert payload["tools_upserted"] == 0
-    assert payload["requested_app_slugs"] == ["missing"]
-    assert payload["matched_app_slugs"] == []
-    assert payload["skipped_apps"] == [
-        {"slug": "missing", "reason": "not_found"},
-    ]
-    assert (
-        dbsession.query(DynamicProviderApp).filter_by(backend_id="pipedream").count()
-        == 0
-    )
-
-
-@pytest.mark.anyio
 async def test_live_composio_oauth_connect_route_uses_backend_config(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeConnectAdapter:
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            assert toolkit_slug == "DISCORD"
+            return "authcfg_discord"
+
         def create_auth_link(
             self,
             *,
@@ -1559,24 +1281,6 @@ async def test_live_composio_oauth_connect_route_uses_backend_config(
     )
     assert backend.status_code == status.HTTP_200_OK, backend.json()
 
-    sync = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": "composio",
-            "apps": [
-                {
-                    "provider_app_id": "DISCORD",
-                    "canonical_app_slug": "discord",
-                    "display_name": "Discord",
-                    "auth_modes": ["oauth"],
-                    "raw_provider_metadata": {"auth_config_id": "authcfg_discord"},
-                },
-            ],
-        },
-    )
-    assert sync.status_code == status.HTTP_200_OK, sync.json()
-
     start = await client.post(
         "/v0/integrations/connect/start",
         headers=HEADERS,
@@ -1586,6 +1290,7 @@ async def test_live_composio_oauth_connect_route_uses_backend_config(
             "user_id": "integration-user",
             "canonical_app_slug": "discord",
             "backend_id": "composio",
+            "provider_app_id": "DISCORD",
             "requested_scopes": ["guilds"],
             "auth_mode": "oauth",
             "redirect_url": "http://localhost:3000/integrations/callback",

@@ -1,9 +1,8 @@
 """Provider-backed integration control-plane models.
 
-Builtins project contexts are the durable app/tool catalog. ``DynamicProviderApp``
-and ``ProviderToolCatalog`` remain as legacy compatibility projections for API
-clients that still read the DB-backed catalog. Connection, auth, overlay, policy,
-approval, and audit rows remain active production state.
+Builtins project contexts are the durable app/tool catalog. Orchestra keeps only
+mutable operational state: backend config, bootstrap state, connections, auth,
+overlays, policy, approvals, and audits.
 """
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ from __future__ import annotations
 import sqlalchemy as sa
 from sqlalchemy import (
     TIMESTAMP,
-    Boolean,
     Column,
     Index,
     Integer,
@@ -93,129 +91,6 @@ class IntegrationBootstrapState(Base):
             "backend_id",
             name="uq_integration_bootstrap_state_env_backend",
         ),
-    )
-
-
-class DynamicProviderApp(Base):
-    """Legacy compatibility projection of provider app catalog metadata.
-
-    Do not build new durable sync state on this table. New app catalog
-    materialization should target ``Builtins/Integrations/Apps``.
-    """
-
-    __tablename__ = "dynamic_provider_apps"
-
-    id = Column(Integer, primary_key=True)
-    backend_id = Column(String, nullable=False, index=True)
-    provider_app_id = Column(String, nullable=False)
-    canonical_app_slug = Column(String, nullable=False, index=True)
-    display_name = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
-    category = Column(String, nullable=True, index=True)
-    icon_url = Column(String, nullable=True)
-    auth_modes = Column(JSONB, nullable=False, server_default=JSON_EMPTY_ARRAY)
-    available_scopes_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_ARRAY,
-    )
-    available_actions_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_ARRAY,
-    )
-    raw_provider_metadata_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_OBJECT,
-    )
-    cache_version = Column(String, nullable=False, server_default="local-v0")
-    last_synced_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint(
-            "backend_id",
-            "provider_app_id",
-            name="uq_dynamic_provider_app_backend_provider_app",
-        ),
-        UniqueConstraint(
-            "backend_id",
-            "canonical_app_slug",
-            name="uq_dynamic_provider_app_backend_slug",
-        ),
-        Index(
-            "ix_dynamic_provider_apps_slug_display",
-            "canonical_app_slug",
-            "display_name",
-        ),
-    )
-
-
-class ProviderToolCatalog(Base):
-    """Legacy compatibility projection of provider action/tool metadata.
-
-    Do not build new durable sync state on this table. New tool catalog
-    materialization should target ``Builtins/Integrations/Tools``.
-    """
-
-    __tablename__ = "provider_tool_catalog"
-
-    id = Column(Integer, primary_key=True)
-    tool_id = Column(String, nullable=False, unique=True, index=True)
-    backend_id = Column(String, nullable=False, index=True)
-    provider_app_id = Column(String, nullable=False, index=True)
-    canonical_app_slug = Column(String, nullable=False, index=True)
-    provider_tool_id = Column(String, nullable=False)
-    unify_tool_id = Column(String, nullable=False, unique=True, index=True)
-    canonical_name = Column(String, nullable=False, unique=True, index=True)
-    function_manager_name = Column(String, nullable=False, unique=True, index=True)
-    name = Column(String, nullable=False)
-    display_name = Column(String, nullable=False)
-    description = Column(Text, nullable=False)
-    tags_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_ARRAY)
-    category = Column(String, nullable=True, index=True)
-    input_schema_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_OBJECT)
-    output_schema_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_OBJECT)
-    required_scopes_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_ARRAY,
-    )
-    action_class = Column(String, nullable=False, server_default="read", index=True)
-    behavior_hints_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_ARRAY,
-    )
-    data_categories_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_ARRAY,
-    )
-    examples_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_ARRAY)
-    provider_raw_metadata_json = Column(
-        JSONB,
-        nullable=False,
-        server_default=JSON_EMPTY_OBJECT,
-    )
-    search_text = Column(Text, nullable=False, server_default="")
-    embedding_ref = Column(String, nullable=True, index=True)
-    overlay_rank_boost = Column(Integer, nullable=False, server_default="0")
-    enabled_by_default = Column(Boolean, nullable=False, server_default=sa.text("true"))
-    confirmation_required = Column(
-        Boolean,
-        nullable=False,
-        server_default=sa.text("false"),
-    )
-    last_synced_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint(
-            "backend_id",
-            "provider_tool_id",
-            name="uq_provider_tool_catalog_backend_provider_tool",
-        ),
-        Index("ix_provider_tool_catalog_slug_name", "canonical_app_slug", "name"),
     )
 
 

@@ -215,6 +215,7 @@ class IntegrationConnectStartRequest(BaseModel):
     assistant_id: Optional[int] = None
     canonical_app_slug: str
     backend_id: Optional[str] = None
+    provider_app_id: Optional[str] = None
     requested_scopes: list[str] = Field(default_factory=list)
     auth_mode: Optional[str] = None
     api_key_fields: dict[str, str] = Field(default_factory=dict)
@@ -417,6 +418,23 @@ class ProviderToolRunRequest(BaseModel):
     conversation_id: Optional[str] = None
     approval_audit_id: Optional[int] = None
     confirmation_token: Optional[str] = None
+    backend_id: Optional[str] = None
+    provider_app_id: Optional[str] = None
+    provider_tool_id: Optional[str] = None
+    canonical_name: Optional[str] = None
+    function_manager_name: Optional[str] = None
+    app_slug: Optional[str] = None
+    canonical_app_slug: Optional[str] = None
+    app_display_name: Optional[str] = None
+    app_icon_url: Optional[str] = None
+    tool_display_name: Optional[str] = None
+    action_class: Optional[ActionClass] = None
+    behavior_hints: list[ToolBehaviorHint] = Field(default_factory=list)
+    required_scopes: list[str] = Field(default_factory=list)
+    confirmation_required: bool = False
+    input_schema: Optional[dict[str, Any]] = None
+    output_schema: Optional[dict[str, Any]] = None
+    examples: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ProviderToolConfirmationPayload(BaseModel):

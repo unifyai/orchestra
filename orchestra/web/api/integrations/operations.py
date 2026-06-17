@@ -28,19 +28,16 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.models.integration_provider_models import (
-    DynamicProviderApp,
     IntegrationBackend,
     IntegrationConnection,
     IntegrationOverlay,
     ProviderActionAudit,
-    ProviderToolCatalog,
 )
 from orchestra.integrations.providers import (
     ProviderExecutionRequest,
     get_provider_adapter,
 )
 from orchestra.web.api.integrations.schema import (
-    IntegrationAppDetailResponse,
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
     IntegrationConnectionResponse,
@@ -52,7 +49,6 @@ from orchestra.web.api.integrations.schema import (
     ProviderToolConfirmationPayload,
     ProviderToolRunRequest,
     ProviderToolRunResponse,
-    ProviderToolSearchResult,
 )
 
 READY_STATUSES = {"connected"}
@@ -67,6 +63,31 @@ class OwnerContext:
     team_id: Optional[int] = None
     user_id: Optional[str] = None
     assistant_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class RuntimeProviderTool:
+    tool_id: str
+    backend_id: str
+    provider_app_id: str
+    canonical_app_slug: str
+    app_display_name: str
+    app_icon_url: str | None
+    provider_tool_id: str
+    unify_tool_id: str
+    canonical_name: str
+    function_manager_name: str
+    name: str
+    display_name: str
+    description: str
+    action_class: str
+    behavior_hints_json: list[str]
+    required_scopes_json: list[str]
+    input_schema_json: dict[str, Any]
+    output_schema_json: dict[str, Any]
+    examples_json: list[dict[str, Any]]
+    enabled_by_default: bool = True
+    confirmation_required: bool = False
 
 
 DEFAULT_BACKENDS = [
@@ -491,189 +512,13 @@ def _sync_catalog_rows(
     session: Session,
     body: IntegrationCatalogSyncRequest,
 ) -> dict[str, int]:
-    """Import normalized provider apps/actions into the dynamic catalog."""
+    """Legacy DB projection writes are retired; Builtins logs own catalog rows."""
 
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    apps_upserted = 0
-    tools_upserted = 0
-    action_previews_by_app: dict[tuple[str, str], list[dict[str, Any]]] = {}
-
-    for app_data in body.apps:
-        provider_app_id = app_data["provider_app_id"]
-        canonical_app_slug = _slugify(
-            app_data.get("canonical_app_slug") or provider_app_id,
-        )
-        raw_metadata = dict(app_data.get("raw_provider_metadata") or {})
-        source_type = app_data.get("source_type") or body.source_type
-        raw_metadata.setdefault("source_type", source_type)
-        if source_type == "native":
-            raw_metadata.setdefault(
-                "native_metadata",
-                {
-                    "tier": app_data.get("tier"),
-                    "quality": app_data.get("quality"),
-                    "capabilities": app_data.get("capabilities") or [],
-                    "function_names": app_data.get("function_names") or [],
-                    "guidance_titles": app_data.get("guidance_titles") or [],
-                    "required_secrets": app_data.get("required_secrets") or [],
-                    "optional_secrets": app_data.get("optional_secrets") or [],
-                    "homepage": app_data.get("homepage"),
-                    "tags": app_data.get("tags") or [],
-                },
-            )
-        values = {
-            "backend_id": body.backend_id,
-            "provider_app_id": provider_app_id,
-            "canonical_app_slug": canonical_app_slug,
-            "display_name": app_data.get("display_name")
-            or canonical_app_slug.replace("_", " ").title(),
-            "description": app_data.get("description"),
-            "category": app_data.get("category"),
-            "icon_url": app_data.get("icon_url"),
-            "auth_modes": app_data.get("auth_modes") or ["oauth"],
-            "available_scopes_json": app_data.get("available_scopes") or [],
-            "available_actions_json": app_data.get("available_actions") or [],
-            "raw_provider_metadata_json": {
-                **raw_metadata,
-                **(
-                    {"api_key_schema": app_data["api_key_schema"]}
-                    if app_data.get("api_key_schema")
-                    else {}
-                ),
-            },
-            "cache_version": body.cache_version,
-        }
-        dao.upsert_catalog_app(
-            backend_id=body.backend_id,
-            provider_app_id=provider_app_id,
-            canonical_app_slug=canonical_app_slug,
-            values=values,
-        )
-        apps_upserted += 1
-
-    scoped_app_slugs = {
-        _slugify(slug)
-        for slug in body.app_slugs
-        if isinstance(slug, str) and slug.strip()
-    }
-    if not scoped_app_slugs:
-        scoped_app_slugs = {
-            _slugify(app.get("canonical_app_slug") or app.get("provider_app_id") or "")
-            for app in body.apps
-            if app.get("canonical_app_slug") or app.get("provider_app_id")
-        }
-    for tool_data in body.tools:
-        provider_app_id = tool_data["provider_app_id"]
-        canonical_app_slug = _slugify(
-            tool_data.get("canonical_app_slug") or provider_app_id,
-        )
-        name = _slugify(tool_data.get("name") or tool_data["provider_tool_id"])
-        tool_id = f"{body.backend_id}:{canonical_app_slug}:{name}"
-        provider_tool_id = tool_data["provider_tool_id"]
-        display_name = tool_data.get("display_name") or name.replace("_", " ").title()
-        description = tool_data.get("description") or display_name
-        required_scopes = tool_data.get("required_scopes") or []
-        behavior_hints = _normalize_behavior_hints(tool_data.get("behavior_hints"))
-        action_class = tool_data.get("action_class")
-        if not behavior_hints:
-            behavior_hints = _behavior_hints_from_action_class(action_class)
-        if not action_class:
-            action_class = _action_class_from_behavior_hints(behavior_hints)
-        search_text = " ".join(
-            [
-                canonical_app_slug,
-                provider_app_id,
-                name,
-                display_name,
-                description,
-                " ".join(required_scopes),
-                " ".join(behavior_hints),
-            ],
-        ).lower()
-        values = {
-            "tool_id": tool_id,
-            "backend_id": body.backend_id,
-            "provider_app_id": provider_app_id,
-            "canonical_app_slug": canonical_app_slug,
-            "provider_tool_id": provider_tool_id,
-            "unify_tool_id": f"primitives.integrations.{canonical_app_slug}.{name}",
-            "canonical_name": f"primitives.integrations.{canonical_app_slug}.{name}",
-            "function_manager_name": f"primitives_integrations__{canonical_app_slug}__{name}",
-            "name": name,
-            "display_name": display_name,
-            "description": description,
-            "tags_json": tool_data.get("tags") or [],
-            "category": tool_data.get("category"),
-            "input_schema_json": tool_data.get("input_schema") or {"type": "object"},
-            "output_schema_json": tool_data.get("output_schema") or {"type": "object"},
-            "required_scopes_json": required_scopes,
-            "action_class": action_class,
-            "behavior_hints_json": behavior_hints,
-            "data_categories_json": tool_data.get("data_categories") or [],
-            "examples_json": tool_data.get("examples") or [],
-            "provider_raw_metadata_json": tool_data.get("raw_provider_metadata") or {},
-            "search_text": tool_data.get("search_text") or search_text,
-            "embedding_ref": tool_data.get("embedding_ref"),
-            "confirmation_required": bool(
-                tool_data.get("confirmation_required", False),
-            ),
-        }
-        dao.upsert_catalog_tool(tool_id=tool_id, values=values)
-        action_previews_by_app.setdefault(
-            (body.backend_id, provider_app_id),
-            [],
-        ).append(
-            {
-                "id": tool_id,
-                "name": name,
-                "display_name": display_name,
-                "description": description,
-                "activation_state": "not_connected",
-                "action_class": values["action_class"],
-                "behavior_hints": behavior_hints,
-            },
-        )
-        tools_upserted += 1
-
-    for (
-        backend_id,
-        provider_app_id,
-    ), action_previews in action_previews_by_app.items():
-        app = dao.get_app_by_backend_provider(
-            backend_id=backend_id,
-            provider_app_id=provider_app_id,
-        )
-        if app:
-            dao.set_app_action_previews(app, action_previews)
-    apps_pruned = 0
-    tools_pruned = 0
-    if _catalog_prune_requested(body):
-        allowed_slugs = {
-            _slugify(slug)
-            for slug in body.app_slugs
-            if isinstance(slug, str) and slug.strip()
-        }
-        if not allowed_slugs:
-            allowed_slugs = {
-                _slugify(
-                    app.get("canonical_app_slug") or app.get("provider_app_id") or "",
-                )
-                for app in body.apps
-                if app.get("canonical_app_slug") or app.get("provider_app_id")
-            }
-        pruned = dao.prune_catalog_to_app_slugs(
-            backend_id=body.backend_id,
-            canonical_app_slugs=allowed_slugs,
-        )
-        apps_pruned = pruned["apps_pruned"]
-        tools_pruned += pruned["tools_pruned"]
-    session.commit()
     return {
-        "apps_upserted": apps_upserted,
-        "tools_upserted": tools_upserted,
-        "apps_pruned": apps_pruned,
-        "tools_pruned": tools_pruned,
+        "apps_upserted": 0,
+        "tools_upserted": 0,
+        "apps_pruned": 0,
+        "tools_pruned": 0,
     }
 
 
@@ -1198,7 +1043,7 @@ def _connection_to_response(
     )
 
 
-def _tool_keys(tool: ProviderToolCatalog) -> set[str]:
+def _tool_keys(tool: RuntimeProviderTool) -> set[str]:
     return {
         key
         for key in {tool.tool_id, tool.provider_tool_id, tool.canonical_name, tool.name}
@@ -1206,7 +1051,7 @@ def _tool_keys(tool: ProviderToolCatalog) -> set[str]:
     }
 
 
-def _default_tool_policy_level(tool: ProviderToolCatalog) -> str:
+def _default_tool_policy_level(tool: RuntimeProviderTool) -> str:
     if not tool.enabled_by_default:
         return "forbidden"
     if tool.confirmation_required or tool.action_class in {
@@ -1246,7 +1091,7 @@ def _disabled_action_ids(conn: IntegrationConnection | None) -> list[str]:
 
 
 def _effective_tool_policy_level(
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: IntegrationConnection | None,
 ) -> str:
     policy = _connection_tool_policy(conn)
@@ -1342,7 +1187,7 @@ def _log_composio_connect_failure(
     stage: str,
     connection: IntegrationConnection,
     owner: OwnerContext,
-    app: DynamicProviderApp | None,
+    app: Any | None,
     exc: Exception,
 ) -> None:
     status_code, response_text = _provider_exception_details(exc)
@@ -1364,7 +1209,7 @@ def _log_composio_connect_failure(
 def _provider_connect_url(
     *,
     backend: IntegrationBackend | None,
-    app: DynamicProviderApp | None = None,
+    app: Any | None = None,
     owner: OwnerContext,
     connection: IntegrationConnection,
     redirect_url: Optional[str],
@@ -1425,11 +1270,6 @@ def _provider_connect_url(
                     raise ValueError(
                         f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
                     )
-                if app:
-                    app.raw_provider_metadata_json = {
-                        **(app.raw_provider_metadata_json or {}),
-                        "auth_config_id": str(auth_config_id),
-                    }
             try:
                 connect_url, connected_account_id, error = adapter.create_auth_link(
                     user_id=external_user_id,
@@ -1535,213 +1375,9 @@ def _best_connection(
     return conn
 
 
-def _tool_to_search_result(
-    *,
-    tool: ProviderToolCatalog,
-    app: DynamicProviderApp | None,
-    conn: IntegrationConnection | None,
-    match_reason: str = "app detail",
-    score: float = 0.0,
-) -> ProviderToolSearchResult:
-    return ProviderToolSearchResult(
-        tool_id=tool.tool_id,
-        backend_id=tool.backend_id,
-        provider_app_id=tool.provider_app_id,
-        provider_tool_id=tool.provider_tool_id,
-        canonical_name=tool.canonical_name,
-        function_manager_name=tool.function_manager_name,
-        app_slug=tool.canonical_app_slug,
-        app_display_name=app.display_name if app else tool.canonical_app_slug,
-        app_icon_url=app.icon_url if app else None,
-        tool_display_name=tool.display_name,
-        description=tool.description,
-        match_reason=match_reason,
-        activation_state=_activation_state(tool, conn),
-        action_class=tool.action_class,
-        behavior_hints=tool.behavior_hints_json or [],
-        required_scopes=tool.required_scopes_json or [],
-        connection_id=conn.connection_id if conn else None,
-        confirmation_required=_tool_requires_confirmation(tool, conn, None),
-        approval_level=_effective_tool_policy_level(tool, conn),
-        score=score,
-    )
-
-
-def _scope_label(scope_id: str) -> str:
-    cleaned = (
-        scope_id.replace(":", " ").replace(".", " ").replace("_", " ").replace("-", " ")
-    )
-    return " ".join(part.capitalize() for part in cleaned.split()) or scope_id
-
-
-def _derive_scopes(
-    app: DynamicProviderApp,
-    tools: list[ProviderToolCatalog],
-) -> list[dict[str, Any]]:
-    scopes_by_id: dict[str, dict[str, Any]] = {}
-    for index, scope in enumerate(app.available_scopes_json or []):
-        if isinstance(scope, str):
-            scope_id = scope
-            scopes_by_id[scope_id] = {
-                "id": scope_id,
-                "label": _scope_label(scope_id),
-                "required": True,
-            }
-        elif isinstance(scope, dict):
-            scope_id = str(
-                scope.get("id")
-                or scope.get("name")
-                or scope.get("scope")
-                or f"scope-{index}",
-            )
-            scopes_by_id[scope_id] = {
-                "id": scope_id,
-                "label": scope.get("label")
-                or scope.get("display_name")
-                or _scope_label(scope_id),
-                "description": scope.get("description"),
-                "required": scope.get("required", True),
-            }
-    for tool in tools:
-        for scope_id in tool.required_scopes_json or []:
-            if not scope_id:
-                continue
-            scopes_by_id.setdefault(
-                str(scope_id),
-                {
-                    "id": str(scope_id),
-                    "label": _scope_label(str(scope_id)),
-                    "required": True,
-                },
-            )
-    return list(scopes_by_id.values())
-
-
-def _scope_ids(scopes: list[dict[str, Any]]) -> list[str]:
-    return [str(scope["id"]) for scope in scopes if scope.get("id")]
-
-
-def _effective_requested_scopes(
-    app: DynamicProviderApp,
-    tools: list[ProviderToolCatalog],
-    requested_scopes: list[str],
-) -> list[str]:
-    if requested_scopes:
-        return requested_scopes
-    return _scope_ids(_derive_scopes(app, tools))
-
-
-def _tool_preview(
-    tool: ProviderToolCatalog,
-    conn: IntegrationConnection | None,
-) -> dict[str, Any]:
-    return {
-        "id": tool.tool_id,
-        "name": tool.name,
-        "display_name": tool.display_name,
-        "description": tool.description,
-        "activation_state": _activation_state(tool, conn),
-        "action_class": tool.action_class,
-        "behavior_hints": tool.behavior_hints_json or [],
-        "provider_tool_id": tool.provider_tool_id,
-        "canonical_name": tool.canonical_name,
-        "required_scopes": tool.required_scopes_json or [],
-        "confirmation_required": _tool_requires_confirmation(tool, conn, None),
-        "approval_level": _effective_tool_policy_level(tool, conn),
-    }
-
-
-def _app_metadata(app: DynamicProviderApp) -> dict[str, Any]:
-    return (
-        app.raw_provider_metadata_json
-        if isinstance(app.raw_provider_metadata_json, dict)
-        else {}
-    )
-
-
-def _app_source_type(app: DynamicProviderApp) -> str:
-    """Return the explicit source lane for unified app discovery.
-
-    Native apps are Unity-deploy packages projected into the global catalog for
-    search only; provider-backed apps are third-party catalog rows with
-    connection and policy state owned by Orchestra.
-    """
-
-    metadata = _app_metadata(app)
-    if metadata.get("source_type") == "native" or app.backend_id == "unity_native":
-        return "native"
-    return "third_party"
-
-
-def _app_source_label(app: DynamicProviderApp) -> str:
-    return "Native" if _app_source_type(app) == "native" else "Third-party"
-
-
 def _active_backend_ids(session: Session) -> set[str]:
     seed_default_provider_catalog(session)
     return IntegrationProviderDAO(session).active_backend_ids()
-
-
-def get_app_detail(
-    session: Session,
-    *,
-    canonical_app_slug: str,
-    owner: OwnerContext,
-) -> IntegrationAppDetailResponse:
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    app = dao.get_app_by_slug(canonical_app_slug)
-    if not app:
-        raise ValueError(f"Unknown integration app: {canonical_app_slug}")
-    overlay = dao.get_overlay(canonical_app_slug)
-    conn = _best_connection(
-        session,
-        owner=owner,
-        canonical_app_slug=canonical_app_slug,
-        backend_id=app.backend_id,
-    )
-    tools = dao.list_tools(
-        canonical_app_slug=canonical_app_slug,
-        backend_id=app.backend_id,
-    )
-    derived_scopes = _derive_scopes(app, tools)
-    tool_results = [
-        _tool_to_search_result(
-            tool=tool,
-            app=app,
-            conn=conn,
-            match_reason="app detail",
-            score=1.0,
-        )
-        for tool in tools
-    ]
-    metadata = _app_metadata(app)
-    source_type = _app_source_type(app)
-    return IntegrationAppDetailResponse(
-        backend_id=app.backend_id,
-        provider_app_id=app.provider_app_id,
-        canonical_app_slug=app.canonical_app_slug,
-        display_name=app.display_name,
-        source_type=source_type,
-        source_label=_app_source_label(app),
-        description=app.description,
-        category=app.category,
-        icon_url=app.icon_url,
-        auth_modes=app.auth_modes or [],
-        available_scopes=derived_scopes,
-        available_actions=[_tool_preview(tool, conn) for tool in tools],
-        tool_count=len(tools),
-        api_key_schema=metadata.get("api_key_schema"),
-        connection_status=conn.status if conn else None,
-        connection_id=conn.connection_id if conn else None,
-        external_account_label=conn.external_account_label if conn else None,
-        overlay=overlay.display_overrides_json if overlay else {},
-        native_metadata=(
-            metadata.get("native_metadata") if source_type == "native" else {}
-        ),
-        tools=[tool.model_dump() for tool in tool_results],
-        derived_scopes=derived_scopes,
-    )
 
 
 def start_connection(
@@ -1750,6 +1386,7 @@ def start_connection(
     owner: OwnerContext,
     canonical_app_slug: str,
     backend_id: Optional[str],
+    provider_app_id: Optional[str],
     requested_scopes: list[str],
     auth_mode: Optional[str],
     api_key_fields: dict[str, str],
@@ -1759,27 +1396,18 @@ def start_connection(
 ) -> tuple[IntegrationConnectionResponse, Optional[str], str, bool, list[str]]:
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
-    app = dao.get_app_by_slug(canonical_app_slug, backend_id=backend_id)
-    if not app:
-        raise ValueError(f"Unknown integration app: {canonical_app_slug}")
-    backend = dao.get_backend(app.backend_id)
+    resolved_backend_id = backend_id or "composio"
+    resolved_provider_app_id = provider_app_id or canonical_app_slug
+    backend = dao.get_backend(resolved_backend_id)
     if not backend or backend.status != "enabled":
-        raise ValueError(f"Integration backend is disabled: {app.backend_id}")
-    if _app_source_type(app) == "native":
+        raise ValueError(f"Integration backend is disabled: {resolved_backend_id}")
+    if resolved_backend_id == "unity_native":
         raise ValueError(
             "Native Unity-deploy integrations are deployment-enabled and do not create provider connections.",
         )
 
-    chosen_auth_mode = auth_mode or ((app.auth_modes or ["oauth"])[0])
-    tools = dao.list_tools(
-        canonical_app_slug=app.canonical_app_slug,
-        backend_id=app.backend_id,
-    )
-    effective_requested_scopes = _effective_requested_scopes(
-        app,
-        tools,
-        requested_scopes,
-    )
+    chosen_auth_mode = auth_mode or "oauth"
+    effective_requested_scopes = requested_scopes
     status = (
         "connected" if chosen_auth_mode == "api_key" and api_key_fields else "pending"
     )
@@ -1793,17 +1421,15 @@ def start_connection(
             "team_id": owner.team_id,
             "user_id": owner.user_id,
             "assistant_id": owner.assistant_id,
-            "canonical_app_slug": app.canonical_app_slug,
-            "backend_id": app.backend_id,
-            "provider_app_id": app.provider_app_id,
+            "canonical_app_slug": canonical_app_slug,
+            "backend_id": resolved_backend_id,
+            "provider_app_id": resolved_provider_app_id,
             "provider_connection_id": (
                 f"local_{uuid.uuid4().hex}" if status == "connected" else None
             ),
             "status": status,
             "granted_scopes_json": effective_requested_scopes,
-            "enabled_capabilities_json": _capability_ids(
-                app.available_actions_json or [],
-            ),
+            "enabled_capabilities_json": [],
             "credential_storage": credential_storage,
             "secret_refs_json": {key: "<redacted>" for key in api_key_fields},
             "external_account_label": _normalize_account_label(account_label),
@@ -1819,7 +1445,7 @@ def start_connection(
     if chosen_auth_mode == "oauth":
         connect_url = _provider_connect_url(
             backend=backend,
-            app=app,
+            app=None,
             owner=owner,
             connection=connection,
             redirect_url=redirect_url,
@@ -2031,30 +1657,26 @@ def get_connection_tool_policy(
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
     _assert_connection_owner(dao, conn, owner)
-    app = dao.get_app_by_slug(conn.canonical_app_slug, backend_id=conn.backend_id)
-    tools = dao.list_tools(
-        canonical_app_slug=conn.canonical_app_slug,
-        backend_id=conn.backend_id,
-    )
+    policy = _connection_tool_policy(conn)
     return IntegrationToolPolicyResponse(
         connection_id=conn.connection_id,
         canonical_app_slug=conn.canonical_app_slug,
-        app_display_name=app.display_name if app else None,
+        app_display_name=conn.canonical_app_slug.replace("_", " ").title(),
         account_label=conn.external_account_label,
         policies=[
             IntegrationToolPolicyItem(
-                tool_id=tool.tool_id,
-                provider_tool_id=tool.provider_tool_id,
-                canonical_name=tool.canonical_name,
-                display_name=tool.display_name,
-                action_class=tool.action_class,
-                behavior_hints=tool.behavior_hints_json or [],
-                default_approval_level=_default_tool_policy_level(tool),
-                approval_level=_effective_tool_policy_level(tool, conn),
-                activation_state=_activation_state(tool, conn),
-                confirmation_required=_tool_requires_confirmation(tool, conn, None),
+                tool_id=tool_id,
+                provider_tool_id=tool_id,
+                canonical_name=tool_id,
+                display_name=tool_id.rsplit(":", 1)[-1].replace("_", " ").title(),
+                action_class="write",
+                behavior_hints=[],
+                default_approval_level="specific_approval",
+                approval_level=approval_level,
+                activation_state="connected_ready",
+                confirmation_required=approval_level == "specific_approval",
             )
-            for tool in tools
+            for tool_id, approval_level in sorted(policy.items())
         ],
     )
 
@@ -2070,28 +1692,12 @@ def patch_connection_tool_policy(
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
     _assert_connection_owner(dao, conn, owner)
-    tools = dao.list_tools(
-        canonical_app_slug=conn.canonical_app_slug,
-        backend_id=conn.backend_id,
-    )
     policy = {} if body.reset_to_defaults else dict(_connection_tool_policy(conn))
-    tools_by_key: dict[str, ProviderToolCatalog] = {}
-    for tool in tools:
-        for key in _tool_keys(tool):
-            tools_by_key[key] = tool
-
     if body.bulk_approval_level:
-        selected_action_classes = set(body.action_classes or [])
-        for tool in tools:
-            if (
-                selected_action_classes
-                and tool.action_class not in selected_action_classes
-            ):
-                continue
-            policy[tool.tool_id] = body.bulk_approval_level
+        for tool_id in list(policy):
+            policy[tool_id] = body.bulk_approval_level
     for tool_id, approval_level in body.tool_policies.items():
-        tool = tools_by_key.get(tool_id)
-        policy[tool.tool_id if tool else tool_id] = approval_level
+        policy[tool_id] = approval_level
 
     dao.set_connection_tool_policy(conn, policy)
     session.commit()
@@ -2112,13 +1718,9 @@ def _set_policy_for_approval_scope(
             return False
         policy[audit.tool_id] = approval_level
     elif scope == "app_action_class":
-        tools = dao.list_tools(
-            canonical_app_slug=audit.canonical_app_slug,
-            backend_id=audit.backend_id,
-        )
-        for tool in tools:
-            if tool.action_class == audit.action_class:
-                policy[tool.tool_id] = approval_level
+        if not audit.tool_id:
+            return False
+        policy[audit.tool_id] = approval_level
     else:
         return False
     dao.set_connection_tool_policy(conn, policy)
@@ -2256,7 +1858,7 @@ def deny_tool_execution(
 
 
 def _activation_state(
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: Optional[IntegrationConnection],
 ) -> str:
     if not tool.enabled_by_default:
@@ -2278,7 +1880,7 @@ def _policy_error(
     *,
     backend: IntegrationBackend | None,
     overlay: IntegrationOverlay | None,
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: IntegrationConnection | None,
     owner: OwnerContext,
 ) -> dict[str, Any] | None:
@@ -2309,7 +1911,7 @@ def _policy_error(
 
 
 def _tool_requires_confirmation(
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: IntegrationConnection | None,
     overlay: IntegrationOverlay | None,
 ) -> bool:
@@ -2327,45 +1929,6 @@ def _tool_requires_confirmation(
     policy = (overlay.action_policy_json if overlay else {}) or {}
     confirm_actions = set(policy.get("confirmation_required_actions") or [])
     return bool(confirm_actions.intersection(_tool_keys(tool)))
-
-
-def _tool_search_result(
-    *,
-    tool: ProviderToolCatalog,
-    app: DynamicProviderApp | None,
-    conn: IntegrationConnection | None,
-    activation_state: str,
-    match_reason: str,
-    score: float,
-    include_schema: bool = False,
-) -> ProviderToolSearchResult:
-    result = ProviderToolSearchResult(
-        tool_id=tool.tool_id,
-        backend_id=tool.backend_id,
-        provider_app_id=tool.provider_app_id,
-        provider_tool_id=tool.provider_tool_id,
-        canonical_name=tool.canonical_name,
-        function_manager_name=tool.function_manager_name,
-        app_slug=tool.canonical_app_slug,
-        app_display_name=app.display_name if app else tool.canonical_app_slug,
-        app_icon_url=app.icon_url if app else None,
-        tool_display_name=tool.display_name,
-        description=tool.description,
-        match_reason=match_reason,
-        activation_state=activation_state,
-        action_class=tool.action_class,
-        behavior_hints=tool.behavior_hints_json or [],
-        required_scopes=tool.required_scopes_json or [],
-        connection_id=conn.connection_id if conn else None,
-        confirmation_required=_tool_requires_confirmation(tool, conn, None),
-        approval_level=_effective_tool_policy_level(tool, conn),
-        score=score,
-    )
-    if include_schema:
-        result.input_schema = tool.input_schema_json or {}
-        result.output_schema = tool.output_schema_json or {}
-        result.examples = tool.examples_json or []
-    return result
 
 
 def _redact_summary(payload: dict[str, Any]) -> str:
@@ -2408,6 +1971,45 @@ def _provider_request_summary(error: dict[str, Any] | None) -> dict[str, Any]:
     return summary if isinstance(summary, dict) else {}
 
 
+def _runtime_tool_from_request(
+    tool_id: str,
+    body: ProviderToolRunRequest,
+) -> RuntimeProviderTool:
+    parts = tool_id.split(":", 2)
+    backend_id = body.backend_id or (parts[0] if len(parts) == 3 else "composio")
+    app_slug = (
+        body.app_slug
+        or body.canonical_app_slug
+        or (parts[1] if len(parts) == 3 else "unknown")
+    )
+    name = parts[2] if len(parts) == 3 else tool_id
+    provider_tool_id = body.provider_tool_id or f"{app_slug}.{name}"
+    canonical_name = body.canonical_name or f"primitives.integrations.{app_slug}.{name}"
+    return RuntimeProviderTool(
+        tool_id=tool_id,
+        backend_id=backend_id,
+        provider_app_id=body.provider_app_id or app_slug,
+        canonical_app_slug=app_slug,
+        app_display_name=body.app_display_name or app_slug.replace("_", " ").title(),
+        app_icon_url=body.app_icon_url,
+        provider_tool_id=provider_tool_id,
+        unify_tool_id=canonical_name,
+        canonical_name=canonical_name,
+        function_manager_name=body.function_manager_name
+        or f"primitives_integrations__{app_slug}__{name}",
+        name=name,
+        display_name=body.tool_display_name or name.replace("_", " ").title(),
+        description=body.tool_display_name or name.replace("_", " ").title(),
+        action_class=body.action_class or "write",
+        behavior_hints_json=body.behavior_hints,
+        required_scopes_json=body.required_scopes,
+        input_schema_json=body.input_schema or {},
+        output_schema_json=body.output_schema or {},
+        examples_json=body.examples,
+        confirmation_required=body.confirmation_required,
+    )
+
+
 def _confirmation_ttl_seconds() -> int:
     try:
         return int(os.getenv("INTEGRATION_CONFIRMATION_TTL_SECONDS", "900"))
@@ -2419,7 +2021,7 @@ def _confirmation_expires_at() -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=_confirmation_ttl_seconds())
 
 
-def _approval_options(tool: ProviderToolCatalog) -> list[str]:
+def _approval_options(tool: RuntimeProviderTool) -> list[str]:
     options = ["once", "tool"]
     if tool.action_class in {"read", "sensitive_read"}:
         options.append("app_action_class")
@@ -2429,8 +2031,8 @@ def _approval_options(tool: ProviderToolCatalog) -> list[str]:
 def _build_confirmation_payload(
     *,
     audit: ProviderActionAudit,
-    tool: ProviderToolCatalog,
-    app: DynamicProviderApp | None,
+    tool: RuntimeProviderTool,
+    app: Any | None,
     conn: IntegrationConnection | None,
     confirmation_token: str | None,
 ) -> ProviderToolConfirmationPayload:
@@ -2439,7 +2041,7 @@ def _build_confirmation_payload(
         connection_id=conn.connection_id if conn else None,
         tool_id=tool.tool_id,
         app_slug=tool.canonical_app_slug,
-        app_display_name=app.display_name if app else None,
+        app_display_name=app.display_name if app else tool.app_display_name,
         account_label=conn.external_account_label if conn else None,
         tool_display_name=tool.display_name,
         action_class=tool.action_class,
@@ -2463,7 +2065,7 @@ class ApprovalResolution:
 def _audit_values(
     *,
     body: ProviderToolRunRequest,
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: IntegrationConnection | None,
     status: str,
     start: float,
@@ -2504,7 +2106,7 @@ def _audit_values(
 def _approved_audit_matches(
     *,
     audit: ProviderActionAudit,
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: IntegrationConnection | None,
     arguments_hash: str,
 ) -> bool:
@@ -2528,7 +2130,7 @@ def _resolve_tool_approval(
     *,
     dao: IntegrationProviderDAO,
     body: ProviderToolRunRequest,
-    tool: ProviderToolCatalog,
+    tool: RuntimeProviderTool,
     conn: IntegrationConnection | None,
     overlay: IntegrationOverlay | None,
     start: float,
@@ -2595,10 +2197,7 @@ def _resolve_tool_approval(
         confirmation=_build_confirmation_payload(
             audit=audit,
             tool=tool,
-            app=dao.get_app_by_slug(
-                tool.canonical_app_slug,
-                backend_id=tool.backend_id,
-            ),
+            app=None,
             conn=conn,
             confirmation_token=confirmation_token,
         ),
@@ -2622,9 +2221,7 @@ def run_tool(
         user_id=body.user_id,
         assistant_id=body.assistant_id,
     )
-    tool = dao.get_tool(tool_id)
-    if not tool:
-        raise ValueError(f"Unknown provider tool: {tool_id}")
+    tool = _runtime_tool_from_request(tool_id, body)
     backend = dao.get_backend(tool.backend_id)
     overlay = dao.get_overlay(tool.canonical_app_slug)
     conn = _best_connection(
