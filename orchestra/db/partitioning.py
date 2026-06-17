@@ -228,6 +228,157 @@ def drop_partitions_for_owned_projects(
     return dropped
 
 
+# --------------------------------------------------------------------------- #
+# In-place conversion of populated legacy (non-partitioned) tables.
+# --------------------------------------------------------------------------- #
+# Target composite primary keys (the partition key must be part of the PK).
+_NEW_PK: dict[str, list[str]] = {
+    "log_event": ["project_id", "id"],
+    "log_event_context": ["project_id", "log_event_id", "context_id"],
+    "embedding": ["project_id", "id"],
+    "embedding_queue": ["project_id", "id"],
+}
+# Child table -> the column whose value joins to ``log_event.id`` to derive the
+# denormalized ``project_id`` during backfill.
+_PROJECT_BACKFILL_FK: dict[str, str] = {
+    "log_event_context": "log_event_id",
+    "embedding": "ref_id",
+    "embedding_queue": "ref_id",
+}
+# Suffix applied to the legacy table's pre-existing indexes so the freshly
+# created partitioned parent can claim the canonical (schema-global) index
+# names; the legacy indexes are then attached to the parent's partitioned
+# indexes by definition match (no rebuild).
+_PRE_PARTITION_SUFFIX = "_prepart"
+
+
+def _constraints(conn: Connection, table: str, contype: str) -> list[str]:
+    return list(
+        conn.execute(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = to_regclass(:t) AND contype = :ct",
+            ),
+            {"t": table, "ct": contype},
+        ).scalars(),
+    )
+
+
+def _fks_referencing(conn: Connection, target: str) -> list[tuple[str, str]]:
+    rows = conn.execute(
+        text(
+            "SELECT conrelid::regclass::text AS tbl, conname FROM pg_constraint "
+            "WHERE contype = 'f' AND confrelid = to_regclass(:t)",
+        ),
+        {"t": target},
+    ).all()
+    return [(r[0], r[1]) for r in rows]
+
+
+def _column_names(conn: Connection, table: str) -> list[str]:
+    return list(
+        conn.execute(
+            text(
+                "SELECT attname FROM pg_attribute "
+                "WHERE attrelid = to_regclass(:t) AND attnum > 0 AND NOT attisdropped "
+                "ORDER BY attnum",
+            ),
+            {"t": table},
+        ).scalars(),
+    )
+
+
+def _index_names(conn: Connection, table: str) -> list[str]:
+    return list(
+        conn.execute(
+            text("SELECT indexname FROM pg_indexes WHERE tablename = :t"),
+            {"t": table},
+        ).scalars(),
+    )
+
+
+def convert_legacy_to_partitioned(conn: Connection) -> None:
+    """Convert the populated, non-partitioned kernel tables to partitioned form.
+
+    In-place, no bulk data copy and no index rebuild: each legacy table is
+    reshaped to the partitioned schema and then attached as the ``DEFAULT``
+    partition of a freshly-created partitioned parent, so its existing GIN/HNSW
+    indexes ride along. Designed to run inside the alembic migration transaction
+    (brief exclusive locks; acceptable with a maintenance window).
+
+    Assumes ``log_event`` carries ``project_id`` already and that the child
+    tables derive theirs from it. ``log_unique_constraint`` is not partitioned;
+    it only loses its FK to ``log_event`` (handled in phase 1).
+    """
+    from orchestra.db.meta import meta
+    from orchestra.db.models import load_all_models
+
+    load_all_models()
+
+    # Phase 1: drop every FK that points at log_event (its PK is changing to a
+    # composite key that single-column FKs can no longer reference).
+    for tbl, conname in _fks_referencing(conn, "log_event"):
+        conn.execute(text(f'ALTER TABLE {tbl} DROP CONSTRAINT "{conname}"'))
+
+    # Phase 2: denormalize project_id onto the child tables (log_event intact).
+    for child, fk_col in _PROJECT_BACKFILL_FK.items():
+        conn.execute(
+            text(f'ALTER TABLE "{child}" ADD COLUMN IF NOT EXISTS project_id integer'),
+        )
+        conn.execute(
+            text(
+                f'UPDATE "{child}" c SET project_id = le.project_id '
+                f"FROM log_event le WHERE c.{fk_col} = le.id AND c.project_id IS NULL",
+            ),
+        )
+        # Rows whose log_event no longer exists (orphans) cannot be placed in a
+        # partition; drop them.
+        conn.execute(text(f'DELETE FROM "{child}" WHERE project_id IS NULL'))
+        conn.execute(
+            text(f'ALTER TABLE "{child}" ALTER COLUMN project_id SET NOT NULL'),
+        )
+
+    # Phase 3: reshape each table and attach it as the DEFAULT partition.
+    for table in PARTITIONED_TABLES:
+        default = default_partition_name(table)
+
+        # Drop old PK + unique constraints (replaced by composite ones that
+        # include project_id), and log_event's own outbound project FK (the
+        # partitioned parent re-declares it).
+        for pk in _constraints(conn, table, "p"):
+            conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{pk}"'))
+        for uq in _constraints(conn, table, "u"):
+            conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{uq}"'))
+        if table == "log_event":
+            for fk in _constraints(conn, table, "f"):
+                conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{fk}"'))
+
+        # Ensure the composite-PK columns are NOT NULL; ATTACH auto-creates the
+        # parent's PK/UNIQUE indexes on the partition, so we must NOT add our own
+        # PK here (that would be a second primary key and ATTACH would reject it).
+        for col in _NEW_PK[table]:
+            conn.execute(
+                text(f'ALTER TABLE "{table}" ALTER COLUMN {col} SET NOT NULL'),
+            )
+
+        # Free the canonical (schema-global) index names for the parent by
+        # suffixing the legacy table's indexes; they remain valid and get
+        # attached to the parent's partitioned indexes by definition match.
+        for idx in _index_names(conn, table):
+            if not idx.endswith(_PRE_PARTITION_SUFFIX):
+                conn.execute(
+                    text(
+                        f'ALTER INDEX "{idx}" RENAME TO "{idx}{_PRE_PARTITION_SUFFIX}"'
+                    ),
+                )
+
+        conn.execute(text(f'ALTER TABLE "{table}" RENAME TO "{default}"'))
+        meta.tables[table].create(bind=conn)
+        conn.execute(
+            text(f'ALTER TABLE "{table}" ATTACH PARTITION "{default}" DEFAULT'),
+        )
+
+
 def child_partitions(conn: Connection, table: str) -> list[str]:
     """Return the names of all child partitions currently attached to ``table``."""
     rows = conn.execute(
@@ -317,12 +468,16 @@ def promote_project_to_partition(
             ),
         )
         # Move the project's rows directly into the standalone table (inserting
-        # into the parent would just route them back to DEFAULT).
+        # into the parent would just route them back to DEFAULT). Use an explicit
+        # column list -- a partition's physical column order can differ from the
+        # parent's (e.g. when project_id was appended via ALTER ADD COLUMN), so a
+        # positional ``SELECT *`` would misalign columns.
+        cols = ", ".join(f'"{c}"' for c in _column_names(conn, table))
         conn.execute(
             text(
                 f"WITH moved AS ("
                 f'  DELETE FROM "{default_part}" WHERE project_id = {pid} RETURNING *'
-                f') INSERT INTO "{partition}" SELECT * FROM moved',
+                f') INSERT INTO "{partition}" ({cols}) SELECT {cols} FROM moved',
             ),
         )
         conn.execute(
