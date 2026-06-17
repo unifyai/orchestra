@@ -28,6 +28,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import NamedTuple
 
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
 # Top-level prefix for shared-team contexts (mirrors unity's ContextRegistry).
 TEAM_CONTEXT_PREFIX = "Teams"
 # Path component marking a cross-assistant / cross-user aggregation view.
@@ -89,3 +92,37 @@ def owner_from_context_name(name: str) -> Owner:
             return Owner(OwnerScope.ASSISTANT, int(parts[i]))
 
     return Owner(OwnerScope.SYSTEM, None)
+
+
+def backfill_context_owners(conn: Connection, batch: int = 5000) -> int:
+    """Classify every not-yet-classified context from its name.
+
+    Sets ``owner_scope`` / ``owner_id`` on ``context`` rows where ``owner_scope``
+    is NULL, using :func:`owner_from_context_name`. Batched by id and idempotent
+    (re-runs only touch still-NULL rows). Returns the number of rows updated.
+    """
+    updated = 0
+    last_id = 0
+    while True:
+        rows = conn.execute(
+            text(
+                "SELECT id, name FROM context "
+                "WHERE owner_scope IS NULL AND id > :last "
+                "ORDER BY id LIMIT :lim",
+            ),
+            {"last": last_id, "lim": batch},
+        ).fetchall()
+        if not rows:
+            break
+        for ctx_id, name in rows:
+            owner = owner_from_context_name(name or "")
+            conn.execute(
+                text(
+                    "UPDATE context SET owner_scope = :s, owner_id = :oid "
+                    "WHERE id = :cid",
+                ),
+                {"s": owner.scope.value, "oid": owner.owner_id, "cid": ctx_id},
+            )
+            updated += 1
+        last_id = rows[-1][0]
+    return updated
