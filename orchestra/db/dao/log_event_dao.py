@@ -1795,8 +1795,10 @@ class LogEventDAO:
 
             # Embedding cleanup before hard delete: cancel pending queue items
             # (prevents worker race conditions), soft-delete embeddings (excludes
-            # from HNSW search immediately), and null ref_ids (avoids per-row
-            # SET NULL trigger overhead when log_event rows are deleted).
+            # them from HNSW search immediately and marks them for the index-
+            # maintenance worker to reclaim), and null their now-dangling ref_ids
+            # (the embedding->log_event FK was removed for partitioning, so the
+            # delete below no longer touches the embedding table itself).
             from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(self.session)

@@ -110,20 +110,24 @@ class EmbeddingDAO:
                 total += result.rowcount
                 self.session.commit()
         else:
+            # ``project_id`` is denormalized onto embedding, so soft-delete by it
+            # directly: this prunes to the project's partition and uses the
+            # composite PK to page through batches. (A ctid-based batch is unsafe
+            # here because ctid is ambiguous across partitions.)
             while True:
                 result = self.session.execute(
                     text(
                         """
                         WITH batch AS (
-                            SELECT e.ctid FROM embedding e
-                            JOIN log_event le ON e.ref_id = le.id
-                            WHERE le.project_id = :project_id
-                              AND e.is_deleted = false
+                            SELECT project_id, id FROM embedding
+                            WHERE project_id = :project_id
+                              AND is_deleted = false
                             LIMIT :batch_size
                         )
-                        UPDATE embedding
+                        UPDATE embedding e
                         SET is_deleted = true
-                        WHERE ctid IN (SELECT ctid FROM batch)
+                        FROM batch b
+                        WHERE e.project_id = b.project_id AND e.id = b.id
                     """,
                     ),
                     {"project_id": project_id, "batch_size": batch_size},
@@ -144,9 +148,12 @@ class EmbeddingDAO:
     ) -> int:
         """Null out embedding ref_ids in bulk for the given scope.
 
-        Must be called BEFORE hard-deleting log events. This prevents the
-        per-row FK SET NULL trigger from firing during deletion, which would
-        cause massive overhead (index updates on the embedding table per row).
+        Called when the referenced log events are being hard-deleted. The
+        embedding.ref_id -> log_event FK was removed when the tables were
+        partitioned, so deleting a log event no longer touches the embedding;
+        nulling ref_id explicitly records that the reference is gone (callers
+        also soft-delete these embeddings so the index-maintenance worker
+        reclaims them).
         """
         self._validate_scope(log_event_ids, project_id)
 
