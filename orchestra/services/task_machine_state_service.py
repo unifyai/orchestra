@@ -1994,6 +1994,7 @@ def _upsert_machine_row(
 
     session.add(
         LogEventContext(
+            project_id=project_id,
             log_event_id=log_event.id,
             context_id=context_id,
         ),

@@ -278,6 +278,22 @@ class UserAccountCleanupService:
 
         self._delete_user_table_dependencies(user_id, billing_account_id)
 
+        # Drop dedicated partitions of the user's giant projects before the
+        # cascade so their log/embedding data is removed in O(1) rather than
+        # row-by-row through the project -> log_event cascade.
+        from orchestra.db.partitioning import drop_partitions_for_owned_projects
+
+        dropped = drop_partitions_for_owned_projects(
+            self.session.connection(),
+            user_id=user_id,
+        )
+        if dropped:
+            logger.info(
+                "Dropped partitions for user %s giant projects: %s",
+                user_id,
+                dropped,
+            )
+
         self.session.execute(
             text('DELETE FROM "user" WHERE id = :uid'),
             {"uid": user_id},

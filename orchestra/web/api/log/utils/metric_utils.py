@@ -876,7 +876,9 @@ def _compute_metric_for_key_grouped(
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(
+            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+        ).filter(
             LogEventContext.context_id == context_id,
         )
 
@@ -1028,7 +1030,9 @@ def compute_metric_for_key(
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(
+            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+        ).filter(
             LogEventContext.context_id == context_id,
         )
 
@@ -1207,7 +1211,9 @@ def compute_metric_bulk(
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(
+            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+        ).filter(
             LogEventContext.context_id == context_id,
         )
 

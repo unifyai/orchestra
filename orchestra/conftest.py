@@ -142,6 +142,15 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
         meta.create_all(engine)
     finally:
         _restore_detached_indexes(removed_hnsw_indexes)
+    # The kernel log/embedding tables are LIST(project_id)-partitioned. create_all
+    # builds only the partitioned parents; create a DEFAULT partition per table so
+    # tests can insert rows for any project without provisioning a dedicated
+    # per-project partition.
+    from orchestra.db.partitioning import PARTITIONED_TABLES, ensure_partitions
+
+    with engine.begin() as conn:
+        for _ptable in PARTITIONED_TABLES:
+            ensure_partitions(conn, _ptable)
     with engine.begin() as conn:
         # Create the hamming_distance function for tests
         conn.execute(
@@ -1796,6 +1805,7 @@ def large_repairs_dataset(
                 created_event_ids.append(log_event.id)
                 session.add(
                     LogEventContext(
+                        project_id=log_event.project_id,
                         log_event_id=log_event.id,
                         context_id=context_id,
                     ),

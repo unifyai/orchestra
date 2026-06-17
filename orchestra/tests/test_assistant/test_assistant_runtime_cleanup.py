@@ -867,7 +867,13 @@ def _seed_context_with_log(dbsession, project, name):
     log = LogEvent(project_id=project.id, data={"message": "to purge"})
     dbsession.add(log)
     dbsession.flush()
-    dbsession.add(LogEventContext(log_event_id=log.id, context_id=context.id))
+    dbsession.add(
+        LogEventContext(
+            project_id=project.id,
+            log_event_id=log.id,
+            context_id=context.id,
+        ),
+    )
     dbsession.flush()
     return context
 
@@ -1034,7 +1040,13 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
         )
         dbsession.add(log)
         dbsession.flush()
-        dbsession.add(LogEventContext(log_event_id=log.id, context_id=context.id))
+        dbsession.add(
+            LogEventContext(
+                project_id=project.id,
+                log_event_id=log.id,
+                context_id=context.id,
+            ),
+        )
     dbsession.flush()
     context_id = context.id
 

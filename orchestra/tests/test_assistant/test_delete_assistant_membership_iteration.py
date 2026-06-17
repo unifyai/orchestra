@@ -149,7 +149,13 @@ def _add_scheduled_activation(
     )
     dbsession.add(log_event)
     dbsession.flush()
-    dbsession.add(LogEventContext(log_event_id=log_event.id, context_id=context.id))
+    dbsession.add(
+        LogEventContext(
+            project_id=log_event.project_id,
+            log_event_id=log_event.id,
+            context_id=context.id,
+        ),
+    )
     dbsession.flush()
     return log_event
 
