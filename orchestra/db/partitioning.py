@@ -245,3 +245,91 @@ def child_partitions(conn: Connection, table: str) -> list[str]:
         {"t": table},
     ).scalars()
     return list(rows)
+
+
+def table_storage_units(conn: Connection, table: str) -> list[str]:
+    """Return the physical relations that hold ``table``'s rows.
+
+    For a partitioned parent that is its child partitions (the parent itself has
+    no storage); for an ordinary table it is just the table. Lets maintenance
+    (VACUUM/REINDEX) operate per physical segment so one giant partition cannot
+    block the rest.
+    """
+    if is_partitioned(conn, table):
+        return child_partitions(conn, table)
+    return [table] if relation_exists(conn, table) else []
+
+
+def find_promotion_candidates(
+    conn: Connection,
+    threshold: int,
+) -> list[tuple[int, int]]:
+    """Projects still in the DEFAULT partition large enough to deserve their own.
+
+    Returns ``(project_id, log_event_row_count)`` pairs sorted by size desc.
+    Counted against ``log_event``'s DEFAULT partition only, so projects already
+    promoted to a dedicated partition are naturally excluded.
+    """
+    default_part = default_partition_name("log_event")
+    if not relation_exists(conn, default_part):
+        return []
+    rows = conn.execute(
+        text(
+            f'SELECT project_id, count(*) AS c FROM "{default_part}" '
+            f"GROUP BY project_id HAVING count(*) >= :t ORDER BY c DESC",
+        ),
+        {"t": threshold},
+    ).all()
+    return [(int(r[0]), int(r[1])) for r in rows]
+
+
+def promote_project_to_partition(
+    conn: Connection,
+    project_id: int,
+) -> list[str]:
+    """Move a project's rows out of DEFAULT into its own dedicated partition.
+
+    For each table in the heavy family that does not already have a dedicated
+    partition for ``project_id``: build a standalone table, move the project's
+    rows out of the DEFAULT partition into it, then ATTACH it (which builds the
+    parent's per-partition GIN/HNSW/btree indexes on the new partition). This is
+    a per-row move, so it is meant to run proactively while the project is at
+    the promotion threshold -- not once it is already enormous. Returns the list
+    of partitions created.
+
+    Run inside a transaction: the DELETE-from-default + ATTACH must be atomic.
+    """
+    pid = int(project_id)
+    created: list[str] = []
+    for table in PARTITIONED_TABLES:
+        partition = dedicated_partition_name(table, pid)
+        if relation_exists(conn, partition):
+            continue
+        default_part = default_partition_name(table)
+        # Standalone clone: columns + NOT NULL + defaults + CHECK constraints
+        # (ATTACH requires the partition to carry the parent's CHECK constraints
+        # to skip a validation scan). PK/unique/secondary indexes are built by
+        # ATTACH from the parent's partitioned indexes.
+        conn.execute(
+            text(
+                f'CREATE TABLE "{partition}" '
+                f'(LIKE "{table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)',
+            ),
+        )
+        # Move the project's rows directly into the standalone table (inserting
+        # into the parent would just route them back to DEFAULT).
+        conn.execute(
+            text(
+                f"WITH moved AS ("
+                f'  DELETE FROM "{default_part}" WHERE project_id = {pid} RETURNING *'
+                f') INSERT INTO "{partition}" SELECT * FROM moved',
+            ),
+        )
+        conn.execute(
+            text(
+                f'ALTER TABLE "{table}" ATTACH PARTITION "{partition}" '
+                f"FOR VALUES IN ({pid})",
+            ),
+        )
+        created.append(partition)
+    return created
