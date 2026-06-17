@@ -2097,9 +2097,22 @@ def _queue_embeddings_for_generation(
     if not ids_to_queue:
         return
 
+    # Resolve each queued log event's project_id (embedding_queue is partitioned
+    # by project_id, denormalized from the referenced log_event).
+    from orchestra.db.models.core_models import LogEvent
+
+    id_to_project = dict(
+        session.execute(
+            select(LogEvent.id, LogEvent.project_id).where(
+                LogEvent.id.in_(ids_to_queue),
+            ),
+        ).all(),
+    )
+
     # 3. Bulk insert into queue (use ON CONFLICT DO NOTHING to handle race conditions)
     queue_entries = [
         {
+            "project_id": id_to_project[log_event_id],
             "ref_id": log_event_id,
             "key": key,  # Target key for Embedding.key
             "text": id_to_text[log_event_id],
@@ -2109,6 +2122,7 @@ def _queue_embeddings_for_generation(
             "retry_count": 0,
         }
         for log_event_id in ids_to_queue
+        if log_event_id in id_to_project
     ]
 
     stmt = insert(EmbeddingQueue).values(queue_entries)
@@ -2178,7 +2192,15 @@ async def _get_or_generate_embedding(
         vector = await _get_embedding(text, model, dimensions)
 
         # Insert into DB (use upsert to handle race conditions)
+        from orchestra.db.models.core_models import LogEvent
+
+        embedding_project_id = (
+            session.query(LogEvent.project_id)
+            .filter(LogEvent.id == log_event_id)
+            .scalar()
+        )
         stmt = insert(Embedding).values(
+            project_id=embedding_project_id,
             ref_id=log_event_id,
             key=key,
             model=model,
@@ -2280,11 +2302,19 @@ def _ensure_vectors_exist(
     # Use INSERT ... ON CONFLICT DO UPDATE to handle both:
     # - New embeddings (insert)
     # - Soft-deleted embeddings (resurrect by setting is_deleted=False and updating vector)
+    from orchestra.db.models.core_models import LogEvent
+
+    id_to_project = dict(
+        session.query(LogEvent.id, LogEvent.project_id)
+        .filter(LogEvent.id.in_(ids_to_embed))
+        .all(),
+    )
     rows_to_upsert = []
     for i, log_event_id in enumerate(ids_to_embed):
         embedding_vector = all_embeddings[i]
         rows_to_upsert.append(
             {
+                "project_id": id_to_project[log_event_id],
                 "ref_id": log_event_id,
                 "key": key,
                 "model": model_name,

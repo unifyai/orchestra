@@ -3313,6 +3313,7 @@ class ContextDAO:
             # Create associations between log events and context
             for log_event in log_events:
                 association = LogEventContext(
+                    project_id=log_event.project_id,
                     log_event_id=log_event.id,
                     context_id=context_id,
                 )
@@ -3639,6 +3640,7 @@ class ContextDAO:
 
                 # Create association between the new log event and context
                 association = LogEventContext(
+                    project_id=new_log_event.project_id,
                     log_event_id=new_log_event.id,
                     context_id=context_id,
                 )
@@ -4182,6 +4184,13 @@ class ContextDAO:
 
         now = datetime.now(timezone.utc)
         old_ids = list(id_map.keys())
+        # embedding_queue is partitioned by project_id (denormalized from the
+        # referenced log_event); resolve each new log event's project.
+        new_id_to_project = dict(
+            self.session.query(LogEvent.id, LogEvent.project_id)
+            .filter(LogEvent.id.in_(list(id_map.values())))
+            .all(),
+        )
         total = 0
 
         for offset in range(0, len(old_ids), batch_size):
@@ -4200,6 +4209,7 @@ class ContextDAO:
 
             values = [
                 {
+                    "project_id": new_id_to_project[id_map[emb.ref_id]],
                     "ref_id": id_map[emb.ref_id],
                     "key": emb.key,
                     "text": "[copied]",
@@ -4210,7 +4220,7 @@ class ContextDAO:
                     "created_at": now,
                 }
                 for emb in source_embeddings
-                if emb.ref_id in id_map
+                if emb.ref_id in id_map and id_map[emb.ref_id] in new_id_to_project
             ]
 
             if values:

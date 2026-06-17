@@ -133,6 +133,7 @@ class LogEventDAO:
             # Associate logs with context
             associations = [
                 LogEventContext(
+                    project_id=project_id,
                     log_event_id=log_event_id,
                     context_id=context_id,
                 )
@@ -1638,6 +1639,7 @@ class LogEventDAO:
                         if is_image_embedding:
                             embedding_objects.append(
                                 Embedding(
+                                    project_id=template.project_id,
                                     ref_id=log_event_id,
                                     key=template.key,
                                     model=DEFAULT_IMAGE_EMBEDDING_MODEL,
@@ -1750,7 +1752,9 @@ class LogEventDAO:
         if project_id:
             query = query.where(LogEvent.project_id == project_id)
         if context_id:
-            query = query.join(LogEventContext).where(
+            query = query.join(
+                LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            ).where(
                 LogEventContext.context_id == context_id,
             )
 

@@ -1003,6 +1003,7 @@ def create_from_logs(
                                     )
 
                                     embedding_obj = Embedding(
+                                        project_id=project_obj.id,
                                         ref_id=log_event_id,
                                         key=body.key,
                                         model=DEFAULT_IMAGE_EMBEDDING_MODEL,
@@ -1871,11 +1872,11 @@ def _atomic_upsert_mode(
         session.execute(
             text(
                 """
-                INSERT INTO log_event_context (log_event_id, context_id)
-                VALUES (:log_id, :context_id)
+                INSERT INTO log_event_context (project_id, log_event_id, context_id)
+                VALUES (:project_id, :log_id, :context_id)
                 """,
             ),
-            {"log_id": log_id, "context_id": context_id},
+            {"project_id": project_id, "log_id": log_id, "context_id": context_id},
         )
 
     mirrored_contexts = []
@@ -1933,11 +1934,15 @@ def _atomic_upsert_mode(
                     session.execute(
                         text(
                             """
-                            INSERT INTO log_event_context (log_event_id, context_id)
-                            VALUES (:log_id, :context_id)
+                            INSERT INTO log_event_context (project_id, log_event_id, context_id)
+                            VALUES (:project_id, :log_id, :context_id)
                             """,
                         ),
-                        {"log_id": log_id, "context_id": archive_context_id},
+                        {
+                            "project_id": project_id,
+                            "log_id": log_id,
+                            "context_id": archive_context_id,
+                        },
                     )
 
                 mirrored_contexts.append(archive_context)

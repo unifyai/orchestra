@@ -142,6 +142,23 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
         meta.create_all(engine)
     finally:
         _restore_detached_indexes(removed_hnsw_indexes)
+    # The kernel log/embedding tables are LIST(project_id)-partitioned. create_all
+    # builds only the partitioned parents; create a DEFAULT partition per table so
+    # tests can insert rows for any project without provisioning a dedicated
+    # per-project partition.
+    with engine.begin() as conn:
+        for _ptable in (
+            "log_event",
+            "log_event_context",
+            "embedding",
+            "embedding_queue",
+        ):
+            conn.execute(
+                text(
+                    f"CREATE TABLE IF NOT EXISTS {_ptable}_default "
+                    f"PARTITION OF {_ptable} DEFAULT",
+                ),
+            )
     with engine.begin() as conn:
         # Create the hamming_distance function for tests
         conn.execute(
