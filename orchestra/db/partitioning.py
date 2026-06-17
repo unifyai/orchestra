@@ -297,6 +297,44 @@ def _index_names(conn: Connection, table: str) -> list[str]:
     )
 
 
+def _column_types(conn: Connection, table: str) -> dict[str, str]:
+    rows = conn.execute(
+        text(
+            "SELECT a.attname, format_type(a.atttypid, a.atttypmod) "
+            "FROM pg_attribute a WHERE a.attrelid = to_regclass(:t) "
+            "AND a.attnum > 0 AND NOT a.attisdropped",
+        ),
+        {"t": table},
+    ).all()
+    return {r[0]: r[1] for r in rows}
+
+
+def _align_partition_column_types(
+    conn: Connection,
+    parent: str,
+    partition: str,
+) -> None:
+    """ALTER the partition's column types to match the parent before ATTACH.
+
+    Existing tables can have drifted from the model (e.g. a column is ``text``
+    in the DB but ``varchar`` in the model). ATTACH PARTITION requires exact
+    type equality, so converge the partition to the parent's (model-derived)
+    types. For binary-coercible changes (varchar<->text, varchar length
+    widening) this is a metadata-only operation with no table rewrite.
+    """
+    parent_types = _column_types(conn, parent)
+    part_types = _column_types(conn, partition)
+    for name, ptype in parent_types.items():
+        cur = part_types.get(name)
+        if cur is not None and cur != ptype:
+            conn.execute(
+                text(
+                    f'ALTER TABLE "{partition}" ALTER COLUMN "{name}" '
+                    f'TYPE {ptype} USING "{name}"::{ptype}',
+                ),
+            )
+
+
 def convert_legacy_to_partitioned(conn: Connection) -> None:
     """Convert the populated, non-partitioned kernel tables to partitioned form.
 
@@ -374,6 +412,9 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
 
         conn.execute(text(f'ALTER TABLE "{table}" RENAME TO "{default}"'))
         meta.tables[table].create(bind=conn)
+        # Converge any drifted column types (e.g. text vs varchar) to the
+        # model-derived parent so ATTACH's exact-type check passes.
+        _align_partition_column_types(conn, table, default)
         conn.execute(
             text(f'ALTER TABLE "{table}" ATTACH PARTITION "{default}" DEFAULT'),
         )
