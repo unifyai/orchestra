@@ -1870,6 +1870,9 @@ def _upsert_context(
     ).scalar_one_or_none()
     if existing is None:
         now = datetime.now(timezone.utc)
+        from orchestra.db.scope import owner_from_context_name
+
+        owner = owner_from_context_name(normalized_name)
         stmt = (
             pg_insert(Context)
             .values(
@@ -1884,6 +1887,8 @@ def _upsert_context(
                 unique_key_types=list((unique_keys or {}).values()),
                 auto_counting={},
                 foreign_keys=[],
+                owner_scope=owner.scope.value,
+                owner_id=owner.owner_id,
             )
             .on_conflict_do_nothing(index_elements=["project_id", "name"])
             .returning(Context.id)

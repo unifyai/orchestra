@@ -2656,6 +2656,13 @@ class ContextDAO:
         # Convert foreign_keys list to proper format for storage
         foreign_keys_json = foreign_keys if foreign_keys else []
 
+        # Classify ownership from the context name (assistant/team/aggregation/
+        # system). Logs created here denormalize this owner onto the heavy tables
+        # so an assistant/team can be deleted as a partition drop.
+        from orchestra.db.scope import owner_from_context_name
+
+        owner = owner_from_context_name(name)
+
         stmt = pg_insert(Context).values(
             project_id=project_id,
             name=name,
@@ -2668,6 +2675,8 @@ class ContextDAO:
             unique_key_types=unique_key_types,
             auto_counting=auto_counting or {},
             foreign_keys=foreign_keys_json,
+            owner_scope=owner.scope.value,
+            owner_id=owner.owner_id,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -3226,6 +3235,10 @@ class ContextDAO:
             # Convert foreign_keys list to proper format for storage
             foreign_keys_json = foreign_keys if foreign_keys else []
 
+            from orchestra.db.scope import owner_from_context_name
+
+            owner = owner_from_context_name(name)
+
             # Create the context
             stmt = pg_insert(Context).values(
                 project_id=project_id,
@@ -3239,6 +3252,8 @@ class ContextDAO:
                 unique_key_types=unique_key_types,
                 auto_counting=auto_counting or {},
                 foreign_keys=foreign_keys_json,
+                owner_scope=owner.scope.value,
+                owner_id=owner.owner_id,
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -3271,6 +3286,8 @@ class ContextDAO:
                             unique_key_types=unique_key_types,
                             auto_counting=auto_counting or {},
                             foreign_keys=foreign_keys_json,
+                            owner_scope=owner.scope.value,
+                            owner_id=owner.owner_id,
                         )
                         .returning(Context.id)
                     )

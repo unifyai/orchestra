@@ -2232,6 +2232,8 @@ def admin_duplicate_project(
                 "allow_duplicates": ctx.allow_duplicates,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
+                "owner_scope": ctx.owner_scope,
+                "owner_id": ctx.owner_id,
                 "old_id": ctx.id,  # Temporary field to track old ID
             },
         )
