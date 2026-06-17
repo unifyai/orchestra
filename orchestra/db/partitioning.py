@@ -460,6 +460,182 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
                 )
 
 
+# --------------------------------------------------------------------------- #
+# Owner sub-partitioning (phase 2): divide the shared Assistants project's
+# partition by owner_key so an assistant/team can be dropped as an O(1) sub-
+# partition. Only the deletion-relevant heavy family is sub-partitioned;
+# embedding_queue is transient and stays project-only.
+# --------------------------------------------------------------------------- #
+OWNER_SUB_TABLES: tuple[str, ...] = (
+    "log_event",
+    "log_event_context",
+    "embedding",
+)
+# Composite PKs once owner_key participates (it must, to sub-partition by it).
+_OWNER_SUB_PK: dict[str, list[str]] = {
+    "log_event": ["project_id", "owner_key", "id"],
+    "log_event_context": ["project_id", "owner_key", "log_event_id", "context_id"],
+    "embedding": ["project_id", "owner_key", "id"],
+}
+
+
+def owner_subpartition_name(table: str, project_id: int, owner_key: str) -> str:
+    """Name of the per-owner sub-partition under a project's partition."""
+    return f"{dedicated_partition_name(table, project_id)}_{owner_key}"
+
+
+def add_owner_key_to_keys(conn: Connection, table: str) -> None:
+    """Make owner_key NOT NULL and part of the PK + every UNIQUE constraint.
+
+    Every unique constraint on a partitioned table must contain all partition
+    key columns, so owner_key is added to the PK and to each existing UNIQUE
+    (after project_id). owner_key is functionally determined by the log's
+    ``ref_id`` / owning context, so this does not change real uniqueness.
+    """
+    conn.execute(text(f'ALTER TABLE "{table}" ALTER COLUMN owner_key SET NOT NULL'))
+    for conname, condef in conn.execute(
+        text(
+            "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid = to_regclass(:t) AND contype = 'u'",
+        ),
+        {"t": table},
+    ).all():
+        cols = [
+            x.strip()
+            for x in condef[condef.index("(") + 1 : condef.rindex(")")].split(",")
+        ]
+        new_cols = ["project_id", "owner_key"] + [
+            x for x in cols if x not in ("project_id", "owner_key")
+        ]
+        conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{conname}"'))
+        conn.execute(
+            text(
+                f'ALTER TABLE "{table}" ADD CONSTRAINT "{conname}" '
+                f'UNIQUE ({", ".join(new_cols)})',
+            ),
+        )
+    pkname = conn.execute(
+        text(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = to_regclass(:t) AND contype = 'p'",
+        ),
+        {"t": table},
+    ).scalar()
+    conn.execute(text(f'ALTER TABLE "{table}" DROP CONSTRAINT "{pkname}"'))
+    conn.execute(
+        text(
+            f'ALTER TABLE "{table}" ADD PRIMARY KEY ({", ".join(_OWNER_SUB_PK[table])})',
+        ),
+    )
+
+
+def sub_partition_project_by_owner(conn: Connection, project_id: int) -> None:
+    """Carve a project's rows into a ``PARTITION BY LIST(owner_key)`` partition.
+
+    Replaces the project's leaf placement (its rows currently live in the
+    top-level DEFAULT partition) with a dedicated partition that is itself
+    sub-partitioned by owner_key, starting with just a DEFAULT sub-partition;
+    all rows land there until specific owners are promoted. Assumes
+    :func:`add_owner_key_to_keys` has already run.
+    """
+    pid = int(project_id)
+    for table in OWNER_SUB_TABLES:
+        top_default = default_partition_name(table)
+        sub_parent = dedicated_partition_name(table, pid)
+        conn.execute(
+            text(
+                f'CREATE TABLE "{sub_parent}" '
+                f'(LIKE "{table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS) '
+                f"PARTITION BY LIST (owner_key)",
+            ),
+        )
+        conn.execute(
+            text(
+                f'CREATE TABLE "{sub_parent}_default" PARTITION OF "{sub_parent}" DEFAULT'
+            ),
+        )
+        cols = ", ".join(f'"{c}"' for c in _column_names(conn, table))
+        conn.execute(
+            text(
+                f'WITH moved AS (DELETE FROM "{top_default}" '
+                f"WHERE project_id = {pid} RETURNING *) "
+                f'INSERT INTO "{sub_parent}" ({cols}) SELECT {cols} FROM moved',
+            ),
+        )
+        conn.execute(
+            text(
+                f'ALTER TABLE "{table}" ATTACH PARTITION "{sub_parent}" '
+                f"FOR VALUES IN ({pid})",
+            ),
+        )
+
+
+def promote_owner(conn: Connection, project_id: int, owner_key: str) -> list[str]:
+    """Carve one owner out of a project's sub-DEFAULT into its own sub-partition.
+
+    Enables an O(1) drop of that owner later. Idempotent: skips a table whose
+    owner sub-partition already exists. Returns the sub-partitions created.
+    """
+    pid = int(project_id)
+    created: list[str] = []
+    for table in OWNER_SUB_TABLES:
+        sub_parent = dedicated_partition_name(table, pid)
+        part = owner_subpartition_name(table, pid, owner_key)
+        if relation_exists(conn, part):
+            continue
+        sub_default = f"{sub_parent}_default"
+        conn.execute(
+            text(
+                f'CREATE TABLE "{part}" (LIKE "{sub_parent}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)'
+            ),
+        )
+        cols = ", ".join(f'"{c}"' for c in _column_names(conn, table))
+        conn.execute(
+            text(
+                f'WITH moved AS (DELETE FROM "{sub_default}" '
+                f"WHERE owner_key = :ok RETURNING *) "
+                f'INSERT INTO "{part}" ({cols}) SELECT {cols} FROM moved',
+            ),
+            {"ok": owner_key},
+        )
+        conn.execute(
+            text(
+                f'ALTER TABLE "{sub_parent}" ATTACH PARTITION "{part}" '
+                f"FOR VALUES IN ('{owner_key}')",
+            ),
+        )
+        created.append(part)
+    return created
+
+
+def drop_owner(conn: Connection, project_id: int, owner_key: str) -> str:
+    """Delete all of an owner's data within a project.
+
+    O(1) ``DROP PARTITION`` when the owner has a dedicated sub-partition;
+    otherwise a row-delete from the project's sub-DEFAULT (cheap for the small
+    assistants/teams that were never promoted). Returns the method used.
+    """
+    pid = int(project_id)
+    if relation_exists(conn, owner_subpartition_name("log_event", pid, owner_key)):
+        for table in OWNER_SUB_TABLES:
+            sub_parent = dedicated_partition_name(table, pid)
+            part = owner_subpartition_name(table, pid, owner_key)
+            if not relation_exists(conn, part):
+                continue
+            conn.execute(text(f'ALTER TABLE "{sub_parent}" DETACH PARTITION "{part}"'))
+            conn.execute(text(f'DROP TABLE IF EXISTS "{part}"'))
+        return "drop_partition"
+
+    # Not promoted: delete by (project_id, owner_key) through the parent, which
+    # routes to whichever partition holds the rows. Cheap for small owners.
+    for table in OWNER_SUB_TABLES:
+        conn.execute(
+            text(f'DELETE FROM "{table}" WHERE project_id = :pid AND owner_key = :ok'),
+            {"pid": pid, "ok": owner_key},
+        )
+    return "row_delete"
+
+
 def child_partitions(conn: Connection, table: str) -> list[str]:
     """Return the names of all child partitions currently attached to ``table``."""
     rows = conn.execute(
