@@ -51,16 +51,15 @@ def dedicated_partition_name(table: str, project_id: int) -> str:
 
 
 def table_relkind(conn: Connection, table: str) -> str | None:
-    """Return ``pg_class.relkind`` for ``table`` in the public schema.
+    """Return ``pg_class.relkind`` for ``table``, resolved via the search_path.
 
     ``'p'`` -> partitioned parent, ``'r'`` -> ordinary table, ``None`` -> the
-    relation does not exist.
+    relation does not exist. Kernel tables live in ``public`` (always on the
+    search_path), so this matches them in production while remaining usable
+    against a scratch schema.
     """
     return conn.execute(
-        text(
-            "SELECT relkind FROM pg_class "
-            "WHERE relname = :t AND relnamespace = 'public'::regnamespace",
-        ),
+        text("SELECT relkind FROM pg_class WHERE oid = to_regclass(:t)"),
         {"t": table},
     ).scalar()
 
