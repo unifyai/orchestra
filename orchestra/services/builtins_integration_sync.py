@@ -226,7 +226,7 @@ def app_catalog_row(
     display_name = app.get("display_name") or app.get("app_display_name") or slug
     description = app.get("description") or ""
     source_type = app.get("source_type") or (
-        "native" if backend_id == "unity_native" else "third_party"
+        "native" if backend_id == "droid_native" else "third_party"
     )
     auth_modes = app.get("auth_modes") or []
     available_scopes = (
@@ -568,7 +568,7 @@ def tool_catalog_row(
         "verify": confirmation_required
         or action_class in {"write", "destructive", "bulk_export"},
         "is_primitive": True,
-        "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+        "primitive_class": "droid.integrations.primitives.IntegrationPrimitives",
         "primitive_method": item.get("function_manager_name")
         or name.replace(".", "__"),
         "metadata": metadata,

@@ -712,13 +712,13 @@ async def test_native_app_sync_search_and_connection_rejection(
         json={
             **_owner_payload(assistant_id=22),
             "canonical_app_slug": "matterport",
-            "backend_id": "unity_native",
+            "backend_id": "droid_native",
             "requested_scopes": [],
             "auth_mode": "native",
         },
     )
     assert rejected.status_code == status.HTTP_404_NOT_FOUND
-    assert "Native Unity-deploy integrations" in rejected.json()["detail"]
+    assert "Native Droid-deploy integrations" in rejected.json()["detail"]
 
 
 @pytest.mark.anyio

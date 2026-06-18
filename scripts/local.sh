@@ -10,8 +10,8 @@
 # This eliminates network latency and staging server bottlenecks during testing.
 #
 # Scope: this is an INTERNAL dev/test harness for Orchestra alone. To run the
-# whole product locally (Orchestra + Unity gateway + Console + Coordinator), use
-# `unity stack up` from the unity repo — it invokes this script for you.
+# whole product locally (Orchestra + Droid gateway + Console + Coordinator), use
+# `droid stack up` from the droid repo — it invokes this script for you.
 #
 # Usage:
 #   ./local_orchestra.sh start    # Start and wait for ready (preserves data)
@@ -191,7 +191,7 @@ check_poetry() {
 
 # Get an executable from the in-project .venv, with fallback to poetry run.
 # This avoids issues where poetry picks up the wrong virtualenv when called
-# from a different repo's context (e.g., unity calling orchestra's local.sh).
+# from a different repo's context (e.g., droid calling orchestra's local.sh).
 #
 # Usage: get_venv_executable <repo_path> <executable_name>
 # Example: get_venv_executable "/path/to/orchestra" "python"
@@ -366,7 +366,7 @@ start_db_container() {
     fi
   else
     # Fresh start: create the container with a named volume + restart policy
-    # so it survives reboots and `unity stop` / `unity restart` cycles.
+    # so it survives reboots and `droid stop` / `droid restart` cycles.
 
     # Check if port is already in use by something else
     if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then

@@ -193,7 +193,7 @@ class Settings(BaseSettings):
 
     # Local file-based logging directory
     # When set, traces are written to JSON files in this directory
-    # Example: /Users/user/unity/logs/orchestra/2025-01-01T12-00-00
+    # Example: /Users/user/droid/logs/orchestra/2025-01-01T12-00-00
     log_dir: Optional[str] = os.environ.get(
         "ORCHESTRA_LOG_DIR",
         None,
@@ -202,9 +202,9 @@ class Settings(BaseSettings):
     # OTel span log directory (for file-based span export)
     # When set, OTel spans are written to JSONL files in this directory.
     # If not set, falls back to log_dir for backward compatibility.
-    # This enables writing spans to a shared directory with Unity for
+    # This enables writing spans to a shared directory with Droid for
     # full-stack trace correlation across processes.
-    # Example: /Users/user/unity/logs/otel
+    # Example: /Users/user/droid/logs/otel
     otel_log_dir: Optional[str] = os.environ.get(
         "ORCHESTRA_OTEL_LOG_DIR",
         None,
@@ -403,39 +403,39 @@ class Settings(BaseSettings):
 
     # Assistant creation
     assistant_creation_cost: float = 0.0
-    unity_coordinator_whatsapp_number: Optional[str] = (
-        os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
-        or os.environ.get("UNITY_WHATSAPP_POOL_NUMBER")
-        or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
+    droid_coordinator_whatsapp_number: Optional[str] = (
+        os.environ.get("DROID_COORDINATOR_WHATSAPP_NUMBER")
+        or os.environ.get("DROID_WHATSAPP_POOL_NUMBER")
+        or os.environ.get("ORCHESTRA_DROID_WHATSAPP_POOL_NUMBER")
     )
-    unity_coordinator_email_address: Optional[str] = (
-        os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
-        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
+    droid_coordinator_email_address: Optional[str] = (
+        os.environ.get("DROID_COORDINATOR_EMAIL_ADDRESS")
+        or os.environ.get("ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS")
         or "marty@unify.ai"
     )
     # Discrete per-country Coordinator phone numbers. The UK number is keyed
     # under ISO country code "GB". The correct prod/staging value is mounted
     # from Secret Manager per service.
-    unity_coordinator_phone_uk: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_PHONE_UK",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_UK")
-    unity_coordinator_phone_us: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_PHONE_US",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_US")
-    unity_coordinator_default_phone_country: str = (
-        os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
-        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+    droid_coordinator_phone_uk: Optional[str] = os.environ.get(
+        "DROID_COORDINATOR_PHONE_UK",
+    ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_PHONE_UK")
+    droid_coordinator_phone_us: Optional[str] = os.environ.get(
+        "DROID_COORDINATOR_PHONE_US",
+    ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_PHONE_US")
+    droid_coordinator_default_phone_country: str = (
+        os.environ.get("DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        or os.environ.get("ORCHESTRA_DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or "US"
     )
     # Universal Coordinator Discord bot. The bot ID is a Discord snowflake;
-    # the token authenticates the Gateway connection. Unity pulls both from
+    # the token authenticates the Gateway connection. Droid pulls both from
     # Orchestra's shared pool, so the secrets only live in this project.
-    unity_coordinator_discord_id: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_DISCORD_ID",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_ID")
-    unity_coordinator_discord_token: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_DISCORD_TOKEN",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_TOKEN")
+    droid_coordinator_discord_id: Optional[str] = os.environ.get(
+        "DROID_COORDINATOR_DISCORD_ID",
+    ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_DISCORD_ID")
+    droid_coordinator_discord_token: Optional[str] = os.environ.get(
+        "DROID_COORDINATOR_DISCORD_TOKEN",
+    ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_DISCORD_TOKEN")
 
     # Assistant photo generation
     photo_generation_cost: float = (

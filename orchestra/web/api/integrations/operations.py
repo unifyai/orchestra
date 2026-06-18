@@ -108,10 +108,10 @@ DEFAULT_BACKENDS = [
         "default_priority": 20,
     },
     {
-        "backend_id": "unity_native",
+        "backend_id": "droid_native",
         "kind": "first_party",
         "environment": "prod",
-        "display_name": "Unity Native",
+        "display_name": "Droid Native",
         "status": "enabled",
         "default_priority": 1,
         "config_json": {"execution_mode": "function_manager"},
@@ -1406,9 +1406,9 @@ def start_connection(
     backend = dao.get_backend(resolved_backend_id)
     if not backend or backend.status != "enabled":
         raise ValueError(f"Integration backend is disabled: {resolved_backend_id}")
-    if resolved_backend_id == "unity_native":
+    if resolved_backend_id == "droid_native":
         raise ValueError(
-            "Native Unity-deploy integrations are deployment-enabled and do not create provider connections.",
+            "Native Droid-deploy integrations are deployment-enabled and do not create provider connections.",
         )
 
     chosen_auth_mode = auth_mode or "oauth"

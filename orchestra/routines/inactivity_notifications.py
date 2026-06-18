@@ -6,15 +6,15 @@ Coordinator is provisioned at signup (see the signup paths in
 It introduces the Coordinator and points the user at the console.
 
 It is sent **from the shared Coordinator mailbox** (the
-``UNITY_COORDINATOR_EMAIL_ADDRESS`` setting, surfaced via
-:func:`orchestra.services.universal_unity_email.get_universal_unity_email_address`)
+``DROID_COORDINATOR_EMAIL_ADDRESS`` setting, surfaced via
+:func:`orchestra.services.universal_droid_email.get_universal_droid_email_address`)
 rather than the general ``hello@unify.ai`` outbound address, so the
 message lands in the user's inbox as if their Coordinator wrote it.
 
 The inactivity *re-engagement* nudge is **not** templated here: that
 message is composed and sent by the Coordinator brain after
 :mod:`orchestra.routines.inactivity_followup` wakes the Coordinator (see
-``unity.conversation_manager.domains.inactivity``).
+``droid.conversation_manager.domains.inactivity``).
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ async def send_coordinator_emails(
     """Send a Coordinator-voiced email from the shared Coordinator mailbox.
 
     Routes through the Gmail service account, sending *from* and
-    impersonating the ``UNITY_COORDINATOR_EMAIL_ADDRESS`` mailbox so the
+    impersonating the ``DROID_COORDINATOR_EMAIL_ADDRESS`` mailbox so the
     message appears to come from the user's coordinator rather than the
     general outbound address.
 
@@ -106,15 +106,15 @@ async def send_coordinator_emails(
     (returns ``False``) when the coordinator mailbox is not configured —
     typical in local dev — so callers stay safe to run there.
     """
-    from orchestra.services.universal_unity_email import (
-        get_universal_unity_email_address,
+    from orchestra.services.universal_droid_email import (
+        get_universal_droid_email_address,
     )
     from orchestra.web.api.utils.email import send_email_async
 
-    from_address = get_universal_unity_email_address()
+    from_address = get_universal_droid_email_address()
     if not from_address:
         logger.warning(
-            "Coordinator mailbox (UNITY_COORDINATOR_EMAIL_ADDRESS) not "
+            "Coordinator mailbox (DROID_COORDINATOR_EMAIL_ADDRESS) not "
             "configured; skipping coordinator email %r.",
             subject,
         )

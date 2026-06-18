@@ -32,7 +32,7 @@ def env_suffix() -> str:
     """Resource-name suffix for the current environment.
 
     Matches the naming convention used by the comms/adapters services
-    (``unity-{assistant_id}-staging`` on staging, unsuffixed in
+    (``droid-{assistant_id}-staging`` on staging, unsuffixed in
     production).
     """
     return "-staging" if resolve_deploy_env() == "staging" else ""

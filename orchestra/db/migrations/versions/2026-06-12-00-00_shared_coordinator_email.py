@@ -20,7 +20,7 @@ _NEW_PREDICATE = (
     "status != 'deleted' "
     "AND contact_type NOT IN ('whatsapp', 'discord') "
     "AND NOT (contact_type = 'email' "
-    "AND COALESCE(metadata ->> 'universal_unity', 'false') = 'true')"
+    "AND COALESCE(metadata ->> 'universal_droid', 'false') = 'true')"
 )
 
 

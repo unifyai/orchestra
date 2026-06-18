@@ -12,8 +12,8 @@ Provides two exporters for different use cases:
 2. JsonlSpanExporter (ORCHESTRA_OTEL_LOG_DIR):
    - Exports spans to JSONL files keyed by trace_id
    - Format: {trace_id}.jsonl (one JSON line per span)
-   - Matches Unity's FileSpanExporter format
-   - Best for unified traces when running from Unity's test suite
+   - Matches Droid's FileSpanExporter format
+   - Best for unified traces when running from Droid's test suite
 
 When both are configured, both exporters run (different output formats).
 """
@@ -564,9 +564,9 @@ class JsonlSpanExporter(SpanExporter):
 
     Format: {log_dir}/{trace_id}.jsonl (one JSON line per span)
 
-    This matches Unity's FileSpanExporter format, enabling unified traces
-    when Orchestra and Unity write to the same directory. All spans from
-    a single test (Unity → Unillm → Unify → Orchestra) appear in one file.
+    This matches Droid's FileSpanExporter format, enabling unified traces
+    when Orchestra and Droid write to the same directory. All spans from
+    a single test (Droid → Unillm → Unify → Orchestra) appear in one file.
 
     Use ORCHESTRA_OTEL_LOG_DIR to enable this exporter.
     """
@@ -601,7 +601,7 @@ class JsonlSpanExporter(SpanExporter):
         if span.parent is not None:
             parent_span_id = f"{span.parent.span_id:016x}"
 
-        # Build span data matching Unity's format
+        # Build span data matching Droid's format
         span_data = {
             "trace_id": trace_id,
             "span_id": span_id,

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "orchestra"
 version = "0.0.0"
-description = "Backend API and persistence layer for Unity and the wider Unify stack"
+description = "Backend API and persistence layer for Droid and the wider Unify stack"
 authors = [
     "Unify <hello@unify.ai>",
 ]

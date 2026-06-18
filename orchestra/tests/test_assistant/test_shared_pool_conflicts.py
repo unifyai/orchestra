@@ -52,9 +52,9 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.settings import settings
-from orchestra.services.universal_unity_email import (
+from orchestra.services.universal_droid_email import (
     ensure_coordinator_universal_email_contact,
-    get_universal_unity_email_address,
+    get_universal_droid_email_address,
 )
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
@@ -178,7 +178,7 @@ def _enable_shared_email(
         provider="google_workspace",
         provisioned_by="platform",
         status="active",
-        metadata_={"universal_unity": True},
+        metadata_={"universal_droid": True},
     )
     dbsession.add(contact)
     dbsession.flush()
@@ -1029,7 +1029,7 @@ class TestColdMessages:
 
 
 class TestUniversalUnityWhatsApp:
-    def test_verified_owner_routes_to_single_owned_unity(
+    def test_verified_owner_routes_to_single_owned_droid(
         self,
         dbsession: Session,
         dao: SharedPoolDAO,
@@ -1037,13 +1037,13 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
         )
-        user = _make_user(dbsession, "unity-owner@test.com", "+15550610001")
+        user = _make_user(dbsession, "droid-owner@test.com", "+15550610001")
         coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
@@ -1069,13 +1069,13 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
         )
-        user = _make_user(dbsession, "unity-known@test.com", "+15550620001")
+        user = _make_user(dbsession, "droid-known@test.com", "+15550620001")
         coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
@@ -1092,20 +1092,20 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
         )
-        user = _make_user(dbsession, "unity-ambiguous@test.com", "+15550630001")
+        user = _make_user(dbsession, "droid-ambiguous@test.com", "+15550630001")
         org = _make_org(dbsession, user, "UnityAmbiguous")
         personal = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         org_coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             org.id,
             is_coordinator=True,
         )
@@ -1124,7 +1124,7 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
         )
         user = _make_user(dbsession, "regular-assignment@test.com", "+15550640001")
         assistant = _make_assistant(dbsession, user, "Regular")
@@ -1133,7 +1133,7 @@ class TestUniversalUnityWhatsApp:
 
         assert pool.number == pool_numbers[1].number
 
-    def test_universal_unity_owner_route_is_ephemeral(
+    def test_universal_droid_owner_route_is_ephemeral(
         self,
         dbsession: Session,
         dao: SharedPoolDAO,
@@ -1141,13 +1141,13 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
         )
-        user = _make_user(dbsession, "unity-owner-route@test.com", "+15550650001")
+        user = _make_user(dbsession, "droid-owner-route@test.com", "+15550650001")
         coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
@@ -1170,7 +1170,7 @@ class TestUniversalUnityWhatsApp:
             is None
         )
 
-    def test_universal_unity_external_route_fails_without_reassigning(
+    def test_universal_droid_external_route_fails_without_reassigning(
         self,
         dbsession: Session,
         dao: SharedPoolDAO,
@@ -1178,13 +1178,13 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "unity_coordinator_whatsapp_number", pool_numbers[0].number
+            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
         )
-        user = _make_user(dbsession, "unity-external-route@test.com", "+15550660001")
+        user = _make_user(dbsession, "droid-external-route@test.com", "+15550660001")
         coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         contact = _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
@@ -3388,8 +3388,8 @@ class TestCallSessionEndpoints:
             "from_number": "+15550100001",
             "to_number": "+15550100002",
             "pool_number": "+15550100002",
-            "conference_name": "unity_wa_conf_CA_test_call_session",
-            "livekit_room": "unity_wa_room_1_CA_test_call_session",
+            "conference_name": "droid_wa_conf_CA_test_call_session",
+            "livekit_room": "droid_wa_room_1_CA_test_call_session",
             "status": "created",
             "metadata": {"sip_dispatch_rule_id": "rule-1"},
         }
@@ -3455,19 +3455,19 @@ class TestSharedCoordinatorEmailRouting:
         self,
         dbsession: Session,
     ):
-        email_address = get_universal_unity_email_address()
+        email_address = get_universal_droid_email_address()
         user1 = _make_user(dbsession, "shared-email-owner-1@test.com")
         user2 = _make_user(dbsession, "shared-email-owner-2@test.com")
         coordinator1 = _make_assistant(
             dbsession,
             user1,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         coordinator2 = _make_assistant(
             dbsession,
             user2,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
 
@@ -3483,20 +3483,20 @@ class TestSharedCoordinatorEmailRouting:
 
         assert contact1.contact_value == email_address
         assert contact2.contact_value == email_address
-        assert contact1.metadata_ == {"universal_unity": True}
-        assert contact2.metadata_ == {"universal_unity": True}
+        assert contact1.metadata_ == {"universal_droid": True}
+        assert contact2.metadata_ == {"universal_droid": True}
 
     async def test_email_resolve_routes_verified_owner(
         self,
         client: AsyncClient,
         dbsession: Session,
     ):
-        email_address = get_universal_unity_email_address()
+        email_address = get_universal_droid_email_address()
         user = _make_user(dbsession, "shared-email-owner@test.com")
         coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         _enable_shared_email(dbsession, coordinator, email_address)
@@ -3520,12 +3520,12 @@ class TestSharedCoordinatorEmailRouting:
         client: AsyncClient,
         dbsession: Session,
     ):
-        email_address = get_universal_unity_email_address()
+        email_address = get_universal_droid_email_address()
         user = _make_user(dbsession, "shared-email-cold-owner@test.com")
         coordinator = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         _enable_shared_email(dbsession, coordinator, email_address)
@@ -3545,19 +3545,19 @@ class TestSharedCoordinatorEmailRouting:
         client: AsyncClient,
         dbsession: Session,
     ):
-        email_address = get_universal_unity_email_address()
+        email_address = get_universal_droid_email_address()
         user = _make_user(dbsession, "shared-email-ambiguous@test.com")
         personal = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             is_coordinator=True,
         )
         organization = _make_org(dbsession, user)
         org_scoped = _make_assistant(
             dbsession,
             user,
-            "Unity",
+            "Droid",
             org_id=organization.id,
             is_coordinator=True,
         )

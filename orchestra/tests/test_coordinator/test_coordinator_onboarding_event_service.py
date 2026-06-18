@@ -4,7 +4,7 @@ Exercises the pure gating + payload-shaping logic against in-memory
 mocks rather than the full FastAPI stack, since the network round
 trip and orchestra-side state read are both already covered by
 upstream integration tests. The point of these tests is to pin down
-the **contract** between trigger sites and Unity:
+the **contract** between trigger sites and Droid:
 
 * the helper stays silent unless ``Coordinator/State.mode ==
   'onboarding'``;
@@ -14,7 +14,7 @@ the **contract** between trigger sites and Unity:
 * sync and async flavours behave the same under the gate.
 
 Adapters HTTP failures are pinned via the test that mocks
-``_post_unity_system_event`` to raise — the helper should swallow
+``_post_droid_system_event`` to raise — the helper should swallow
 and return ``False`` so the wrapping endpoint never regresses.
 """
 
@@ -73,7 +73,7 @@ async def test_async_notify_skips_when_mode_is_working() -> None:
     coordinator = _fake_coordinator()
     with (
         patch.object(svc, "get_coordinator_state", return_value=WORKING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.notify_coordinator_onboarding_event(
             session=MagicMock(),
@@ -91,7 +91,7 @@ async def test_async_notify_emits_when_mode_is_onboarding() -> None:
     coordinator = _fake_coordinator(agent_id=42)
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.notify_coordinator_onboarding_event(
             session=MagicMock(),
@@ -120,7 +120,7 @@ async def test_async_notify_rejects_unknown_subtype() -> None:
     coordinator = _fake_coordinator()
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.notify_coordinator_onboarding_event(
             session=MagicMock(),
@@ -139,7 +139,7 @@ async def test_async_notify_swallows_transport_failures() -> None:
     failing_post = AsyncMock(side_effect=RuntimeError("adapters down"))
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=failing_post),
+        patch.object(svc, "_post_droid_system_event", new=failing_post),
     ):
         result = await svc.notify_coordinator_onboarding_event(
             session=MagicMock(),
@@ -163,7 +163,7 @@ async def test_async_notify_for_assistant_resolves_workspace_coordinator() -> No
             return_value=coordinator,
         ) as resolve,
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.maybe_notify_for_assistant_async(
             session=MagicMock(),
@@ -184,7 +184,7 @@ async def test_async_notify_for_assistant_returns_false_when_no_coordinator() ->
     specialist = _fake_specialist()
     with (
         patch.object(svc, "get_workspace_coordinator", return_value=None),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.maybe_notify_for_assistant_async(
             session=MagicMock(),
@@ -218,11 +218,11 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
 
 @pytest.mark.anyio
 async def test_step_skipped_event_embeds_step_snapshots() -> None:
-    """Skip events tell Unity which step was skipped and what is resolved so far."""
+    """Skip events tell Droid which step was skipped and what is resolved so far."""
     coordinator = _fake_coordinator(agent_id=15)
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_step_skipped_event(
             session=MagicMock(),
@@ -323,11 +323,11 @@ def test_derive_onboarding_progress_orders_steps_canonically() -> None:
 
 @pytest.mark.anyio
 async def test_step_started_event_embeds_active_step_snapshot() -> None:
-    """Active-step events tell Unity which checklist row the user selected."""
+    """Active-step events tell Droid which checklist row the user selected."""
     coordinator = _fake_coordinator(agent_id=16)
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_step_started_event(
             session=MagicMock(),
@@ -368,7 +368,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
             "derive_onboarding_progress",
             return_value=["workspace", "apps"],
         ) as derive,
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(
             session=MagicMock(),
@@ -393,7 +393,7 @@ async def test_session_started_event_omits_empty_step_snapshot() -> None:
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
         patch.object(svc, "derive_onboarding_progress", return_value=[]),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(
             session=MagicMock(),

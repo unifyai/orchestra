@@ -3,7 +3,7 @@
 When an organization's membership changes (invite acceptance, direct member
 add, member removal) the set of contacts every org assistant should see
 changes too. Orchestra fans out the ``sync_contacts`` Adapters webhook so
-Unity can re-derive each affected assistant's Contacts table.
+Droid can re-derive each affected assistant's Contacts table.
 
 These tests pin the wiring: every membership-mutating endpoint must drive
 ``fan_out_contact_sync_for_org`` (org-wide) or ``trigger_contact_sync_safe``

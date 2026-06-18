@@ -1,7 +1,7 @@
 """Ownership scope for kernel contexts and their logs/embeddings.
 
-Orchestra is the engine for Unity's assistants, so the kernel models the
-ownership boundary that Unity expresses through its context-naming convention
+Orchestra is the engine for Droid's assistants, so the kernel models the
+ownership boundary that Droid expresses through its context-naming convention
 as first-class columns rather than leaving it implicit in context-name strings.
 
 Every context has an **owner**: the entity whose data it holds and which is the
@@ -34,7 +34,7 @@ from sqlalchemy.engine import Connection
 
 logger = logging.getLogger(__name__)
 
-# Top-level prefix for shared-team contexts (mirrors unity's ContextRegistry).
+# Top-level prefix for shared-team contexts (mirrors droid's ContextRegistry).
 TEAM_CONTEXT_PREFIX = "Teams"
 # Path component marking a cross-assistant / cross-user aggregation view.
 AGGREGATION_COMPONENT = "All"
@@ -58,9 +58,9 @@ def _is_int(token: str) -> bool:
 
 
 def owner_from_context_name(name: str) -> Owner:
-    """Derive the ownership scope of a context from its (Unity-convention) name.
+    """Derive the ownership scope of a context from its (Droid-convention) name.
 
-    Convention (see unity ``ContextRegistry`` / ``session_details``):
+    Convention (see droid ``ContextRegistry`` / ``session_details``):
 
     * ``Teams/{team_id}/...``            -> team-owned
     * ``{user_id}/All/...`` or ``All/...`` -> aggregation view (no owner)

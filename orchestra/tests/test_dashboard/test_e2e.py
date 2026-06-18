@@ -1,6 +1,6 @@
 """End-to-end / integration tests for the dashboard token system.
 
-Covers full lifecycle flows, Unity-like composition, console resolution
+Covers full lifecycle flows, Droid-like composition, console resolution
 chain, and cross-project / cross-user / org isolation.
 """
 
@@ -99,19 +99,19 @@ async def test_multiple_tokens_per_project(client: AsyncClient, dbsession: Sessi
 
 
 # ===========================================================================
-# Unity-like tile + dashboard composition flows
+# Droid-like tile + dashboard composition flows
 # ===========================================================================
 
 
 @pytest.mark.anyio
-async def test_unity_tile_creation_flow(client: AsyncClient, dbsession: Session):
-    """Simulate what Unity does: create project, register tile token, verify
+async def test_droid_tile_creation_flow(client: AsyncClient, dbsession: Session):
+    """Simulate what Droid does: create project, register tile token, verify
     the admin resolution returns all the fields the console needs."""
-    user = await create_test_user(client, "unity_tile@test.com")
+    user = await create_test_user(client, "droid_tile@test.com")
 
     proj_resp = await client.post(
         "/v0/project",
-        json={"name": "unity-tile-proj"},
+        json={"name": "droid-tile-proj"},
         headers=user["headers"],
     )
     assert proj_resp.status_code == 200
@@ -119,41 +119,41 @@ async def test_unity_tile_creation_flow(client: AsyncClient, dbsession: Session)
     reg = await client.post(
         "/v0/dashboards/tokens",
         json=token_body(
-            "unity_tile01",
+            "droid_tile01",
             "tile",
-            "unity-tile-proj/Dashboards/Tiles",
-            "unity-tile-proj",
+            "droid-tile-proj/Dashboards/Tiles",
+            "droid-tile-proj",
         ),
         headers=user["headers"],
     )
     assert reg.status_code == status.HTTP_201_CREATED
 
     resolved = await client.get(
-        "/v0/admin/dashboards/tokens/unity_tile01",
+        "/v0/admin/dashboards/tokens/droid_tile01",
         headers=ADMIN_HEADERS,
     )
     assert resolved.status_code == status.HTTP_200_OK
     data = resolved.json()
     assert data["entity_type"] == "tile"
-    assert data["context_name"] == "unity-tile-proj/Dashboards/Tiles"
+    assert data["context_name"] == "droid-tile-proj/Dashboards/Tiles"
     assert data["user_id"] == user["id"]
     assert data["organization_id"] is None
     assert isinstance(data["project_id"], int) and data["project_id"] > 0
 
 
 @pytest.mark.anyio
-async def test_unity_dashboard_composition_flow(
+async def test_droid_dashboard_composition_flow(
     client: AsyncClient,
     dbsession: Session,
 ):
     """Register 3 tile tokens then 1 dashboard token referencing them.
     Verify all resolve with correct entity_types. Deleting the dashboard
     must not affect the tiles."""
-    user = await create_test_user(client, "unity_compose@test.com")
+    user = await create_test_user(client, "droid_compose@test.com")
 
     await client.post(
         "/v0/project",
-        json={"name": "unity-compose-proj"},
+        json={"name": "droid-compose-proj"},
         headers=user["headers"],
     )
 
@@ -165,8 +165,8 @@ async def test_unity_dashboard_composition_flow(
             json=token_body(
                 tok,
                 "tile",
-                "unity-compose-proj/Dashboards/Tiles",
-                "unity-compose-proj",
+                "droid-compose-proj/Dashboards/Tiles",
+                "droid-compose-proj",
             ),
             headers=user["headers"],
         )
@@ -178,8 +178,8 @@ async def test_unity_dashboard_composition_flow(
         json=token_body(
             "comp_dash_00",
             "dashboard",
-            "unity-compose-proj/Dashboards/Layouts",
-            "unity-compose-proj",
+            "droid-compose-proj/Dashboards/Layouts",
+            "droid-compose-proj",
         ),
         headers=user["headers"],
     )

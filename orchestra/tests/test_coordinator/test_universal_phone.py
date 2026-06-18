@@ -23,8 +23,8 @@ def _make_user(
     phone_number: str | None = None,
 ) -> User:
     user = User(
-        id=f"unity-phone-{suffix}",
-        email=f"unity-phone-{suffix}@test.com",
+        id=f"droid-phone-{suffix}",
+        email=f"droid-phone-{suffix}@test.com",
         phone_number=phone_number,
     )
     dbsession.add(user)
@@ -49,9 +49,9 @@ def _active_phone_contact(
 
 @pytest.fixture(autouse=True)
 def universal_phone_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "unity_coordinator_phone_us", "+14155552671")
-    monkeypatch.setattr(settings, "unity_coordinator_phone_uk", "+447911123456")
-    monkeypatch.setattr(settings, "unity_coordinator_default_phone_country", "US")
+    monkeypatch.setattr(settings, "droid_coordinator_phone_us", "+14155552671")
+    monkeypatch.setattr(settings, "droid_coordinator_phone_uk", "+447911123456")
+    monkeypatch.setattr(settings, "droid_coordinator_default_phone_country", "US")
 
 
 def test_create_workspace_coordinator_attaches_universal_phone_by_preferred_country(
@@ -82,7 +82,7 @@ def test_create_workspace_coordinator_attaches_universal_phone_by_preferred_coun
     assert contact.country_code == "GB"
     assert contact.provider == "twilio"
     assert contact.provisioned_by == "platform"
-    assert contact.metadata_["universal_unity"] is True
+    assert contact.metadata_["universal_droid"] is True
     assert contact.metadata_["assignment_source"] == "geo"
 
 

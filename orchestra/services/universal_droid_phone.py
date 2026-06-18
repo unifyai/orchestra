@@ -18,7 +18,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 from orchestra.web.api.utils.phone_number_validator import PhoneNumberValidator
 
-UNIVERSAL_UNITY_PHONE_METADATA = {"universal_unity": True}
+UNIVERSAL_DROID_PHONE_METADATA = {"universal_droid": True}
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 
 
@@ -38,14 +38,14 @@ def _normalize_phone_number(number: str) -> str:
     return formatted
 
 
-def get_universal_unity_phone_numbers() -> dict[str, str]:
+def get_universal_droid_phone_numbers() -> dict[str, str]:
     # Discrete per-country Coordinator phone numbers, mounted per environment
     # from Secret Manager. The UK number is keyed under its ISO country code
     # ("GB") so it lines up with the country resolved from the visitor's IP by
     # the console.
     candidates = {
-        "GB": settings.unity_coordinator_phone_uk,
-        "US": settings.unity_coordinator_phone_us,
+        "GB": settings.droid_coordinator_phone_uk,
+        "US": settings.droid_coordinator_phone_us,
     }
     numbers: dict[str, str] = {}
     for country_code, number in candidates.items():
@@ -54,18 +54,18 @@ def get_universal_unity_phone_numbers() -> dict[str, str]:
     return numbers
 
 
-def get_universal_unity_phone_number(country: str | None) -> str | None:
+def get_universal_droid_phone_number(country: str | None) -> str | None:
     country_code = _normalize_country(country)
     if country_code is None:
         return None
-    return get_universal_unity_phone_numbers().get(country_code)
+    return get_universal_droid_phone_numbers().get(country_code)
 
 
-def is_universal_unity_phone_number(number: str | None) -> bool:
+def is_universal_droid_phone_number(number: str | None) -> bool:
     if not number:
         return False
     normalized = _normalize_phone_number(number)
-    return normalized in set(get_universal_unity_phone_numbers().values())
+    return normalized in set(get_universal_droid_phone_numbers().values())
 
 
 def infer_phone_country(number: str | None) -> str | None:
@@ -77,19 +77,19 @@ def infer_phone_country(number: str | None) -> str | None:
     return phonenumbers.region_code_for_number(parsed)
 
 
-def select_universal_unity_phone_country(
+def select_universal_droid_phone_country(
     *,
     preferred_country: str | None,
     user_phone_number: str | None,
 ) -> str | None:
-    numbers = get_universal_unity_phone_numbers()
+    numbers = get_universal_droid_phone_numbers()
     if not numbers:
         return None
 
     candidates = [
         _normalize_country(preferred_country),
         infer_phone_country(user_phone_number),
-        _normalize_country(settings.unity_coordinator_default_phone_country),
+        _normalize_country(settings.droid_coordinator_default_phone_country),
     ]
     for country in candidates:
         if country in numbers:
@@ -98,12 +98,12 @@ def select_universal_unity_phone_country(
     return sorted(numbers)[0]
 
 
-def ensure_universal_unity_phone_pool(
+def ensure_universal_droid_phone_pool(
     session: Session,
     *,
     country: str,
 ) -> SharedPoolNumber | None:
-    number = get_universal_unity_phone_number(country)
+    number = get_universal_droid_phone_number(country)
     if number is None:
         return None
 
@@ -139,7 +139,7 @@ def _existing_universal_phone_contact(
             AssistantContact.assistant_id == coordinator.agent_id,
             AssistantContact.contact_type == "phone",
             AssistantContact.status == "active",
-            AssistantContact.metadata_["universal_unity"].astext == "true",
+            AssistantContact.metadata_["universal_droid"].astext == "true",
         )
         .first()
     )
@@ -159,7 +159,7 @@ def ensure_coordinator_universal_phone_contact(
     if existing is not None and preferred_country is None:
         existing_country = _normalize_country(existing.country_code)
         configured_number = (
-            get_universal_unity_phone_number(existing_country)
+            get_universal_droid_phone_number(existing_country)
             if existing_country
             else None
         )
@@ -168,7 +168,7 @@ def ensure_coordinator_universal_phone_contact(
         # settings, reconcile the stored value in place (preserving country)
         # rather than reselecting a — possibly different — country.
         if configured_number:
-            pool = ensure_universal_unity_phone_pool(session, country=existing_country)
+            pool = ensure_universal_droid_phone_pool(session, country=existing_country)
             if pool is not None and existing.contact_value != configured_number:
                 reconciled = AssistantContactDAO(session).upsert_assistant_contact(
                     assistant_id=coordinator.agent_id,
@@ -178,7 +178,7 @@ def ensure_coordinator_universal_phone_contact(
                     provisioned_by="platform",
                     country_code=existing_country,
                     metadata={
-                        **UNIVERSAL_UNITY_PHONE_METADATA,
+                        **UNIVERSAL_DROID_PHONE_METADATA,
                         "country": existing_country,
                         "assignment_source": "reconcile",
                         "shared_pool_number_id": pool.id,
@@ -191,19 +191,19 @@ def ensure_coordinator_universal_phone_contact(
     user_phone_number = (
         session.query(User.phone_number).filter(User.id == coordinator.user_id).scalar()
     )
-    country = select_universal_unity_phone_country(
+    country = select_universal_droid_phone_country(
         preferred_country=preferred_country,
         user_phone_number=user_phone_number,
     )
     if country is None:
         return None
 
-    pool = ensure_universal_unity_phone_pool(session, country=country)
+    pool = ensure_universal_droid_phone_pool(session, country=country)
     if pool is None:
         return None
 
     metadata = {
-        **UNIVERSAL_UNITY_PHONE_METADATA,
+        **UNIVERSAL_DROID_PHONE_METADATA,
         "country": country,
         "assignment_source": assignment_source,
         "shared_pool_number_id": pool.id,

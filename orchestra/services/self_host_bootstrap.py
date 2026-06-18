@@ -39,7 +39,7 @@ SELF_HOST_OWNER_NAME = "Local Owner"
 
 @dataclass(frozen=True)
 class SelfHostBootstrapResult:
-    """Credentials and runtime ids printed after ``unity stack up``."""
+    """Credentials and runtime ids printed after ``droid stack up``."""
 
     user_id: str
     email: str
@@ -96,7 +96,7 @@ def ensure_provider_integration_backends(session: Session) -> None:
     Composio executes live only when ``COMPOSIO_API_KEY`` is configured, so the
     backend row is enabled exactly when the key is present and disabled
     otherwise. Provider catalog normalization stays with the admin bootstrap
-    script, and the compose stack then feeds its snapshot into Unity's Builtins
+    script, and the compose stack then feeds its snapshot into Droid's Builtins
     seeder so public app/tool discovery uses the shared Builtins project.
     """
     seed_default_provider_catalog(session)
@@ -114,7 +114,7 @@ def _resolve_password() -> str:
     credentials_path = os.path.expanduser(
         os.environ.get(
             "SELF_HOST_CREDENTIALS_FILE",
-            "~/.unity/self-host-credentials.json",
+            "~/.droid/self-host-credentials.json",
         ),
     )
     if os.path.isfile(credentials_path):

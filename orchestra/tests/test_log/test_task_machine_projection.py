@@ -1,4 +1,4 @@
-"""Integration tests for Unity task machine-state projection."""
+"""Integration tests for Droid task machine-state projection."""
 
 from __future__ import annotations
 
@@ -363,7 +363,7 @@ def test_reconcile_deletes_unarmed_scheduled_delivery(monkeypatch):
 
 
 def test_post_task_activation_request_skips_in_self_host_mode(monkeypatch):
-    """Self-host uses Unity's LocalActivationScheduler instead of Communication."""
+    """Self-host uses Droid's LocalActivationScheduler instead of Communication."""
 
     posts: list[tuple] = []
 
@@ -378,7 +378,7 @@ def test_post_task_activation_request_skips_in_self_host_mode(monkeypatch):
             posts.append((args, kwargs))
 
     monkeypatch.setenv("SELF_HOST", "1")
-    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("DROID_COMMS_URL", "http://comms.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
 
@@ -411,7 +411,7 @@ def test_post_task_activation_request_posts_when_not_self_host(monkeypatch):
             )
 
     monkeypatch.delenv("SELF_HOST", raising=False)
-    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("DROID_COMMS_URL", "http://comms.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
 

@@ -29,14 +29,14 @@ from orchestra.db.models.orchestra_models import (
     SharedPoolNumber,
     User,
 )
-from orchestra.services.universal_unity_whatsapp import (
-    is_universal_unity_whatsapp_number,
+from orchestra.services.universal_droid_whatsapp import (
+    is_universal_droid_whatsapp_number,
 )
-from orchestra.services.universal_unity_phone import (
-    is_universal_unity_phone_number,
+from orchestra.services.universal_droid_phone import (
+    is_universal_droid_phone_number,
 )
-from orchestra.services.universal_unity_discord import (
-    is_universal_unity_discord_bot,
+from orchestra.services.universal_droid_discord import (
+    is_universal_droid_discord_bot,
 )
 from orchestra.services.shared_coordinator_routing import (
     find_user_by_shared_identity,
@@ -180,8 +180,8 @@ class SharedPoolDAO:
         """
         now = datetime.now(timezone.utc)
 
-        if self._is_universal_unity_pool(pool_number):
-            return self._resolve_universal_unity_inbound(pool_number, sender)
+        if self._is_universal_droid_pool(pool_number):
+            return self._resolve_universal_droid_inbound(pool_number, sender)
 
         # Tier 1: platform-specific user identity match
         user = self._find_user_by_platform_identity(sender)
@@ -324,7 +324,7 @@ class SharedPoolDAO:
         )
         return [r[0] for r in rows]
 
-    def _resolve_universal_unity_inbound(
+    def _resolve_universal_droid_inbound(
         self,
         pool_number: str,
         sender: str,
@@ -337,7 +337,7 @@ class SharedPoolDAO:
             sender=sender,
         )
 
-    def _find_owned_universal_unity_assistants(
+    def _find_owned_universal_droid_assistants(
         self,
         user_id: str,
         pool_number: str,
@@ -381,7 +381,7 @@ class SharedPoolDAO:
         active_pool = [
             pool
             for pool in active_pool
-            if not self._is_universal_unity_pool(pool.number)
+            if not self._is_universal_droid_pool(pool.number)
         ]
 
         eligible = []
@@ -449,10 +449,10 @@ class SharedPoolDAO:
         if not pool:
             raise ValueError(f"Pool number {contact.contact_value} not found.")
 
-        is_universal_unity_contact = self._is_universal_unity_contact(contact)
-        if is_universal_unity_contact:
+        is_universal_droid_contact = self._is_universal_droid_contact(contact)
+        if is_universal_droid_contact:
             return (
-                self._build_universal_unity_owner_route(
+                self._build_universal_droid_owner_route(
                     contact,
                     pool,
                     contact_number,
@@ -760,7 +760,7 @@ class SharedPoolDAO:
         for personal_aid, personal_cv, personal_is_coordinator in personal_assistants:
             if personal_cv in org_pool_map:
                 org_aid, org_is_coordinator = org_pool_map[personal_cv]
-                if self._is_universal_unity_pool(personal_cv) and (
+                if self._is_universal_droid_pool(personal_cv) and (
                     personal_is_coordinator or org_is_coordinator
                 ):
                     continue
@@ -973,17 +973,17 @@ class SharedPoolDAO:
                     user_ids.append(uid)
         return user_ids
 
-    def _is_universal_unity_pool(self, pool_number: str | None) -> bool:
+    def _is_universal_droid_pool(self, pool_number: str | None) -> bool:
         if self.platform == "whatsapp":
-            return is_universal_unity_whatsapp_number(pool_number)
+            return is_universal_droid_whatsapp_number(pool_number)
         if self.platform == "phone":
-            return is_universal_unity_phone_number(pool_number)
+            return is_universal_droid_phone_number(pool_number)
         if self.platform == "discord":
-            return is_universal_unity_discord_bot(pool_number)
+            return is_universal_droid_discord_bot(pool_number)
         return False
 
-    def _is_universal_unity_contact(self, contact: AssistantContact) -> bool:
-        if not self._is_universal_unity_pool(contact.contact_value):
+    def _is_universal_droid_contact(self, contact: AssistantContact) -> bool:
+        if not self._is_universal_droid_pool(contact.contact_value):
             return False
         assistant = (
             self.session.query(Assistant)
@@ -992,7 +992,7 @@ class SharedPoolDAO:
         )
         return bool(assistant and assistant.is_coordinator)
 
-    def _build_universal_unity_owner_route(
+    def _build_universal_droid_owner_route(
         self,
         contact: AssistantContact,
         pool: SharedPoolNumber,
@@ -1001,16 +1001,16 @@ class SharedPoolDAO:
         target_user = self._find_user_by_platform_identity(contact_number)
         if target_user is None:
             raise ValueError(
-                "Universal Unity routes can only message verified platform users.",
+                "Universal Droid routes can only message verified platform users.",
             )
 
-        candidates = self._find_owned_universal_unity_assistants(
+        candidates = self._find_owned_universal_droid_assistants(
             target_user.id,
             pool.number,
         )
         if candidates != [contact.assistant_id]:
             raise ValueError(
-                "Universal Unity routes require an unambiguous contact.",
+                "Universal Droid routes require an unambiguous contact.",
             )
 
         return SharedPlatformRoute(

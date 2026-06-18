@@ -16,7 +16,7 @@ connector = Connector()
 tables = ["auth_user", "project", "artifact", "dataset_artifact", "log_event", "log"]
 
 
-def create_unity_project():
+def create_droid_project():
 
     # Use Cloud SQL connector for GCP deployment
     from google.cloud.sql.connector import Connector
@@ -57,4 +57,4 @@ def create_unity_project():
 
 
 if __name__ == "__main__":
-    create_unity_project()
+    create_droid_project()
