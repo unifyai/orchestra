@@ -50,6 +50,13 @@ def main() -> None:
         help="Owner contexts processed per committed batch (default 1000).",
     )
     parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="ANALYZE the heavy tables before reclassifying so the planner has "
+        "fresh stats (it picks the log_event PK nested-loop join over a scan of "
+        "a giant partition only with accurate row estimates).",
+    )
+    parser.add_argument(
         "--vacuum",
         action="store_true",
         help="VACUUM (ANALYZE) the heavy tables after reclassifying to reclaim "
@@ -68,6 +75,12 @@ def main() -> None:
     # AUTOCOMMIT so each batched UPDATE commits independently (resumable, bounded
     # locks); VACUUM also requires running outside a transaction.
     engine = create_engine(db_url, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
+
+    if args.analyze:
+        with engine.connect() as conn:
+            for table in _HEAVY_TABLES:
+                log.info("ANALYZE %s ...", table)
+                conn.execute(text(f'ANALYZE "{table}"'))
 
     start = time.monotonic()
     with engine.connect() as conn:
