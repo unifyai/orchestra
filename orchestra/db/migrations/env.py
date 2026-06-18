@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import Connection, create_engine
+from sqlalchemy import Connection, create_engine, text
 
 from orchestra.db.meta import meta
 from orchestra.db.migrations.reconcile import reconcile_to_new_chain
@@ -63,6 +63,15 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
+        # The pre-deploy migrator runs while the previous app revision is still
+        # serving traffic and holding ACCESS SHARE locks on the kernel tables.
+        # Migrations routinely need ACCESS EXCLUSIVE (DROP / ALTER ... ADD
+        # PRIMARY KEY / ATTACH PARTITION), so a short app-oriented lock_timeout
+        # makes them fail-fast ("canceling statement due to lock timeout")
+        # instead of queuing for the lock. Give the migrator a generous bound so
+        # it acquires the lock once in-flight queries clear, while still failing
+        # (rather than hanging indefinitely) on a pathological long-lived lock.
+        connection.execute(text("SET lock_timeout = '5min'"))
         context.run_migrations()
 
 

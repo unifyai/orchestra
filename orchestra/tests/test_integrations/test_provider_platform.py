@@ -16,10 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.integration_provider_models import (
-    DynamicProviderApp,
     IntegrationBackend,
     ProviderActionAudit,
-    ProviderToolCatalog,
 )
 from orchestra.integrations.providers.composio import ComposioProviderAdapter
 from orchestra.integrations.providers.local_echo import LocalEchoProviderAdapter
@@ -52,171 +50,29 @@ def _owner_query(assistant_id: int, user_id: str = "api-user") -> str:
     return f"owner_scope=assistant&assistant_id={assistant_id}&user_id={user_id}"
 
 
-async def _sync_integrations(
-    client: AsyncClient,
+def _tool_metadata(
     *,
-    backend_id: str = "composio",
-    app_slug: str = "hubspot",
-    display_name: str = "HubSpot",
-    tool_name: str = "search_contacts",
-    tool_display_name: str = "Search HubSpot contacts",
+    app_slug: str,
+    tool_name: str,
+    display_name: str,
     action_class: str = "read",
     required_scopes: list[str] | None = None,
-    source_type: str = "third_party",
-    sync_mode: str = "partial",
-    prune_unlisted_apps: bool = False,
-) -> dict:
-    response = await client.post(
-        "/v0/admin/integrations/sync",
-        headers=ADMIN_HEADERS,
-        json={
-            "backend_id": backend_id,
-            "source_type": source_type,
-            "app_slugs": [app_slug],
-            "sync_mode": sync_mode,
-            "prune_unlisted_apps": prune_unlisted_apps,
-            "apps": [
-                {
-                    "provider_app_id": app_slug,
-                    "canonical_app_slug": app_slug,
-                    "display_name": display_name,
-                    "description": f"{display_name} catalog entry.",
-                    "category": "CRM" if source_type == "third_party" else "native",
-                    "auth_modes": (
-                        ["api_key"] if source_type == "third_party" else ["native"]
-                    ),
-                    "tier": "api",
-                    "quality": "gold",
-                    "function_names": (
-                        [f"{app_slug}_sync"] if source_type == "native" else []
-                    ),
-                    "required_secrets": (
-                        [f"{app_slug.upper()}_TOKEN"] if source_type == "native" else []
-                    ),
-                    "tags": [app_slug, "synced"],
-                },
-            ],
-            "tools": (
-                []
-                if source_type == "native"
-                else [
-                    {
-                        "provider_app_id": app_slug,
-                        "canonical_app_slug": app_slug,
-                        "provider_tool_id": f"{app_slug}.{tool_name}",
-                        "name": tool_name,
-                        "display_name": tool_display_name,
-                        "description": f"{tool_display_name} for synced catalog tests.",
-                        "input_schema": {
-                            "type": "object",
-                            "properties": {"query": {"type": "string"}},
-                        },
-                        "output_schema": {"type": "object"},
-                        "required_scopes": (
-                            required_scopes if required_scopes is not None else ["read"]
-                        ),
-                        "action_class": action_class,
-                        "confirmation_required": action_class
-                        in {"write", "destructive", "bulk_export"},
-                    },
-                ]
-            ),
-        },
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    return response.json()
-
-
-@pytest.mark.anyio
-async def test_partial_sync_preserves_unlisted_catalog_rows(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    await _sync_integrations(client, app_slug="gmail", tool_name="search_messages")
-    await _sync_integrations(client, app_slug="slack", tool_name="send_message")
-
-    response = await _sync_integrations(
-        client,
-        app_slug="gmail",
-        tool_name="list_threads",
-        prune_unlisted_apps=False,
-    )
-
-    assert response["apps_pruned"] == 0
-    assert response["tools_pruned"] == 0
-    assert {
-        app.canonical_app_slug
-        for app in dbsession.query(DynamicProviderApp).filter_by(backend_id="composio")
-    } == {"gmail", "slack"}
-    assert (
-        dbsession.query(ProviderToolCatalog)
-        .filter_by(backend_id="composio", canonical_app_slug="slack")
-        .count()
-        == 1
-    )
-    assert (
-        dbsession.query(ProviderToolCatalog)
-        .filter_by(backend_id="composio", canonical_app_slug="gmail")
-        .count()
-        == 2
-    )
-
-
-@pytest.mark.anyio
-async def test_partial_prune_removes_unlisted_catalog_rows(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    await _sync_integrations(client, app_slug="gmail", tool_name="search_messages")
-    await _sync_integrations(client, app_slug="slack", tool_name="send_message")
-
-    response = await _sync_integrations(
-        client,
-        app_slug="gmail",
-        tool_name="list_threads",
-        prune_unlisted_apps=True,
-    )
-
-    assert response["apps_pruned"] == 1
-    assert response["tools_pruned"] == 1
-    assert sorted(
-        app.canonical_app_slug
-        for app in dbsession.query(DynamicProviderApp)
-        .filter_by(backend_id="composio")
-        .all()
-    ) == ["gmail"]
-    assert (
-        dbsession.query(ProviderToolCatalog)
-        .filter_by(backend_id="composio", canonical_app_slug="slack")
-        .count()
-        == 0
-    )
-
-
-@pytest.mark.anyio
-async def test_full_sync_prunes_backend_catalog_rows(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    await _sync_integrations(client, app_slug="gmail", tool_name="search_messages")
-    await _sync_integrations(client, app_slug="slack", tool_name="send_message")
-
-    response = await _sync_integrations(
-        client,
-        app_slug="gmail",
-        tool_name="list_threads",
-        sync_mode="full",
-    )
-
-    assert response["prune_unlisted_apps"] is True
-    assert response["apps_pruned"] == 1
-    assert response["tools_pruned"] == 1
-    assert sorted(
-        app.canonical_app_slug
-        for app in dbsession.query(DynamicProviderApp)
-        .filter_by(backend_id="composio")
-        .all()
-    ) == ["gmail"]
+) -> dict[str, object]:
+    return {
+        "backend_id": "composio",
+        "provider_app_id": app_slug,
+        "canonical_app_slug": app_slug,
+        "app_display_name": app_slug.replace("_", " ").title(),
+        "provider_tool_id": f"{app_slug}.{tool_name}",
+        "canonical_name": f"primitives.integrations.{app_slug}.{tool_name}",
+        "function_manager_name": f"primitives_integrations__{app_slug}__{tool_name}",
+        "tool_display_name": display_name,
+        "action_class": action_class,
+        "required_scopes": required_scopes or [],
+        "behavior_hints": ["mutates_state"] if action_class == "write" else [],
+        "confirmation_required": action_class
+        in {"write", "destructive", "bulk_export"},
+    }
 
 
 def test_backend_bootstrap_is_idempotent_and_does_not_seed_catalog(
@@ -235,8 +91,6 @@ def test_backend_bootstrap_is_idempotent_and_does_not_seed_catalog(
     seed_default_provider_catalog(dbsession)
 
     assert dbsession.query(IntegrationBackend).count() == first_backend_count
-    assert dbsession.query(DynamicProviderApp).count() == 0
-    assert dbsession.query(ProviderToolCatalog).count() == 0
     assert (
         dbsession.query(IntegrationBackend)
         .filter_by(backend_id="pipedream")
@@ -273,7 +127,7 @@ def test_provider_registry_uses_deployment_env_for_live_adapters(
     assert isinstance(pipedream, PipedreamProviderAdapter)
 
 
-def test_provider_catalog_unique_constraints(dbsession: Session) -> None:
+def test_provider_backend_unique_constraints(dbsession: Session) -> None:
     dbsession.add(
         IntegrationBackend(
             backend_id="duplicate-backend",
@@ -290,26 +144,6 @@ def test_provider_catalog_unique_constraints(dbsession: Session) -> None:
             environment="test",
             display_name="Duplicate Again",
         ),
-    )
-    with pytest.raises(IntegrityError):
-        dbsession.flush()
-    dbsession.rollback()
-
-    dbsession.add_all(
-        [
-            DynamicProviderApp(
-                backend_id="custom",
-                provider_app_id="app-one",
-                canonical_app_slug="same-slug",
-                display_name="App One",
-            ),
-            DynamicProviderApp(
-                backend_id="custom",
-                provider_app_id="app-two",
-                canonical_app_slug="same-slug",
-                display_name="App Two",
-            ),
-        ],
     )
     with pytest.raises(IntegrityError):
         dbsession.flush()
@@ -759,25 +593,6 @@ async def test_admin_backend_config_and_catalog_sync_routes(
     assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
     assert patch_response.json()["status"] == "disabled"
 
-    await client.patch(
-        "/v0/admin/integrations/backends/pipedream",
-        headers=ADMIN_HEADERS,
-        json={"status": "enabled"},
-    )
-    sync_response = await _sync_integrations(
-        client,
-        backend_id="pipedream",
-        app_slug="linear",
-        display_name="Linear",
-        tool_name="list_issues",
-        tool_display_name="List Linear issues",
-    )
-    assert sync_response["apps_upserted"] == 1
-    assert sync_response["tools_upserted"] == 1
-    assert sync_response["apps"][0]["canonical_app_slug"] == "linear"
-    assert sync_response["tools"][0]["canonical_app_slug"] == "linear"
-    assert sync_response["tools"][0]["provider_tool_id"] == "linear.list_issues"
-
     bootstrap = await client.put(
         "/v0/admin/integrations/bootstrap-state",
         headers=ADMIN_HEADERS,
@@ -832,22 +647,13 @@ async def test_admin_backend_config_and_catalog_sync_routes(
 async def test_backend_status_is_the_only_catalog_visibility_gate(
     client: AsyncClient,
 ) -> None:
-    await _sync_integrations(
-        client,
-        backend_id="pipedream",
-        app_slug="linear",
-        display_name="Linear",
-        tool_name="list_issues",
-        tool_display_name="List Linear issues",
-    )
-
-    hidden = await client.get(
+    tombstone = await client.get(
         "/v0/integrations/apps/search",
         headers=HEADERS,
         params={"query": "Linear"},
     )
-    assert hidden.status_code == status.HTTP_200_OK, hidden.json()
-    assert hidden.json() == []
+    assert tombstone.status_code == status.HTTP_410_GONE
+    assert "Builtins logs" in tombstone.json()["detail"]
 
     disabled_connect = await client.post(
         "/v0/integrations/connect/start",
@@ -871,44 +677,34 @@ async def test_backend_status_is_the_only_catalog_visibility_gate(
     )
     assert enabled.status_code == status.HTTP_200_OK, enabled.json()
 
-    visible = await client.get(
+    still_tombstoned = await client.get(
         "/v0/integrations/apps/search",
         headers=HEADERS,
         params={"query": "Linear"},
     )
-    assert visible.status_code == status.HTTP_200_OK, visible.json()
-    assert visible.json()[0]["canonical_app_slug"] == "linear"
+    assert still_tombstoned.status_code == status.HTTP_410_GONE
+    assert "Builtins logs" in still_tombstoned.json()["detail"]
 
 
 @pytest.mark.anyio
 async def test_native_app_sync_search_and_connection_rejection(
     client: AsyncClient,
 ) -> None:
-    await _sync_integrations(
-        client,
-        backend_id="unity_native",
-        app_slug="matterport",
-        display_name="Matterport",
-        source_type="native",
-    )
-
     page = await client.get(
         "/v0/integrations/apps",
         headers=HEADERS,
         params={"source_type": "native", "query": "Matterport"},
     )
-    assert page.status_code == status.HTTP_200_OK, page.json()
-    assert page.json()["total"] == 1
-    assert page.json()["items"][0]["source_label"] == "Native"
-    assert page.json()["items"][0]["native_metadata"]["tier"] == "api"
+    assert page.status_code == status.HTTP_410_GONE
+    assert "Builtins logs" in page.json()["detail"]
 
     third_party_page = await client.get(
         "/v0/integrations/apps",
         headers=HEADERS,
         params={"source_type": "third_party", "query": "Matterport"},
     )
-    assert third_party_page.status_code == status.HTTP_200_OK, third_party_page.json()
-    assert third_party_page.json()["total"] == 0
+    assert third_party_page.status_code == status.HTTP_410_GONE
+    assert "Builtins logs" in third_party_page.json()["detail"]
 
     rejected = await client.post(
         "/v0/integrations/connect/start",
@@ -930,31 +726,6 @@ async def test_connection_start_derives_requested_scopes_generically(
     client: AsyncClient,
 ) -> None:
     assistant_id = 120_000 + (uuid.uuid4().int % 1000)
-    await _sync_integrations(
-        client,
-        app_slug="scope_slack",
-        display_name="Scope Slack",
-        tool_name="send_message",
-        required_scopes=["chat:write"],
-    )
-    await _sync_integrations(
-        client,
-        app_slug="scope_mail",
-        display_name="Scope Mail",
-        tool_name="fetch_messages",
-        required_scopes=[
-            "https://mail.google.com/",
-            "https://www.googleapis.com/auth/gmail.readonly",
-        ],
-    )
-    await _sync_integrations(
-        client,
-        app_slug="scope_free",
-        display_name="Scope Free",
-        tool_name="ping",
-        required_scopes=[],
-    )
-
     slack_start = await client.post(
         "/v0/integrations/connect/start",
         headers=HEADERS,
@@ -962,7 +733,8 @@ async def test_connection_start_derives_requested_scopes_generically(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "scope_slack",
             "backend_id": "composio",
-            "requested_scopes": [],
+            "provider_app_id": "scope_slack",
+            "requested_scopes": ["chat:write"],
             "auth_mode": "oauth",
         },
     )
@@ -992,9 +764,7 @@ async def test_connection_start_derives_requested_scopes_generically(
             "activation_state": "connected_ready",
         },
     )
-    assert connected_tools.status_code == status.HTTP_200_OK, connected_tools.json()
-    assert connected_tools.json()["total"] == 1
-    assert connected_tools.json()["items"][0]["activation_state"] == "connected_ready"
+    assert connected_tools.status_code == status.HTTP_410_GONE, connected_tools.text
 
     mail_start = await client.post(
         "/v0/integrations/connect/start",
@@ -1003,7 +773,11 @@ async def test_connection_start_derives_requested_scopes_generically(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "scope_mail",
             "backend_id": "composio",
-            "requested_scopes": [],
+            "provider_app_id": "scope_mail",
+            "requested_scopes": [
+                "https://mail.google.com/",
+                "https://www.googleapis.com/auth/gmail.readonly",
+            ],
             "auth_mode": "oauth",
         },
     )
@@ -1020,6 +794,7 @@ async def test_connection_start_derives_requested_scopes_generically(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "scope_mail",
             "backend_id": "composio",
+            "provider_app_id": "scope_mail",
             "requested_scopes": ["https://mail.google.com/"],
             "auth_mode": "oauth",
         },
@@ -1034,6 +809,7 @@ async def test_connection_start_derives_requested_scopes_generically(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "scope_free",
             "backend_id": "composio",
+            "provider_app_id": "scope_free",
             "requested_scopes": [],
             "auth_mode": "oauth",
         },
@@ -1049,7 +825,11 @@ async def test_connection_start_derives_requested_scopes_generically(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "scope_mail",
             "backend_id": "composio",
-            "requested_scopes": [],
+            "provider_app_id": "scope_mail",
+            "requested_scopes": [
+                "https://mail.google.com/",
+                "https://www.googleapis.com/auth/gmail.readonly",
+            ],
             "auth_mode": "api_key",
             "api_key_fields": {"token": "secret"},
         },
@@ -1073,8 +853,7 @@ async def test_connection_start_derives_requested_scopes_generically(
             "activation_state": "connected_ready",
         },
     )
-    assert api_key_tools.status_code == status.HTTP_200_OK, api_key_tools.json()
-    assert api_key_tools.json()["total"] == 1
+    assert api_key_tools.status_code == status.HTTP_410_GONE, api_key_tools.text
 
     api_key_scope_free_start = await client.post(
         "/v0/integrations/connect/start",
@@ -1083,6 +862,7 @@ async def test_connection_start_derives_requested_scopes_generically(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "scope_free",
             "backend_id": "composio",
+            "provider_app_id": "scope_free",
             "requested_scopes": [],
             "auth_mode": "api_key",
             "api_key_fields": {"token": "secret"},
@@ -1099,234 +879,16 @@ async def test_connection_start_derives_requested_scopes_generically(
 async def test_app_catalog_status_filters_facets_and_summary_payload(
     client: AsyncClient,
 ) -> None:
-    assistant_id = 90_000 + (uuid.uuid4().int % 1000)
-    app_specs = [
-        ("asana", "Asana Tasks", "list_tasks", ["tasks.read"]),
-        ("dropbox", "Dropbox Files", "list_files", ["files.read"]),
-        ("hubspot", "HubSpot CRM", "search_contacts", ["crm.objects.contacts.read"]),
-        ("jira", "Jira Issues", "list_issues", ["issues.read"]),
-        ("notion", "Notion Docs", "list_pages", ["pages.read"]),
-        ("slack", "Slack Chat", "send_message", ["chat:write"]),
-    ]
-    for slug, display_name, tool_name, scopes in app_specs:
-        await _sync_integrations(
-            client,
-            app_slug=slug,
-            display_name=display_name,
-            tool_name=tool_name,
-            tool_display_name=f"{display_name} tool",
-            required_scopes=scopes,
-        )
-    await _sync_integrations(
-        client,
-        app_slug="matterport",
-        display_name="Matterport Native",
-        source_type="native",
-    )
-
-    configured_start = await client.post(
-        "/v0/integrations/connect/start",
-        headers=HEADERS,
-        json={
-            **_owner_payload(assistant_id=assistant_id),
-            "canonical_app_slug": "hubspot",
-            "backend_id": "composio",
-            "requested_scopes": ["crm.objects.contacts.read"],
-            "auth_mode": "api_key",
-            "api_key_fields": {"token": "secret"},
-        },
-    )
-    assert configured_start.status_code == status.HTTP_200_OK, configured_start.json()
-
-    connected_start = await client.post(
-        "/v0/integrations/connect/start",
-        headers=HEADERS,
-        json={
-            **_owner_payload(assistant_id=assistant_id),
-            "canonical_app_slug": "slack",
-            "backend_id": "composio",
-            "requested_scopes": ["chat:write"],
-            "auth_mode": "oauth",
-        },
-    )
-    assert connected_start.status_code == status.HTTP_200_OK, connected_start.json()
-    connected_id = connected_start.json()["connection"]["connection_id"]
-    connected_complete = await client.post(
-        f"/v0/integrations/connections/{connected_id}/complete",
-        headers=HEADERS,
-        json={
-            "provider_connection_id": "provider-slack",
-            "granted_scopes": ["chat:write"],
-            "status": "connected",
-        },
-    )
-    assert (
-        connected_complete.status_code == status.HTTP_200_OK
-    ), connected_complete.json()
-
-    missing_scope_start = await client.post(
-        "/v0/integrations/connect/start",
-        headers=HEADERS,
-        json={
-            **_owner_payload(assistant_id=assistant_id),
-            "canonical_app_slug": "jira",
-            "backend_id": "composio",
-            "requested_scopes": ["issues.comment"],
-            "auth_mode": "oauth",
-        },
-    )
-    assert (
-        missing_scope_start.status_code == status.HTTP_200_OK
-    ), missing_scope_start.json()
-    missing_scope_id = missing_scope_start.json()["connection"]["connection_id"]
-    missing_scope_complete = await client.post(
-        f"/v0/integrations/connections/{missing_scope_id}/complete",
-        headers=HEADERS,
-        json={
-            "provider_connection_id": "provider-jira",
-            "granted_scopes": [],
-            "status": "connected",
-        },
-    )
-    assert (
-        missing_scope_complete.status_code == status.HTTP_200_OK
-    ), missing_scope_complete.json()
-
-    pending_start = await client.post(
-        "/v0/integrations/connect/start",
-        headers=HEADERS,
-        json={
-            **_owner_payload(assistant_id=assistant_id),
-            "canonical_app_slug": "notion",
-            "backend_id": "composio",
-            "requested_scopes": ["pages.read"],
-            "auth_mode": "oauth",
-        },
-    )
-    assert pending_start.status_code == status.HTTP_200_OK, pending_start.json()
-
-    connected_page = await client.get(
+    for path in (
         "/v0/integrations/apps",
-        headers=HEADERS,
-        params=[
-            ("owner_scope", "assistant"),
-            ("assistant_id", str(assistant_id)),
-            ("user_id", "api-user"),
-            ("source_type", "third_party"),
-            ("status", "connected"),
-            ("status", "configured"),
-            ("limit", "100"),
-            ("offset", "0"),
-        ],
-    )
-    assert connected_page.status_code == status.HTTP_200_OK, connected_page.json()
-    connected_body = connected_page.json()
-    assert connected_body["total"] == 2
-    assert {item["connection_status"] for item in connected_body["items"]} == {
-        "connected",
-        "configured",
-    }
-
-    comma_page = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "source_type": "third_party",
-            "status": "connected,configured",
-        },
-    )
-    assert comma_page.status_code == status.HTTP_200_OK, comma_page.json()
-    assert comma_page.json()["total"] == 2
-
-    grouped_page = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "source_type": "third_party",
-            "status_group": "connected",
-        },
-    )
-    assert grouped_page.status_code == status.HTTP_200_OK, grouped_page.json()
-    assert grouped_page.json()["total"] == 2
-
-    attention_page = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "query": "Jira",
-            "source_type": "third_party",
-            "status_group": "needs_attention",
-        },
-    )
-    assert attention_page.status_code == status.HTTP_200_OK, attention_page.json()
-    assert attention_page.json()["total"] == 1
-    assert attention_page.json()["items"][0]["canonical_app_slug"] == "jira"
-    assert attention_page.json()["items"][0]["connection_status"] == "missing_scope"
-
-    not_connected_page = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "source_type": "third_party",
-            "status_group": "not_connected",
-            "limit": 1,
-            "offset": 1,
-        },
-    )
-    assert (
-        not_connected_page.status_code == status.HTTP_200_OK
-    ), not_connected_page.json()
-    assert not_connected_page.json()["total"] == 2
-    assert not_connected_page.json()["items"][0]["canonical_app_slug"] == "dropbox"
-    assert not_connected_page.json()["items"][0]["connection_status"] == "not_connected"
-
-    facets = connected_body["facets"]
-    assert facets["total"] == 6
-    assert facets["source_type"] == {"native": 0, "third_party": 6}
-    assert facets["status"]["connected"] == 1
-    assert facets["status"]["configured"] == 1
-    assert facets["status"]["pending"] == 1
-    assert facets["status"]["missing_scope"] == 1
-    assert facets["status"]["not_connected"] == 2
-    assert facets["status_group"] == {
-        "connected": 2,
-        "needs_attention": 2,
-        "not_connected": 2,
-    }
-
-    summary_page = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "status_group": "connected",
-            "detail_level": "summary",
-            "limit": 1,
-        },
-    )
-    assert summary_page.status_code == status.HTTP_200_OK, summary_page.json()
-    summary_item = summary_page.json()["items"][0]
-    assert summary_item["available_actions"] == []
-    assert summary_item["available_scopes"] == []
-    assert summary_item["tool_count"] == 1
-    assert summary_item["connection_status"] in {"connected", "configured"}
-
-    invalid_status = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={**_owner_payload(assistant_id=assistant_id), "status": "bogus"},
-    )
-    assert invalid_status.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    invalid_group = await client.get(
-        "/v0/integrations/apps",
-        headers=HEADERS,
-        params={**_owner_payload(assistant_id=assistant_id), "status_group": "bogus"},
-    )
-    assert invalid_group.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        "/v0/integrations/apps/search",
+        "/v0/integrations/tools",
+        "/v0/integrations/tools/search",
+        "/v0/integrations/tools/composio:slack:send_message/schema",
+    ):
+        response = await client.get(path, headers=HEADERS)
+        assert response.status_code == status.HTTP_410_GONE, (path, response.text)
+        assert "Builtins logs" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -1352,15 +914,6 @@ async def test_connection_tool_pagination_run_policy_and_audit(
     dbsession: Session,
 ) -> None:
     assistant_id = 77_000 + (uuid.uuid4().int % 1000)
-    await _sync_integrations(
-        client,
-        app_slug="hubspot",
-        display_name="HubSpot",
-        tool_name="search_contacts",
-        tool_display_name="Search HubSpot contacts",
-        required_scopes=["crm.objects.contacts.read"],
-    )
-
     start_response = await client.post(
         "/v0/integrations/connect/start",
         headers=HEADERS,
@@ -1375,6 +928,13 @@ async def test_connection_tool_pagination_run_policy_and_audit(
     )
     assert start_response.status_code == status.HTTP_200_OK, start_response.json()
     connection_id = start_response.json()["connection"]["connection_id"]
+    tool_id = "composio:hubspot:search_contacts"
+    tool_metadata = _tool_metadata(
+        app_slug="hubspot",
+        tool_name="search_contacts",
+        display_name="Search HubSpot contacts",
+        required_scopes=["crm.objects.contacts.read"],
+    )
 
     tools = await client.get(
         "/v0/integrations/tools",
@@ -1387,11 +947,7 @@ async def test_connection_tool_pagination_run_policy_and_audit(
             "offset": 0,
         },
     )
-    assert tools.status_code == status.HTTP_200_OK, tools.json()
-    assert tools.json()["total"] == 1
-    tool = tools.json()["items"][0]
-    assert tool["activation_state"] == "connected_ready"
-    assert "input_schema" not in tool
+    assert tools.status_code == status.HTTP_410_GONE, tools.text
 
     tools_with_schema = await client.get(
         "/v0/integrations/tools",
@@ -1405,23 +961,20 @@ async def test_connection_tool_pagination_run_policy_and_audit(
             "offset": 0,
         },
     )
-    assert tools_with_schema.status_code == status.HTTP_200_OK, tools_with_schema.json()
-    tool_with_schema = tools_with_schema.json()["items"][0]
-    assert tool_with_schema["input_schema"]["properties"]["query"]["type"] == "string"
-    assert tool_with_schema["output_schema"] == {"type": "object"}
+    assert tools_with_schema.status_code == status.HTTP_410_GONE, tools_with_schema.text
 
     schema = await client.get(
-        f"/v0/integrations/tools/{tool['tool_id']}/schema?{_owner_query(assistant_id)}",
+        f"/v0/integrations/tools/{tool_id}/schema?{_owner_query(assistant_id)}",
         headers=HEADERS,
     )
-    assert schema.status_code == status.HTTP_200_OK, schema.json()
-    assert schema.json()["canonical_name"] == tool["canonical_name"]
+    assert schema.status_code == status.HTTP_410_GONE, schema.text
 
     run = await client.post(
-        f"/v0/integrations/tools/{tool['tool_id']}/run",
+        f"/v0/integrations/tools/{tool_id}/run",
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"query": "alice"},
         },
@@ -1441,19 +994,20 @@ async def test_connection_tool_pagination_run_policy_and_audit(
     policy = await client.patch(
         f"/v0/integrations/connections/{connection_id}/tool-policy",
         headers=HEADERS,
-        json={"tool_policies": {tool["tool_id"]: "forbidden"}},
+        json={"tool_policies": {tool_id: "forbidden"}},
     )
     assert policy.status_code == status.HTTP_200_OK, policy.json()
     patched_policy = next(
-        item for item in policy.json()["policies"] if item["tool_id"] == tool["tool_id"]
+        item for item in policy.json()["policies"] if item["tool_id"] == tool_id
     )
     assert patched_policy["approval_level"] == "forbidden"
 
     blocked = await client.post(
-        f"/v0/integrations/tools/{tool['tool_id']}/run",
+        f"/v0/integrations/tools/{tool_id}/run",
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"query": "alice"},
         },
@@ -1468,14 +1022,6 @@ async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
     client: AsyncClient,
 ) -> None:
     assistant_id = 78_000 + (uuid.uuid4().int % 1000)
-    await _sync_integrations(
-        client,
-        app_slug="gmail",
-        display_name="Gmail",
-        tool_name="list_labels",
-        tool_display_name="List Gmail labels",
-        required_scopes=["https://www.googleapis.com/auth/gmail.labels"],
-    )
     start_response = await client.post(
         "/v0/integrations/connect/start",
         headers=HEADERS,
@@ -1484,6 +1030,7 @@ async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
             "assistant_id": assistant_id,
             "canonical_app_slug": "gmail",
             "backend_id": "composio",
+            "provider_app_id": "gmail",
             "requested_scopes": ["https://www.googleapis.com/auth/gmail.labels"],
             "auth_mode": "api_key",
             "api_key_fields": {"token": "secret"},
@@ -1491,20 +1038,13 @@ async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
     )
     assert start_response.status_code == status.HTTP_200_OK, start_response.json()
     connection_id = start_response.json()["connection"]["connection_id"]
-
-    tools = await client.get(
-        "/v0/integrations/tools",
-        headers=HEADERS,
-        params={
-            "owner_scope": "assistant",
-            "assistant_id": assistant_id,
-            "canonical_app_slug": "gmail",
-            "activation_state": "connected_ready",
-            "limit": 1,
-        },
+    tool_id = "composio:gmail:get_labels"
+    tool_metadata = _tool_metadata(
+        app_slug="gmail",
+        tool_name="get_labels",
+        display_name="List Gmail labels",
+        required_scopes=["https://www.googleapis.com/auth/gmail.labels"],
     )
-    assert tools.status_code == status.HTTP_200_OK, tools.json()
-    tool_id = tools.json()["items"][0]["tool_id"]
 
     run = await client.post(
         f"/v0/integrations/tools/{tool_id}/run",
@@ -1512,6 +1052,7 @@ async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
         json={
             "owner_scope": "assistant",
             "assistant_id": assistant_id,
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"user_id": "me"},
         },
@@ -1527,15 +1068,6 @@ async def test_run_tool_confirmation_envelope(
     dbsession: Session,
 ) -> None:
     assistant_id = 88_000 + (uuid.uuid4().int % 1000)
-    await _sync_integrations(
-        client,
-        app_slug="slack",
-        display_name="Slack",
-        tool_name="send_message",
-        tool_display_name="Send Slack message",
-        action_class="write",
-        required_scopes=["chat:write"],
-    )
     start_response = await client.post(
         "/v0/integrations/connect/start",
         headers=HEADERS,
@@ -1543,6 +1075,7 @@ async def test_run_tool_confirmation_envelope(
             **_owner_payload(assistant_id=assistant_id),
             "canonical_app_slug": "slack",
             "backend_id": "composio",
+            "provider_app_id": "slack",
             "requested_scopes": ["chat:write"],
             "auth_mode": "api_key",
             "api_key_fields": {"token": "secret"},
@@ -1551,24 +1084,21 @@ async def test_run_tool_confirmation_envelope(
     )
     assert start_response.status_code == status.HTTP_200_OK, start_response.json()
     connection_id = start_response.json()["connection"]["connection_id"]
-
-    tools = await client.get(
-        "/v0/integrations/tools/search",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "query": "Slack message",
-            "include_unconnected": True,
-        },
+    tool_id = "composio:slack:send_message"
+    tool_metadata = _tool_metadata(
+        app_slug="slack",
+        tool_name="send_message",
+        display_name="Send Slack message",
+        action_class="write",
+        required_scopes=["chat:write"],
     )
-    assert tools.status_code == status.HTTP_200_OK, tools.json()
-    tool_id = tools.json()[0]["tool_id"]
 
     missing_confirmation = await client.post(
         f"/v0/integrations/tools/{tool_id}/run",
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"channel": "general", "text": "hello"},
         },
@@ -1611,6 +1141,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "confirmation_token": valid_token,
             "arguments": {"channel": "general", "text": "hello"},
@@ -1624,6 +1155,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"channel": "general", "text": "approve once"},
         },
@@ -1668,6 +1200,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "approval_audit_id": once_audit_id,
             "arguments": {"channel": "general", "text": "approve once"},
@@ -1685,6 +1218,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"channel": "general", "text": "deny"},
         },
@@ -1714,6 +1248,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "approval_audit_id": deny_audit_id,
             "arguments": {"channel": "general", "text": "deny"},
@@ -1728,6 +1263,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"channel": "general", "text": "persist"},
         },
@@ -1750,6 +1286,7 @@ async def test_run_tool_confirmation_envelope(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_id,
             "arguments": {"channel": "general", "text": "future"},
         },
@@ -1763,23 +1300,14 @@ async def test_tool_policy_is_scoped_to_connection_account(
     client: AsyncClient,
 ) -> None:
     assistant_id = 89_000 + (uuid.uuid4().int % 1000)
-    await _sync_integrations(
-        client,
+    tool_id = "composio:asana:create_task"
+    read_tool_id = "composio:asana:list_tasks"
+    tool_metadata = _tool_metadata(
         app_slug="asana",
-        display_name="Asana",
         tool_name="create_task",
-        tool_display_name="Create Asana task",
+        display_name="Create Asana task",
         action_class="write",
         required_scopes=["tasks:write"],
-    )
-    await _sync_integrations(
-        client,
-        app_slug="asana",
-        display_name="Asana",
-        tool_name="list_tasks",
-        tool_display_name="List Asana tasks",
-        action_class="read",
-        required_scopes=["tasks:read"],
     )
     connection_ids: list[str] = []
     for label in ["Work Asana", "Personal Asana"]:
@@ -1790,6 +1318,7 @@ async def test_tool_policy_is_scoped_to_connection_account(
                 **_owner_payload(assistant_id=assistant_id),
                 "canonical_app_slug": "asana",
                 "backend_id": "composio",
+                "provider_app_id": "asana",
                 "requested_scopes": ["tasks:write", "tasks:read"],
                 "auth_mode": "api_key",
                 "api_key_fields": {"token": "secret"},
@@ -1799,17 +1328,6 @@ async def test_tool_policy_is_scoped_to_connection_account(
         assert response.status_code == status.HTTP_200_OK, response.json()
         connection_ids.append(response.json()["connection"]["connection_id"])
 
-    tools = await client.get(
-        "/v0/integrations/tools",
-        headers=HEADERS,
-        params={
-            **_owner_payload(assistant_id=assistant_id),
-            "canonical_app_slug": "asana",
-            "activation_state": "connected_ready",
-            "limit": 1,
-        },
-    )
-    assert tools.status_code == status.HTTP_200_OK, tools.json()
     policy_before = await client.get(
         f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
         headers=HEADERS,
@@ -1818,11 +1336,7 @@ async def test_tool_policy_is_scoped_to_connection_account(
     assert policy_before.status_code == status.HTTP_200_OK, policy_before.json()
     assert policy_before.json()["account_label"] == "Work Asana"
     assert policy_before.json()["app_display_name"] == "Asana"
-    policies_by_name = {
-        item["display_name"]: item for item in policy_before.json()["policies"]
-    }
-    tool_id = policies_by_name["Create Asana task"]["tool_id"]
-    read_tool_id = policies_by_name["List Asana tasks"]["tool_id"]
+    assert policy_before.json()["policies"] == []
 
     patched = await client.patch(
         f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
@@ -1833,7 +1347,6 @@ async def test_tool_policy_is_scoped_to_connection_account(
     assert patched.status_code == status.HTTP_200_OK, patched.json()
     patched_by_id = {item["tool_id"]: item for item in patched.json()["policies"]}
     assert patched_by_id[tool_id]["approval_level"] == "auto"
-    assert patched_by_id[read_tool_id]["approval_level"] == "auto"
 
     second_patch = await client.patch(
         f"/v0/integrations/connections/{connection_ids[0]}/tool-policy",
@@ -1859,16 +1372,14 @@ async def test_tool_policy_is_scoped_to_connection_account(
         params={"owner_scope": "assistant", "assistant_id": assistant_id},
     )
     assert other_policy.status_code == status.HTTP_200_OK, other_policy.json()
-    other_item = next(
-        item for item in other_policy.json()["policies"] if item["tool_id"] == tool_id
-    )
-    assert other_item["approval_level"] == "specific_approval"
+    assert other_policy.json()["policies"] == []
 
     auto_run = await client.post(
         f"/v0/integrations/tools/{tool_id}/run",
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_ids[0],
             "arguments": {"name": "ship account scoped policy"},
         },
@@ -1881,6 +1392,7 @@ async def test_tool_policy_is_scoped_to_connection_account(
         headers=HEADERS,
         json={
             **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
             "connection_id": connection_ids[1],
             "arguments": {"name": "ask on other account"},
         },

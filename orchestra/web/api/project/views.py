@@ -2232,6 +2232,8 @@ def admin_duplicate_project(
                 "allow_duplicates": ctx.allow_duplicates,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
+                "owner_scope": ctx.owner_scope,
+                "owner_id": ctx.owner_id,
                 "old_id": ctx.id,  # Temporary field to track old ID
             },
         )
@@ -2307,6 +2309,8 @@ def admin_duplicate_project(
         # Add JSONB fields
         new_event_data["data"] = le.data
         new_event_data["key_order"] = le.key_order
+        # Preserve the owning scope on the copy (owner sub-partition key).
+        new_event_data["owner_key"] = le.owner_key
 
         log_event_values.append(new_event_data)
 
@@ -2363,6 +2367,7 @@ def admin_duplicate_project(
                         "project_id": new_project.id,
                         "log_event_id": log_event_id_map[lec.log_event_id],
                         "context_id": context_id_map[lec.context_id],
+                        "owner_key": lec.owner_key,
                     },
                 )
 

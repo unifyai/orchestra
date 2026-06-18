@@ -1557,7 +1557,7 @@ async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
     client: AsyncClient,
     dbsession,
 ):
-    """Delete cleans creator scopes and user aggregates but preserves All/*."""
+    """Delete cleans creator scopes, user aggregates, and the topmost All/* (uniform cascade)."""
     user = await create_test_user(
         client,
         "org_3tier_cleanup@test.com",
@@ -1655,7 +1655,7 @@ async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
     if logs_tier3.status_code == 200:
         assert logs_tier3.json()["count"] == 0, "Tier3 context should be empty"
 
-    # Verify log is removed from tier2 but remains in tier1 (archive protection)
+    # Verify log is removed from tier2 (uniform cascade, no archive protection)
     sibling_logs = await client.get(
         f"/v0/logs?project_name={project_name}&context={tier2_context}",
         headers=org_headers,
@@ -1666,7 +1666,7 @@ async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
             log_id not in log_ids
         ), f"Log {log_id} should be removed from sibling context {tier2_context}"
 
-    # Archive protection: log remains in topmost All/* context
+    # Uniform cascade: log is also removed from topmost All/* context
     archive_logs = await client.get(
         f"/v0/logs?project_name={project_name}&context={tier1_context}",
         headers=org_headers,
@@ -1674,8 +1674,8 @@ async def test_delete_org_assistant_cleans_lower_tiers_and_preserves_archive(
     if archive_logs.status_code == 200:
         log_ids = [log["id"] for log in archive_logs.json()["logs"]]
         assert (
-            log_id in log_ids
-        ), f"Log {log_id} should remain in archive context {tier1_context}"
+            log_id not in log_ids
+        ), f"Log {log_id} should be removed from {tier1_context} (uniform cascade, no archive protection)"
 
 
 @pytest.mark.anyio
@@ -1683,7 +1683,7 @@ async def test_delete_org_assistant_by_other_member_cleans_creator_scoped_logs(
     client: AsyncClient,
     dbsession,
 ):
-    """Cross-member delete cleans creator scopes but preserves the All/* archive."""
+    """Cross-member delete cleans creator scopes and the topmost All/* (uniform cascade)."""
 
     owner = await create_test_user(
         client,
@@ -1803,7 +1803,7 @@ async def test_delete_org_assistant_by_other_member_cleans_creator_scoped_logs(
         headers=org_headers,
     )
     if tier1_logs.status_code == status.HTTP_200_OK:
-        assert log_id in [log["id"] for log in tier1_logs.json()["logs"]]
+        assert log_id not in [log["id"] for log in tier1_logs.json()["logs"]]
 
 
 # =============================================================================
@@ -2794,7 +2794,7 @@ async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive
     dbsession,
 ):
     """
-    Transfer-to-personal removes lower tiers while keeping the topmost archive.
+    Transfer-to-personal removes logs from all tiers (uniform cascade, no archive protection).
 
     Uses 3-tier context hierarchy:
     - Tier 1: All/Transcripts (global aggregate)
@@ -2804,7 +2804,7 @@ async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive
     When transferring an assistant from org to personal with delete_logs=True:
     - Assistant-specific contexts (Tier 3) should be deleted
     - Tier 2 user aggregates should be cleaned via context_dao.delete()
-    - Tier 1 All/* should remain as the protected archive
+    - Tier 1 All/* should also be cleaned (uniform cascade)
     """
     user = await create_test_user(
         client,
@@ -2891,7 +2891,7 @@ async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive
     transfer_data = transfer_resp.json()["info"]
     assert transfer_data["logs_deleted"] is True
 
-    # Verify log is removed from tier2 and tier3 but remains in tier1 (archive protection)
+    # Verify log is removed from all three tiers (uniform cascade, no archive protection)
     for ctx in [tier2_context, tier3_context]:
         logs_resp = await client.get(
             f"/v0/logs?project_name=Assistants&context={ctx}",
@@ -2902,15 +2902,15 @@ async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive
                 log["id"] for log in logs_resp.json()["logs"]
             ], f"Log should be cleaned from {ctx}"
 
-    # Archive protection: log remains in topmost All/* context
+    # Uniform cascade: log is also removed from topmost All/* context
     logs_resp = await client.get(
         f"/v0/logs?project_name=Assistants&context={tier1_context}",
         headers=org_headers,
     )
     if logs_resp.status_code == 200:
-        assert log_id in [
+        assert log_id not in [
             log["id"] for log in logs_resp.json()["logs"]
-        ], f"Log should remain in archive {tier1_context}"
+        ], f"Log should be removed from {tier1_context} (uniform cascade, no archive protection)"
 
 
 @pytest.mark.anyio
@@ -2922,8 +2922,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     Test that logs from OTHER assistants in shared contexts are preserved during transfer.
 
     When transferring assistant A with delete_logs=True:
-    - Assistant A's logs should be removed from Tier 2 and Tier 3
-    - Assistant A's topmost All/* archive copy should remain
+    - Assistant A's logs should be removed from all tiers (uniform cascade, no archive protection)
     - Assistant B's logs in shared All/* contexts should NOT be affected
     """
     user = await create_test_user(
@@ -3050,14 +3049,16 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     # Assistant B's log should still exist
     assert log_id_b in log_ids, f"Log B should still exist in {tier2_context}"
 
-    # Archive protection: log A remains in topmost All/* context for historical record
+    # Uniform cascade: log A is also removed from topmost All/* context
     logs_resp = await client.get(
         f"/v0/logs?project_name=Assistants&context={tier1_context}",
         headers=org_headers,
     )
     assert logs_resp.status_code == 200
     log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-    assert log_id_a in log_ids, f"Log A should remain in archive {tier1_context}"
+    assert (
+        log_id_a not in log_ids
+    ), f"Log A should be removed from {tier1_context} (uniform cascade, no archive protection)"
     assert log_id_b in log_ids, f"Log B should still exist in {tier1_context}"
 
     # Verify Assistant B's Tier 3 context is untouched

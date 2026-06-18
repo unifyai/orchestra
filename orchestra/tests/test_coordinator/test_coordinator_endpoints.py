@@ -186,11 +186,12 @@ def _insert_log(
         context = Context(project_id=project.id, name=context_name)
         dbsession.add(context)
         dbsession.flush()
-    log_event = LogEvent(project_id=project.id, data=data)
+    log_event = LogEvent(owner_key="sys", project_id=project.id, data=data)
     dbsession.add(log_event)
     dbsession.flush()
     dbsession.add(
         LogEventContext(
+            owner_key="sys",
             project_id=project.id,
             log_event_id=log_event.id,
             context_id=context.id,

@@ -2194,10 +2194,10 @@ async def _get_or_generate_embedding(
         # Insert into DB (use upsert to handle race conditions)
         from orchestra.db.models.core_models import LogEvent
 
-        embedding_project_id = (
-            session.query(LogEvent.project_id)
+        embedding_project_id, embedding_owner_key = (
+            session.query(LogEvent.project_id, LogEvent.owner_key)
             .filter(LogEvent.id == log_event_id)
-            .scalar()
+            .one()
         )
         stmt = insert(Embedding).values(
             project_id=embedding_project_id,
@@ -2206,6 +2206,7 @@ async def _get_or_generate_embedding(
             model=model,
             vector=vector,
             is_deleted=False,
+            owner_key=embedding_owner_key or "sys",
         )
         stmt = stmt.on_conflict_do_update(
             constraint="uq_embedding",
@@ -2304,22 +2305,25 @@ def _ensure_vectors_exist(
     # - Soft-deleted embeddings (resurrect by setting is_deleted=False and updating vector)
     from orchestra.db.models.core_models import LogEvent
 
-    id_to_project = dict(
-        session.query(LogEvent.id, LogEvent.project_id)
+    id_to_log = {
+        r[0]: (r[1], r[2])
+        for r in session.query(LogEvent.id, LogEvent.project_id, LogEvent.owner_key)
         .filter(LogEvent.id.in_(ids_to_embed))
-        .all(),
-    )
+        .all()
+    }
     rows_to_upsert = []
     for i, log_event_id in enumerate(ids_to_embed):
         embedding_vector = all_embeddings[i]
+        proj, owner = id_to_log[log_event_id]
         rows_to_upsert.append(
             {
-                "project_id": id_to_project[log_event_id],
+                "project_id": proj,
                 "ref_id": log_event_id,
                 "key": key,
                 "model": model_name,
                 "vector": embedding_vector,
                 "is_deleted": False,
+                "owner_key": owner or "sys",
             },
         )
 

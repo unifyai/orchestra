@@ -233,11 +233,12 @@ def _add_context_log(
         context = Context(project_id=project.id, name=context_name)
         dbsession.add(context)
         dbsession.flush()
-    log_event = LogEvent(project_id=project.id, data=entries)
+    log_event = LogEvent(owner_key="sys", project_id=project.id, data=entries)
     dbsession.add(log_event)
     dbsession.flush()
     dbsession.add(
         LogEventContext(
+            owner_key="sys",
             project_id=project.id,
             log_event_id=log_event.id,
             context_id=context.id,

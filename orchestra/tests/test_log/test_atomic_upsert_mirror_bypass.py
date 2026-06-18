@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 
 import pytest
@@ -90,11 +89,15 @@ def _context_exists(
 
 
 @pytest.mark.anyio
-async def test_personal_path_mirrors_when_add_to_all_context_true(
+async def test_personal_path_does_not_mirror_when_add_to_all_context_true(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Personal atomic upserts mirror into the archive context when requested."""
+    """add_to_all_context no longer mirrors: All/* aggregation has been retired.
+
+    The flag is still accepted for backward compatibility but is a no-op; the log
+    only ever lands in its own context.
+    """
 
     project_name = _project_name("personal")
     await _create_project(client, project_name)
@@ -109,25 +112,28 @@ async def test_personal_path_mirrors_when_add_to_all_context_true(
 
     assert response.status_code == 200, response.json()
     payload = response.json()
-    assert payload["mirrored_contexts"] == ["All/SomeTable"]
+    assert payload["mirrored_contexts"] is None
     assert _context_links_for_log(
         dbsession,
         project_name=project_name,
         log_id=payload["log_id"],
-    ) == ["All/SomeTable", "user1/assistant1/SomeTable"]
+    ) == ["user1/assistant1/SomeTable"]
+    assert not _context_exists(
+        dbsession,
+        project_name=project_name,
+        context_name="All/SomeTable",
+    )
 
 
 @pytest.mark.anyio
 async def test_team_path_skips_mirror_when_add_to_all_context_true(
     client: AsyncClient,
     dbsession: Session,
-    caplog: pytest.LogCaptureFixture,
 ):
     """Shared-team atomic upserts keep only the canonical context link."""
 
     project_name = _project_name("team")
     await _create_project(client, project_name)
-    caplog.set_level(logging.DEBUG, logger="orchestra.web.api.log.views")
 
     response = await _atomic_upsert(
         client,
@@ -149,11 +155,6 @@ async def test_team_path_skips_mirror_when_add_to_all_context_true(
         dbsession,
         project_name=project_name,
         context_name="All/SomeTable",
-    )
-    assert any(
-        getattr(record, "mirror_skipped", False) is True
-        and getattr(record, "context_name", None) == "Teams/7/SomeTable"
-        for record in caplog.records
     )
 
 

@@ -110,6 +110,15 @@ class LogEventContext(Base):
         ForeignKey("context.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    # Owning scope of the referenced log_event (see orchestra.db.scope). Carried
+    # on every association (including those into aggregation views) so all of an
+    # assistant/team's associations live in its sub-partition and drop together.
+    owner_key = Column(
+        String,
+        nullable=False,
+        primary_key=True,
+        server_default="sys",
+    )
 
     __table_args__ = (
         Index("idx_log_event_context_context_id", "context_id"),
@@ -141,6 +150,13 @@ class Context(Base):
     auto_counting = Column(JSONB, nullable=False, server_default="{}")
     foreign_keys = Column(JSONB, nullable=False, server_default="[]")
     current_commit_hash = Column(String, nullable=True)
+    # Ownership scope: the entity whose data this context holds and the unit of
+    # bulk deletion (see orchestra.db.scope). ``owner_scope`` is one of
+    # assistant/team/aggregation/system; ``owner_id`` is the agent_id (assistant)
+    # or team_id (team), else NULL. Logs created here denormalize this owner onto
+    # the heavy tables so an assistant/team can be dropped as a partition.
+    owner_scope = Column(String, nullable=True)
+    owner_id = Column(Integer, nullable=True)
 
     project = relationship("Project", back_populates="contexts")
     log_events = relationship(
@@ -164,6 +180,14 @@ class Context(Base):
         sa.CheckConstraint(
             "char_length(description) <= 256",
             name="ck_context_description_len",
+        ),
+        # Find all contexts owned by a given assistant/team within a project.
+        Index(
+            "idx_context_owner",
+            "project_id",
+            "owner_scope",
+            "owner_id",
+            postgresql_where=text("owner_id IS NOT NULL"),
         ),
     )
 
@@ -243,6 +267,15 @@ class LogEvent(Base):
     key_order = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    # Owning scope (see orchestra.db.scope): the assistant/team whose context
+    # created this log. The LIST sub-partition key the shared Assistants project
+    # is divided by, enabling O(1) per-assistant / per-team deletion.
+    owner_key = Column(
+        String,
+        nullable=False,
+        primary_key=True,
+        server_default="sys",
+    )
     contexts = relationship(
         "Context",
         secondary="log_event_context",
@@ -425,9 +458,25 @@ class Embedding(Base):
     vector = Column(Vector(), nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     is_deleted = Column(Boolean, nullable=False, server_default=sa.text("false"))
+    # Owning scope of the referenced log_event (see orchestra.db.scope); the
+    # LIST sub-partition key so an assistant/team's vectors (and their HNSW
+    # index segment) drop with its partition.
+    owner_key = Column(
+        String,
+        nullable=False,
+        primary_key=True,
+        server_default="sys",
+    )
 
     __table_args__ = (
-        UniqueConstraint("project_id", "ref_id", "model", "key", name="uq_embedding"),
+        UniqueConstraint(
+            "project_id",
+            "owner_key",
+            "ref_id",
+            "model",
+            "key",
+            name="uq_embedding",
+        ),
         Index(
             "idx_embedding_ref",
             "ref_id",

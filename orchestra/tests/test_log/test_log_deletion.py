@@ -1226,17 +1226,17 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
     client: AsyncClient,
 ):
     """
-    Test deleting logs from 'User/Assistant/Transcripts' cascades correctly with archive protection.
+    Test deleting logs from 'User/Assistant/Transcripts' cascades uniformly across all tiers.
 
     3-tier context hierarchy:
-    - Tier 1: All/Transcripts (global aggregate) - PROTECTED ARCHIVE
+    - Tier 1: All/Transcripts (global aggregate)
     - Tier 2: user2/All/Transcripts (user aggregate)
     - Tier 3: user2/assistant2/Transcripts (user + assistant specific)
 
     Deleting from Tier 3 should:
     - Remove from Tier 3 (source)
-    - Remove from Tier 2 (not protected)
-    - PRESERVE in Tier 1 (archive protection)
+    - Remove from Tier 2
+    - Remove from Tier 1 (uniform cascade, no archive protection)
     """
     project_name = "Assistants"
     global_all_context = "All/Transcripts"
@@ -1290,7 +1290,7 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
         assert response.status_code == 200, response.json()
         assert log_id in [log["id"] for log in response.json()["logs"]]
 
-    # Delete from User/Assistant context - cascades with archive protection
+    # Delete from User/Assistant context - cascades uniformly across all tiers
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
@@ -1300,26 +1300,17 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
     )
     assert response.status_code == 200, response.json()
 
-    # Verify log is removed from Tier 2 and Tier 3 (not protected)
-    for ctx in [user_all_context, user_assistant_context]:
+    # Verify log is removed from all three tiers (uniform cascade, no archive protection)
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
             f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
         assert response.status_code == 200, response.json()
-        assert log_id not in [log["id"] for log in response.json()["logs"]]
-
-    # Verify log is PRESERVED in Tier 1 archive (archive protection)
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        params={"context": global_all_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id in [
-        log["id"] for log in response.json()["logs"]
-    ], "Archive All/* should be protected"
+        assert log_id not in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be removed from {ctx} (uniform cascade, no archive protection)"
 
 
 @pytest.mark.anyio
@@ -1485,17 +1476,17 @@ async def test_assistants_3tier_delete_from_user_all_context(
     client: AsyncClient,
 ):
     """
-    Test deletion from User/All context cascades correctly with archive protection.
+    Test deletion from User/All context cascades uniformly across all tiers.
 
     3-tier context hierarchy:
-    - Tier 1: All/Transcripts (global aggregate) - PROTECTED ARCHIVE
+    - Tier 1: All/Transcripts (global aggregate)
     - Tier 2: user1/All/Transcripts (user aggregate)
     - Tier 3: user1/assistant1/Transcripts (user + assistant specific)
 
     Deleting from Tier 2 (User/All) should:
     - Remove from Tier 2 (source)
-    - Remove from Tier 3 (not protected)
-    - PRESERVE in Tier 1 (archive protection)
+    - Remove from Tier 3
+    - Remove from Tier 1 (uniform cascade, no archive protection)
     """
     project_name = "Assistants"
     global_all_context = "All/Transcripts"
@@ -1549,7 +1540,7 @@ async def test_assistants_3tier_delete_from_user_all_context(
         assert response.status_code == 200, response.json()
         assert log_id in [log["id"] for log in response.json()["logs"]]
 
-    # Delete from User/All context - cascades with archive protection
+    # Delete from User/All context - cascades uniformly across all tiers
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
@@ -1559,26 +1550,17 @@ async def test_assistants_3tier_delete_from_user_all_context(
     )
     assert response.status_code == 200, response.json()
 
-    # Verify removed from Tier 2 and Tier 3 (not protected)
-    for ctx in [user_all_context, user_assistant_context]:
+    # Verify removed from all three tiers (uniform cascade, no archive protection)
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
             f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
         assert response.status_code == 200, response.json()
-        assert log_id not in [log["id"] for log in response.json()["logs"]]
-
-    # Verify PRESERVED in Tier 1 archive (archive protection)
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        params={"context": global_all_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id in [
-        log["id"] for log in response.json()["logs"]
-    ], "Archive All/* should be protected"
+        assert log_id not in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be removed from {ctx} (uniform cascade, no archive protection)"
 
 
 @pytest.mark.anyio
@@ -2154,198 +2136,8 @@ async def test_assistants_3tier_with_prefix_and_nested_subcontext(
 
 
 # =============================================================================
-# Archive Protection Tests for Spending Limit Context Hierarchy
+# Uniform Cascade Tests for Spending Limit Context Hierarchy
 # =============================================================================
-
-
-@pytest.mark.anyio
-async def test_archive_protection_delete_from_tier3_preserves_archive(
-    client: AsyncClient,
-):
-    """
-    Test that deleting from Tier 3 context does NOT cascade to topmost archive (All/*).
-
-    When deleting from User/Assistant/Spending/Monthly:
-    - Tier 1: All/Spending/Monthly (PROTECTED - should NOT be deleted)
-    - Tier 2: User/All/Spending/Monthly (NOT protected - should be deleted)
-    - Tier 3: User/Assistant/Spending/Monthly (source - deleted)
-
-    This preserves historical spending data in the archive.
-    """
-    project_name = "Assistants"
-    archive_context = "All/Spending/Monthly"
-    user_all_context = "user1/All/Spending/Monthly"
-    user_assistant_context = "user1/assistant1/Spending/Monthly"
-
-    # Create project
-    response = await _create_project(client, project_name)
-    assert response.status_code == 200, response.json()
-
-    # Create all three contexts
-    for ctx in [archive_context, user_all_context, user_assistant_context]:
-        response = await client.post(
-            f"/v0/project/{project_name}/contexts",
-            json={"name": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-
-    # Create a spending log
-    response = await _create_log(
-        client,
-        project_name,
-        entries={
-            "spend": 15.50,
-            "model": "gpt-4",
-            "_user": "user1",
-            "_assistant": "assistant1",
-        },
-        context=archive_context,
-    )
-    assert response.status_code == 200, response.json()
-    log_id = response.json()["log_event_ids"][0]
-
-    # Add to other contexts
-    for ctx in [user_all_context, user_assistant_context]:
-        response = await client.post(
-            f"/v0/project/{project_name}/contexts/add_logs",
-            json={"context_name": ctx, "log_ids": [log_id]},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-
-    # Verify log is in all three contexts
-    for ctx in [archive_context, user_all_context, user_assistant_context]:
-        response = await client.get(
-            f"/v0/logs?project_name={project_name}",
-            params={"context": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-        assert log_id in [log["id"] for log in response.json()["logs"]]
-
-    # Delete from Tier 3 (user+assistant context)
-    ids_and_fields = [([log_id], None)]
-    response = await _delete_logs(
-        client,
-        ids_and_fields,
-        project_name=project_name,
-        context=user_assistant_context,
-    )
-    assert response.status_code == 200, response.json()
-
-    # Verify log is removed from Tier 2 and Tier 3
-    for ctx in [user_all_context, user_assistant_context]:
-        response = await client.get(
-            f"/v0/logs?project_name={project_name}",
-            params={"context": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-        assert log_id not in [
-            log["id"] for log in response.json()["logs"]
-        ], f"Log should be removed from {ctx}"
-
-    # Verify log is PRESERVED in topmost archive (All/*)
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        params={"context": archive_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id in [
-        log["id"] for log in response.json()["logs"]
-    ], "Log should be PRESERVED in archive All/Spending/Monthly"
-
-
-@pytest.mark.anyio
-async def test_archive_protection_delete_from_tier2_preserves_archive(
-    client: AsyncClient,
-):
-    """
-    Test that deleting from Tier 2 context does NOT cascade to topmost archive (All/*).
-
-    When deleting from User/All/Spending/Monthly:
-    - Tier 1: All/Spending/Monthly (PROTECTED - should NOT be deleted)
-    - Tier 2: User/All/Spending/Monthly (source - deleted)
-    - Tier 3: User/Assistant/Spending/Monthly (should be deleted)
-
-    This preserves historical spending data in the archive.
-    """
-    project_name = "Assistants"
-    archive_context = "All/Spending/Monthly"
-    user_all_context = "user2/All/Spending/Monthly"
-    user_assistant_context = "user2/assistant2/Spending/Monthly"
-
-    # Create project
-    response = await _create_project(client, project_name)
-    assert response.status_code == 200, response.json()
-
-    # Create all three contexts
-    for ctx in [archive_context, user_all_context, user_assistant_context]:
-        response = await client.post(
-            f"/v0/project/{project_name}/contexts",
-            json={"name": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-
-    # Create a spending log
-    response = await _create_log(
-        client,
-        project_name,
-        entries={
-            "spend": 25.00,
-            "model": "claude-3-opus",
-            "_user": "user2",
-            "_assistant": "assistant2",
-        },
-        context=archive_context,
-    )
-    assert response.status_code == 200, response.json()
-    log_id = response.json()["log_event_ids"][0]
-
-    # Add to other contexts
-    for ctx in [user_all_context, user_assistant_context]:
-        response = await client.post(
-            f"/v0/project/{project_name}/contexts/add_logs",
-            json={"context_name": ctx, "log_ids": [log_id]},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-
-    # Delete from Tier 2 (user/All context)
-    ids_and_fields = [([log_id], None)]
-    response = await _delete_logs(
-        client,
-        ids_and_fields,
-        project_name=project_name,
-        context=user_all_context,
-    )
-    assert response.status_code == 200, response.json()
-
-    # Verify log is removed from Tier 2 and Tier 3
-    for ctx in [user_all_context, user_assistant_context]:
-        response = await client.get(
-            f"/v0/logs?project_name={project_name}",
-            params={"context": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-        assert log_id not in [
-            log["id"] for log in response.json()["logs"]
-        ], f"Log should be removed from {ctx}"
-
-    # Verify log is PRESERVED in topmost archive (All/*)
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}",
-        params={"context": archive_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id in [
-        log["id"] for log in response.json()["logs"]
-    ], "Log should be PRESERVED in archive All/Spending/Monthly"
 
 
 @pytest.mark.anyio
@@ -2353,14 +2145,14 @@ async def test_archive_delete_from_archive_cascades_normally(
     client: AsyncClient,
 ):
     """
-    Test that deleting from archive (All/*) DOES cascade to lower tiers.
+    Test that deleting from All/* DOES cascade to lower tiers.
 
     When deleting from All/Spending/Monthly:
     - Tier 1: All/Spending/Monthly (source - deleted)
     - Tier 2: User/All/Spending/Monthly (should be deleted)
     - Tier 3: User/Assistant/Spending/Monthly (should be deleted)
 
-    Archive protection only applies when deleting FROM lower tiers.
+    Deletion cascades uniformly across all tiers (no archive protection).
     """
     project_name = "Assistants"
     archive_context = "All/Spending/Monthly"
@@ -2432,14 +2224,14 @@ async def test_archive_protection_intermediate_all_not_protected(
     client: AsyncClient,
 ):
     """
-    Test that intermediate User/All/* contexts are NOT protected.
+    Test that intermediate User/All/* contexts have their logs removed on cascade.
 
-    Only topmost All/* contexts are protected. When deleting from Tier 3:
-    - Tier 1: All/Spending/Monthly (PROTECTED)
-    - Tier 2: User/All/Spending/Monthly (NOT protected - should be deleted)
-    - Tier 3: User/Assistant/Spending/Monthly (source)
+    Deletion cascades uniformly across all tiers. When deleting from Tier 3:
+    - Tier 1: All/Transcripts (removed - uniform cascade, no archive protection)
+    - Tier 2: User/All/Transcripts (removed)
+    - Tier 3: User/Assistant/Transcripts (source)
 
-    This test confirms Tier 2 is NOT protected.
+    This test confirms Tier 2 logs are removed.
     """
     project_name = "Assistants"
     archive_context = "All/Transcripts"
@@ -2503,7 +2295,7 @@ async def test_archive_protection_intermediate_all_not_protected(
     )
     assert response.status_code == 200, response.json()
 
-    # Verify Tier 2 (User/All/*) IS deleted - NOT protected
+    # Verify Tier 2 (User/All/*) IS deleted
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         params={"context": user_all_context},
@@ -2512,99 +2304,18 @@ async def test_archive_protection_intermediate_all_not_protected(
     assert response.status_code == 200, response.json()
     assert log_id not in [
         log["id"] for log in response.json()["logs"]
-    ], "User/All/* should NOT be protected and log should be deleted"
+    ], "User/All/* log should be deleted"
 
-    # Verify Tier 1 (All/*) IS preserved - protected
+    # Verify Tier 1 (All/*) IS deleted - uniform cascade, no archive protection
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         params={"context": archive_context},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    assert log_id in [
+    assert log_id not in [
         log["id"] for log in response.json()["logs"]
-    ], "All/* should be protected and log should be preserved"
-
-
-@pytest.mark.anyio
-async def test_archive_protection_with_prefix(
-    client: AsyncClient,
-):
-    """
-    Test archive protection works correctly with prefixed contexts.
-
-    For Unity test isolation paths:
-    - Tier 1: tests/test_foo/All/Spending/Monthly (PROTECTED)
-    - Tier 2: tests/test_foo/User/All/Spending/Monthly (NOT protected)
-    - Tier 3: tests/test_foo/User/Assistant/Spending/Monthly
-
-    Note: Only true topmost archive (All/*) is protected, not prefix/All/*.
-    """
-    project_name = "UnityTests-ArchiveTest"
-    prefix = "tests/test_billing"
-    # With prefix, this becomes prefix/All/... which is NOT a topmost archive
-    archive_context = f"{prefix}/All/Spending/Monthly"
-    user_all_context = f"{prefix}/default/All/Spending/Monthly"
-    user_assistant_context = f"{prefix}/default/Assistant/Spending/Monthly"
-
-    # Create project
-    response = await _create_project(client, project_name)
-    assert response.status_code == 200, response.json()
-
-    # Create all three contexts
-    for ctx in [archive_context, user_all_context, user_assistant_context]:
-        response = await client.post(
-            f"/v0/project/{project_name}/contexts",
-            json={"name": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-
-    # Create a spending log
-    response = await _create_log(
-        client,
-        project_name,
-        entries={
-            "spend": 50.00,
-            "model": "claude-3-sonnet",
-            "_user": "default",
-            "_assistant": "Assistant",
-        },
-        context=archive_context,
-    )
-    assert response.status_code == 200, response.json()
-    log_id = response.json()["log_event_ids"][0]
-
-    # Add to other contexts
-    for ctx in [user_all_context, user_assistant_context]:
-        response = await client.post(
-            f"/v0/project/{project_name}/contexts/add_logs",
-            json={"context_name": ctx, "log_ids": [log_id]},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-
-    # Delete from Tier 3 - prefix/All/* is NOT topmost, so should cascade to all
-    ids_and_fields = [([log_id], None)]
-    response = await _delete_logs(
-        client,
-        ids_and_fields,
-        project_name=project_name,
-        context=user_assistant_context,
-    )
-    assert response.status_code == 200, response.json()
-
-    # With prefix, prefix/All/* is NOT a topmost archive, so all tiers deleted
-    for ctx in [archive_context, user_all_context, user_assistant_context]:
-        response = await client.get(
-            f"/v0/logs?project_name={project_name}",
-            params={"context": ctx},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-        assert log_id not in [
-            log["id"] for log in response.json()["logs"]
-        ], f"Log should be removed from {ctx} (prefix/All/* is not topmost archive)"
+    ], "All/* log should be removed (uniform cascade, no archive protection)"
 
 
 # =============================================================================

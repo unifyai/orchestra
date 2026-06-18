@@ -864,11 +864,12 @@ def _seed_context_with_log(dbsession, project, name):
     context = Context(project_id=project.id, name=name)
     dbsession.add(context)
     dbsession.flush()
-    log = LogEvent(project_id=project.id, data={"message": "to purge"})
+    log = LogEvent(owner_key="sys", project_id=project.id, data={"message": "to purge"})
     dbsession.add(log)
     dbsession.flush()
     dbsession.add(
         LogEventContext(
+            owner_key="sys",
             project_id=project.id,
             log_event_id=log.id,
             context_id=context.id,
@@ -1035,6 +1036,7 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
     n_logs = 5
     for i in range(n_logs):
         log = LogEvent(
+            owner_key="sys",
             project_id=project.id,
             data={"img": f"https://storage.googleapis.com/{bucket_name}/file_{i}.png"},
         )
@@ -1042,6 +1044,7 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
         dbsession.flush()
         dbsession.add(
             LogEventContext(
+                owner_key="sys",
                 project_id=project.id,
                 log_event_id=log.id,
                 context_id=context.id,

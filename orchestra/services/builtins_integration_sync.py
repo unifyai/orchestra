@@ -1082,6 +1082,9 @@ def upsert_context_rows(
     inserted = 0
     updated = 0
     now = datetime.now(timezone.utc)
+    from orchestra.db.scope import owner_key_for_context
+
+    owner_key_value = owner_key_for_context(session, context_id)
     id_to_text: dict[int, str] = {}
     for row in rows_by_key.values():
         key_values = {column: row[column] for column in key_columns}
@@ -1099,8 +1102,8 @@ def upsert_context_rows(
             new_log_event_id = session.execute(
                 text(
                     """
-                    INSERT INTO log_event (project_id, data, created_at, updated_at)
-                    VALUES (:project_id, CAST(:data AS jsonb), :created_at, :updated_at)
+                    INSERT INTO log_event (project_id, data, created_at, updated_at, owner_key)
+                    VALUES (:project_id, CAST(:data AS jsonb), :created_at, :updated_at, :owner_key)
                     RETURNING id
                     """,
                 ),
@@ -1109,15 +1112,22 @@ def upsert_context_rows(
                     "data": data_json,
                     "created_at": now,
                     "updated_at": now,
+                    "owner_key": owner_key_value,
                 },
             ).scalar_one()
             association = pg_insert(LogEventContext).values(
                 project_id=project_id,
                 log_event_id=new_log_event_id,
                 context_id=context_id,
+                owner_key=owner_key_value,
             )
             association = association.on_conflict_do_nothing(
-                index_elements=["project_id", "log_event_id", "context_id"],
+                index_elements=[
+                    "project_id",
+                    "owner_key",
+                    "log_event_id",
+                    "context_id",
+                ],
             )
             session.execute(association)
             inserted_constraint = _insert_new_constraint(
@@ -1179,9 +1189,15 @@ def upsert_context_rows(
                 project_id=project_id,
                 log_event_id=log_event_id,
                 context_id=context_id,
+                owner_key=owner_key_value,
             )
             association = association.on_conflict_do_nothing(
-                index_elements=["project_id", "log_event_id", "context_id"],
+                index_elements=[
+                    "project_id",
+                    "owner_key",
+                    "log_event_id",
+                    "context_id",
+                ],
             )
             session.execute(association)
             _upsert_constraint(
@@ -1558,34 +1574,6 @@ def _build_sync_payload(
     return IntegrationCatalogSyncRequest(**payload)
 
 
-def _update_legacy_catalog_projection(
-    session: Session,
-    *,
-    request: BuiltinsSyncRequest,
-    apps: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
-    app_slugs: list[str],
-    prune_unlisted_apps: bool,
-) -> dict[str, int]:
-    """Refresh legacy DB app/tool rows as a compatibility projection."""
-
-    if not apps and not tools:
-        return {"apps_upserted": 0, "tools_upserted": 0}
-    from orchestra.web.api.integrations.operations import _sync_catalog_rows
-
-    return _sync_catalog_rows(
-        session,
-        IntegrationCatalogSyncRequest(
-            backend_id=request.backend_id,
-            cache_version=request.cache_version,
-            apps=apps,
-            tools=tools,
-            app_slugs=app_slugs,
-            prune_unlisted_apps=prune_unlisted_apps,
-        ),
-    )
-
-
 def _materialize_apps(
     session: Session,
     *,
@@ -1758,14 +1746,6 @@ def run_builtins_sync(
         app_fetch = _fetch_provider_catalog_with_retry(session, app_body)
         contexts = ensure_builtins_catalog_contexts(session)
         project = contexts["project"]
-        legacy_app_counts = _update_legacy_catalog_projection(
-            session,
-            request=request,
-            apps=app_fetch.apps,
-            tools=[],
-            app_slugs=app_fetch.matched_app_slugs,
-            prune_unlisted_apps=request.prune_unlisted_apps,
-        )
         app_counts = _materialize_apps(
             session,
             project_id=project.id,
@@ -1789,7 +1769,6 @@ def run_builtins_sync(
                 "cache_version": app_fetch.cache_version,
                 "auth_configs_created": app_fetch.auth_configs_created,
                 "auth_configs_reused": app_fetch.auth_configs_reused,
-                "legacy_apps_upserted": legacy_app_counts.get("apps_upserted", 0),
                 "app_phase_seconds": round(time.perf_counter() - app_started_at, 3),
             },
         )
@@ -1876,14 +1855,6 @@ def run_builtins_sync(
                     app_slugs=[slug.upper() for slug in batch_slugs],
                 )
                 fetch = _fetch_provider_catalog_with_retry(session, body)
-                legacy_counts = _update_legacy_catalog_projection(
-                    session,
-                    request=request,
-                    apps=[],
-                    tools=fetch.tools,
-                    app_slugs=fetch.matched_app_slugs,
-                    prune_unlisted_apps=False,
-                )
                 counts = _materialize_tools(
                     session,
                     project_id=project.id,
@@ -1936,7 +1907,6 @@ def run_builtins_sync(
                     "updated": counts["updated"],
                     "total": counts["total"],
                     "pruned": counts.get("pruned", 0),
-                    "legacy_tools_upserted": legacy_counts.get("tools_upserted", 0),
                     "matched_app_slugs": fetch.matched_app_slugs,
                     "skipped_apps": fetch.skipped_apps,
                     "elapsed_seconds": elapsed,

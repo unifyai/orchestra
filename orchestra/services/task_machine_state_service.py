@@ -1870,6 +1870,9 @@ def _upsert_context(
     ).scalar_one_or_none()
     if existing is None:
         now = datetime.now(timezone.utc)
+        from orchestra.db.scope import owner_from_context_name
+
+        owner = owner_from_context_name(normalized_name)
         stmt = (
             pg_insert(Context)
             .values(
@@ -1884,6 +1887,8 @@ def _upsert_context(
                 unique_key_types=list((unique_keys or {}).values()),
                 auto_counting={},
                 foreign_keys=[],
+                owner_scope=owner.scope.value,
+                owner_id=owner.owner_id,
             )
             .on_conflict_do_nothing(index_elements=["project_id", "name"])
             .returning(Context.id)
@@ -1982,12 +1987,16 @@ def _upsert_machine_row(
         return _MachineRowUpsertResult(row=existing, created=False)
 
     now = datetime.now(timezone.utc)
+    from orchestra.db.scope import owner_key_for_context
+
+    ok = owner_key_for_context(session, context_id)
     log_event = LogEvent(
         project_id=project_id,
         data=dict(payload),
         key_order=_extract_key_order(dict(payload)),
         created_at=now,
         updated_at=now,
+        owner_key=ok,
     )
     session.add(log_event)
     session.flush()
@@ -1997,6 +2006,7 @@ def _upsert_machine_row(
             project_id=project_id,
             log_event_id=log_event.id,
             context_id=context_id,
+            owner_key=ok,
         ),
     )
     session.flush()

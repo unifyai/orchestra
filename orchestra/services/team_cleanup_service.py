@@ -223,10 +223,24 @@ def _shared_team_contexts(session: Session, *, team_id: int) -> list[Context]:
 
 
 def _purge_shared_team_contexts(session: Session, *, team_id: int) -> None:
-    """Delete shared context roots for a team through the context DAO."""
+    """Delete shared context roots for a team.
+
+    The team's heavy-table rows (owned by ``t{team_id}``) are dropped up front
+    per hosting project -- an O(1) partition drop when the team was promoted to
+    its own sub-partition, otherwise a single owner_key-scoped DELETE -- then the
+    per-context loop clears the now-empty metadata.
+    """
+    from orchestra.db.partitioning import drop_owner
+    from orchestra.db.scope import OwnerScope
+    from orchestra.db.scope import owner_key as _owner_key
+
+    contexts = _shared_team_contexts(session, team_id=team_id)
+    ok = _owner_key(OwnerScope.TEAM, team_id)
+    for project_id in {int(c.project_id) for c in contexts}:
+        drop_owner(session.connection(), project_id, ok)
 
     context_dao = ContextDAO(session)
-    for context in _shared_team_contexts(session, team_id=team_id):
+    for context in contexts:
         context_dao.delete(context.id)
 
 

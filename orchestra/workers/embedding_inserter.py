@@ -240,10 +240,18 @@ def bulk_insert_to_embedding_table(
     Returns:
         Number of embeddings inserted/updated
     """
-    from orchestra.db.models.orchestra_models import Embedding
+    from orchestra.db.models.orchestra_models import Embedding, LogEvent
 
     if not items:
         return 0
+
+    # Owning scope of each referenced log (embedding_queue is not sub-partitioned
+    # so owner_key is resolved from the log here).
+    owner_by_ref = dict(
+        session.query(LogEvent.id, LogEvent.owner_key)
+        .filter(LogEvent.id.in_([item.ref_id for item in items]))
+        .all(),
+    )
 
     # Prepare embedding objects for bulk insert
     embedding_dicts = [
@@ -254,6 +262,7 @@ def bulk_insert_to_embedding_table(
             "model": item.model,
             "vector": item.generated_vector,
             "is_deleted": False,
+            "owner_key": owner_by_ref.get(item.ref_id) or "sys",
         }
         for item in items
     ]

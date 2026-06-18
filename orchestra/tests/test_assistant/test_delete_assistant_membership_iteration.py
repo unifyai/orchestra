@@ -136,6 +136,7 @@ def _add_scheduled_activation(
         dbsession.add(context)
         dbsession.flush()
     log_event = LogEvent(
+        owner_key="sys",
         project_id=project.id,
         data={
             "activation_kind": "scheduled",
@@ -151,6 +152,7 @@ def _add_scheduled_activation(
     dbsession.flush()
     dbsession.add(
         LogEventContext(
+            owner_key="sys",
             project_id=log_event.project_id,
             log_event_id=log_event.id,
             context_id=context.id,

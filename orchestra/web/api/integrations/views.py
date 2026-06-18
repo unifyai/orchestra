@@ -15,12 +15,8 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.integration_provider_models import DynamicProviderApp
 from orchestra.web.api.integrations.operations import (
     OwnerContext,
-    _activation_state,
-    _best_connection,
-    _tool_search_result,
     approve_tool_execution,
     cancel_connection,
     complete_connection,
@@ -34,11 +30,9 @@ from orchestra.web.api.integrations.operations import (
     run_tool,
     seed_default_provider_catalog,
     start_connection,
+    test_connection,
+    update_connection,
 )
-from orchestra.web.api.integrations.operations import (
-    sync_integrations as sync_integrations_operation,
-)
-from orchestra.web.api.integrations.operations import test_connection, update_connection
 from orchestra.web.api.integrations.schema import (
     BuiltinsIntegrationSyncRequest,
     BuiltinsIntegrationSyncResponse,
@@ -63,15 +57,10 @@ from orchestra.web.api.integrations.schema import (
     IntegrationToolPolicyResponse,
     ProviderToolRunRequest,
     ProviderToolRunResponse,
-    ProviderToolSearchResult,
 )
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 admin_router = APIRouter(prefix="/integrations", tags=["Integration Admin"])
-
-
-def _tool_result_payload(result: ProviderToolSearchResult) -> dict:
-    return result.model_dump(exclude_none=True)
 
 
 def _owner_from_query(
@@ -115,85 +104,14 @@ def _optional_owner_from_query(
     )
 
 
-def _app_status(conn, tools) -> str:
-    if conn is None:
-        return "not_connected"
-    if conn.status == "pending":
-        return "pending"
-    if conn.status != "connected":
-        return conn.status
-    if conn.credential_storage == "secret_manager":
-        return "configured"
-    granted = set(conn.granted_scopes_json or [])
-    for tool in tools:
-        required = set(tool.required_scopes_json or [])
-        if required and not required.issubset(granted):
-            return "missing_scope"
-    return "connected"
-
-
-def _app_status_group(status_value: str) -> str:
-    if status_value in {"connected", "configured"}:
-        return "connected"
-    if status_value in {"pending", "missing_scope", "expired", "error"}:
-        return "needs_attention"
-    return "not_connected"
-
-
-def _app_payload(
-    dao: IntegrationProviderDAO,
-    app: DynamicProviderApp,
-    conn,
-    *,
-    detail_level: str,
-) -> dict:
-    tools = dao.list_tools(
-        canonical_app_slug=app.canonical_app_slug,
-        backend_id=app.backend_id,
-    )
-    status_value = _app_status(conn, tools)
-    raw_metadata = app.raw_provider_metadata_json or {}
-    is_native = app.backend_id == "unity_native" or (
-        isinstance(raw_metadata, dict) and raw_metadata.get("source_type") == "native"
-    )
-    payload = {
-        "backend_id": app.backend_id,
-        "provider_app_id": app.provider_app_id,
-        "canonical_app_slug": app.canonical_app_slug,
-        "display_name": app.display_name,
-        "source_type": "native" if is_native else "third_party",
-        "source_label": "Native" if app.backend_id == "unity_native" else "Third-party",
-        "description": app.description,
-        "category": app.category,
-        "icon_url": app.icon_url,
-        "auth_modes": app.auth_modes or [],
-        "tool_count": len(tools),
-        "connection_status": status_value,
-        "connection_id": conn.connection_id if conn else None,
-        "external_account_label": conn.external_account_label if conn else None,
-        "overlay": {},
-        "native_metadata": (
-            raw_metadata.get("native_metadata", {})
-            if is_native and isinstance(raw_metadata, dict)
-            else {}
+def _catalog_route_removed() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Integration app and tool catalog reads use Builtins logs, not "
+            "Orchestra integration catalog routes."
         ),
-    }
-    if detail_level != "summary":
-        payload["available_scopes"] = []
-        payload["available_actions"] = [
-            {
-                "tool_id": tool.tool_id,
-                "name": tool.name,
-                "display_name": tool.display_name,
-                "activation_state": _activation_state(tool, conn),
-                "action_class": tool.action_class,
-            }
-            for tool in tools
-        ]
-    else:
-        payload["available_scopes"] = []
-        payload["available_actions"] = []
-    return payload
+    )
 
 
 def _bootstrap_state_response(state) -> IntegrationBootstrapStateResponse:
@@ -238,15 +156,13 @@ def _backend_status_response(
     *,
     backend,
     state,
-    catalog_counts: dict[str, dict[str, int]],
 ) -> IntegrationBackendStatusResponse:
     bootstrap_state = _bootstrap_state_response(state) if state else None
-    counts = catalog_counts.get(backend.backend_id, {})
     return IntegrationBackendStatusResponse(
         backend=IntegrationBackendResponse.model_validate(backend),
         bootstrap_state=bootstrap_state,
-        catalog_app_count=int(counts.get("apps", 0)),
-        catalog_tool_count=int(counts.get("tools", 0)),
+        catalog_app_count=bootstrap_state.apps_upserted if bootstrap_state else 0,
+        catalog_tool_count=bootstrap_state.tools_upserted if bootstrap_state else 0,
         desired_hash=bootstrap_state.desired_hash if bootstrap_state else None,
         sync_mode=bootstrap_state.sync_mode if bootstrap_state else None,
         requested_app_slugs=(
@@ -289,7 +205,6 @@ def get_integration_backend_status(
         states_by_backend.setdefault(state.backend_id, state)
         if environment is None:
             states_by_backend[(state.backend_id, state.environment)] = state
-    catalog_counts = dao.catalog_counts_by_backend()
     responses: list[IntegrationBackendStatusResponse] = []
     for backend in dao.list_backends():
         state = states_by_backend.get(backend.backend_id)
@@ -302,7 +217,6 @@ def get_integration_backend_status(
             _backend_status_response(
                 backend=backend,
                 state=state,
-                catalog_counts=catalog_counts,
             ),
         )
     return responses
@@ -398,17 +312,16 @@ def put_integration_bootstrap_state(
 
 @admin_router.post("/sync")
 def sync_integrations(
-    body: IntegrationCatalogSyncRequest,
-    session: Session = Depends(get_db_session),
+    body: IntegrationCatalogSyncRequest,  # noqa: ARG001
 ) -> IntegrationCatalogSyncResponse:
-    """Sync integrations through one admin contract.
-
-    Native/custom publishers pass normalized ``apps``/``tools`` directly.
-    Provider live syncs pass ``backend_id`` plus bounded provider options; the
-    provider-specific API pagination and normalization stays inside Orchestra.
-    """
-
-    return sync_integrations_operation(session, body)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Legacy integration catalog projection sync is removed. Seed "
+            "Builtins Integrations/Apps and Integrations/Tools through the "
+            "Builtins artifacts/logging path."
+        ),
+    )
 
 
 @admin_router.post("/builtins-sync/start")
@@ -464,146 +377,29 @@ def start_builtins_integration_sync(
 
 @router.get("/apps")
 def list_integration_apps(
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    query: str = "",
-    source_type: str | None = None,
-    status: list[str] | None = Query(None),
-    status_group: str | None = None,
-    detail_level: str = "full",
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
+    owner_scope: str = Query("assistant"),  # noqa: ARG001
+    org_id: int | None = None,  # noqa: ARG001
+    team_id: int | None = None,  # noqa: ARG001
+    user_id: str | None = None,  # noqa: ARG001
+    assistant_id: int | None = None,  # noqa: ARG001
+    query: str = "",  # noqa: ARG001
+    source_type: str | None = None,  # noqa: ARG001
+    status_filter: list[str] | None = Query(None, alias="status"),  # noqa: ARG001
+    status_group: str | None = None,  # noqa: ARG001
+    detail_level: str = "full",  # noqa: ARG001
+    limit: int = Query(50, ge=1, le=200),  # noqa: ARG001
+    offset: int = Query(0, ge=0),  # noqa: ARG001
 ) -> dict:
-    from fastapi import status as http_status
-
-    valid_statuses = {
-        "connected",
-        "configured",
-        "pending",
-        "missing_scope",
-        "not_connected",
-        "expired",
-        "error",
-    }
-    valid_groups = {"connected", "needs_attention", "not_connected"}
-    requested_statuses: set[str] = set()
-    for raw_status in status or []:
-        requested_statuses.update(
-            part.strip() for part in raw_status.split(",") if part.strip()
-        )
-    if requested_statuses.difference(valid_statuses):
-        raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="invalid_status",
-        )
-    if status_group is not None and status_group not in valid_groups:
-        raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="invalid_status_group",
-        )
-
-    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    enabled_backend_ids = dao.active_backend_ids()
-    apps = (
-        session.query(DynamicProviderApp)
-        .order_by(DynamicProviderApp.display_name.asc())
-        .all()
-    )
-    query_norm = query.strip().lower()
-    all_items: list[dict] = []
-    for app in apps:
-        if app.backend_id not in enabled_backend_ids:
-            continue
-        conn = _best_connection(
-            session,
-            owner=owner,
-            canonical_app_slug=app.canonical_app_slug,
-            backend_id=app.backend_id,
-        )
-        item = _app_payload(dao, app, conn, detail_level=detail_level)
-        all_items.append(item)
-
-    base_filtered = []
-    for item in all_items:
-        if source_type and item["source_type"] != source_type:
-            continue
-        if (
-            query_norm
-            and query_norm
-            not in f"{item['display_name']} {item['canonical_app_slug']}".lower()
-        ):
-            continue
-        base_filtered.append(item)
-
-    facets = {
-        "total": len(base_filtered),
-        "source_type": {
-            "native": sum(
-                1 for item in base_filtered if item["source_type"] == "native"
-            ),
-            "third_party": sum(
-                1 for item in base_filtered if item["source_type"] == "third_party"
-            ),
-        },
-        "status": {status_name: 0 for status_name in valid_statuses},
-        "status_group": {group_name: 0 for group_name in valid_groups},
-    }
-    for item in base_filtered:
-        facets["status"][item["connection_status"]] = (
-            facets["status"].get(item["connection_status"], 0) + 1
-        )
-        group = _app_status_group(item["connection_status"])
-        facets["status_group"][group] = facets["status_group"].get(group, 0) + 1
-
-    filtered = []
-    for item in base_filtered:
-        if requested_statuses and item["connection_status"] not in requested_statuses:
-            continue
-        if (
-            status_group
-            and _app_status_group(item["connection_status"]) != status_group
-        ):
-            continue
-        filtered.append(item)
-
-    return {
-        "items": filtered[offset : offset + limit],
-        "total": len(filtered),
-        "limit": limit,
-        "offset": offset,
-        "facets": facets,
-    }
+    _catalog_route_removed()
 
 
 @router.get("/apps/search")
 def search_integration_apps(
-    query: str = Query(""),
-    source_type: str | None = None,
-    limit: int = Query(20, ge=1, le=100),
-    session: Session = Depends(get_db_session),
+    query: str = Query(""),  # noqa: ARG001
+    source_type: str | None = None,  # noqa: ARG001
+    limit: int = Query(20, ge=1, le=100),  # noqa: ARG001
 ) -> list[dict]:
-    page = list_integration_apps(
-        owner_scope="assistant",
-        org_id=None,
-        team_id=None,
-        user_id=None,
-        assistant_id=None,
-        query=query,
-        source_type=source_type,
-        status=None,
-        status_group=None,
-        detail_level="summary",
-        limit=limit,
-        offset=0,
-        session=session,
-    )
-    return page["items"]
+    _catalog_route_removed()
 
 
 @router.get("/connections")
@@ -646,6 +442,7 @@ def start_integration_connect(
             ),
             canonical_app_slug=body.canonical_app_slug,
             backend_id=body.backend_id,
+            provider_app_id=body.provider_app_id,
             requested_scopes=body.requested_scopes,
             auth_mode=body.auth_mode,
             api_key_fields=body.api_key_fields,
@@ -864,139 +661,45 @@ def patch_integration_tool_policy(
 
 @router.get("/tools")
 def list_provider_tools(
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    canonical_app_slug: str | None = None,
-    activation_state: str | None = None,
-    include_schema: bool = False,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
+    owner_scope: str = Query("assistant"),  # noqa: ARG001
+    org_id: int | None = None,  # noqa: ARG001
+    team_id: int | None = None,  # noqa: ARG001
+    user_id: str | None = None,  # noqa: ARG001
+    assistant_id: int | None = None,  # noqa: ARG001
+    canonical_app_slug: str | None = None,  # noqa: ARG001
+    activation_state: str | None = None,  # noqa: ARG001
+    include_schema: bool = False,  # noqa: ARG001
+    limit: int = Query(50, ge=1, le=200),  # noqa: ARG001
+    offset: int = Query(0, ge=0),  # noqa: ARG001
 ) -> dict:
-    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    enabled_backend_ids = dao.active_backend_ids()
-    tools = dao.list_tools(canonical_app_slug=canonical_app_slug)
-    items: list[ProviderToolSearchResult] = []
-    for tool in tools:
-        if tool.backend_id not in enabled_backend_ids:
-            continue
-        app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
-        conn = _best_connection(
-            session,
-            owner=owner,
-            canonical_app_slug=tool.canonical_app_slug,
-            backend_id=tool.backend_id,
-        )
-        item = _tool_search_result(
-            tool=tool,
-            app=app,
-            conn=conn,
-            activation_state=_activation_state(tool, conn),
-            match_reason="list",
-            score=1.0,
-            include_schema=include_schema,
-        )
-        if activation_state and item.activation_state != activation_state:
-            continue
-        items.append(item)
-    total = len(items)
-    return {
-        "items": [
-            _tool_result_payload(item) for item in items[offset : offset + limit]
-        ],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+    _catalog_route_removed()
 
 
 @router.get("/tools/search")
 def search_provider_tools(
-    query: str = Query(""),
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    include_unconnected: bool = False,
-    include_schema: bool = False,
-    limit: int = Query(20, ge=1, le=100),
-    session: Session = Depends(get_db_session),
+    query: str = Query(""),  # noqa: ARG001
+    owner_scope: str = Query("assistant"),  # noqa: ARG001
+    org_id: int | None = None,  # noqa: ARG001
+    team_id: int | None = None,  # noqa: ARG001
+    user_id: str | None = None,  # noqa: ARG001
+    assistant_id: int | None = None,  # noqa: ARG001
+    include_unconnected: bool = False,  # noqa: ARG001
+    include_schema: bool = False,  # noqa: ARG001
+    limit: int = Query(20, ge=1, le=100),  # noqa: ARG001
 ) -> list[dict]:
-    owner = _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
-    seed_default_provider_catalog(session)
-    dao = IntegrationProviderDAO(session)
-    enabled_backend_ids = dao.active_backend_ids()
-    query_norm = query.strip().lower()
-    results: list[ProviderToolSearchResult] = []
-    for tool in dao.list_tools():
-        if tool.backend_id not in enabled_backend_ids:
-            continue
-        app = dao.get_app_by_slug(tool.canonical_app_slug, backend_id=tool.backend_id)
-        haystack = " ".join(
-            [
-                tool.name,
-                tool.display_name,
-                tool.description,
-                tool.canonical_app_slug,
-                app.display_name if app else "",
-            ],
-        ).lower()
-        if query_norm and query_norm not in haystack:
-            continue
-        conn = _best_connection(
-            session,
-            owner=owner,
-            canonical_app_slug=tool.canonical_app_slug,
-            backend_id=tool.backend_id,
-        )
-        item = _tool_search_result(
-            tool=tool,
-            app=app,
-            conn=conn,
-            activation_state=_activation_state(tool, conn),
-            match_reason="search",
-            score=1.0,
-            include_schema=include_schema,
-        )
-        if not include_unconnected and item.activation_state == "not_connected":
-            continue
-        results.append(item)
-        if len(results) >= limit:
-            break
-    return [_tool_result_payload(result) for result in results]
+    _catalog_route_removed()
 
 
 @router.get("/tools/{tool_id}/schema")
 def get_provider_tool_schema(
-    tool_id: str,
-    owner_scope: str = Query("assistant"),
-    org_id: int | None = None,
-    team_id: int | None = None,
-    user_id: str | None = None,
-    assistant_id: int | None = None,
-    session: Session = Depends(get_db_session),
+    tool_id: str,  # noqa: ARG001
+    owner_scope: str = Query("assistant"),  # noqa: ARG001
+    org_id: int | None = None,  # noqa: ARG001
+    team_id: int | None = None,  # noqa: ARG001
+    user_id: str | None = None,  # noqa: ARG001
+    assistant_id: int | None = None,  # noqa: ARG001
 ) -> dict:
-    _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id)
-    seed_default_provider_catalog(session)
-    tool = IntegrationProviderDAO(session).get_tool(tool_id)
-    if not tool:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown provider tool: {tool_id}",
-        )
-    return {
-        "tool_id": tool.tool_id,
-        "canonical_name": tool.canonical_name,
-        "input_schema": tool.input_schema_json or {},
-        "output_schema": tool.output_schema_json or {},
-        "examples": tool.examples_json or [],
-    }
+    _catalog_route_removed()
 
 
 @router.post(
