@@ -141,9 +141,9 @@ def test_owner_purge_is_indexed_and_proportional(dbsession) -> None:
     # auto-generates it under meta.create_all in tests, while the migration names
     # it ``*_powner_idx`` in prod), so assert on the access method + index
     # condition rather than the exact name.
-    assert "Index Scan" in plan or "Bitmap Index Scan" in plan, (
-        f"owner-scoped delete must use an index, got plan:\n{plan}"
-    )
+    assert (
+        "Index Scan" in plan or "Bitmap Index Scan" in plan
+    ), f"owner-scoped delete must use an index, got plan:\n{plan}"
     assert "owner_key" in plan, f"index condition must scope by owner_key:\n{plan}"
     assert "Seq Scan" not in plan, f"unexpected Seq Scan in plan:\n{plan}"
 
