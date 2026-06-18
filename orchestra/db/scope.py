@@ -263,6 +263,85 @@ def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
     conn.execute(text("UPDATE embedding SET owner_key = 'sys' WHERE owner_key IS NULL"))
 
 
+def reclassify_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
+    """Correct heavy rows wrongly stuck at ``'sys'`` to their real owning scope.
+
+    :func:`backfill_heavy_owner_keys` only updates ``owner_key IS NULL`` rows,
+    but the ``heavy_owner_key`` migration added the column with ``DEFAULT 'sys'``
+    -- so every pre-existing row was already ``'sys'`` (never NULL) and that
+    backfill was a no-op for all historical data. This corrective pass recomputes
+    ``owner_key`` from each log's owning (assistant/team) context for rows still
+    labelled ``'sys'`` that actually belong to an owner, then resyncs
+    ``log_event_context`` / ``embedding`` to their log's owner. Rows with no
+    assistant/team owning context stay ``'sys'`` (correct). Without this,
+    owner-scoped deletion (``purge_owner`` / ``drop_owner``) would delete only an
+    owner's correctly-tagged rows and leave its ``'sys'``-stuck history orphaned.
+
+    Batched by id and idempotent: a re-run only touches rows still mislabelled.
+    Intended to run under an autocommit block so each batch commits (avoids one
+    long transaction over a large table) and the work is resumable.
+    """
+    # 1) log_event: 'sys' -> owning (assistant/team) context's a{id} / t{id}.
+    max_le = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM log_event")).scalar()
+    lo = 0
+    while lo < max_le:
+        hi = lo + batch
+        conn.execute(
+            text(
+                """
+                UPDATE log_event le SET owner_key = sub.ok
+                FROM (
+                    SELECT DISTINCT ON (lec.log_event_id) lec.log_event_id AS leid,
+                        CASE c.owner_scope
+                            WHEN 'assistant' THEN 'a' || c.owner_id
+                            WHEN 'team' THEN 't' || c.owner_id
+                        END AS ok
+                    FROM log_event_context lec
+                    JOIN context c ON c.id = lec.context_id
+                    WHERE c.owner_scope IN ('assistant', 'team')
+                      AND c.owner_id IS NOT NULL
+                      AND lec.log_event_id > :lo AND lec.log_event_id <= :hi
+                ) sub
+                WHERE le.id = sub.leid
+                  AND le.owner_key = 'sys' AND sub.ok IS NOT NULL
+                """,
+            ),
+            {"lo": lo, "hi": hi},
+        )
+        lo = hi
+
+    # 2) log_event_context: resync rows still 'sys' to their log's real owner.
+    lo = 0
+    while lo < max_le:
+        hi = lo + batch
+        conn.execute(
+            text(
+                "UPDATE log_event_context lec SET owner_key = le.owner_key "
+                "FROM log_event le WHERE le.id = lec.log_event_id "
+                "AND lec.log_event_id > :lo AND lec.log_event_id <= :hi "
+                "AND lec.owner_key = 'sys' AND le.owner_key <> 'sys'",
+            ),
+            {"lo": lo, "hi": hi},
+        )
+        lo = hi
+
+    # 3) embedding: resync rows still 'sys' to their referenced log's real owner.
+    max_emb = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM embedding")).scalar()
+    lo = 0
+    while lo < max_emb:
+        hi = lo + batch
+        conn.execute(
+            text(
+                "UPDATE embedding e SET owner_key = le.owner_key "
+                "FROM log_event le WHERE le.id = e.ref_id "
+                "AND e.id > :lo AND e.id <= :hi "
+                "AND e.owner_key = 'sys' AND le.owner_key <> 'sys'",
+            ),
+            {"lo": lo, "hi": hi},
+        )
+        lo = hi
+
+
 def backfill_context_owners(conn: Connection, batch: int = 5000) -> int:
     """Classify every not-yet-classified context from its name.
 
