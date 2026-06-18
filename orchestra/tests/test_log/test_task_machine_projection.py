@@ -182,8 +182,6 @@ def _scheduled_task_entries(
         "_user_id": "1",
         "_assistant_id": "42",
         "schedule": {
-            "prev_task": None,
-            "next_task": None,
             "start_at": start_at,
         },
         "repeat": [{"unit": "day", "count": 1}],
@@ -797,40 +795,6 @@ async def test_admin_reproject_restores_missing_scheduled_activation(
         log for log in activations_after_second if log["entries"]["task_id"] == 350
     ]
     assert len(matching) == 1
-
-
-@pytest.mark.anyio
-async def test_admin_reproject_is_noop_for_non_head_scheduled_row(
-    client: AsyncClient,
-):
-    """Queue tails should remain unarmed after explicit reprojection."""
-
-    await _ensure_task_machine_project(client)
-    entries = _scheduled_task_entries(task_id=351)
-    entries["schedule"]["prev_task"] = 350
-    response = await _create_log(
-        client,
-        TASK_MACHINE_PROJECT_NAME,
-        context=TASKS_CONTEXT,
-        entries=entries,
-    )
-    assert response.status_code == 200, response.json()
-
-    reproject_response = await client.post(
-        "/v0/admin/task-activation/reproject",
-        json={
-            "project_name": TASK_MACHINE_PROJECT_NAME,
-            "assistant_id": "42",
-            "task_id": 351,
-        },
-        headers=ADMIN_HEADERS,
-    )
-
-    assert reproject_response.status_code == 200, reproject_response.json()
-    body = reproject_response.json()
-    assert body["upserted"] == 0
-    assert body["deleted"] == 0
-    assert body["activation"] is None
 
 
 @pytest.mark.anyio
