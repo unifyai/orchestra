@@ -16,8 +16,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_table("provider_tool_catalog")
-    op.drop_table("dynamic_provider_apps")
+    # IF EXISTS so a re-run after a partially-applied attempt is idempotent.
+    # provider_tool_catalog references dynamic_provider_apps, so drop it first.
+    # The migrator's generous lock_timeout (see env.py) lets these DROPs queue
+    # for ACCESS EXCLUSIVE behind the still-running app's ACCESS SHARE locks.
+    op.execute("DROP TABLE IF EXISTS provider_tool_catalog")
+    op.execute("DROP TABLE IF EXISTS dynamic_provider_apps")
 
 
 def downgrade() -> None:
