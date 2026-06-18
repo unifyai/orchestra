@@ -10,6 +10,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.models.orchestra_models import Team, TeamAssistantMembership, TeamMember
 from orchestra.tests.utils import create_test_user
 
 
@@ -316,6 +317,134 @@ async def test_delete_team(client: AsyncClient):
         headers=owner["headers"],
     )
     assert get_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_org_wide_sharing_toggle_and_auto_enrollment(client: AsyncClient, dbsession):
+    owner = await create_test_user(client, "org_share_owner@test.com")
+    member = await create_test_user(client, "org_share_member@test.com")
+    future_member = await create_test_user(client, "org_share_future@test.com")
+
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Wide Sharing Toggle Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED, org_response.json()
+    org_id = org_response.json()["id"]
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_response.json()['api_key']}",
+    }
+
+    add_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_response.status_code == status.HTTP_201_CREATED
+
+    assistant_response = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "PreToggle",
+            "surname": "Droid",
+            "create_infra": False,
+            "is_local": True,
+        },
+        headers=org_headers,
+    )
+    assert assistant_response.status_code == status.HTTP_200_OK, assistant_response.json()
+    assistant_id = int(assistant_response.json()["info"]["agent_id"])
+
+    enable_response = await client.put(
+        f"/v0/organizations/{org_id}/sharing-settings",
+        json={"data_sharing_mode": "shared"},
+        headers=owner["headers"],
+    )
+    assert enable_response.status_code == status.HTTP_200_OK, enable_response.json()
+    assert enable_response.json()["data_sharing_mode"] == "shared"
+
+    dbsession.expire_all()
+    team = (
+        dbsession.query(Team)
+        .filter_by(organization_id=org_id, name="Org", is_org_wide_sharing=True)
+        .one()
+    )
+    team_members = {
+        row.user_id for row in dbsession.query(TeamMember).filter_by(team_id=team.id).all()
+    }
+    assert {owner["id"], member["id"]}.issubset(team_members)
+    assert (
+        dbsession.query(TeamAssistantMembership)
+        .filter_by(team_id=team.id, assistant_id=assistant_id)
+        .one_or_none()
+        is not None
+    )
+
+    future_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": future_member["id"]},
+        headers=owner["headers"],
+    )
+    assert future_member_response.status_code == status.HTTP_201_CREATED
+
+    future_assistant_response = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Future",
+            "surname": "Droid",
+            "create_infra": False,
+            "is_local": True,
+        },
+        headers=org_headers,
+    )
+    assert future_assistant_response.status_code == status.HTTP_200_OK
+    future_assistant = future_assistant_response.json()["info"]
+    assert team.id in future_assistant["team_ids"]
+    future_assistant_id = int(future_assistant["agent_id"])
+
+    dbsession.expire_all()
+    refreshed_team_members = {
+        row.user_id for row in dbsession.query(TeamMember).filter_by(team_id=team.id).all()
+    }
+    assert future_member["id"] in refreshed_team_members
+    assert (
+        dbsession.query(TeamAssistantMembership)
+        .filter_by(team_id=team.id, assistant_id=future_assistant_id)
+        .one_or_none()
+        is not None
+    )
+
+    managed_patch = await client.patch(
+        f"/v0/organizations/{org_id}/teams/{team.id}",
+        json={"name": "Renamed Org"},
+        headers=owner["headers"],
+    )
+    assert managed_patch.status_code == status.HTTP_409_CONFLICT
+
+    managed_delete = await client.delete(
+        f"/v0/organizations/{org_id}/teams/{team.id}",
+        headers=owner["headers"],
+    )
+    assert managed_delete.status_code == status.HTTP_409_CONFLICT
+
+    disable_response = await client.put(
+        f"/v0/organizations/{org_id}/sharing-settings",
+        json={"data_sharing_mode": "private"},
+        headers=owner["headers"],
+    )
+    assert disable_response.status_code == status.HTTP_200_OK, disable_response.json()
+    assert disable_response.json()["data_sharing_mode"] == "private"
+
+    dbsession.expire_all()
+    assert dbsession.get(Team, team.id) is None
+    assert (
+        dbsession.query(TeamAssistantMembership)
+        .filter_by(assistant_id=future_assistant_id)
+        .count()
+        == 0
+    )
 
 
 @pytest.mark.anyio

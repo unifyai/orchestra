@@ -14,12 +14,12 @@ from orchestra.db.dao.team_dao import TEAM_STATUS_ACTIVE, TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Team
-from orchestra.services.contact_membership_service import (
-    ensure_team_contact_memberships,
-)
-from orchestra.services.coordinator_service import (
-    ensure_workspace_coordinator_provisioned,
-    get_workspace_coordinator,
+from orchestra.services.contact_membership_service import ensure_team_contact_memberships
+from orchestra.services.coordinator_service import get_workspace_coordinator
+from orchestra.services.org_wide_sharing_service import (
+    WorkspaceCoordinatorProvisioningError,
+    add_assistant_to_team,
+    add_coordinator_to_team,
 )
 from orchestra.services.team_cleanup_service import (
     TeamCleanupAuthError,
@@ -69,6 +69,16 @@ def _require_active_team(team: Team) -> None:
         )
 
 
+def _require_unmanaged_team(team: Team) -> None:
+    """Reject manual mutations against the managed org-wide sharing team."""
+
+    if team.is_org_wide_sharing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="org_wide_sharing_team_managed",
+        )
+
+
 def _ensure_member_team_contacts(
     session: Session,
     *,
@@ -89,57 +99,20 @@ async def _add_coordinator_to_team(
 ) -> tuple[Assistant, bool, list]:
     """Provision a member's workspace coordinator and add it to the team."""
 
-    existing_workspace_coordinator = get_workspace_coordinator(
-        session,
-        user_id=member_user_id,
-        organization_id=team.organization_id,
-    )
-    created_workspace_coordinator = False
-    if existing_workspace_coordinator is not None:
-        assistant = existing_workspace_coordinator
-    else:
-        try:
-            assistant, created_workspace_coordinator = (
-                await ensure_workspace_coordinator_provisioned(
-                    session,
-                    user_id=member_user_id,
-                    organization_id=team.organization_id,
-                )
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="workspace_coordinator_provisioning_failed",
-            ) from exc
-
-    team_dao = TeamDAO(session)
-    refresh_payloads: list = []
-    if (
-        team_dao.get_assistant_membership(
-            team_id=team.id,
-            assistant_id=assistant.agent_id,
-        )
-        is None
-    ):
-        team_dao.add_assistant_membership(
+    try:
+        assistant, result = await add_coordinator_to_team(
+            session,
             team=team,
-            assistant=assistant,
-            added_by=actor_user_id,
+            member_user_id=member_user_id,
+            actor_user_id=actor_user_id,
         )
-        _ensure_member_team_contacts(
-            session,
-            assistant_id=assistant.agent_id,
-            team_id=team.id,
-        )
-        refresh_payloads = membership_refresh_payloads(session, [assistant])
-    else:
-        _ensure_member_team_contacts(
-            session,
-            assistant_id=assistant.agent_id,
-            team_id=team.id,
-        )
+    except WorkspaceCoordinatorProvisioningError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="workspace_coordinator_provisioning_failed",
+        ) from exc
 
-    return assistant, created_workspace_coordinator, refresh_payloads
+    return assistant, bool(result.created_coordinator_ids), result.refresh_payloads
 
 
 def _require_assistant_membership_target_allowed(
@@ -294,6 +267,7 @@ async def create_team(
         organization_id=team.organization_id,
         created_at=team.created_at,
         member_count=len(team_dao.get_team_members(team.id)),
+        is_org_wide_sharing=team.is_org_wide_sharing,
     )
 
 
@@ -349,6 +323,7 @@ def list_teams(
             created_at=team.created_at,
             members=(members := team_dao.get_team_members(team.id)),
             member_count=len(members),
+            is_org_wide_sharing=team.is_org_wide_sharing,
         )
         for team in teams
     ]
@@ -414,6 +389,7 @@ def get_team(
         organization_id=team.organization_id,
         created_at=team.created_at,
         members=members,
+        is_org_wide_sharing=team.is_org_wide_sharing,
     )
 
 
@@ -473,6 +449,7 @@ async def update_team(
             detail=f"Team with id {team_id} not found in this organization",
         )
     _require_active_team(team)
+    _require_unmanaged_team(team)
 
     if team_data.name and team_data.name != team.name:
         existing_team = team_dao.get_by_name(team_data.name, organization_id)
@@ -515,6 +492,7 @@ async def update_team(
         organization_id=team.organization_id,
         created_at=team.created_at,
         member_count=len(team_dao.get_team_members(team_id)),
+        is_org_wide_sharing=team.is_org_wide_sharing,
     )
 
 
@@ -569,6 +547,7 @@ async def delete_team(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Team with id {team_id} not found in this organization",
         )
+    _require_unmanaged_team(team)
 
     try:
         await run_team_cleanup(
@@ -658,6 +637,7 @@ async def add_team_members(
             detail=f"Team with id {team_id} not found in this organization",
         )
     _require_active_team(team)
+    _require_unmanaged_team(team)
 
     created_coordinator_ids: list[int] = []
     refresh_payloads = []
@@ -720,6 +700,7 @@ async def add_team_members(
         organization_id=team.organization_id,
         created_at=team.created_at,
         members=members,
+        is_org_wide_sharing=team.is_org_wide_sharing,
     )
 
 
@@ -779,6 +760,7 @@ async def remove_team_member(
             detail=f"Team with id {team_id} not found in this organization",
         )
     _require_active_team(team)
+    _require_unmanaged_team(team)
 
     refresh_payloads = []
     try:
@@ -817,6 +799,7 @@ async def remove_team_member(
         organization_id=team.organization_id,
         created_at=team.created_at,
         members=members,
+        is_org_wide_sharing=team.is_org_wide_sharing,
     )
 
 
@@ -864,6 +847,7 @@ async def add_team_assistant_member(
             detail=f"Team with id {team_id} not found in this organization",
         )
     _require_active_team(team)
+    _require_unmanaged_team(team)
 
     created_workspace_coordinator = False
     created_workspace_coordinator_id: int | None = None
@@ -900,28 +884,20 @@ async def add_team_assistant_member(
                 team=team,
                 assistant=assistant,
             )
-            if team_dao.get_assistant_membership(
+            existing_membership = team_dao.get_assistant_membership(
                 team_id=team.id,
                 assistant_id=assistant.agent_id,
-            ):
-                _ensure_member_team_contacts(
-                    session,
-                    assistant_id=assistant.agent_id,
-                    team_id=team.id,
-                )
+            )
+            result = add_assistant_to_team(
+                session,
+                team=team,
+                assistant=assistant,
+                actor_user_id=user_id,
+            )
+            if existing_membership:
                 response.status_code = status.HTTP_200_OK
             else:
-                team_dao.add_assistant_membership(
-                    team=team,
-                    assistant=assistant,
-                    added_by=user_id,
-                )
-                _ensure_member_team_contacts(
-                    session,
-                    assistant_id=assistant.agent_id,
-                    team_id=team.id,
-                )
-                refresh_payloads = membership_refresh_payloads(session, [assistant])
+                refresh_payloads = result.refresh_payloads
         session.commit()
     except HTTPException:
         session.rollback()

@@ -1166,6 +1166,18 @@ class Organization(Base):
         server_default="false",
     )
 
+    org_wide_sharing_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    org_wide_sharing_team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # === VERIFICATION FIELDS ===
     # Verified orgs get higher rate limits
     verified = Column(
@@ -1188,6 +1200,10 @@ class Organization(Base):
         default=False,
         server_default="false",
     )
+
+    @property
+    def data_sharing_mode(self) -> str:
+        return "shared" if self.org_wide_sharing_enabled else "private"
 
     # Relationships
     billing_account = relationship(
@@ -1485,6 +1501,12 @@ class Team(Base):
         nullable=False,
         default=TEAM_STATUS_ACTIVE,
         server_default=TEAM_STATUS_ACTIVE,
+    )
+    is_org_wide_sharing = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
     )
     created_at = Column(TIMESTAMP, server_default=func.now())
 

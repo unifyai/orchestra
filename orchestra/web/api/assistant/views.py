@@ -104,8 +104,12 @@ from orchestra.services.coordinator_service import (
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
+from orchestra.services.org_wide_sharing_service import enroll_assistant_in_org_wide_team
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
+from orchestra.services.team_membership_refresh_service import (
+    publish_membership_refreshes_best_effort,
+)
 from orchestra.services.universal_unity_contacts import (
     UNIVERSAL_CONTACT_TYPES,
     drifted_universal_coordinator_contact_types,
@@ -1165,9 +1169,22 @@ async def create_assistant(
             project=assistants_project,
         )
 
+        sharing_refresh_payloads = []
+        if organization_id is not None and not assistant.is_coordinator:
+            org = session.get(Organization, organization_id)
+            if org is not None and org.org_wide_sharing_enabled:
+                sharing_result = enroll_assistant_in_org_wide_team(
+                    session,
+                    org=org,
+                    assistant=assistant,
+                    actor_user_id=user_id,
+                )
+                sharing_refresh_payloads.extend(sharing_result.refresh_payloads)
+
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
         session.commit()
+        await publish_membership_refreshes_best_effort(sharing_refresh_payloads)
 
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure

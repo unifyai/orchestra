@@ -26,6 +26,7 @@ class TeamDAO:
         name: str,
         organization_id: int,
         description: Optional[str] = None,
+        is_org_wide_sharing: bool = False,
     ) -> Team:
         """
         Create a new team.
@@ -39,6 +40,7 @@ class TeamDAO:
             name=name,
             organization_id=organization_id,
             description=description,
+            is_org_wide_sharing=is_org_wide_sharing,
         )
         self.session.add(team)
         self.session.flush()
