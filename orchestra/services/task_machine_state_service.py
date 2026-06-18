@@ -61,7 +61,7 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
     },
 )
 
-_SCHEDULED_ACTIVATION_STATUSES = {"scheduled", "queued", "primed"}
+_SCHEDULED_ACTIVATION_STATUSES = {"scheduled"}
 _TRIGGERABLE_STATUS = "triggerable"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
@@ -1720,8 +1720,6 @@ def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
     if trigger not in (None, {}):
         return False
     if not isinstance(schedule, dict):
-        return False
-    if schedule.get("prev_task") is not None:
         return False
     if schedule.get("start_at") is None:
         return False
