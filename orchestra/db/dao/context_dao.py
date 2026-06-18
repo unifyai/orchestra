@@ -2637,6 +2637,8 @@ class ContextDAO:
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
         foreign_keys: Optional[List[Dict[str, Any]]] = None,
+        owner_scope: Optional[str] = None,
+        owner_id: Optional[int] = None,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -2656,12 +2658,13 @@ class ContextDAO:
         # Convert foreign_keys list to proper format for storage
         foreign_keys_json = foreign_keys if foreign_keys else []
 
-        # Classify ownership from the context name (assistant/team/aggregation/
-        # system). Logs created here denormalize this owner onto the heavy tables
-        # so an assistant/team can be deleted as a partition drop.
-        from orchestra.db.scope import owner_from_context_name
+        # Ownership (assistant/team/aggregation/system): use the caller-supplied
+        # scope when given, else infer it from the context name. Logs created
+        # here denormalize this owner onto the heavy tables so an assistant/team
+        # can be deleted as a partition drop.
+        from orchestra.db.scope import resolve_owner
 
-        owner = owner_from_context_name(name)
+        owner_scope, owner_id = resolve_owner(name, owner_scope, owner_id)
 
         stmt = pg_insert(Context).values(
             project_id=project_id,
@@ -2675,8 +2678,8 @@ class ContextDAO:
             unique_key_types=unique_key_types,
             auto_counting=auto_counting or {},
             foreign_keys=foreign_keys_json,
-            owner_scope=owner.scope.value,
-            owner_id=owner.owner_id,
+            owner_scope=owner_scope,
+            owner_id=owner_id,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -2852,6 +2855,8 @@ class ContextDAO:
                         unique_keys=context_data.get("unique_keys"),
                         auto_counting=context_data.get("auto_counting"),
                         foreign_keys=context_data.get("foreign_keys"),
+                        owner_scope=context_data.get("owner_scope"),
+                        owner_id=context_data.get("owner_id"),
                     )
                     created_contexts.append(name)
 
@@ -2904,6 +2909,8 @@ class ContextDAO:
                                         foreign_keys=matching_context.get(
                                             "foreign_keys",
                                         ),
+                                        owner_scope=matching_context.get("owner_scope"),
+                                        owner_id=matching_context.get("owner_id"),
                                     )
                         except:
                             # If re-creation fails, remove from created list
@@ -3196,6 +3203,8 @@ class ContextDAO:
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
         foreign_keys: Optional[List[Dict[str, Any]]] = None,
+        owner_scope: Optional[str] = None,
+        owner_id: Optional[int] = None,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -3208,6 +3217,10 @@ class ContextDAO:
             name: Name of the context
             description: Optional description of the context
             is_versioned: Whether the context should be versioned
+            owner_scope: Explicit ownership scope (assistant/team/aggregation/
+                system); inferred from ``name`` when omitted.
+            owner_id: Explicit owner id (agent_id / team_id) paired with
+                ``owner_scope``.
 
         Returns:
             The ID of the existing or newly created context
@@ -3235,9 +3248,9 @@ class ContextDAO:
             # Convert foreign_keys list to proper format for storage
             foreign_keys_json = foreign_keys if foreign_keys else []
 
-            from orchestra.db.scope import owner_from_context_name
+            from orchestra.db.scope import resolve_owner
 
-            owner = owner_from_context_name(name)
+            owner_scope, owner_id = resolve_owner(name, owner_scope, owner_id)
 
             # Create the context
             stmt = pg_insert(Context).values(
@@ -3252,8 +3265,8 @@ class ContextDAO:
                 unique_key_types=unique_key_types,
                 auto_counting=auto_counting or {},
                 foreign_keys=foreign_keys_json,
-                owner_scope=owner.scope.value,
-                owner_id=owner.owner_id,
+                owner_scope=owner_scope,
+                owner_id=owner_id,
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -3286,8 +3299,8 @@ class ContextDAO:
                             unique_key_types=unique_key_types,
                             auto_counting=auto_counting or {},
                             foreign_keys=foreign_keys_json,
-                            owner_scope=owner.scope.value,
-                            owner_id=owner.owner_id,
+                            owner_scope=owner_scope,
+                            owner_id=owner_id,
                         )
                         .returning(Context.id)
                     )

@@ -233,6 +233,8 @@ def create_context(
                             "unique_keys": validated_request.unique_keys,
                             "auto_counting": validated_request.auto_counting,
                             "foreign_keys": foreign_keys_data,
+                            "owner_scope": validated_request.owner_scope,
+                            "owner_id": validated_request.owner_id,
                         },
                     )
                 except Exception as e:
@@ -255,6 +257,8 @@ def create_context(
                         "unique_keys": context_request.unique_keys,
                         "auto_counting": context_request.auto_counting,
                         "foreign_keys": foreign_keys_data,
+                        "owner_scope": context_request.owner_scope,
+                        "owner_id": context_request.owner_id,
                     },
                 )
 

@@ -857,96 +857,94 @@ def _seed_owner_and_project(dbsession, *, suffix="purge"):
     return user, project
 
 
-def _seed_context_with_log(dbsession, project, name):
-    """Create a context under *project* with one log event linked to it."""
-    from orchestra.db.models.core_models import Context, LogEvent, LogEventContext
+def test_purge_assistant_owner_removes_tree_and_logs_and_spares_others(dbsession):
+    """The synchronous assistant purge deletes only the target owner's data.
 
-    context = Context(project_id=project.id, name=name)
-    dbsession.add(context)
-    dbsession.flush()
-    log = LogEvent(owner_key="sys", project_id=project.id, data={"message": "to purge"})
-    dbsession.add(log)
-    dbsession.flush()
-    dbsession.add(
-        LogEventContext(
-            owner_key="sys",
+    ``purge_assistant_owner`` runs the indexed owner-scoped purge: the
+    assistant's context tree (CASCADE) and its heavy-table rows
+    (log_event / log_event_context / embedding by ``a{agent_id}``) go in one
+    pass, while a co-resident different-owner's rows are untouched.
+    """
+    from orchestra.db.models.core_models import (
+        Context,
+        Embedding,
+        LogEvent,
+        LogEventContext,
+    )
+    from orchestra.services.assistant_cleanup_service import purge_assistant_owner
+
+    user, project = _seed_owner_and_project(dbsession, suffix="sync")
+    agent_id = 424242
+    ok = f"a{agent_id}"
+
+    def _seed(owner_key, owner_id, ctx_name):
+        ctx = Context(
             project_id=project.id,
-            log_event_id=log.id,
-            context_id=context.id,
-        ),
-    )
-    dbsession.flush()
-    return context
-
-
-@pytest.mark.anyio
-async def test_process_cleanup_purges_context_tree_by_path(dbsession):
-    """A purge_contexts task removes the assistant's {user}/{agent} context tree."""
-    from orchestra.db.models.core_models import Context
-
-    user, project = _seed_owner_and_project(dbsession)
-    agent_id = 987654  # row already deleted by the endpoint in real flows
-    prefix = f"{user.id}/{agent_id}"
-    _seed_context_with_log(dbsession, project, f"{prefix}/Knowledge")
-    _seed_context_with_log(dbsession, project, f"{prefix}/Guidance")
-
-    task = AssistantCleanupTask(
-        assistant_id=agent_id,
-        desktop_mode="ubuntu",
-        source_flow=CleanupSource.ASSISTANT_DELETE,
-        cleanup_payload={
-            "contacts": [],
-            "user_id": user.id,
-            "organization_id": None,
-            "purge_contexts": True,
-        },
-        status="pending",
-    )
-    dbsession.add(task)
-    dbsession.commit()
-
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.create_bucket_service",
-    ) as mock_bucket_cls:
-        mock_teardown.return_value = {"success": True, "steps": {}, "errors": []}
-        mock_deprovision.return_value = {
-            "success": True,
-            "attempted": 0,
-            "soft_deleted": 0,
-            "errors": [],
-        }
-        mock_bucket = mock_bucket_cls.return_value
-        mock_bucket.delete_assistant_file.return_value = True
-        mock_bucket.delete_all_assistant_data.return_value = {
-            "media": 0,
-            "recordings": 0,
-            "attachments": 0,
-        }
-
-        result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task.id])
-
-    assert result["completed"] == 1, result
-    dbsession.expire_all()
-    remaining = (
-        dbsession.query(Context)
-        .filter(
-            Context.project_id == project.id,
-            Context.name.like(f"{prefix}/%"),
+            name=ctx_name,
+            owner_scope="assistant",
+            owner_id=owner_id,
         )
-        .count()
+        dbsession.add(ctx)
+        dbsession.flush()
+        log = LogEvent(project_id=project.id, owner_key=owner_key, data={})
+        dbsession.add(log)
+        dbsession.flush()
+        dbsession.add(
+            LogEventContext(
+                project_id=project.id,
+                log_event_id=log.id,
+                context_id=ctx.id,
+                owner_key=owner_key,
+            ),
+        )
+        dbsession.add(
+            Embedding(
+                project_id=project.id,
+                ref_id=log.id,
+                owner_key=owner_key,
+                model="m",
+                key="k",
+                vector=[0.1, 0.2, 0.3],
+            ),
+        )
+        dbsession.flush()
+        return ctx, log
+
+    target_ctx, target_log = _seed(ok, agent_id, f"{user.id}/{agent_id}/Knowledge")
+    other_ctx, other_log = _seed("a999", 999, f"{user.id}/999/Knowledge")
+    # Capture ids as plain ints before the raw-SQL delete removes the rows
+    # (accessing a deleted ORM instance's attributes would trigger a refresh).
+    target_ctx_id, target_log_id = target_ctx.id, target_log.id
+    other_ctx_id, other_log_id = other_ctx.id, other_log.id
+
+    method = purge_assistant_owner(
+        dbsession,
+        assistant_id=agent_id,
+        user_id=user.id,
+        organization_id=None,
     )
-    assert remaining == 0
+    assert method == "row_delete"
+    dbsession.expire_all()
+
+    def _count(model, **kw):
+        return dbsession.query(model).filter_by(**kw).count()
+
+    # Target owner: context + heavy rows all gone.
+    assert _count(Context, id=target_ctx_id) == 0
+    assert _count(LogEvent, project_id=project.id, id=target_log_id) == 0
+    assert (
+        _count(LogEventContext, project_id=project.id, log_event_id=target_log_id) == 0
+    )
+    assert _count(Embedding, project_id=project.id, ref_id=target_log_id) == 0
+    # Co-resident different owner: untouched.
+    assert _count(Context, id=other_ctx_id) == 1
+    assert _count(LogEvent, project_id=project.id, id=other_log_id) == 1
+    assert _count(Embedding, project_id=project.id, ref_id=other_log_id) == 1
 
 
 @pytest.mark.anyio
-async def test_process_cleanup_purge_retries_then_fails(dbsession):
-    """A purge_contexts task that keeps failing retries and then terminally fails
+async def test_process_cleanup_retries_then_fails(dbsession):
+    """A teardown task that keeps failing retries and then terminally fails
     (surfaced via the task row / admin endpoint)."""
     from orchestra.services.assistant_cleanup_service import MAX_CLEANUP_ATTEMPTS
 
@@ -956,12 +954,7 @@ async def test_process_cleanup_purge_retries_then_fails(dbsession):
         assistant_id=987655,
         desktop_mode="ubuntu",
         source_flow=CleanupSource.ASSISTANT_DELETE,
-        cleanup_payload={
-            "contacts": [],
-            "user_id": user.id,
-            "organization_id": None,
-            "purge_contexts": True,
-        },
+        cleanup_payload={"contacts": []},
         status="pending",
         # One attempt below the cap so this run is terminal.
         attempt_count=MAX_CLEANUP_ATTEMPTS - 1,
@@ -1058,9 +1051,13 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
 
     # Chunk size of 2 forces the 5 logs across 3 chunks in every IN-lookup.
     with patch.object(
-        led_module.LogEventDAO, "bucket_service_factory", lambda: mock_bucket
+        led_module.LogEventDAO,
+        "bucket_service_factory",
+        lambda: mock_bucket,
     ), patch.object(led_module, "_LOG_ID_IN_CHUNK", 2), patch.object(
-        sib_module, "_LOG_ID_IN_CHUNK", 2
+        sib_module,
+        "_LOG_ID_IN_CHUNK",
+        2,
     ):
         ContextDAO(dbsession).delete(context_id)
 

@@ -199,6 +199,20 @@ class ContextCreateRequest(BaseModel):
             },
         ],
     )
+    owner_scope: Optional[str] = Field(
+        default=None,
+        description="Explicit ownership scope of this context "
+        "('assistant', 'team', 'aggregation', 'system'). When omitted, the "
+        "owner is inferred from the context name. Determines the unit of "
+        "O(owner) bulk deletion.",
+        example="assistant",
+    )
+    owner_id: Optional[int] = Field(
+        default=None,
+        description="Owner id (agent_id for assistant scope, team_id for team "
+        "scope) paired with owner_scope; None otherwise.",
+        example=123,
+    )
 
     @field_validator("unique_keys")
     @classmethod

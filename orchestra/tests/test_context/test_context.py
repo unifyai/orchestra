@@ -48,6 +48,48 @@ async def test_create_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_context_owner_scope_explicit_and_inferred(
+    client: AsyncClient,
+    dbsession,
+):
+    """Context create stores explicit owner scope, else infers it from the name."""
+    from orchestra.db.models.core_models import Context
+
+    project_name = "owner-scope-project"
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Explicit owner wins even for a name that would otherwise classify as system.
+    explicit = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "ArbitraryName", "owner_scope": "team", "owner_id": 555},
+        headers=HEADERS,
+    )
+    assert explicit.status_code == 200
+
+    # No explicit owner -> inferred from the {user}/{agent_id}/... convention.
+    inferred = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "u123/77/Knowledge"},
+        headers=HEADERS,
+    )
+    assert inferred.status_code == 200
+
+    rows = {
+        c.name: (c.owner_scope, c.owner_id)
+        for c in dbsession.query(Context)
+        .filter(Context.name.in_(["ArbitraryName", "u123/77/Knowledge"]))
+        .all()
+    }
+    assert rows["ArbitraryName"] == ("team", 555)
+    assert rows["u123/77/Knowledge"] == ("assistant", 77)
+
+
+@pytest.mark.anyio
 async def test_create_context_with_slash(client: AsyncClient):
     project_name = "test-project"
     context_name = "/training/trial1"

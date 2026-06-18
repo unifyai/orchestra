@@ -123,6 +123,9 @@ class LogEventContext(Base):
     __table_args__ = (
         Index("idx_log_event_context_context_id", "context_id"),
         Index("idx_log_event_context_log_event_id", "log_event_id"),
+        # Owner-scoped deletion: makes ``DELETE ... WHERE project_id AND
+        # owner_key`` (per-assistant/team purge) O(the owner's rows).
+        Index("idx_log_event_context_project_owner", "project_id", "owner_key"),
         {"postgresql_partition_by": "LIST (project_id)"},
     )
 
@@ -288,6 +291,10 @@ class LogEvent(Base):
     __table_args__ = (
         Index("idx_log_event_project_id_id", "project_id", "id"),
         Index("idx_log_event_data", "data", postgresql_using="gin"),
+        # Owner-scoped deletion: makes ``DELETE ... WHERE project_id AND
+        # owner_key`` (per-assistant/team purge) O(the owner's rows) instead of a
+        # scan of the whole shared Assistants project.
+        Index("idx_log_event_project_owner", "project_id", "owner_key"),
         {"postgresql_partition_by": "LIST (project_id)"},
     )
 
@@ -558,7 +565,11 @@ class EmbeddingQueue(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "project_id", "ref_id", "key", "model", name="uq_embedding_queue"
+            "project_id",
+            "ref_id",
+            "key",
+            "model",
+            name="uq_embedding_queue",
         ),
         sa.CheckConstraint(
             "status IN ('pending', 'generating', 'vector_ready', 'inserting', "

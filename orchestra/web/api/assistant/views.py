@@ -76,6 +76,7 @@ from orchestra.services.assistant_cleanup_service import (
     deprovision_assistant_contacts,
     enqueue_cleanup_tasks,
     process_assistant_cleanup_tasks,
+    purge_assistant_owner,
 )
 from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -787,7 +788,7 @@ def _self_heal_coordinator_contacts(
     if get_universal_unity_discord_bot_id():
         try:
             _discord_pool, discord_pool_changed = ensure_universal_unity_discord_pool(
-                session
+                session,
             )
         except Exception:
             logging.warning(
@@ -1537,7 +1538,8 @@ async def update_coordinator_state_endpoint(
         and previous_state.get("onboarding_step") != update.onboarding_step
     ):
         completed_step_ids = derive_onboarding_progress(
-            session, coordinator=coordinator
+            session,
+            coordinator=coordinator,
         )
         await emit_onboarding_step_started_event(
             session,
@@ -3024,7 +3026,8 @@ def _load_assistant_for_file_access(
         organization_id=organization_id,
     )
     if not assistant or _is_hidden_workspace_coordinator_for_user(
-        assistant, user_id=user_id
+        assistant,
+        user_id=user_id,
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -3034,7 +3037,10 @@ def _load_assistant_for_file_access(
         ra_dao = ResourceAccessDAO(session)
         permission = "assistant:write" if write else "assistant:read"
         if not ra_dao.check_user_permission(
-            user_id, "assistant", assistant_id, permission
+            user_id,
+            "assistant",
+            assistant_id,
+            permission,
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -3236,15 +3242,17 @@ async def get_workspace_file_policy(
     if not row:
         return InfoResponse(
             info=WorkspaceFilePolicy(
-                provider=provider, default_allow=False, decisions=[]
-            )
+                provider=provider,
+                default_allow=False,
+                decisions=[],
+            ),
         )
     return InfoResponse(
         info=WorkspaceFilePolicy(
             provider=provider,
             default_allow=row.default_allow,
             decisions=row.decisions or [],
-        )
+        ),
     )
 
 
@@ -3289,7 +3297,7 @@ async def update_workspace_file_policy(
             provider=provider,
             default_allow=row.default_allow,
             decisions=row.decisions or [],
-        )
+        ),
     )
 
 
@@ -3318,7 +3326,7 @@ async def admin_get_workspace_file_access(
                     provider=provider,
                     default_allow=row.default_allow,
                     decisions=row.decisions or [],
-                )
+                ),
             )
     return InfoResponse(info=WorkspaceFileAccessAdminResponse(policies=policies))
 
@@ -3719,22 +3727,16 @@ async def delete_assistant(
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
-    Delete an assistant; defer the heavy context/log purge to the durable worker.
+    Delete an assistant: purge its database footprint inline, defer only the
+    external (network-bound) teardown to the durable worker.
 
-    The request does only bounded work: validate, purge team memberships,
-    deprovision contacts inline (so successes can be soft-marked in the same
-    transaction), drop demo metadata, and delete the assistant row. Because
-    contexts/logs are keyed by the ``{user_id}/{agent_id}`` *path* (not an FK to
-    the assistant row), the potentially huge purge of the assistant's context
-    tree is handed to the durable ``AssistantCleanupTask`` queue
-    (``purge_contexts=True``) instead of running inline — this keeps deletion
-    fast and non-blocking for data-heavy assistants.
-
-    The worker (driven by the immediate post-response drain and the cleanup
-    cron) tears down runtime, deletes assistant GCS data, and purges the context
-    tree via ``ContextDAO.delete()`` (which strips ``*/All/*`` sibling
-    associations while preserving the topmost ``All/*`` archives). Any failed
-    step is retried; a terminally failed task is visible via the admin cleanup
+    The assistant's heavy-table rows and owned context tree are deleted
+    synchronously via :func:`purge_assistant_owner`, a single owner-scoped purge
+    that is proportional to *this* assistant's data (indexed on
+    ``(project_id, owner_key)``) -- fast enough to run in-request. Only the
+    runtime shutdown, contact deprovisioning, and assistant-scoped GCS cleanup
+    are handed to the durable ``AssistantCleanupTask`` queue, which is retried
+    out of band; a terminally failed task is visible via the admin cleanup
     endpoint.
     """
     dao = AssistantDAO(session)
@@ -3780,15 +3782,15 @@ async def delete_assistant(
 
         # Deprovision contacts inline so successes can be soft-deleted in the
         # same transaction.  Failures are captured in cleanup_spec and persisted
-        # in the durable task queue below for background retry. The spec carries
-        # ``purge_contexts=True`` so the worker also purges the assistant's
-        # ``{user_id}/{agent_id}`` context tree (by path) after the row is gone.
+        # in the durable task queue below for background retry. The assistant's
+        # database footprint is purged synchronously below; the queued task
+        # carries only the external (runtime / contacts / GCS) teardown.
         contact_dao = AssistantContactDAO(session)
         active_contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
+        assistant_user_id = assistant.user_id
         cleanup_spec = build_cleanup_spec_from_assistant(
             assistant,
             active_contacts,
-            purge_contexts=True,
         )
 
         contact_result = await deprovision_assistant_contacts(
@@ -3823,10 +3825,22 @@ async def delete_assistant(
             agent_id=assistant_id,
             organization_id=organization_id,
         )
+
+        # Purge the assistant's database footprint (heavy-table rows + owned
+        # context tree) synchronously and indexed, in the same transaction as
+        # the row delete. This is proportional to the assistant's own data, not
+        # the shared Assistants project, so it stays fast even for data-heavy
+        # assistants.
+        purge_assistant_owner(
+            session,
+            assistant_id=assistant_id,
+            user_id=assistant_user_id,
+            organization_id=organization_id,
+        )
         session.commit()
 
         # Schedule an immediate post-response drain of the durable cleanup task
-        # queue (runtime teardown, GCS, and the context/log purge).
+        # queue (external runtime / contact / GCS teardown only).
         session_factory = request.app.state.db_session_factory
         background_tasks.add_task(
             _cleanup_after_assistant_delete,

@@ -2042,10 +2042,9 @@ async def test_delete_assistant_processes_cleanup_tasks(
     cleanup_task = dbsession.query(AssistantCleanupTask).one()
     assert cleanup_task.assistant_id == assistant_id
     assert cleanup_task.status == "pending"
-    # The single-delete flow tasks the worker with the context purge and carries
-    # owner scope so it can locate the Assistants project by path.
-    assert cleanup_task.cleanup_payload["purge_contexts"] is True
-    assert cleanup_task.cleanup_payload["user_id"]
+    # The queued task now carries only external (runtime / contact / GCS)
+    # teardown; the database footprint is purged synchronously in the request.
+    assert "purge_contexts" not in cleanup_task.cleanup_payload
     # The row itself is removed synchronously by the request.
     dbsession.expire_all()
     assert dbsession.get(Assistant, assistant_id) is None
