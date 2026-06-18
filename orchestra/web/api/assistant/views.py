@@ -104,7 +104,9 @@ from orchestra.services.coordinator_service import (
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
-from orchestra.services.org_wide_sharing_service import enroll_assistant_in_org_wide_team
+from orchestra.services.org_wide_sharing_service import (
+    enroll_assistant_in_org_wide_team,
+)
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.services.team_membership_refresh_service import (

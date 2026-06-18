@@ -7,8 +7,15 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.models.orchestra_models import Assistant, Organization, OrganizationMember, Team
-from orchestra.services.contact_membership_service import ensure_team_contact_memberships
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    Organization,
+    OrganizationMember,
+    Team,
+)
+from orchestra.services.contact_membership_service import (
+    ensure_team_contact_memberships,
+)
 from orchestra.services.coordinator_service import (
     ensure_workspace_coordinator_provisioned,
     get_workspace_coordinator,
@@ -92,7 +99,9 @@ async def add_coordinator_to_team(
             added_by=actor_user_id,
         )
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
-        result.refresh_payloads.extend(membership_refresh_payloads(session, [assistant]))
+        result.refresh_payloads.extend(
+            membership_refresh_payloads(session, [assistant])
+        )
     else:
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
 
@@ -123,7 +132,9 @@ def add_assistant_to_team(
             added_by=actor_user_id,
         )
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
-        result.refresh_payloads.extend(membership_refresh_payloads(session, [assistant]))
+        result.refresh_payloads.extend(
+            membership_refresh_payloads(session, [assistant])
+        )
     else:
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
     return result

@@ -14,7 +14,9 @@ from orchestra.db.dao.team_dao import TEAM_STATUS_ACTIVE, TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Team
-from orchestra.services.contact_membership_service import ensure_team_contact_memberships
+from orchestra.services.contact_membership_service import (
+    ensure_team_contact_memberships,
+)
 from orchestra.services.coordinator_service import get_workspace_coordinator
 from orchestra.services.org_wide_sharing_service import (
     WorkspaceCoordinatorProvisioningError,

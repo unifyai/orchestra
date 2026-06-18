@@ -10,7 +10,11 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.models.orchestra_models import Team, TeamAssistantMembership, TeamMember
+from orchestra.db.models.orchestra_models import (
+    Team,
+    TeamAssistantMembership,
+    TeamMember,
+)
 from orchestra.tests.utils import create_test_user
 
 
@@ -320,7 +324,9 @@ async def test_delete_team(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_org_wide_sharing_toggle_and_auto_enrollment(client: AsyncClient, dbsession):
+async def test_org_wide_sharing_toggle_and_auto_enrollment(
+    client: AsyncClient, dbsession
+):
     owner = await create_test_user(client, "org_share_owner@test.com")
     member = await create_test_user(client, "org_share_member@test.com")
     future_member = await create_test_user(client, "org_share_future@test.com")
@@ -354,7 +360,9 @@ async def test_org_wide_sharing_toggle_and_auto_enrollment(client: AsyncClient, 
         },
         headers=org_headers,
     )
-    assert assistant_response.status_code == status.HTTP_200_OK, assistant_response.json()
+    assert (
+        assistant_response.status_code == status.HTTP_200_OK
+    ), assistant_response.json()
     assistant_id = int(assistant_response.json()["info"]["agent_id"])
 
     enable_response = await client.put(
@@ -372,7 +380,8 @@ async def test_org_wide_sharing_toggle_and_auto_enrollment(client: AsyncClient, 
         .one()
     )
     team_members = {
-        row.user_id for row in dbsession.query(TeamMember).filter_by(team_id=team.id).all()
+        row.user_id
+        for row in dbsession.query(TeamMember).filter_by(team_id=team.id).all()
     }
     assert {owner["id"], member["id"]}.issubset(team_members)
     assert (
@@ -406,7 +415,8 @@ async def test_org_wide_sharing_toggle_and_auto_enrollment(client: AsyncClient, 
 
     dbsession.expire_all()
     refreshed_team_members = {
-        row.user_id for row in dbsession.query(TeamMember).filter_by(team_id=team.id).all()
+        row.user_id
+        for row in dbsession.query(TeamMember).filter_by(team_id=team.id).all()
     }
     assert future_member["id"] in refreshed_team_members
     assert (
