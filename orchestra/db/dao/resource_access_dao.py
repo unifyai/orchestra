@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Assistant,
-    Context,
     Project,
     ResourceAccess,
     TeamMember,
@@ -814,16 +813,13 @@ class ResourceAccessDAO:
         assistant: Assistant,
         organization_id: int,
     ) -> None:
-        """
-        Delete all logs associated with an assistant being removed.
+        """Delete everything an assistant owns in its org's Assistants project.
 
-        Uses context_dao.delete() which handles:
-        - Context deletion with cascade
-        - 3-tier sibling cleanup (All/*, User/All/*)
-        - GCS media cleanup
-        - Orphaned log event cleanup
+        One indexed owner-scoped purge: the assistant's heavy-table rows (owner
+        ``a{agent_id}``) and its owned context tree are removed together (see
+        :func:`orchestra.db.scope.purge_owner`).
         """
-        from orchestra.db.dao.context_dao import ContextDAO
+        from orchestra.db.scope import OwnerScope, purge_owner
 
         ASSISTANTS_PROJECT_NAME = "Assistants"
 
@@ -839,31 +835,12 @@ class ResourceAccessDAO:
         if not org_project:
             return
 
-        assistant_context_id = str(assistant.agent_id)
-        context_dao = ContextDAO(self.session)
-
-        from sqlalchemy import or_
-
-        contexts_to_delete = (
-            self.session.query(Context)
-            .filter(
-                Context.project_id == org_project.id,
-                or_(
-                    Context.name == assistant_context_id,
-                    Context.name.like(f"{assistant_context_id}/%"),
-                    Context.name.like(f"%/{assistant_context_id}"),
-                    Context.name.like(f"%/{assistant_context_id}/%"),
-                ),
-            )
-            .all()
+        purge_owner(
+            self.session.connection(),
+            org_project.id,
+            OwnerScope.ASSISTANT.value,
+            int(assistant.agent_id),
         )
-
-        for ctx in contexts_to_delete:
-            # context_dao.delete() handles:
-            # - Sibling cleanup (All/*, User/All/*)
-            # - GCS media cleanup
-            # - Orphaned log event cleanup
-            context_dao.delete(ctx.id)
 
     def _is_resource_unshared(
         self,

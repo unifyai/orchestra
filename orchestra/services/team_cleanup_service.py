@@ -9,7 +9,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.team_dao import TEAM_STATUS_ACTIVE, TEAM_STATUS_DELETING
 from orchestra.db.models.orchestra_models import (
@@ -223,25 +222,24 @@ def _shared_team_contexts(session: Session, *, team_id: int) -> list[Context]:
 
 
 def _purge_shared_team_contexts(session: Session, *, team_id: int) -> None:
-    """Delete shared context roots for a team.
+    """Delete everything a team owns across its hosting projects.
 
-    The team's heavy-table rows (owned by ``t{team_id}``) are dropped up front
-    per hosting project -- an O(1) partition drop when the team was promoted to
-    its own sub-partition, otherwise a single owner_key-scoped DELETE -- then the
-    per-context loop clears the now-empty metadata.
+    One indexed owner-scoped purge per hosting project: the team's heavy-table
+    rows (owner ``t{team_id}``) and its ``Teams/{team_id}/...`` context tree are
+    removed together (see :func:`orchestra.db.scope.purge_owner`) -- an O(1)
+    partition drop when the team was promoted, otherwise an indexed
+    owner_key-scoped delete.
     """
-    from orchestra.db.partitioning import drop_owner
-    from orchestra.db.scope import OwnerScope
-    from orchestra.db.scope import owner_key as _owner_key
+    from orchestra.db.scope import OwnerScope, purge_owner
 
     contexts = _shared_team_contexts(session, team_id=team_id)
-    ok = _owner_key(OwnerScope.TEAM, team_id)
     for project_id in {int(c.project_id) for c in contexts}:
-        drop_owner(session.connection(), project_id, ok)
-
-    context_dao = ContextDAO(session)
-    for context in contexts:
-        context_dao.delete(context.id)
+        purge_owner(
+            session.connection(),
+            project_id,
+            OwnerScope.TEAM.value,
+            team_id,
+        )
 
 
 def _drop_team_rows(session: Session, *, team_id: int) -> None:

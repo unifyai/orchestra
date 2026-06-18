@@ -94,6 +94,25 @@ def owner_from_context_name(name: str) -> Owner:
     return Owner(OwnerScope.SYSTEM, None)
 
 
+def resolve_owner(
+    name: str,
+    owner_scope: str | None = None,
+    owner_id: int | None = None,
+) -> tuple[str, int | None]:
+    """Resolve a context's ownership, preferring an explicit scope when given.
+
+    Callers that already know the owning entity (e.g. a client passing the
+    active assistant/team) supply ``owner_scope`` / ``owner_id`` directly;
+    otherwise the owner is inferred from the context-name convention
+    (:func:`owner_from_context_name`). Returns ``(owner_scope, owner_id)`` ready
+    to store on the ``context`` row.
+    """
+    if owner_scope is not None:
+        return OwnerScope(owner_scope).value, owner_id
+    owner = owner_from_context_name(name)
+    return owner.scope.value, owner.owner_id
+
+
 def owner_key(scope: OwnerScope, owner_id: int | None) -> str:
     """Single-column partition key encoding an owner.
 
@@ -131,6 +150,44 @@ def owner_key_for_log(conn: Connection, log_event_id: int) -> str:
         {"i": log_event_id},
     ).scalar()
     return val or "sys"
+
+
+def purge_owner(
+    conn: Connection,
+    project_id: int,
+    owner_scope: str,
+    owner_id: int | None,
+) -> str:
+    """Delete everything one owner (an assistant or team) holds in a project.
+
+    Two coordinated, indexed deletions:
+
+    * the heavy tables (``log_event`` / ``log_event_context`` / ``embedding``)
+      by ``owner_key`` via :func:`orchestra.db.partitioning.drop_owner` -- an
+      O(1) partition drop when the owner was promoted, otherwise an
+      ``(project_id, owner_key)``-indexed row delete;
+    * the owner's ``context`` rows by ``(project_id, owner_scope, owner_id)``
+      (the ``idx_context_owner`` partial index), whose ``ON DELETE CASCADE``
+      clears ``context_counter`` / ``context_version`` / ``field_type`` and any
+      remaining ``log_event_context`` rows.
+
+    Returns the heavy-table method used (``drop_partition`` / ``row_delete``).
+    """
+    from orchestra.db.partitioning import drop_owner
+
+    method = drop_owner(
+        conn,
+        int(project_id),
+        owner_key(OwnerScope(owner_scope), owner_id),
+    )
+    conn.execute(
+        text(
+            "DELETE FROM context WHERE project_id = :pid "
+            "AND owner_scope = :scope AND owner_id = :oid",
+        ),
+        {"pid": int(project_id), "scope": owner_scope, "oid": owner_id},
+    )
+    return method
 
 
 def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:

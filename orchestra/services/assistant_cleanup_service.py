@@ -77,10 +77,13 @@ class ContactCleanupSpec:
 
 @dataclass
 class AssistantCleanupSpec:
-    """Serializable cleanup contract for one assistant deletion flow.
+    """Serializable contract for an assistant's **external** teardown.
 
-    The payload is persisted before destructive owner-row deletes so retries can
-    finish runtime teardown, contact cleanup, and assistant GCS cleanup later.
+    The assistant's database footprint (its heavy-table rows and owned context
+    tree) is now deleted synchronously and indexed at delete time (see
+    :func:`purge_assistant_owner`). This async spec carries only the
+    network-bound teardown that must be retried out of band: runtime shutdown,
+    contact deprovisioning, and assistant-scoped GCS cleanup.
     """
 
     assistant_id: int
@@ -88,16 +91,6 @@ class AssistantCleanupSpec:
     profile_photo: str | None = None
     profile_video: str | None = None
     contacts: list[ContactCleanupSpec] = field(default_factory=list)
-    # Owner scope, used by the worker to locate the assistant's Assistants
-    # project + ``{user_id}/{agent_id}`` context tree when ``purge_contexts``
-    # is set. ``purge_contexts`` is True only for the single-assistant delete
-    # flow, where the assistant row is deleted synchronously by the endpoint and
-    # the worker owns the (slow) purge of the assistant's context/log tree by
-    # path. Other flows leave it False because they delete contexts by other
-    # means (or rely on project CASCADE).
-    user_id: str | None = None
-    organization_id: int | None = None
-    purge_contexts: bool = False
 
     def to_payload(self) -> dict:
         """Persist the retry-relevant assistant cleanup state."""
@@ -105,9 +98,6 @@ class AssistantCleanupSpec:
             "profile_photo": self.profile_photo,
             "profile_video": self.profile_video,
             "contacts": [contact.to_payload() for contact in self.contacts],
-            "user_id": self.user_id,
-            "organization_id": self.organization_id,
-            "purge_contexts": self.purge_contexts,
         }
 
     @classmethod
@@ -123,9 +113,6 @@ class AssistantCleanupSpec:
                 ContactCleanupSpec.from_payload(contact_payload)
                 for contact_payload in payload.get("contacts", [])
             ],
-            user_id=payload.get("user_id"),
-            organization_id=payload.get("organization_id"),
-            purge_contexts=bool(payload.get("purge_contexts", False)),
         )
 
 
@@ -136,9 +123,6 @@ def build_cleanup_spec(
     profile_photo: str | None = None,
     profile_video: str | None = None,
     contacts: list[AssistantContact] | None = None,
-    user_id: str | None = None,
-    organization_id: int | None = None,
-    purge_contexts: bool = False,
 ) -> AssistantCleanupSpec:
     """Create an assistant cleanup spec from already-loaded ORM objects."""
     return AssistantCleanupSpec(
@@ -156,33 +140,20 @@ def build_cleanup_spec(
             )
             for contact in (contacts or [])
         ],
-        user_id=user_id,
-        organization_id=organization_id,
-        purge_contexts=purge_contexts,
     )
 
 
 def build_cleanup_spec_from_assistant(
     assistant: Assistant,
     contacts: list[AssistantContact] | None = None,
-    *,
-    purge_contexts: bool = False,
 ) -> AssistantCleanupSpec:
-    """Create a cleanup spec directly from an assistant row.
-
-    ``purge_contexts`` is set by the single-assistant delete flow so the worker
-    also purges the assistant's ``{user_id}/{agent_id}`` context tree (by path)
-    after the endpoint has already removed the assistant row.
-    """
+    """Create an external-teardown cleanup spec directly from an assistant row."""
     return build_cleanup_spec(
         assistant_id=int(assistant.agent_id),
         desktop_mode=assistant.desktop_mode,
         profile_photo=assistant.profile_photo,
         profile_video=assistant.profile_video,
         contacts=contacts,
-        user_id=assistant.user_id,
-        organization_id=assistant.organization_id,
-        purge_contexts=purge_contexts,
     )
 
 
@@ -369,119 +340,54 @@ def _delete_assistant_gcs_data(spec: AssistantCleanupSpec) -> dict[str, object]:
     }
 
 
-def _resolve_assistants_project(spec: AssistantCleanupSpec, session: Session):
-    """Return the spec owner's Assistants project, or None when absent."""
+def _resolve_assistants_project(
+    session: Session,
+    *,
+    user_id: str | None,
+    organization_id: int | None,
+):
+    """Return the owner's Assistants project, or None when absent."""
     query = session.query(Project).filter(Project.name == ASSISTANTS_PROJECT_NAME)
-    if spec.organization_id is not None:
-        return query.filter(Project.organization_id == spec.organization_id).first()
+    if organization_id is not None:
+        return query.filter(Project.organization_id == organization_id).first()
     return query.filter(
-        Project.user_id == spec.user_id,
+        Project.user_id == user_id,
         Project.organization_id.is_(None),
     ).first()
 
 
-def _purge_assistant_contexts(
+def purge_assistant_owner(
     session: Session,
-    spec: AssistantCleanupSpec,
-) -> dict[str, object]:
-    """Delete the assistant's ``{user_id}/{agent_id}`` context tree.
+    *,
+    assistant_id: int,
+    user_id: str | None,
+    organization_id: int | None,
+) -> str | None:
+    """Delete an assistant's entire footprint in its Assistants project.
 
-    Resumable by design: each ``ContextDAO.delete()`` commits its own work, so a
-    partial run persists progress and the next attempt re-queries whatever
-    contexts remain. The topmost ``All/*`` aggregation archives are preserved by
-    ``ContextDAO.delete()`` itself (sibling cleanup only strips associations).
+    Runs the single indexed, owner-scoped purge (heavy-table rows + the owned
+    context tree; see :func:`orchestra.db.scope.purge_owner`) so an assistant's
+    data deletion is proportional to *its own* rows -- fast enough to run inline
+    in the delete request. Returns the heavy-table method used
+    (``drop_partition`` / ``row_delete``), or ``None`` when the owner has no
+    Assistants project.
     """
-    from sqlalchemy import or_ as _or
-
-    from orchestra.db.dao.context_dao import ContextDAO
-    from orchestra.db.models.core_models import Context
-
-    if not spec.user_id:
-        return {
-            "success": True,
-            "skipped": True,
-            "reason": "missing_user_id",
-            "deleted_contexts": 0,
-            "remaining": 0,
-            "errors": [],
-        }
-
-    project = _resolve_assistants_project(spec, session)
+    project = _resolve_assistants_project(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     if project is None:
-        # No Assistants project means nothing to purge for this owner scope.
-        return {
-            "success": True,
-            "deleted_contexts": 0,
-            "remaining": 0,
-            "errors": [],
-        }
+        return None
 
-    # Drop the assistant's heavy-table data (log_event / log_event_context /
-    # embedding, wherever referenced) in one shot: an O(1) partition drop when
-    # this owner was promoted to its own sub-partition, otherwise a single
-    # owner_key-scoped DELETE. Safe now that no aggregation archive is preserved
-    # -- the assistant's logs have no durable home outside its own contexts.
-    from orchestra.db.partitioning import drop_owner
-    from orchestra.db.scope import OwnerScope
-    from orchestra.db.scope import owner_key as _owner_key
+    from orchestra.db.scope import OwnerScope, purge_owner
 
-    drop_owner(
+    return purge_owner(
         session.connection(),
         project.id,
-        _owner_key(OwnerScope.ASSISTANT, int(spec.assistant_id)),
+        OwnerScope.ASSISTANT.value,
+        int(assistant_id),
     )
-
-    prefix = f"{spec.user_id}/{spec.assistant_id}"
-
-    def _remaining_contexts() -> list[Context]:
-        return (
-            session.query(Context)
-            .filter(
-                Context.project_id == project.id,
-                _or(
-                    Context.name == prefix,
-                    Context.name.like(f"{prefix}/%"),
-                ),
-            )
-            .all()
-        )
-
-    context_dao = ContextDAO(session)
-    errors: list[str] = []
-    deleted = 0
-    for ctx in _remaining_contexts():
-        try:
-            context_dao.delete(ctx.id)
-            deleted += 1
-        except Exception as exc:
-            errors.append(
-                f"Failed to delete context {ctx.name} for assistant "
-                f"{spec.assistant_id}: {exc}",
-            )
-
-    remaining = (
-        session.query(Context)
-        .filter(
-            Context.project_id == project.id,
-            _or(
-                Context.name == prefix,
-                Context.name.like(f"{prefix}/%"),
-            ),
-        )
-        .count()
-    )
-    if remaining and not errors:
-        errors.append(
-            f"{remaining} context(s) still remain for assistant "
-            f"{spec.assistant_id} after purge pass",
-        )
-
-    return {
-        "success": not errors and remaining == 0,
-        "deleted_contexts": deleted,
-        "remaining": remaining,
-        "errors": errors,
-    }
 
 
 def _next_retry_at(attempt_count: int) -> datetime:
@@ -562,27 +468,11 @@ async def process_assistant_cleanup_tasks(
                 )
                 errors.extend(storage_result.get("errors", []))
 
-            # Context/log purge is owned by the single-assistant delete flow
-            # (``purge_contexts``). The assistant row is already gone; we purge
-            # its ``{user_id}/{agent_id}`` context tree by path. Run only once
-            # runtime/contact/GCS are clean to keep the task's success contract
-            # all-or-nothing and resumable on retry.
-            context_result: dict[str, object] = {
-                "success": True,
-                "skipped": True,
-                "reason": "not_applicable",
-                "errors": [],
-            }
-            if spec.purge_contexts and not errors:
-                context_result = _purge_assistant_contexts(session, spec)
-                errors.extend(context_result.get("errors", []))
-
             task.attempt_count += 1
             task.last_result = {
                 "runtime": runtime_result,
                 "contacts": contact_result,
                 "storage": storage_result,
-                "contexts": context_result,
             }
             task.cleanup_payload = spec.to_payload()
             if errors:

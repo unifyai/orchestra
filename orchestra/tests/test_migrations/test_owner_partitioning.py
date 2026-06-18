@@ -18,8 +18,10 @@ from sqlalchemy import text
 
 from orchestra.db.partitioning import (
     OWNER_SUB_TABLES,
+    build_partitioned_index,
     drop_owner,
     find_owner_promotion_candidates,
+    index_attached_to_child,
     promote_owner,
     sub_partition_project_by_owner,
 )
@@ -63,7 +65,7 @@ def test_owner_partition_lifecycle(dbsession) -> None:
 
     for table, cols in _DDL.items():
         conn.execute(
-            text(f"CREATE TABLE {table} ({cols}) PARTITION BY LIST (project_id)")
+            text(f"CREATE TABLE {table} ({cols}) PARTITION BY LIST (project_id)"),
         )
         conn.execute(text(f"CREATE TABLE {table}_default PARTITION OF {table} DEFAULT"))
 
@@ -114,3 +116,70 @@ def test_owner_partition_lifecycle(dbsession) -> None:
     # Dropping an un-promoted owner falls back to a scoped row delete.
     assert drop_owner(conn, PID, "a2") == "row_delete"
     assert _counts(conn) == {"a1": 0, "a2": 0, "sys": 1}
+
+
+def _public_index_names(conn, table: str) -> list[str]:
+    return list(
+        conn.execute(
+            text("SELECT indexname FROM pg_indexes WHERE tablename = :t"),
+            {"t": table},
+        ).scalars(),
+    )
+
+
+def test_build_partitioned_index_attaches_every_leaf(dbsession) -> None:
+    """The lock-safe partitioned-index builder ends with a valid attached index.
+
+    Exercises the ON ONLY parent + per-leaf + ATTACH tree logic (the
+    ``CONCURRENTLY`` keyword is dropped here since the dbsession runs inside a
+    transaction; the attach semantics are identical). Built in ``public`` so the
+    namespace-scoped ``child_partitions`` lookup sees the leaves, then rolled
+    back with the dbsession.
+    """
+    conn = dbsession.connection()
+    parent = "_idxtest_le"
+    conn.execute(
+        text(
+            f"CREATE TABLE {parent} (project_id int NOT NULL, id bigint NOT NULL, "
+            f"owner_key varchar NOT NULL, PRIMARY KEY (project_id, id, owner_key)) "
+            f"PARTITION BY LIST (project_id)",
+        ),
+    )
+    conn.execute(text(f"CREATE TABLE {parent}_default PARTITION OF {parent} DEFAULT"))
+    conn.execute(
+        text(f"CREATE TABLE {parent}_p7 PARTITION OF {parent} FOR VALUES IN (7)"),
+    )
+
+    index_name = "_idxtest_project_owner"
+    build_partitioned_index(
+        conn,
+        parent,
+        index_name,
+        '"project_id", "owner_key"',
+        leaf_suffix="powner_idx",
+        concurrently=False,
+    )
+    # Re-run is a no-op (idempotent / resumable).
+    build_partitioned_index(
+        conn,
+        parent,
+        index_name,
+        '"project_id", "owner_key"',
+        leaf_suffix="powner_idx",
+        concurrently=False,
+    )
+
+    valid = conn.execute(
+        text(
+            "SELECT i.indisvalid FROM pg_index i JOIN pg_class c "
+            "ON c.oid = i.indexrelid WHERE c.relname = :n",
+        ),
+        {"n": index_name},
+    ).scalar()
+    assert valid is True
+
+    # Each leaf carries the parent's PK index plus exactly one attached owner
+    # index (no duplicate), and both leaves are recognised as attached.
+    for leaf in (f"{parent}_default", f"{parent}_p7"):
+        assert len(_public_index_names(conn, leaf)) == 2
+        assert index_attached_to_child(conn, index_name, leaf)

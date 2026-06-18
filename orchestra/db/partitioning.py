@@ -131,7 +131,7 @@ def create_dedicated_partition(
     name = dedicated_partition_name(table, pid)
     conn.execute(
         text(
-            f'CREATE TABLE IF NOT EXISTS "{name}" PARTITION OF "{table}" FOR VALUES IN ({pid})'
+            f'CREATE TABLE IF NOT EXISTS "{name}" PARTITION OF "{table}" FOR VALUES IN ({pid})',
         ),
     )
 
@@ -424,7 +424,7 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
             if not idx.endswith(_PRE_PARTITION_SUFFIX):
                 conn.execute(
                     text(
-                        f'ALTER INDEX "{idx}" RENAME TO "{idx}{_PRE_PARTITION_SUFFIX}"'
+                        f'ALTER INDEX "{idx}" RENAME TO "{idx}{_PRE_PARTITION_SUFFIX}"',
                     ),
                 )
 
@@ -602,7 +602,7 @@ def sub_partition_project_by_owner(conn: Connection, project_id: int) -> None:
         )
         conn.execute(
             text(
-                f'CREATE TABLE "{sub_parent}_default" PARTITION OF "{sub_parent}" DEFAULT'
+                f'CREATE TABLE "{sub_parent}_default" PARTITION OF "{sub_parent}" DEFAULT',
             ),
         )
         cols = ", ".join(f'"{c}"' for c in _column_names(conn, table))
@@ -637,7 +637,7 @@ def promote_owner(conn: Connection, project_id: int, owner_key: str) -> list[str
         sub_default = f"{sub_parent}_default"
         conn.execute(
             text(
-                f'CREATE TABLE "{part}" (LIKE "{sub_parent}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)'
+                f'CREATE TABLE "{part}" (LIKE "{sub_parent}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)',
             ),
         )
         cols = ", ".join(f'"{c}"' for c in _column_names(conn, table))
@@ -685,6 +685,90 @@ def drop_owner(conn: Connection, project_id: int, owner_key: str) -> str:
             {"pid": pid, "ok": owner_key},
         )
     return "row_delete"
+
+
+def index_attached_to_child(
+    conn: Connection,
+    parent_index: str,
+    child_table: str,
+) -> bool:
+    """True if an index on ``child_table`` is already attached to ``parent_index``.
+
+    Covers both the fresh-deploy case (Postgres auto-created and auto-attached a
+    child index when the partition was created from a parent that already
+    carried the index) and a resumed/partial index build.
+    """
+    return bool(
+        conn.execute(
+            text(
+                "SELECT EXISTS ("
+                "  SELECT 1 FROM pg_inherits inh "
+                "  JOIN pg_class ci ON ci.oid = inh.inhrelid "
+                "  JOIN pg_class pi ON pi.oid = inh.inhparent "
+                "  JOIN pg_index ix ON ix.indexrelid = ci.oid "
+                "  JOIN pg_class ct ON ct.oid = ix.indrelid "
+                "  WHERE pi.relname = :pidx AND ct.relname = :child)",
+            ),
+            {"pidx": parent_index, "child": child_table},
+        ).scalar(),
+    )
+
+
+def build_partitioned_index(
+    conn: Connection,
+    relation: str,
+    index_name: str,
+    columns: str,
+    *,
+    leaf_suffix: str,
+    concurrently: bool = True,
+) -> None:
+    """Build ``index_name`` on partitioned ``relation`` without long write locks.
+
+    A plain ``CREATE INDEX`` on a partitioned parent recurses into every child
+    while holding ACCESS EXCLUSIVE on the whole tree. Instead this registers an
+    *invalid* index on the parent only (``ON ONLY``), builds a copy on each leaf
+    partition (``CONCURRENTLY`` in production), and attaches it; the parent
+    index flips to valid once every leaf is attached. Intermediate partitioned
+    children are handled by recursion. Idempotent and resumable: a child whose
+    index is already attached is skipped (so a re-run, or the fresh-deploy case
+    where partitions auto-inherit the parent's index, is a no-op).
+
+    ``concurrently`` must be False when running inside an open transaction
+    (``CREATE INDEX CONCURRENTLY`` forbids one); production migrations run it in
+    an autocommit block with ``concurrently=True``. ``columns`` is a trusted
+    SQL column list (e.g. ``'"project_id", "owner_key"'``) and ``leaf_suffix``
+    derives the per-partition index names.
+    """
+    conn.execute(
+        text(
+            f'CREATE INDEX IF NOT EXISTS "{index_name}" ON ONLY "{relation}" ({columns})',
+        ),
+    )
+    create_kw = "CONCURRENTLY " if concurrently else ""
+    for child in child_partitions(conn, relation):
+        if index_attached_to_child(conn, index_name, child):
+            continue
+        leaf_index = f"{child}_{leaf_suffix}"
+        if is_partitioned(conn, child):
+            build_partitioned_index(
+                conn,
+                child,
+                leaf_index,
+                columns,
+                leaf_suffix=leaf_suffix,
+                concurrently=concurrently,
+            )
+        else:
+            conn.execute(
+                text(
+                    f'CREATE INDEX {create_kw}IF NOT EXISTS "{leaf_index}" '
+                    f'ON "{child}" ({columns})',
+                ),
+            )
+        conn.execute(
+            text(f'ALTER INDEX "{index_name}" ATTACH PARTITION "{leaf_index}"'),
+        )
 
 
 def child_partitions(conn: Connection, table: str) -> list[str]:
