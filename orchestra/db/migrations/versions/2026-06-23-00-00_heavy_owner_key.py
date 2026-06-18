@@ -31,7 +31,18 @@ _TABLES = ("log_event", "log_event_context", "embedding")
 
 def upgrade() -> None:
     for table in _TABLES:
-        op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS owner_key varchar")
+        # DEFAULT 'sys' (a constant, so a metadata-only add in PG11+) is load-
+        # bearing: the previous app revision keeps writing rows during the
+        # pre-deploy migrate (and until the new revision rolls out) without
+        # setting owner_key. Without a default those inserts land NULL, which
+        # both races the backfill and breaks the subsequent NOT NULL promotion;
+        # with it, un-specified writes fall back to the system bucket. The new
+        # write paths still set owner_key explicitly.
+        op.execute(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS owner_key varchar "
+            f"DEFAULT 'sys'",
+        )
+        op.execute(f"ALTER TABLE {table} ALTER COLUMN owner_key SET DEFAULT 'sys'")
     backfill_heavy_owner_keys(op.get_bind())
 
 
