@@ -132,7 +132,6 @@ def _task_rows_for_id(
             LogEvent.project_id == project_id,
             LogEventContext.project_id == project_id,
             Context.project_id == project_id,
-            Context.owner_scope == "assistant",
             Context.name.like(f"%/{TASKS_CONTEXT_NAME}"),
             LogEvent.data.has_key("task_id"),
             LogEvent.data.op("->>")("task_id") == str(task_id),

@@ -61,6 +61,7 @@ def _seed_task(
     task_id: int,
     status_value: str = "scheduled",
     name: str = "Review report",
+    legacy_context_owner: bool = False,
 ) -> LogEvent:
     project = (
         dbsession.query(Project)
@@ -78,12 +79,10 @@ def _seed_task(
         .one_or_none()
     )
     if context is None:
-        context = Context(
-            project_id=project.id,
-            name=context_name,
-            owner_scope="assistant",
-            owner_id=assistant_id,
-        )
+        context_kwargs = {"project_id": project.id, "name": context_name}
+        if not legacy_context_owner:
+            context_kwargs.update(owner_scope="assistant", owner_id=assistant_id)
+        context = Context(**context_kwargs)
         dbsession.add(context)
         dbsession.flush()
     log = LogEvent(
@@ -153,6 +152,28 @@ async def test_trigger_task_returns_404_when_task_missing(client: AsyncClient):
     response = await client.post("/v0/tasks/999999/trigger", headers=HEADERS)
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metadata(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    task_row = _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=19,
+        legacy_context_owner=True,
+    )
+
+    response = await client.post("/v0/tasks/19/trigger", headers=HEADERS)
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    mock_task_trigger_dispatch.assert_awaited_once()
+    assert mock_task_trigger_dispatch.await_args.kwargs["source_task_log_id"] == task_row.id
 
 
 @pytest.mark.anyio
