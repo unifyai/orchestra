@@ -44,6 +44,7 @@ from orchestra.web.api.project.views import admin_router as project_admin_router
 from orchestra.web.api.slack import admin_router as slack_admin_router
 from orchestra.web.api.table_view.views import admin_router as table_view_admin_router
 from orchestra.web.api.table_view.views import router as table_view_router
+from orchestra.web.api.tasks import router as tasks_router
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import fetch_comms_features
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
@@ -59,6 +60,7 @@ groupings = {
     "Assistants": [
         "Assistant Management",
         "Messages",
+        "Tasks",
         "Voices",
         "Media",
     ],
@@ -331,6 +333,12 @@ api_router.include_router(
 api_router.include_router(
     messages_router,
     tags=["Messages"],
+    dependencies=API_KEY_AUTH,
+)
+
+api_router.include_router(
+    tasks_router,
+    tags=["Tasks"],
     dependencies=API_KEY_AUTH,
 )
 
