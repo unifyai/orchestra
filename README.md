@@ -22,12 +22,12 @@ If Droid is the runtime brain, Orchestra is the durable substrate: projects, con
 
 ## Quick Start
 
-> **Running the whole product locally?** Don't start here. Use **`droid stack up`**
-> from the [droid repo](https://github.com/unifyai/droid) (see its
-> [self-host docs](https://github.com/unifyai/droid/blob/staging/deploy/selfhost/README.md)) —
-> it starts Orchestra, the Droid gateway, Console, and your Coordinator together,
-> and drives Orchestra's `scripts/local.sh` for you. The steps below are for
-> developing/testing **Orchestra on its own**.
+> **Running the whole product locally?** Don't start here. Use
+> `droid-deploy/selfhost/stack.sh up` from the private deployment checkout; see
+> `droid-deploy/docs/local-full-stack-inner-loop.md`. It starts Orchestra, the
+> Droid gateway, Console, and your Coordinator together, and drives Orchestra's
+> `scripts/local.sh` for you. The steps below are for developing/testing
+> **Orchestra on its own**.
 
 For the smallest local development setup with PostgreSQL + pgvector:
 
