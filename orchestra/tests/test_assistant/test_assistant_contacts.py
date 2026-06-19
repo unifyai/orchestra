@@ -1999,14 +1999,14 @@ class TestListContactsEndpoint:
         stored value has drifted from the configured value (self-heal on read).
 
         Models the staging-email repoint: a Coordinator provisioned while the
-        shared mailbox was ``marty@unify.ai`` must pick up
-        ``staging-marty@unify.ai`` on the next read once the setting changes,
+        shared mailbox was ``twin@unify.ai`` must pick up
+        ``staging-twin@unify.ai`` on the next read once the setting changes,
         without re-running the onboarding provisioning call.
         """
         from orchestra.settings import settings
 
         monkeypatch.setattr(
-            settings, "droid_coordinator_email_address", "marty@unify.ai"
+            settings, "droid_coordinator_email_address", "twin@unify.ai"
         )
 
         credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -2036,12 +2036,12 @@ class TestListContactsEndpoint:
             c for c in before.json()["info"] if c["contact_type"] == "email"
         ]
         assert len(before_email) == 1
-        assert before_email[0]["contact_value"] == "marty@unify.ai"
+        assert before_email[0]["contact_value"] == "twin@unify.ai"
 
         # Repoint the shared Coordinator mailbox, then re-read: the stored email
         # reconciles to the new configured address.
         monkeypatch.setattr(
-            settings, "droid_coordinator_email_address", "staging-marty@unify.ai"
+            settings, "droid_coordinator_email_address", "staging-twin@unify.ai"
         )
 
         healed = await client.get(
@@ -2053,7 +2053,7 @@ class TestListContactsEndpoint:
             c for c in healed.json()["info"] if c["contact_type"] == "email"
         ]
         assert len(healed_email) == 1
-        assert healed_email[0]["contact_value"] == "staging-marty@unify.ai"
+        assert healed_email[0]["contact_value"] == "staging-twin@unify.ai"
         assert healed_email[0]["provisioned_by"] == "platform"
 
     @pytest.mark.anyio
@@ -5695,7 +5695,7 @@ class TestConnectEndpointOrg:
         AssistantContactDAO(dbsession).upsert_assistant_contact(
             assistant_id=agent_id,
             contact_type="email",
-            contact_value="marty@unify.ai",
+            contact_value="twin@unify.ai",
             provider="google_workspace",
             provisioned_by="platform",
         )

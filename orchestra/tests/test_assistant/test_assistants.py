@@ -403,7 +403,7 @@ async def test_delete_coordinator_rejected(
     coordinator = Assistant(
         user_id=user_id,
         organization_id=None,
-        first_name="Marty",
+        first_name="Twin",
         is_coordinator=True,
     )
     dbsession.add(coordinator)
