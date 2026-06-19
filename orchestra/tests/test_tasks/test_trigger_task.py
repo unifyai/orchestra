@@ -173,7 +173,10 @@ async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metad
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     mock_task_trigger_dispatch.assert_awaited_once()
-    assert mock_task_trigger_dispatch.await_args.kwargs["source_task_log_id"] == task_row.id
+    assert (
+        mock_task_trigger_dispatch.await_args.kwargs["source_task_log_id"]
+        == task_row.id
+    )
 
 
 @pytest.mark.anyio
