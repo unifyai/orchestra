@@ -86,6 +86,45 @@ log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
+full_stack_state_file() {
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+}
+
+port_is_listening() {
+  local port="$1"
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n '2p' | grep -q .
+}
+
+full_stack_source_is_active() {
+  local state_file
+  state_file="$(full_stack_state_file)"
+  if [[ -f "$state_file" ]]; then
+    python3 - "$state_file" <<'PY' >/dev/null || return 1
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    mode = json.load(fh).get("mode")
+raise SystemExit(0 if not mode or mode == "source" else 1)
+PY
+  fi
+  port_is_listening 8000 && port_is_listening 8001
+}
+
+refuse_isolated_when_full_stack_active() {
+  local action="$1"
+  if [[ "${ORCHESTRA_ALLOW_ISOLATED:-0}" == "1" || -n "${DROID_STACK_ORCHESTRATOR:-}" ]]; then
+    return 0
+  fi
+  if full_stack_source_is_active; then
+    log_error "Refusing isolated Orchestra $action while the full local Droid stack is active."
+    log_info "Use droid-deploy/selfhost/stack.sh status or repair-console instead."
+    log_info "Override only for intentionally isolated Orchestra work:"
+    log_info "  ORCHESTRA_ALLOW_ISOLATED=1 $0 $action"
+    return 1
+  fi
+}
+
 # =============================================================================
 # Prerequisite Checks
 # =============================================================================
@@ -886,6 +925,8 @@ stop_orchestra_server() {
 # =============================================================================
 
 cmd_start() {
+  refuse_isolated_when_full_stack_active start || return 1
+
   echo "=============================================="
   echo "Starting Local Orchestra"
   echo "=============================================="
@@ -969,12 +1010,16 @@ cmd_stop() {
 }
 
 cmd_restart() {
+  refuse_isolated_when_full_stack_active restart || return 1
+
   cmd_stop
   echo ""
   cmd_start
 }
 
 cmd_purge() {
+  refuse_isolated_when_full_stack_active purge || return 1
+
   echo "Purging Local Orchestra (destroys all local data)..."
   echo ""
 

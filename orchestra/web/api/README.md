@@ -16,6 +16,16 @@ This directory holds the `schema` and `view` files for every endpoint under the 
 
 TODO
 
+## Public Assistant Task Trigger
+
+`POST /v0/tasks/{task_id}/trigger` starts an existing assistant task by logical
+`task_id` using the caller's API-key scope. The request has no body; the path
+parameter is the only caller-supplied argument. Orchestra resolves the unique
+accessible assistant/task pair, wakes Droid through the adapters
+`droid_system_event` channel, and returns `202 Accepted` while execution
+continues asynchronously in the assistant runtime. If the API key can see the
+same `task_id` on more than one assistant, the endpoint returns `409 Conflict`.
+
 ## Async vs Sync Route Handlers
 
 FastAPI treats `async def` and `def` route handlers **fundamentally differently**, with real performance implications.
