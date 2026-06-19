@@ -116,7 +116,7 @@ def _make_coordinator(
     return _make_assistant(
         dbsession,
         user_id,
-        first_name="Marty",
+        first_name="Twin",
         last_correspondence_at=last_correspondence_at,
         last_followup_sent_at=last_followup_sent_at,
         inactivity_followup_opted_out=inactivity_followup_opted_out,
@@ -666,10 +666,10 @@ class TestEmailTemplates:
         normalized = re.sub(r"\s+", " ", body.lower())
 
         assert "unify" in WELCOME_SUBJECT.lower()
-        assert "i'm marty" in normalized
+        assert "i'm twin" in normalized
         assert "hi olivia," in normalized
         assert "https://console.unify.ai/" in body
-        assert "— marty" in normalized
+        assert "— twin" in normalized
 
     def test_welcome_email_handles_missing_first_name(self):
         from orchestra.routines.inactivity_notifications import (

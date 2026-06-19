@@ -1,6 +1,6 @@
 """Fixed-voice invariant for Coordinator assistants.
 
-Every Coordinator ("Marty") speaks with one canonical voice. The invariant
+Every Coordinator ("Twin") speaks with one canonical voice. The invariant
 is enforced at the ORM flush boundary so that no API endpoint, service, or
 future code path can persist a Coordinator row with any other voice:
 

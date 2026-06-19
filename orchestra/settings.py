@@ -411,7 +411,7 @@ class Settings(BaseSettings):
     droid_coordinator_email_address: Optional[str] = (
         os.environ.get("DROID_COORDINATOR_EMAIL_ADDRESS")
         or os.environ.get("ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS")
-        or "marty@unify.ai"
+        or "twin@unify.ai"
     )
     # Discrete per-country Coordinator phone numbers. The UK number is keyed
     # under ISO country code "GB". The correct prod/staging value is mounted
