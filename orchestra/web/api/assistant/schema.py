@@ -163,7 +163,7 @@ class AssistantCreate(BaseModel):
     is_local: Optional[bool] = Field(
         False,
         description=(
-            "Whether this is a local assistant (runs unity locally instead of on GKE). "
+            "Whether this is a local assistant (runs droid locally instead of on GKE). "
             "Local assistants skip wakeup calls and GKE job management in the adapters."
         ),
     )
@@ -452,7 +452,7 @@ class AssistantRead(AssistantCreate):
     )
     is_local: Optional[bool] = Field(
         None,
-        description="Whether this is a local assistant (runs unity locally instead of on GKE).",
+        description="Whether this is a local assistant (runs droid locally instead of on GKE).",
     )
     is_coordinator: bool = Field(
         False,
@@ -570,7 +570,7 @@ class OnboardingSessionStarted(BaseModel):
     Console POSTs this the moment the user picks "I'd rather chat"
     or "Start Call" in the Coordinator onboarding picker. The body
     is intentionally tiny — the server derives the completed-step
-    snapshot itself (``derive_onboarding_progress``) and Unity reads
+    snapshot itself (``derive_onboarding_progress``) and Droid reads
     ``Coordinator/State`` plus the chat-history snapshot when
     generating the opener, so only the medium needs to travel.
     """
@@ -740,25 +740,25 @@ class DemoAssistantCreate(BaseModel):
         description="Country code for phone number provisioning (e.g., US, GB). If not provided, uses source assistant's country or defaults to US.",
         example="US",
     )
-    # Optional prospect details - if provided, Unity will pre-populate the boss contact
+    # Optional prospect details - if provided, Droid will pre-populate the boss contact
     prospect_first_name: OptionalSafeLabel = Field(
         None,
-        description="Prospect's first name (optional, for pre-populating boss contact in Unity)",
+        description="Prospect's first name (optional, for pre-populating boss contact in Droid)",
         example="Richard",
     )
     prospect_surname: OptionalSafeLabel = Field(
         None,
-        description="Prospect's surname (optional, for pre-populating boss contact in Unity)",
+        description="Prospect's surname (optional, for pre-populating boss contact in Droid)",
         example="Branson",
     )
     prospect_email: Optional[str] = Field(
         None,
-        description="Prospect's email address (optional, for pre-populating boss contact in Unity)",
+        description="Prospect's email address (optional, for pre-populating boss contact in Droid)",
         example="richard@virgin.com",
     )
     prospect_phone: Optional[str] = Field(
         None,
-        description="Prospect's phone number in E.164 format (optional, for pre-populating boss contact in Unity)",
+        description="Prospect's phone number in E.164 format (optional, for pre-populating boss contact in Droid)",
         example="+447700900000",
     )
 
@@ -971,7 +971,7 @@ class AssistantUpdate(BaseModel):
     )
     is_local: Optional[bool] = Field(
         None,
-        description="Whether this is a local assistant (runs unity locally instead of on GKE).",
+        description="Whether this is a local assistant (runs droid locally instead of on GKE).",
     )
     monthly_spending_cap: Optional[float] = Field(
         None,
@@ -1802,7 +1802,7 @@ class WorkspaceFilePolicyUpdate(BaseModel):
 class WorkspaceFileAccessAdminResponse(BaseModel):
     """Admin read of every provider's file-access policy for an assistant.
 
-    Consumed by the assistant runtime (Unity) to mirror the allowlist into its
+    Consumed by the assistant runtime (Droid) to mirror the allowlist into its
     enforcement layer.
     """
 

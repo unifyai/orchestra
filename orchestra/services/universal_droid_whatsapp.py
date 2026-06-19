@@ -12,27 +12,27 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.settings import settings
 
-UNIVERSAL_UNITY_WHATSAPP_METADATA = {"universal_unity": True}
+UNIVERSAL_DROID_WHATSAPP_METADATA = {"universal_droid": True}
 
 
-def get_universal_unity_whatsapp_number() -> str | None:
-    number = settings.unity_coordinator_whatsapp_number
+def get_universal_droid_whatsapp_number() -> str | None:
+    number = settings.droid_coordinator_whatsapp_number
     if not number:
         return None
     return number.replace("whatsapp:", "").strip() or None
 
 
-def is_universal_unity_whatsapp_number(number: str | None) -> bool:
-    universal_number = get_universal_unity_whatsapp_number()
+def is_universal_droid_whatsapp_number(number: str | None) -> bool:
+    universal_number = get_universal_droid_whatsapp_number()
     if not universal_number or not number:
         return False
     return number.replace("whatsapp:", "").strip() == universal_number
 
 
-def ensure_universal_unity_whatsapp_pool(
+def ensure_universal_droid_whatsapp_pool(
     session: Session,
 ) -> SharedPoolNumber | None:
-    number = get_universal_unity_whatsapp_number()
+    number = get_universal_droid_whatsapp_number()
     if number is None:
         return None
 
@@ -65,7 +65,7 @@ def ensure_coordinator_universal_whatsapp_contact(
     if not coordinator.is_coordinator:
         return None
 
-    pool = ensure_universal_unity_whatsapp_pool(session)
+    pool = ensure_universal_droid_whatsapp_pool(session)
     if pool is None:
         return None
 
@@ -75,7 +75,7 @@ def ensure_coordinator_universal_whatsapp_contact(
         contact_value=pool.number,
         provider="twilio",
         provisioned_by="platform",
-        metadata=UNIVERSAL_UNITY_WHATSAPP_METADATA,
+        metadata=UNIVERSAL_DROID_WHATSAPP_METADATA,
     )
     session.flush()
     return contact

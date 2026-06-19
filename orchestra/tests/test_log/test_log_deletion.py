@@ -1966,7 +1966,7 @@ async def test_assistants_3tier_with_prefix(
     """
     Test 3-tier context deletion with arbitrary prefix before the hierarchy.
 
-    This tests contexts like Unity's test isolation paths:
+    This tests contexts like Droid's test isolation paths:
     - Tier 1: tests/test_foo/All/Contacts (global aggregate with prefix)
     - Tier 2: tests/test_foo/default/All/Contacts (user aggregate with prefix)
     - Tier 3: tests/test_foo/default/Assistant/Contacts (user + assistant with prefix)
@@ -1976,7 +1976,7 @@ async def test_assistants_3tier_with_prefix(
     to extract prefix and SubContext dynamically.
     """
     project_name = "UnityTests-PrefixTest"
-    # Prefix simulates Unity's test isolation paths
+    # Prefix simulates Droid's test isolation paths
     prefix = "tests/test_contact_manager/test_foo"
     global_all_context = f"{prefix}/All/Contacts"
     user_all_context = f"{prefix}/default/All/Contacts"
@@ -2010,7 +2010,7 @@ async def test_assistants_3tier_with_prefix(
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Add to other contexts (simulating Unity's _add_to_all behavior)
+    # Add to other contexts (simulating Droid's _add_to_all behavior)
     for ctx in [global_all_context, user_all_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts/add_logs",

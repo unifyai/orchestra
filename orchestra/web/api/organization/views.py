@@ -50,6 +50,13 @@ from orchestra.services.coordinator_service import (
     ensure_workspace_coordinator_provisioned,
     get_workspace_coordinator,
 )
+from orchestra.services.org_wide_sharing_service import (
+    OrgWideSharingConflictError,
+    WorkspaceCoordinatorProvisioningError,
+    disable_org_wide_sharing,
+    enable_org_wide_sharing,
+    enroll_member_in_org_wide_team,
+)
 from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
 from orchestra.services.team_cleanup_service import (
     purge_assistant_overlay as purge_team_member_overlay,
@@ -77,6 +84,8 @@ from orchestra.web.api.organization.schema import (
     OrganizationOwnershipTransfer,
     OrganizationResponse,
     OrganizationUpdate,
+    OrgSharingSettingsRequest,
+    OrgSharingSettingsResponse,
     OrgMFASettingsRequest,
     OrgMFASettingsResponse,
     OrgSpendingLimitRequest,
@@ -145,6 +154,7 @@ async def _create_organization_with_owner_coordinator(
     name: str,
     owner_user_id: str,
     timezone: str | None,
+    data_sharing_mode: str = "private",
 ) -> dict:
     """Create an organization workspace and ensure owner Coordinator readiness."""
     org_dao = OrganizationDAO(session)
@@ -198,13 +208,50 @@ async def _create_organization_with_owner_coordinator(
         if created_org_coordinator:
             created_coordinator_ids.append(org_coordinator.agent_id)
 
+        sharing_refresh_payloads = []
+        if data_sharing_mode == "shared":
+            sharing_result = await enable_org_wide_sharing(
+                session,
+                org=org,
+                actor_user_id=owner_user_id,
+            )
+            created_coordinator_ids.extend(sharing_result.created_coordinator_ids)
+            sharing_refresh_payloads = sharing_result.refresh_payloads
+
         org_response = OrganizationResponse.model_validate(org)
         response_data = {
             **org_response.model_dump(),
             "api_key": new_api_key,
         }
         session.commit()
+        await publish_membership_refreshes_best_effort(sharing_refresh_payloads)
         return response_data
+    except OrgWideSharingConflictError as exc:
+        session.rollback()
+        for coordinator_id in created_coordinator_ids:
+            try:
+                await delete_pubsub_topic(str(coordinator_id))
+            except Exception:
+                logger.exception(
+                    "Failed to clean up Coordinator topic after org creation rollback.",
+                )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except WorkspaceCoordinatorProvisioningError as exc:
+        session.rollback()
+        for coordinator_id in created_coordinator_ids:
+            try:
+                await delete_pubsub_topic(str(coordinator_id))
+            except Exception:
+                logger.exception(
+                    "Failed to clean up Coordinator topic after org creation rollback.",
+                )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="workspace_coordinator_provisioning_failed",
+        ) from exc
     except Exception as e:
         session.rollback()
         for coordinator_id in created_coordinator_ids:
@@ -261,6 +308,7 @@ async def create_organization(
         name=organization.name,
         owner_user_id=user_id,
         timezone=org_timezone,
+        data_sharing_mode=organization.data_sharing_mode,
     )
 
 
@@ -805,6 +853,7 @@ async def add_organization_member(
     resource_access_dao = ResourceAccessDAO(session)
     created_org_coordinator = False
     created_org_coordinator_id: int | None = None
+    sharing_refresh_payloads = []
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -903,6 +952,15 @@ async def add_organization_member(
         if created_org_coordinator:
             created_org_coordinator_id = org_coordinator.agent_id
 
+        if org.org_wide_sharing_enabled:
+            sharing_result = await enroll_member_in_org_wide_team(
+                session,
+                org=org,
+                member_user_id=member_data.user_id,
+                actor_user_id=user_id,
+            )
+            sharing_refresh_payloads.extend(sharing_result.refresh_payloads)
+
         # Check for shared-pool conflicts introduced by the new membership
         from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
 
@@ -917,6 +975,7 @@ async def add_organization_member(
 
         session.commit()
 
+        await publish_membership_refreshes_best_effort(sharing_refresh_payloads)
         await _run_pool_resolution_followups(pool_resolutions, session)
 
         await fan_out_contact_sync_for_org(organization_id, session)
@@ -926,6 +985,15 @@ async def add_organization_member(
             "user_id": member_data.user_id,
             "api_key": new_api_key,
         }
+    except (OrgWideSharingConflictError, WorkspaceCoordinatorProvisioningError) as e:
+        session.rollback()
+        if created_org_coordinator and created_org_coordinator_id is not None:
+            await delete_pubsub_topic(str(created_org_coordinator_id))
+        logger.error(f"Failed to add organization member: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
     except Exception as e:
         session.rollback()
         if created_org_coordinator and created_org_coordinator_id is not None:
@@ -1838,6 +1906,7 @@ async def accept_invite(
     api_key_dao = ApiKeyDAO(session)
     created_org_coordinator = False
     created_org_coordinator_id: int | None = None
+    sharing_refresh_payloads = []
 
     # Get current user
     user_row = user_dao.get_by_id(user_id)
@@ -1941,6 +2010,15 @@ async def accept_invite(
         if created_org_coordinator:
             created_org_coordinator_id = org_coordinator.agent_id
 
+        if org.org_wide_sharing_enabled:
+            sharing_result = await enroll_member_in_org_wide_team(
+                session,
+                org=org,
+                member_user_id=user_id,
+                actor_user_id=org.owner_id,
+            )
+            sharing_refresh_payloads.extend(sharing_result.refresh_payloads)
+
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
 
@@ -1958,6 +2036,7 @@ async def accept_invite(
 
         session.commit()
 
+        await publish_membership_refreshes_best_effort(sharing_refresh_payloads)
         await _run_pool_resolution_followups(pool_resolutions, session)
 
         await fan_out_contact_sync_for_org(invite.organization_id, session)
@@ -1987,6 +2066,15 @@ async def accept_invite(
             mfa_setup_required=mfa_setup_required,
         )
 
+    except (OrgWideSharingConflictError, WorkspaceCoordinatorProvisioningError) as e:
+        session.rollback()
+        if created_org_coordinator and created_org_coordinator_id is not None:
+            await delete_pubsub_topic(str(created_org_coordinator_id))
+        logger.error(f"Failed to accept organization invite: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
     except Exception as e:
         session.rollback()
         if created_org_coordinator and created_org_coordinator_id is not None:
@@ -2687,6 +2775,7 @@ async def admin_create_organization(
         name=organization.name,
         owner_user_id=organization.creator_user_id,
         timezone=org_timezone,
+        data_sharing_mode=organization.data_sharing_mode,
     )
 
 
@@ -2853,6 +2942,139 @@ def admin_list_invites(
         )
 
     return result
+
+
+# =============================================================================
+# Organization Data Sharing Settings
+# =============================================================================
+
+
+@router.get(
+    "/organizations/{organization_id}/sharing-settings",
+    response_model=OrgSharingSettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_org_sharing_settings(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> OrgSharingSettingsResponse:
+    """Get org-wide data sharing settings for an organization."""
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this organization",
+        )
+
+    return OrgSharingSettingsResponse(
+        data_sharing_mode=org.data_sharing_mode,
+        org_wide_sharing_enabled=org.org_wide_sharing_enabled,
+        org_wide_sharing_team_id=org.org_wide_sharing_team_id,
+    )
+
+
+@router.put(
+    "/organizations/{organization_id}/sharing-settings",
+    response_model=OrgSharingSettingsResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_org_sharing_settings(
+    request_fastapi: Request,
+    organization_id: int,
+    body: OrgSharingSettingsRequest,
+    session: Session = Depends(get_db_session),
+) -> OrgSharingSettingsResponse:
+    """Update org-wide data sharing settings for an organization."""
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found.")
+
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this organization",
+        )
+
+    try:
+        if body.data_sharing_mode == "shared":
+            sharing_result = await enable_org_wide_sharing(
+                session,
+                org=org,
+                actor_user_id=user_id,
+            )
+            session.commit()
+            await publish_membership_refreshes_best_effort(
+                sharing_result.refresh_payloads,
+            )
+        else:
+            await disable_org_wide_sharing(
+                session,
+                org=org,
+                actor_user_id=user_id,
+            )
+    except OrgWideSharingConflictError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except WorkspaceCoordinatorProvisioningError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="workspace_coordinator_provisioning_failed",
+        ) from exc
+    except TeamCleanupNotFoundError:
+        org.org_wide_sharing_enabled = False
+        org.org_wide_sharing_team_id = None
+        session.commit()
+    except TeamCleanupAuthError:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="team_mutation_forbidden",
+        )
+    except TeamCleanupConflictError:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="team_cleanup_in_progress",
+        )
+    except TeamCleanupFailure as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"phase": exc.phase, "reason": exc.reason},
+        ) from exc
+
+    updated_org = org_dao.get(organization_id)
+    return OrgSharingSettingsResponse(
+        data_sharing_mode=updated_org.data_sharing_mode,
+        org_wide_sharing_enabled=updated_org.org_wide_sharing_enabled,
+        org_wide_sharing_team_id=updated_org.org_wide_sharing_team_id,
+    )
 
 
 # =============================================================================

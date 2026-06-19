@@ -1166,6 +1166,18 @@ class Organization(Base):
         server_default="false",
     )
 
+    org_wide_sharing_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    org_wide_sharing_team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # === VERIFICATION FIELDS ===
     # Verified orgs get higher rate limits
     verified = Column(
@@ -1188,6 +1200,10 @@ class Organization(Base):
         default=False,
         server_default="false",
     )
+
+    @property
+    def data_sharing_mode(self) -> str:
+        return "shared" if self.org_wide_sharing_enabled else "private"
 
     # Relationships
     billing_account = relationship(
@@ -1486,6 +1502,12 @@ class Team(Base):
         default=TEAM_STATUS_ACTIVE,
         server_default=TEAM_STATUS_ACTIVE,
     )
+    is_org_wide_sharing = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     assistant_memberships = relationship(
@@ -1734,7 +1756,7 @@ class DemoAssistantMeta(Base):
     label = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
-    # Optional prospect details (for pre-populating boss contact in Unity)
+    # Optional prospect details (for pre-populating boss contact in Droid)
     prospect_first_name = Column(String, nullable=True)
     prospect_surname = Column(String, nullable=True)
     prospect_email = Column(String, nullable=True)
@@ -2137,7 +2159,7 @@ class AssistantContact(Base):
                 "status != 'deleted' "
                 "AND contact_type NOT IN ('whatsapp', 'discord') "
                 "AND NOT (contact_type IN ('email', 'phone') "
-                "AND COALESCE(metadata ->> 'universal_unity', 'false') = 'true')",
+                "AND COALESCE(metadata ->> 'universal_droid', 'false') = 'true')",
             ),
         ),
         sa.CheckConstraint(

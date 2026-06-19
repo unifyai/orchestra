@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 admin_router = APIRouter()
 
-ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+ADAPTERS_URL = os.environ.get("DROID_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
@@ -80,7 +80,7 @@ async def _dispatch_to_adapters(
         return
     adapters_url = ADAPTERS_URL
     if not adapters_url:
-        logger.warning("UNITY_ADAPTERS_URL not set, skipping adapter dispatch")
+        logger.warning("DROID_ADAPTERS_URL not set, skipping adapter dispatch")
         return
     payload: dict = {
         "assistant_id": str(assistant_id),
@@ -284,7 +284,7 @@ async def get_message_status(
 
 
 # ---------------------------------------------------------------------------
-# Admin endpoints (Unity internal)
+# Admin endpoints (Droid internal)
 # ---------------------------------------------------------------------------
 
 
@@ -295,7 +295,7 @@ async def get_message_status(
     tags=["Messages"],
     summary="Mark a message as completed",
     description=(
-        "Admin endpoint for Unity to mark an API message as completed, "
+        "Admin endpoint for Droid to mark an API message as completed, "
         "optionally with a response."
     ),
 )

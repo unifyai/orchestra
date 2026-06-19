@@ -42,7 +42,7 @@ def mock_all_infra(dbsession):
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
-        "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
+        "create_pubsub_topic": AsyncMock(return_value={"name": "droid-1"}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
         "process_assistant_cleanup_tasks": AsyncMock(

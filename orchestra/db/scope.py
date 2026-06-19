@@ -1,7 +1,7 @@
 """Ownership scope for kernel contexts and their logs/embeddings.
 
-Orchestra is the engine for Unity's assistants, so the kernel models the
-ownership boundary that Unity expresses through its context-naming convention
+Orchestra is the engine for Droid's assistants, so the kernel models the
+ownership boundary that Droid expresses through its context-naming convention
 as first-class columns rather than leaving it implicit in context-name strings.
 
 Every context has an **owner**: the entity whose data it holds and which is the
@@ -25,13 +25,16 @@ O(1) partition drop that also removes the aggregation references.
 
 from __future__ import annotations
 
+import logging
 from enum import StrEnum
 from typing import NamedTuple
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-# Top-level prefix for shared-team contexts (mirrors unity's ContextRegistry).
+logger = logging.getLogger(__name__)
+
+# Top-level prefix for shared-team contexts (mirrors droid's ContextRegistry).
 TEAM_CONTEXT_PREFIX = "Teams"
 # Path component marking a cross-assistant / cross-user aggregation view.
 AGGREGATION_COMPONENT = "All"
@@ -55,9 +58,9 @@ def _is_int(token: str) -> bool:
 
 
 def owner_from_context_name(name: str) -> Owner:
-    """Derive the ownership scope of a context from its (Unity-convention) name.
+    """Derive the ownership scope of a context from its (Droid-convention) name.
 
-    Convention (see unity ``ContextRegistry`` / ``session_details``):
+    Convention (see droid ``ContextRegistry`` / ``session_details``):
 
     * ``Teams/{team_id}/...``            -> team-owned
     * ``{user_id}/All/...`` or ``All/...`` -> aggregation view (no owner)
@@ -263,81 +266,109 @@ def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
     conn.execute(text("UPDATE embedding SET owner_key = 'sys' WHERE owner_key IS NULL"))
 
 
-def reclassify_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
+def reclassify_heavy_owner_keys(conn: Connection, batch: int = 1000) -> None:
     """Correct heavy rows wrongly stuck at ``'sys'`` to their real owning scope.
 
-    :func:`backfill_heavy_owner_keys` only updates ``owner_key IS NULL`` rows,
-    but the ``heavy_owner_key`` migration added the column with ``DEFAULT 'sys'``
-    -- so every pre-existing row was already ``'sys'`` (never NULL) and that
-    backfill was a no-op for all historical data. This corrective pass recomputes
+    The ``heavy_owner_key`` migration added ``owner_key`` with ``DEFAULT 'sys'``,
+    so every pre-existing row was already ``'sys'`` (never NULL) and the original
+    NULL-gated backfill was a no-op for all historical data. This recomputes
     ``owner_key`` from each log's owning (assistant/team) context for rows still
-    labelled ``'sys'`` that actually belong to an owner, then resyncs
-    ``log_event_context`` / ``embedding`` to their log's owner. Rows with no
-    assistant/team owning context stay ``'sys'`` (correct). Without this,
-    owner-scoped deletion (``purge_owner`` / ``drop_owner``) would delete only an
-    owner's correctly-tagged rows and leave its ``'sys'``-stuck history orphaned.
+    labelled ``'sys'``, so owner-scoped deletion (``purge_owner`` /
+    ``drop_owner``) removes an owner's full footprint instead of orphaning its
+    history.
 
-    Batched by id and idempotent: a re-run only touches rows still mislabelled.
-    Intended to run under an autocommit block so each batch commits (avoids one
-    long transaction over a large table) and the work is resumable.
+    Driven from the (small) set of assistant/team-owned ``context`` rows and
+    batched by context id, so the work is proportional to the data that is
+    actually mislabelled and every UPDATE is served by
+    ``idx_log_event_context_context_id`` plus ``project_id`` partition pruning --
+    never a scan of the whole heavy tables. Rows whose owning context is not
+    assistant/team stay ``'sys'`` (correct).
+
+    Run under an **autocommit** connection so each batch commits independently;
+    idempotent and resumable, since only ``'sys'`` rows are ever touched (a
+    re-run skips everything already corrected). This is intended to run
+    out-of-band (a standalone maintenance job), not inside a deploy migration.
     """
-    # 1) log_event: 'sys' -> owning (assistant/team) context's a{id} / t{id}.
-    max_le = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM log_event")).scalar()
+    max_ctx = conn.execute(
+        text(
+            "SELECT COALESCE(MAX(id), 0) FROM context "
+            "WHERE owner_scope IN ('assistant', 'team') AND owner_id IS NOT NULL",
+        ),
+    ).scalar()
+    # Per-owner key expression, shared by all three passes (no user input).
+    ok_expr = (
+        "CASE c.owner_scope WHEN 'assistant' THEN 'a' || c.owner_id "
+        "WHEN 'team' THEN 't' || c.owner_id END"
+    )
+    logger.info(
+        "reclassify_heavy_owner_keys: max owner context id=%s, batch=%s",
+        max_ctx,
+        batch,
+    )
     lo = 0
-    while lo < max_le:
+    while lo < max_ctx:
         hi = lo + batch
+        params = {"lo": lo, "hi": hi}
+        logger.info("reclassify_heavy_owner_keys: contexts (%s, %s]", lo, hi)
+        # 1) log_event: 'sys' logs referenced by these owners' contexts.
         conn.execute(
             text(
-                """
+                f"""
                 UPDATE log_event le SET owner_key = sub.ok
                 FROM (
-                    SELECT DISTINCT ON (lec.log_event_id) lec.log_event_id AS leid,
-                        CASE c.owner_scope
-                            WHEN 'assistant' THEN 'a' || c.owner_id
-                            WHEN 'team' THEN 't' || c.owner_id
-                        END AS ok
-                    FROM log_event_context lec
-                    JOIN context c ON c.id = lec.context_id
+                    SELECT lec.log_event_id AS leid, lec.project_id AS pid,
+                           {ok_expr} AS ok
+                    FROM context c
+                    JOIN log_event_context lec
+                      ON lec.context_id = c.id AND lec.project_id = c.project_id
                     WHERE c.owner_scope IN ('assistant', 'team')
                       AND c.owner_id IS NOT NULL
-                      AND lec.log_event_id > :lo AND lec.log_event_id <= :hi
+                      AND c.id > :lo AND c.id <= :hi
                 ) sub
-                WHERE le.id = sub.leid
-                  AND le.owner_key = 'sys' AND sub.ok IS NOT NULL
+                WHERE le.id = sub.leid AND le.project_id = sub.pid
+                  AND le.owner_key = 'sys'
                 """,
             ),
-            {"lo": lo, "hi": hi},
+            params,
         )
-        lo = hi
-
-    # 2) log_event_context: resync rows still 'sys' to their log's real owner.
-    lo = 0
-    while lo < max_le:
-        hi = lo + batch
+        # 2) log_event_context: 'sys' association rows in these contexts.
         conn.execute(
             text(
-                "UPDATE log_event_context lec SET owner_key = le.owner_key "
-                "FROM log_event le WHERE le.id = lec.log_event_id "
-                "AND lec.log_event_id > :lo AND lec.log_event_id <= :hi "
-                "AND lec.owner_key = 'sys' AND le.owner_key <> 'sys'",
+                f"""
+                UPDATE log_event_context lec SET owner_key = sub.ok
+                FROM (
+                    SELECT c.id AS cid, c.project_id AS pid, {ok_expr} AS ok
+                    FROM context c
+                    WHERE c.owner_scope IN ('assistant', 'team')
+                      AND c.owner_id IS NOT NULL
+                      AND c.id > :lo AND c.id <= :hi
+                ) sub
+                WHERE lec.context_id = sub.cid AND lec.project_id = sub.pid
+                  AND lec.owner_key = 'sys'
+                """,
             ),
-            {"lo": lo, "hi": hi},
+            params,
         )
-        lo = hi
-
-    # 3) embedding: resync rows still 'sys' to their referenced log's real owner.
-    max_emb = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM embedding")).scalar()
-    lo = 0
-    while lo < max_emb:
-        hi = lo + batch
+        # 3) embedding: 'sys' vectors whose referenced log is in these contexts.
         conn.execute(
             text(
-                "UPDATE embedding e SET owner_key = le.owner_key "
-                "FROM log_event le WHERE le.id = e.ref_id "
-                "AND e.id > :lo AND e.id <= :hi "
-                "AND e.owner_key = 'sys' AND le.owner_key <> 'sys'",
+                f"""
+                UPDATE embedding e SET owner_key = sub.ok
+                FROM (
+                    SELECT lec.log_event_id AS leid, lec.project_id AS pid,
+                           {ok_expr} AS ok
+                    FROM context c
+                    JOIN log_event_context lec
+                      ON lec.context_id = c.id AND lec.project_id = c.project_id
+                    WHERE c.owner_scope IN ('assistant', 'team')
+                      AND c.owner_id IS NOT NULL
+                      AND c.id > :lo AND c.id <= :hi
+                ) sub
+                WHERE e.ref_id = sub.leid AND e.project_id = sub.pid
+                  AND e.owner_key = 'sys'
+                """,
             ),
-            {"lo": lo, "hi": hi},
+            params,
         )
         lo = hi
 

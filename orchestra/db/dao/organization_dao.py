@@ -217,6 +217,15 @@ class OrganizationDAO:
                     "image": organization.image,
                     "timezone": organization.timezone,
                     "free_trial": bool(organization.free_trial),
+                    "org_wide_sharing_enabled": bool(
+                        organization.org_wide_sharing_enabled,
+                    ),
+                    "org_wide_sharing_team_id": (
+                        None
+                        if organization.org_wide_sharing_team_id is None
+                        else int(organization.org_wide_sharing_team_id)
+                    ),
+                    "data_sharing_mode": organization.data_sharing_mode,
                     "created_at": organization.created_at,
                     "role_id": (
                         None if role_payload is None else role_payload["role_id"]

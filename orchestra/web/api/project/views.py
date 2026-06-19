@@ -829,8 +829,8 @@ def delete_project_logs(
     """
     Deletes all logs in a project.
     """
-    # Check if trying to delete from protected projects (Unity, AssistantJobs, Builtins)
-    if project.name in ["Unity", "AssistantJobs", BUILTINS_PROJECT_NAME]:
+    # Check if trying to delete from protected projects (Droid, AssistantJobs, Builtins)
+    if project.name in ["Droid", "AssistantJobs", BUILTINS_PROJECT_NAME]:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -884,8 +884,8 @@ def delete_project_contexts(
     Deletes all contexts and their associated logs from a project.
     The project's interfaces remain untouched.
     """
-    # Check if trying to delete from protected projects (Unity, AssistantJobs, Builtins)
-    if project.name in ["Unity", "AssistantJobs", BUILTINS_PROJECT_NAME]:
+    # Check if trying to delete from protected projects (Droid, AssistantJobs, Builtins)
+    if project.name in ["Droid", "AssistantJobs", BUILTINS_PROJECT_NAME]:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -938,8 +938,8 @@ def delete_project(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
-    # Check if trying to delete the protected projects (Unity, AssistantJobs, Builtins)
-    if project.name in ["Unity", "AssistantJobs", BUILTINS_PROJECT_NAME]:
+    # Check if trying to delete the protected projects (Droid, AssistantJobs, Builtins)
+    if project.name in ["Droid", "AssistantJobs", BUILTINS_PROJECT_NAME]:
         raise HTTPException(
             status_code=403,
             detail=f"The '{project.name}' project is protected and cannot be deleted.",
@@ -1010,7 +1010,7 @@ def update_project(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Check if trying to rename protected platform projects.
-    if project.name in ["Unity", BUILTINS_PROJECT_NAME] and request.name is not None:
+    if project.name in ["Droid", BUILTINS_PROJECT_NAME] and request.name is not None:
         raise HTTPException(
             status_code=403,
             detail=f"The '{project.name}' project cannot be renamed.",

@@ -2,7 +2,7 @@
 
 This repository is the backend API and persistence layer that powers `api.unify.ai/v0`. It contains the local project/context/log stack as well as the account, billing, organization, assistant, and Console-facing APIs used by the hosted product.
 
-If Unity is the runtime brain, Orchestra is the durable substrate: projects, contexts, logs, assistants, storage metadata, auth, and the other stateful APIs that make long-lived assistants possible.
+If Droid is the runtime brain, Orchestra is the durable substrate: projects, contexts, logs, assistants, storage metadata, auth, and the other stateful APIs that make long-lived assistants possible.
 
 > **Start here:** [API Endpoints README](./orchestra/web/api/README.md) • [Database README](./orchestra/db/README.md) • [Observability](./orchestra/observability/README.md) • [Contributing](CONTRIBUTING.md) • [Security](SECURITY.md)
 
@@ -18,14 +18,14 @@ If Unity is the runtime brain, Orchestra is the durable substrate: projects, con
 
 - [Unify](https://github.com/unifyai/unify) — Python SDK that wraps Orchestra's API
 - [Console](https://github.com/unifyai/console) — Web UI that reads and writes Orchestra data
-- [Unity](https://github.com/unifyai/unity) — AI assistant runtime that persists state through Unify
+- [Droid](https://github.com/unifyai/droid) — AI assistant runtime that persists state through Unify
 
 ## Quick Start
 
-> **Running the whole product locally?** Don't start here. Use **`unity stack up`**
-> from the [unity repo](https://github.com/unifyai/unity) (see its
-> [self-host docs](https://github.com/unifyai/unity/blob/staging/deploy/selfhost/README.md)) —
-> it starts Orchestra, the Unity gateway, Console, and your Coordinator together,
+> **Running the whole product locally?** Don't start here. Use **`droid stack up`**
+> from the [droid repo](https://github.com/unifyai/droid) (see its
+> [self-host docs](https://github.com/unifyai/droid/blob/staging/deploy/selfhost/README.md)) —
+> it starts Orchestra, the Droid gateway, Console, and your Coordinator together,
 > and drives Orchestra's `scripts/local.sh` for you. The steps below are for
 > developing/testing **Orchestra on its own**.
 
@@ -72,7 +72,7 @@ Orchestra is the backend API and database layer in a multi-repository system:
     └────┬───────────────────────────────┘
          │
     ┌────┴────┐    ┌─────────┐    ┌─────────┐
-    │  Unity  │    │  Unify  │    │Orchestra│
+    │  Droid  │    │  Unify  │    │Orchestra│
     │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
     │         │    │         │    │  (DB)   │
     └────┬────┘    └────┬────┘    └────┬────┘

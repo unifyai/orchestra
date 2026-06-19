@@ -1,7 +1,7 @@
 """Organization management schemas."""
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 from zoneinfo import available_timezones
 
 from pydantic import BaseModel, Field, field_validator
@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from orchestra.web.api.utils.safe_text import OptionalSafeLabel, SafeLabel
 
 VALID_TIMEZONES = available_timezones()
+DataSharingMode = Literal["private", "shared"]
 
 
 class OrganizationCreate(BaseModel):
@@ -18,6 +19,7 @@ class OrganizationCreate(BaseModel):
     timezone: Optional[str] = (
         None  # IANA timezone; defaults to owner's timezone if not set
     )
+    data_sharing_mode: DataSharingMode = "private"
 
     @field_validator("timezone")
     @classmethod
@@ -36,6 +38,7 @@ class AdminOrganizationCreate(BaseModel):
     name: SafeLabel
     creator_user_id: str
     timezone: Optional[str] = None
+    data_sharing_mode: DataSharingMode = "private"
 
     @field_validator("timezone")
     @classmethod
@@ -79,6 +82,9 @@ class OrganizationResponse(BaseModel):
     image: Optional[str] = None
     timezone: Optional[str] = None  # IANA timezone (e.g., "America/New_York")
     free_trial: bool = False
+    org_wide_sharing_enabled: bool = False
+    org_wide_sharing_team_id: Optional[int] = None
+    data_sharing_mode: DataSharingMode = "private"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -130,6 +136,20 @@ class OrganizationMemberResponse(BaseModel):
     discord_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class OrgSharingSettingsRequest(BaseModel):
+    """Request body for org-wide data sharing settings."""
+
+    data_sharing_mode: DataSharingMode
+
+
+class OrgSharingSettingsResponse(BaseModel):
+    """Response for org-wide data sharing settings."""
+
+    data_sharing_mode: DataSharingMode
+    org_wide_sharing_enabled: bool
+    org_wide_sharing_team_id: Optional[int] = None
 
 
 # ============== Organization Invite Schemas ==============

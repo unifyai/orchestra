@@ -1,7 +1,7 @@
 """Provider-backed integration APIs.
 
 Console uses these endpoints for gallery, connect, reconnect, disconnect, and
-health states. Unity runtime uses the same contract for effective connection
+health states. Droid runtime uses the same contract for effective connection
 discovery, provider tool search, schema lookup, and governed invocation.
 """
 

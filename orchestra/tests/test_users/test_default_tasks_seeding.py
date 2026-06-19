@@ -7,8 +7,8 @@ correctly in both:
 2. create_user_after_verification (email sign-up path via POST /v0/admin/auth/create-user)
 
 The seeder should create:
-- A "Unity" project
-- A "Unity" interface
+- A "Droid" project
+- A "Droid" interface
 - A "Tasks" tab
 - A "Tasks" table tile
 """
@@ -49,16 +49,16 @@ def _assert_default_tasks_seeded(session: Session, user_id: str):
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
 
-    # 1. Unity project exists
-    project = project_dao.get_by_user_and_name(user_id=user_id, name="Unity")
-    assert project is not None, "Unity project should have been created by seeder"
+    # 1. Droid project exists
+    project = project_dao.get_by_user_and_name(user_id=user_id, name="Droid")
+    assert project is not None, "Droid project should have been created by seeder"
 
-    # 2. Unity interface exists
+    # 2. Droid interface exists
     interface = interface_dao.get_by_project_and_name(
         project_id=project.id,
-        name="Unity",
+        name="Droid",
     )
-    assert interface is not None, "Unity interface should have been created by seeder"
+    assert interface is not None, "Droid interface should have been created by seeder"
 
     # 3. Tasks tab exists
     tab = tab_dao.get_by_interface_and_name(
@@ -84,7 +84,7 @@ async def test_create_user_seeds_default_tasks(
     dbsession: Session,
 ):
     """
-    POST /v0/admin/user should seed default tasks (Unity project, interface,
+    POST /v0/admin/user should seed default tasks (Droid project, interface,
     tab, tile) using session.flush() instead of session.commit().
 
     This is the path used by the NextAuth adapter for OAuth sign-ups.
@@ -203,9 +203,9 @@ async def test_default_tasks_seeder_is_idempotent(
     assert result is not None
     assert "project_id" in result
 
-    # Verify there's still only one Unity project
+    # Verify there's still only one Droid project
     organization_member_dao = OrganizationMemberDAO(dbsession)
     context_dao = ContextDAO(dbsession)
     project_dao = ProjectDAO(dbsession, organization_member_dao, context_dao)
-    projects = project_dao.filter(user_id=user_id, name="Unity")
-    assert len(projects) == 1, "Seeder should not create duplicate Unity projects"
+    projects = project_dao.filter(user_id=user_id, name="Droid")
+    assert len(projects) == 1, "Seeder should not create duplicate Droid projects"

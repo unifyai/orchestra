@@ -24,10 +24,6 @@ Revises: owner_delete_index
 Create Date: 2026-06-27 00:00:00.000000
 """
 
-from alembic import op
-
-from orchestra.db.scope import reclassify_heavy_owner_keys
-
 revision = "reclassify_owner_keys"
 down_revision = "owner_delete_index"
 branch_labels = None
@@ -35,12 +31,24 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.get_context().autocommit_block():
-        reclassify_heavy_owner_keys(op.get_bind())
+    # Intentionally a no-op.
+    #
+    # This correction was originally run inline here, but the full-table,
+    # three-pass UPDATE was far too slow at production scale (it scanned the
+    # whole ~60M-row heavy family and rewrote a primary-key column, bloating the
+    # tables) and could not finish inside the migrator's timeout -- while also
+    # blocking the deploy. A data correction of that size does not belong in the
+    # synchronous, time-bounded deploy migrate step.
+    #
+    # The reclassification now runs **out-of-band** as a standalone, resumable
+    # maintenance job that is driven from the (small) set of assistant/team
+    # contexts and is proportional to the mislabelled data:
+    # ``scripts/reclassify_owner_keys.py`` -> ``scope.reclassify_heavy_owner_keys``.
+    # This revision is kept (already stamped on some environments) so the alembic
+    # chain stays linear; it simply advances the version with no schema/data work.
+    pass
 
 
 def downgrade() -> None:
-    # Pure data correction; the prior ``'sys'`` values cannot be reconstructed
-    # (they were indistinguishable from genuine system rows), so there is nothing
-    # safe to reverse.
+    # No-op upgrade -> nothing to reverse.
     pass

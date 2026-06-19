@@ -1,6 +1,6 @@
 """Aggregate helpers across the per-channel universal Coordinator contacts.
 
-The individual ``universal_unity_{email,phone,whatsapp,discord}`` modules each
+The individual ``universal_droid_{email,phone,whatsapp,discord}`` modules each
 know how to provision their channel. This module answers the cross-channel
 question the console needs for self-healing: *which* universal contacts are
 configured for the platform but not yet present on a given Coordinator.
@@ -15,21 +15,21 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from orchestra.services.universal_unity_discord import (
-    get_universal_unity_discord_bot_id,
-    is_universal_unity_discord_bot,
+from orchestra.services.universal_droid_discord import (
+    get_universal_droid_discord_bot_id,
+    is_universal_droid_discord_bot,
 )
-from orchestra.services.universal_unity_email import (
-    get_universal_unity_email_address,
-    is_universal_unity_email_address,
+from orchestra.services.universal_droid_email import (
+    get_universal_droid_email_address,
+    is_universal_droid_email_address,
 )
-from orchestra.services.universal_unity_phone import (
-    get_universal_unity_phone_numbers,
-    is_universal_unity_phone_number,
+from orchestra.services.universal_droid_phone import (
+    get_universal_droid_phone_numbers,
+    is_universal_droid_phone_number,
 )
-from orchestra.services.universal_unity_whatsapp import (
-    get_universal_unity_whatsapp_number,
-    is_universal_unity_whatsapp_number,
+from orchestra.services.universal_droid_whatsapp import (
+    get_universal_droid_whatsapp_number,
+    is_universal_droid_whatsapp_number,
 )
 
 # Stable channel ordering so the response (and any UI built on it) is
@@ -40,13 +40,13 @@ UNIVERSAL_CONTACT_TYPES: tuple[str, ...] = ("email", "phone", "whatsapp", "disco
 def get_configured_universal_contact_types() -> set[str]:
     """Return the universal contact channels configured for this deployment."""
     configured: set[str] = set()
-    if get_universal_unity_email_address():
+    if get_universal_droid_email_address():
         configured.add("email")
-    if get_universal_unity_phone_numbers():
+    if get_universal_droid_phone_numbers():
         configured.add("phone")
-    if get_universal_unity_whatsapp_number():
+    if get_universal_droid_whatsapp_number():
         configured.add("whatsapp")
-    if get_universal_unity_discord_bot_id():
+    if get_universal_droid_discord_bot_id():
         configured.add("discord")
     return configured
 
@@ -80,17 +80,17 @@ def missing_universal_coordinator_contact_types(
 # normalisation-aware for its channel (email casing, ``whatsapp:`` prefix,
 # phone E.164 formatting, Discord bot snowflake).
 _UNIVERSAL_CONTACT_MATCHERS = {
-    "email": is_universal_unity_email_address,
-    "phone": is_universal_unity_phone_number,
-    "whatsapp": is_universal_unity_whatsapp_number,
-    "discord": is_universal_unity_discord_bot,
+    "email": is_universal_droid_email_address,
+    "phone": is_universal_droid_phone_number,
+    "whatsapp": is_universal_droid_whatsapp_number,
+    "discord": is_universal_droid_discord_bot,
 }
 
 
 def _is_universal_managed_contact(contact: object) -> bool:
     """True when ``contact`` is a platform-managed universal-pool contact."""
     metadata = getattr(contact, "metadata_", None) or {}
-    return bool(metadata.get("universal_unity"))
+    return bool(metadata.get("universal_droid"))
 
 
 def drifted_universal_coordinator_contact_types(
@@ -105,7 +105,7 @@ def drifted_universal_coordinator_contact_types(
     new address, or a phone/WhatsApp/Discord pool identifier was rotated.
 
     Only channels still configured for this deployment are considered, and only
-    platform-managed (``universal_unity``) contacts are inspected, so a
+    platform-managed (``universal_droid``) contacts are inspected, so a
     manually-set contact is never reconciled out from under the user. Any value
     that can't be evaluated (malformed/unparsable) is treated as drift so the
     heal path re-provisions it from settings.

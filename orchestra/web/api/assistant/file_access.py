@@ -5,7 +5,7 @@ connected assistant account, given an explicit set of allow/deny decisions and
 a ``default_allow`` fallback.
 
 This logic is intentionally pure and dependency-free so the assistant runtime
-(unity) can mirror it verbatim — the policy must resolve identically on both
+(droid) can mirror it verbatim — the policy must resolve identically on both
 the configuration side (Console -> Orchestra) and the enforcement side.
 """
 

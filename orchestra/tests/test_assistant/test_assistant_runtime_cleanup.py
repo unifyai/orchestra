@@ -489,7 +489,7 @@ async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is
 async def test_cleanup_sessionless_runtime_uses_binding_scoped_vm_release():
     runtime_status = {
         "assistant_session_exists": False,
-        "active_job_names": ["unity-job-1"],
+        "active_job_names": ["droid-job-1"],
         "owned_vms": [{"binding_id": "binding-1", "vm_name": "vm-1"}],
         "other_owned_vms": [{"binding_id": "binding-2", "vm_name": "vm-2"}],
         "disk_vm_name": "vm-1",
@@ -511,7 +511,7 @@ async def test_cleanup_sessionless_runtime_uses_binding_scoped_vm_release():
         }
         mock_stop_jobs.return_value = {
             "success": True,
-            "job_names": ["unity-job-1"],
+            "job_names": ["droid-job-1"],
             "steps": {},
             "errors": [],
         }
