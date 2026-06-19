@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -221,6 +221,71 @@ def _shared_team_contexts(session: Session, *, team_id: int) -> list[Context]:
     )
 
 
+def _claim_shared_team_contexts(
+    session: Session,
+    *,
+    team_id: int,
+    contexts: list[Context],
+) -> None:
+    """Classify legacy path-owned team contexts so owner purging removes them."""
+
+    if not contexts:
+        return
+
+    context_ids = [int(context.id) for context in contexts]
+    team_owner_key = f"t{team_id}"
+    session.execute(
+        text(
+            """
+            UPDATE context
+            SET owner_scope = 'team', owner_id = :team_id
+            WHERE id = ANY(:context_ids)
+            """,
+        ),
+        {"team_id": int(team_id), "context_ids": context_ids},
+    )
+    session.execute(
+        text(
+            """
+            UPDATE log_event le
+            SET owner_key = :owner_key
+            FROM log_event_context lec
+            WHERE lec.log_event_id = le.id
+              AND lec.project_id = le.project_id
+              AND lec.context_id = ANY(:context_ids)
+              AND le.owner_key = 'sys'
+            """,
+        ),
+        {"owner_key": team_owner_key, "context_ids": context_ids},
+    )
+    session.execute(
+        text(
+            """
+            UPDATE log_event_context
+            SET owner_key = :owner_key
+            WHERE context_id = ANY(:context_ids)
+              AND owner_key = 'sys'
+            """,
+        ),
+        {"owner_key": team_owner_key, "context_ids": context_ids},
+    )
+    session.execute(
+        text(
+            """
+            UPDATE embedding e
+            SET owner_key = :owner_key
+            FROM log_event_context lec
+            WHERE lec.log_event_id = e.ref_id
+              AND lec.project_id = e.project_id
+              AND lec.context_id = ANY(:context_ids)
+              AND e.owner_key = 'sys'
+            """,
+        ),
+        {"owner_key": team_owner_key, "context_ids": context_ids},
+    )
+    session.flush()
+
+
 def _purge_shared_team_contexts(session: Session, *, team_id: int) -> None:
     """Delete everything a team owns across its hosting projects.
 
@@ -233,6 +298,7 @@ def _purge_shared_team_contexts(session: Session, *, team_id: int) -> None:
     from orchestra.db.scope import OwnerScope, purge_owner
 
     contexts = _shared_team_contexts(session, team_id=team_id)
+    _claim_shared_team_contexts(session, team_id=team_id, contexts=contexts)
     for project_id in {int(c.project_id) for c in contexts}:
         purge_owner(
             session.connection(),

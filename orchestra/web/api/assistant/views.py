@@ -6320,6 +6320,13 @@ def _select_contact_membership(
     return query.order_by(ContactMembership.id).first()
 
 
+@admin_router.post(
+    "/assistant/{assistant_id}/contact-memberships",
+    response_model=InfoResponse[ContactMembershipUpsertResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: create contact membership",
+    tags=["Assistants", "Admin"],
+)
 @router.post(
     "/assistant/{assistant_id}/contact-memberships",
     response_model=InfoResponse[ContactMembershipUpsertResponse],
@@ -6335,13 +6342,14 @@ def create_contact_membership(
 ) -> InfoResponse[ContactMembershipUpsertResponse]:
     """Create an assistant-owned contact relationship overlay idempotently."""
 
+    is_admin_request = request.url.path.startswith("/v0/admin/")
     assistant = session.get(Assistant, assistant_id)
     if assistant is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
-    if assistant.user_id != request.state.user_id:
+    if not is_admin_request and assistant.user_id != request.state.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to manage contact memberships for this assistant.",
@@ -6428,6 +6436,13 @@ def create_contact_membership(
     )
 
 
+@admin_router.delete(
+    "/assistant/{assistant_id}/contact-memberships/{contact_id}",
+    response_model=InfoResponse[ContactMembershipDeleteResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: delete contact memberships",
+    tags=["Assistants", "Admin"],
+)
 @router.delete(
     "/assistant/{assistant_id}/contact-memberships/{contact_id}",
     response_model=InfoResponse[ContactMembershipDeleteResponse],
@@ -6445,13 +6460,14 @@ def delete_contact_memberships(
 ) -> InfoResponse[ContactMembershipDeleteResponse]:
     """Delete the relationship overlay for one assistant/contact target."""
 
+    is_admin_request = request.url.path.startswith("/v0/admin/")
     assistant = session.get(Assistant, assistant_id)
     if assistant is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
-    if assistant.user_id != request.state.user_id:
+    if not is_admin_request and assistant.user_id != request.state.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to manage contact memberships for this assistant.",
