@@ -750,7 +750,7 @@ start_orchestra_server() {
     fi
   fi
 
-  if lsof -i ":${ORCHESTRA_PORT}" &>/dev/null; then
+  if lsof -i ":${ORCHESTRA_PORT}" -sTCP:LISTEN &>/dev/null; then
     if wait_for_server; then
       log_success "Orchestra server already running on port $ORCHESTRA_PORT"
       return 0
