@@ -32,6 +32,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.services import onboarding_graph
 from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.contact_membership_service import (
     PERSONAL_BOSS_CONTACT_ID,
@@ -1718,6 +1719,80 @@ def derive_onboarding_progress(
     ]
 
 
+def compute_onboarding_render(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> dict[str, Any]:
+    """Build the precomputed onboarding rendering for the brains + Console.
+
+    This is the single place that turns raw progress into the explicit
+    "what's done / what's a valid next target" picture every downstream
+    consumer reads without re-deriving anything:
+
+      - ``steps``: every graph step with a resolved ``status`` of
+        ``done`` / ``skipped`` / ``available`` / ``locked``.
+      - ``next_targets``: the steps the Coordinator may nudge toward
+        right now (``status == available``), each carrying ready-to-use
+        chat and voice copy plus its channel. There can be more than one
+        once the ``depends_on`` graph branches.
+      - ``active_step_id``: the step the user is currently mid-flow on.
+
+    Completion of the reference-quiz *trigger* rows isn't derivable from
+    durable state, so we infer it from the paired reply step exactly as
+    the Console checklist did: a trigger is done once its reply is done
+    or is the active step, and skipped once its reply is skipped.
+    """
+    completed: set[str] = set(derive_onboarding_progress(session, coordinator=coordinator))
+    state = get_coordinator_state(session, coordinator=coordinator)
+    skipped: set[str] = set(normalize_onboarding_step_ids(state.get("skipped_step_ids")))
+    active = state.get("onboarding_step")
+    active_id = active if isinstance(active, str) else None
+
+    for trigger_id, reply_id in onboarding_graph.TRIGGER_TO_REPLY.items():
+        if reply_id in completed or reply_id == active_id:
+            completed.add(trigger_id)
+        elif reply_id in skipped:
+            skipped.add(trigger_id)
+
+    steps: list[dict[str, Any]] = []
+    next_targets: list[dict[str, Any]] = []
+    for step in onboarding_graph.ONBOARDING_GRAPH:
+        if step.id in completed:
+            status = "done"
+        elif step.id in skipped:
+            status = "skipped"
+        elif onboarding_graph.dependencies_satisfied(step.depends_on, completed, skipped):
+            status = "available"
+        else:
+            status = "locked"
+        steps.append(
+            {
+                "id": step.id,
+                "title": step.title,
+                "phase": step.phase,
+                "status": status,
+                "can_skip": step.can_skip,
+            },
+        )
+        if status == "available":
+            next_targets.append(
+                {
+                    "id": step.id,
+                    "title": step.title,
+                    "nudge_chat": step.nudge_chat,
+                    "nudge_voice": step.nudge_voice,
+                    "channel": step.channel,
+                },
+            )
+
+    return {
+        "active_step_id": active_id,
+        "steps": steps,
+        "next_targets": next_targets,
+    }
+
+
 def _is_coordinator_in_onboarding(
     session: Session,
     *,
@@ -1781,6 +1856,33 @@ def _resolve_target_coordinator(
         user_id=assistant.user_id,
         organization_id=assistant.organization_id,
     )
+
+
+def _with_onboarding_render(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    details: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Attach the precomputed onboarding render to an event's details.
+
+    Every onboarding event carries the same ``onboarding`` rendering the
+    state endpoint returns (steps + statuses + valid next targets with
+    nudge copy), so Droid's ConversationManager can refresh its standing
+    progress model the moment an event lands — without an extra fetch and
+    without re-deriving anything. Best-effort: a derivation failure
+    leaves the original details untouched rather than dropping the event.
+    """
+    merged = dict(details or {})
+    try:
+        merged["onboarding"] = compute_onboarding_render(session, coordinator=coordinator)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Skipping onboarding render on event for %s: %s",
+            getattr(coordinator, "agent_id", None),
+            exc,
+        )
+    return merged
 
 
 def _build_onboarding_event_payload(
@@ -1879,7 +1981,7 @@ async def notify_coordinator_onboarding_event(
         coordinator=coordinator,
         subtype=subtype,
         message=message,
-        details=details,
+        details=_with_onboarding_render(session, coordinator=coordinator, details=details),
     )
     try:
         await _post_droid_system_event(
@@ -1925,7 +2027,7 @@ def notify_coordinator_onboarding_event_safe_sync(
         coordinator=coordinator,
         subtype=subtype,
         message=message,
-        details=details,
+        details=_with_onboarding_render(session, coordinator=coordinator, details=details),
     )
     _fire_and_forget_onboarding_event(payload)
     return True

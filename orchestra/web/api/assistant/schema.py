@@ -681,6 +681,44 @@ class CoordinatorStateUpdate(BaseModel):
     onboarding_deferred: Optional[bool] = Field(None)
 
 
+class OnboardingStepStatus(BaseModel):
+    """One onboarding step with its resolved status.
+
+    ``status`` is one of ``done`` / ``skipped`` / ``available`` /
+    ``locked`` — computed server-side from the canonical graph so
+    consumers never re-derive it.
+    """
+
+    id: str
+    title: str
+    phase: str
+    status: str
+    can_skip: bool = False
+
+
+class OnboardingNextTarget(BaseModel):
+    """A step the Coordinator may nudge toward right now.
+
+    Carries ready-to-use copy so neither brain has to phrase the nudge
+    itself. ``channel`` is set for quiz steps (email/whatsapp/sms/phone/
+    slack/discord) and ``None`` for workspace/apps/act/schedule.
+    """
+
+    id: str
+    title: str
+    nudge_chat: str
+    nudge_voice: str
+    channel: Optional[str] = None
+
+
+class OnboardingRender(BaseModel):
+    """Precomputed onboarding picture shared by both brains and Console."""
+
+    active_step_id: Optional[str] = None
+    steps: List[OnboardingStepStatus] = Field(default_factory=list)
+    next_targets: List[OnboardingNextTarget] = Field(default_factory=list)
+
+
 class CoordinatorStateResponse(BaseModel):
     """Snapshot of the latest Coordinator/State row.
 
@@ -701,6 +739,10 @@ class CoordinatorStateResponse(BaseModel):
     skipped_step_ids: List[str] = Field(default_factory=list)
     intro_watched: bool = False
     onboarding_deferred: bool = False
+    # Precomputed depends_on-aware rendering (steps + statuses + valid
+    # next targets with nudge copy). Present only while actively
+    # onboarding; ``None`` once complete, working, or deferred.
+    onboarding: Optional[OnboardingRender] = None
 
 
 class DemoAssistantCreate(BaseModel):

@@ -88,6 +88,7 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
+    compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
     emit_onboarding_step_skipped_event,
@@ -1479,15 +1480,23 @@ def _coordinator_state_response(
     checklist no longer renders.
     """
     state = get_coordinator_state(session, coordinator=coordinator)
+    actively_onboarding = state["mode"] == COORDINATOR_MODE_ONBOARDING and not state.get(
+        "onboarding_deferred",
+    )
     completed_step_ids = (
         derive_onboarding_progress(session, coordinator=coordinator)
-        if state["mode"] == COORDINATOR_MODE_ONBOARDING
-        and not state.get("onboarding_deferred")
+        if actively_onboarding
         else []
+    )
+    onboarding = (
+        compute_onboarding_render(session, coordinator=coordinator)
+        if actively_onboarding
+        else None
     )
     return CoordinatorStateResponse(
         coordinator_id=coordinator.agent_id,
         completed_step_ids=completed_step_ids,
+        onboarding=onboarding,
         **state,
     )
 
