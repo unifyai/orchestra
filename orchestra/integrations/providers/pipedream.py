@@ -1,4 +1,11 @@
-"""Pipedream integration provider adapter."""
+"""Pipedream integration provider adapter.
+
+This module owns all Pipedream wire-format knowledge: HTTP transport plus the
+normalization of Pipedream app/component payloads into Orchestra's canonical,
+provider-neutral catalog entries (``ProviderAppEntry`` / ``ProviderToolEntry``).
+The generic sync layer only calls ``list_app_entries`` / ``list_tool_entries``
+and never imports any of the ``_pipedream_*`` helpers below.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +14,18 @@ from typing import Any, Iterable
 
 from orchestra.integrations.providers.base import (
     BaseIntegrationProviderAdapter,
+    ProviderAppEntry,
     ProviderExecutionRequest,
     ProviderExecutionResult,
+    ProviderToolEntry,
 )
-from orchestra.integrations.providers.pagination import (
+from orchestra.integrations.providers.utils.normalization import (
+    action_class_from_behavior_hints,
+    confirmation_required_for_action_class,
+    normalized_behavior_hints,
+    slugify,
+)
+from orchestra.integrations.providers.utils.pagination import (
     CursorPage,
     PaginationLimits,
     collect_cursor_pages,
@@ -41,6 +56,8 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         max_pages: int = 1000,
         max_items: int = 100_000,
     ) -> None:
+        super().__init__()
+        self._app_by_canonical_slug: dict[str, dict[str, Any]] = {}
         self.access_token = access_token or os.getenv("PIPEDREAM_ACCESS_TOKEN")
         self.client_id = client_id or os.getenv("PIPEDREAM_CLIENT_ID")
         self.client_secret = client_secret or os.getenv("PIPEDREAM_CLIENT_SECRET")
@@ -80,6 +97,141 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         return iter(
             self.list_components(app=app_id, limit=limit, component_type="action"),
         )
+
+    def list_app_entries(
+        self,
+        *,
+        app_slugs: list[str] | None = None,
+        include_all: bool = False,
+        create_auth_configs: bool = False,
+        include_detail: bool = True,
+    ) -> list[ProviderAppEntry]:
+        """Select Pipedream apps (those exposing components) and emit canonical entries.
+
+        Pipedream Connect manages OAuth itself, so there is no per-app auth-config
+        creation, OAuth scope list, or API-key schema to populate here;
+        ``include_detail`` and ``create_auth_configs`` are accepted for contract
+        parity but have no extra detail fetch to perform.
+        """
+
+        self._reset_catalog_accounting()
+        requested = {slugify(slug) for slug in (app_slugs or []) if slug.strip()}
+        self.last_requested_app_slugs = sorted(requested)
+        provider_apps = self.list_apps(has_components=True)
+        self._app_by_canonical_slug = {}
+        entries: list[ProviderAppEntry] = []
+        for provider_app in provider_apps:
+            canonical_app_slug = _pipedream_app_slug(provider_app)
+            self._app_by_canonical_slug[canonical_app_slug] = provider_app
+            if requested:
+                if canonical_app_slug not in requested:
+                    continue
+            elif not include_all:
+                continue
+            provider_app_id = str(
+                provider_app.get("id")
+                or provider_app.get("name_slug")
+                or provider_app.get("slug")
+                or canonical_app_slug,
+            )
+            entries.append(
+                {
+                    "backend_id": "pipedream",
+                    "provider_app_id": provider_app_id,
+                    "canonical_app_slug": canonical_app_slug,
+                    "display_name": provider_app.get("name")
+                    or canonical_app_slug.replace("_", " ").title(),
+                    "description": provider_app.get("description"),
+                    "category": _pipedream_category(provider_app),
+                    "icon_url": provider_app.get("img_src")
+                    or provider_app.get("logo_url")
+                    or provider_app.get("logoUrl"),
+                    "auth_modes": ["oauth"],
+                    "available_scopes": [],
+                    "tool_count": int(
+                        provider_app.get("component_count")
+                        or provider_app.get("actions_count")
+                        or 0,
+                    ),
+                    "raw_provider_metadata": {
+                        "source": "pipedream_live_sync",
+                        "raw_app": provider_app,
+                    },
+                },
+            )
+        self.last_skipped_apps = [
+            {"slug": slug, "reason": "not_found"}
+            for slug in self.last_requested_app_slugs
+            if slug not in self._app_by_canonical_slug
+        ]
+        return entries
+
+    def list_tool_entries(
+        self,
+        *,
+        app_slug: str,
+        provider_app_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[ProviderToolEntry]:
+        """Fetch one app's public action components and emit canonical tool entries."""
+
+        canonical_app_slug = slugify(app_slug)
+        provider_app = self._app_by_canonical_slug.get(canonical_app_slug, {})
+        resolved_app_id = str(
+            provider_app_id
+            or provider_app.get("id")
+            or provider_app.get("name_slug")
+            or provider_app.get("slug")
+            or canonical_app_slug,
+        )
+        category = _pipedream_category(provider_app)
+        entries: list[ProviderToolEntry] = []
+        for component in self.list_components(
+            app=resolved_app_id,
+            limit=limit,
+            component_type="action",
+        ):
+            provider_tool_id = str(
+                component.get("key")
+                or component.get("id")
+                or component.get("name_slug")
+                or component.get("name")
+                or "",
+            )
+            if not provider_tool_id:
+                continue
+            tool_name = _pipedream_tool_name(provider_tool_id, canonical_app_slug)
+            behavior_hints = _pipedream_behavior_hints(component)
+            action_class = action_class_from_behavior_hints(behavior_hints)
+            entries.append(
+                {
+                    "backend_id": "pipedream",
+                    "provider_app_id": resolved_app_id,
+                    "canonical_app_slug": canonical_app_slug,
+                    "provider_tool_id": provider_tool_id,
+                    "name": tool_name,
+                    "display_name": component.get("name")
+                    or tool_name.replace("_", " ").title(),
+                    "description": component.get("description")
+                    or component.get("name")
+                    or tool_name.replace("_", " ").title(),
+                    "required_scopes": [],
+                    "input_schema": _pipedream_input_schema(component),
+                    "output_schema": {"type": "object"},
+                    "action_class": action_class,
+                    "behavior_hints": behavior_hints,
+                    "confirmation_required": confirmation_required_for_action_class(
+                        action_class,
+                    ),
+                    "category": category,
+                    "tags": [canonical_app_slug, *([category] if category else [])],
+                    "raw_provider_metadata": {
+                        "source": "pipedream_live_sync",
+                        "raw_component": component,
+                    },
+                },
+            )
+        return entries
 
     def list_apps(
         self,
@@ -376,6 +528,71 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
             allowed_origins=allowed_origins,
         )
         return connect_url, None, error
+
+
+# ---------------------------------------------------------------------------
+# Pipedream wire-format normalizers
+#
+# These map Pipedream app/component payloads onto Orchestra's canonical,
+# provider-neutral catalog shapes. They are private to the Pipedream adapter; the
+# generic sync layer never imports them.
+# ---------------------------------------------------------------------------
+
+
+def _pipedream_behavior_hints(component: dict[str, Any]) -> list[str]:
+    annotations = component.get("annotations")
+    return normalized_behavior_hints(
+        tags=set(),
+        annotations=annotations if isinstance(annotations, dict) else None,
+    )
+
+
+def _pipedream_action_class(component: dict[str, Any]) -> str:
+    return action_class_from_behavior_hints(_pipedream_behavior_hints(component))
+
+
+def _pipedream_app_slug(app: dict[str, Any]) -> str:
+    value = (
+        app.get("name_slug")
+        or app.get("slug")
+        or app.get("id")
+        or app.get("name")
+        or ""
+    )
+    return slugify(str(value))
+
+
+def _pipedream_tool_name(provider_tool_id: str, canonical_app_slug: str) -> str:
+    normalized_tool = provider_tool_id.strip()
+    for prefix in (
+        f"{canonical_app_slug}-",
+        f"{canonical_app_slug}_",
+        f"{canonical_app_slug}.",
+    ):
+        if normalized_tool.startswith(prefix):
+            return slugify(normalized_tool[len(prefix) :])
+    return slugify(normalized_tool)
+
+
+def _pipedream_category(app: dict[str, Any]) -> str | None:
+    category = app.get("category")
+    if isinstance(category, dict):
+        return category.get("name") or category.get("slug")
+    categories = app.get("categories")
+    if isinstance(categories, list) and categories:
+        first = categories[0]
+        if isinstance(first, dict):
+            return first.get("name") or first.get("slug")
+        return str(first)
+    return str(category) if category else None
+
+
+def _pipedream_input_schema(component: dict[str, Any]) -> dict[str, Any]:
+    props = component.get("props")
+    if isinstance(props, dict):
+        return {"type": "object", "properties": props}
+    schema = component.get("input_schema") or component.get("inputSchema") or {}
+    return schema if isinstance(schema, dict) else {"type": "object"}
 
 
 def _pipedream_cursor_page(data: dict[str, Any]) -> CursorPage:
