@@ -978,6 +978,7 @@ def _coordinator_state_entry(
     skipped_step_ids: Sequence[str],
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
+    onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
 
@@ -1013,6 +1014,15 @@ def _coordinator_state_entry(
     next_intro_watched = bool((previous or {}).get("intro_watched")) or bool(
         intro_watched,
     )
+    # ``onboarding_deferred`` is the global "do onboarding later" switch.
+    # Unlike ``intro_watched`` it is freely reversible — the user can defer
+    # the whole onboarding phase to start using the platform, then resume
+    # it later — so we carry the previous value forward only when the
+    # current write doesn't explicitly set it.
+    if onboarding_deferred is None:
+        next_onboarding_deferred = bool((previous or {}).get("onboarding_deferred", False))
+    else:
+        next_onboarding_deferred = bool(onboarding_deferred)
     return {
         "mode": mode,
         "onboarding_step": onboarding_step,
@@ -1020,6 +1030,7 @@ def _coordinator_state_entry(
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
+        "onboarding_deferred": next_onboarding_deferred,
         "timestamp": now,
     }
 
@@ -1081,6 +1092,7 @@ def get_coordinator_state(
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
+            "onboarding_deferred": False,
         }
     mode = row.get("mode")
     if mode not in COORDINATOR_MODES:
@@ -1095,6 +1107,7 @@ def get_coordinator_state(
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
+        "onboarding_deferred": bool(row.get("onboarding_deferred", False)),
     }
 
 
@@ -1153,6 +1166,7 @@ def set_coordinator_state(
     skip_onboarding_step: str | None = None,
     unskip_onboarding_step: str | None = None,
     intro_watched: bool | None = None,
+    onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1247,6 +1261,7 @@ def set_coordinator_state(
         skipped_step_ids=next_skipped_step_ids,
         previous=previous,
         intro_watched=intro_watched,
+        onboarding_deferred=onboarding_deferred,
     )
     _write_coordinator_state_row(
         session,
@@ -1708,7 +1723,7 @@ def _is_coordinator_in_onboarding(
     *,
     coordinator: Assistant,
 ) -> bool:
-    """Return ``True`` only when the Coordinator is still in onboarding.
+    """Return ``True`` only when the Coordinator is actively onboarding.
 
     Pulled out as a tiny helper because both the per-coordinator and
     the via-sibling-assistant entry points share the gate, and
@@ -1716,6 +1731,14 @@ def _is_coordinator_in_onboarding(
     strictly best-effort — if state lookup blows up we'd rather stay
     silent than crash the user-facing endpoint that wrapped the
     call.
+
+    A Coordinator counts as onboarding only when it is in
+    ``onboarding`` mode *and* the user has not deferred the whole
+    onboarding phase. The reversible ``onboarding_deferred`` switch
+    lets the user start using the platform without ever finishing
+    onboarding: while it's set we suppress every onboarding narration
+    event exactly as if onboarding were complete, without touching
+    per-step state, so flipping it back resumes the flow untouched.
     """
     try:
         state = get_coordinator_state(session, coordinator=coordinator)
@@ -1725,6 +1748,8 @@ def _is_coordinator_in_onboarding(
             getattr(coordinator, "agent_id", None),
             exc,
         )
+        return False
+    if state.get("onboarding_deferred"):
         return False
     return state.get("mode") == COORDINATOR_MODE_ONBOARDING
 

@@ -661,6 +661,13 @@ class CoordinatorStateUpdate(BaseModel):
     picker (started the call or chose chat) so the ringing picker and
     auto-playing intro never re-appear on a later page load. It is
     one-way sticky: once ``True`` it cannot be reset to ``False``.
+
+    ``onboarding_deferred`` is the global "do onboarding later" switch.
+    Setting it ``True`` suppresses every onboarding narration/opener
+    event and the server-side step derivation exactly as if onboarding
+    were complete, without touching ``mode`` or any per-step state, so
+    the user can start using the platform first. It is freely
+    reversible: setting it back to ``False`` resumes the flow untouched.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -671,6 +678,7 @@ class CoordinatorStateUpdate(BaseModel):
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_step: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
+    onboarding_deferred: Optional[bool] = Field(None)
 
 
 class CoordinatorStateResponse(BaseModel):
@@ -692,6 +700,7 @@ class CoordinatorStateResponse(BaseModel):
     completed_step_ids: List[str] = Field(default_factory=list)
     skipped_step_ids: List[str] = Field(default_factory=list)
     intro_watched: bool = False
+    onboarding_deferred: bool = False
 
 
 class DemoAssistantCreate(BaseModel):

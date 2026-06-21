@@ -1482,6 +1482,7 @@ def _coordinator_state_response(
     completed_step_ids = (
         derive_onboarding_progress(session, coordinator=coordinator)
         if state["mode"] == COORDINATOR_MODE_ONBOARDING
+        and not state.get("onboarding_deferred")
         else []
     )
     return CoordinatorStateResponse(
@@ -1550,6 +1551,7 @@ async def update_coordinator_state_endpoint(
         skip_onboarding_step=update.skip_onboarding_step,
         unskip_onboarding_step=update.unskip_onboarding_step,
         intro_watched=update.intro_watched,
+        onboarding_deferred=update.onboarding_deferred,
     )
     if (
         update.onboarding_step
