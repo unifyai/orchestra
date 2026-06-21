@@ -547,6 +547,11 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Optional deny-list of triggering contacts.",
     },
+    "interrupt": {
+        "field_type": "bool",
+        "mutable": True,
+        "description": "Whether a trigger activation interrupts the assistant.",
+    },
     "trigger_recurring": {
         "field_type": "bool",
         "mutable": True,
@@ -1498,6 +1503,7 @@ def _project_activation_payload(
         "trigger_omit_contact_ids": _coerce_optional_list(
             trigger.get("omit_contact_ids"),
         ),
+        "interrupt": bool(trigger.get("interrupt", False)),
         "trigger_recurring": bool(trigger.get("recurring", False)),
         "entrypoint": entrypoint,
         "repeat": _coerce_optional_list(row.data.get("repeat")),

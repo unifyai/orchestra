@@ -123,11 +123,10 @@ def _task_rows_for_id(
     project_id: int,
     task_id: int,
 ) -> list[tuple[LogEvent, str, Assistant]]:
-    return (
-        session.query(LogEvent, Context.name, Assistant)
+    rows = (
+        session.query(LogEvent, Context.name)
         .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
         .join(Context, Context.id == LogEventContext.context_id)
-        .join(Assistant, Assistant.agent_id == Context.owner_id)
         .filter(
             LogEvent.project_id == project_id,
             LogEventContext.project_id == project_id,
@@ -138,6 +137,24 @@ def _task_rows_for_id(
         )
         .all()
     )
+    targets: list[tuple[LogEvent, str, Assistant]] = []
+    for row, context_name in rows:
+        data = row.data if isinstance(row.data, dict) else {}
+        resolved_assistant_id = _resolve_assistant_id(
+            data=data,
+            context_name=context_name,
+        )
+        if resolved_assistant_id is None:
+            continue
+        assistant = (
+            session.query(Assistant)
+            .filter(Assistant.agent_id == resolved_assistant_id)
+            .one_or_none()
+        )
+        if assistant is None:
+            continue
+        targets.append((row, context_name, assistant))
+    return targets
 
 
 def _resolve_assistant_id(
