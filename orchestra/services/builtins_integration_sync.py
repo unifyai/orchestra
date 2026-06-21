@@ -38,6 +38,10 @@ from orchestra.db.models.core_models import (
     LogUniqueConstraint,
     Project,
 )
+from orchestra.services.integration_embedding_text import (
+    humanize_auth_modes,
+    normalize_embedding_text,
+)
 from orchestra.web.api.integrations.schema import IntegrationCatalogSyncRequest
 
 logger = logging.getLogger(__name__)
@@ -80,6 +84,7 @@ class BuiltinsSyncRequest:
     request_uri: str | None = None
     batch_size: int = DEFAULT_BATCH_SIZE
     workers: int = DEFAULT_WORKERS
+    force: bool = False
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "BuiltinsSyncRequest":
@@ -142,6 +147,11 @@ class BuiltinsSyncRequest:
                     or os.getenv("ORCHESTRA_BUILTINS_SYNC_WORKERS", DEFAULT_WORKERS),
                 ),
             ),
+            force=bool(
+                payload.get("force")
+                or sync_payload.get("force")
+                or _env_flag("ORCHESTRA_BUILTINS_SYNC_FORCE"),
+            ),
         )
 
 
@@ -195,6 +205,10 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _stable_int_id(namespace: str, value: str) -> int:
     digest = hashlib.sha256(f"{namespace}:{value}".encode()).digest()
     return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
@@ -202,6 +216,48 @@ def _stable_int_id(namespace: str, value: str) -> int:
 
 def _normalize_app_slug(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _harvest_category_names(
+    *,
+    category: Any,
+    raw_metadata: dict[str, Any],
+) -> list[str]:
+    """Collect category names from the canonical field plus raw provider metadata.
+
+    The canonical ``category`` is the primary; additional names are recovered
+    best-effort from the provider's own catalog metadata so multi-category apps
+    contribute richer retrieval signal. Provider-neutral: it probes the common
+    metadata containers and tolerates both ``{"name": ...}`` dicts and strings.
+    """
+
+    names: list[str] = []
+    lowered: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text.lower() not in lowered:
+            lowered.add(text.lower())
+            names.append(text)
+
+    add(category)
+    if isinstance(raw_metadata, dict):
+        for container_key in ("raw_toolkit_detail", "raw_toolkit", "raw_app"):
+            container = raw_metadata.get(container_key)
+            if not isinstance(container, dict):
+                continue
+            meta = container.get("meta")
+            categories = (
+                meta.get("categories") if isinstance(meta, dict) else None
+            ) or container.get("categories")
+            if not isinstance(categories, list):
+                continue
+            for entry in categories:
+                if isinstance(entry, dict):
+                    add(entry.get("name") or entry.get("slug") or entry.get("id"))
+                else:
+                    add(entry)
+    return names
 
 
 def _stable_hash_for_rows(
@@ -233,22 +289,22 @@ def app_catalog_row(
         app.get("available_scopes") or app.get("available_scopes_json") or []
     )
     recommended_scopes = app.get("recommended_scopes") or []
+    api_key_schema = app.get("api_key_schema") or app.get("api_key_schema_json")
     category = app.get("category")
-    embedding_text = "\n".join(
-        part
-        for part in (
-            f"Integration App: {display_name}",
-            f"Slug: {slug}",
-            f"Source: {source_type}",
-            f"Category: {category}" if category else "",
-            f"Description: {description}" if description else "",
-            (
-                f"Scopes: {', '.join(str(scope) for scope in available_scopes)}"
-                if available_scopes
-                else ""
-            ),
-        )
-        if part
+    raw_metadata = (
+        app.get("raw_provider_metadata") or app.get("raw_provider_metadata_json") or {}
+    )
+    categories_text = ", ".join(
+        _harvest_category_names(category=category, raw_metadata=raw_metadata),
+    )
+    embedding_text = normalize_embedding_text(
+        [
+            display_name,
+            description,
+            categories_text,
+            humanize_auth_modes(auth_modes),
+            slug,
+        ],
     )
     return {
         "app_id": _stable_int_id("integration_app", f"{backend_id}:{slug}"),
@@ -262,6 +318,7 @@ def app_catalog_row(
         "auth_modes": auth_modes,
         "available_scopes": available_scopes,
         "recommended_scopes": recommended_scopes,
+        "api_key_schema": api_key_schema,
         "tool_count": int(app.get("tool_count") or 0),
         "source_type": source_type,
         "source_label": app.get("source_label")
@@ -423,33 +480,34 @@ def _examples_doc(
 
 def _embedding_text(
     *,
-    name: str,
-    signature: str,
-    app: str,
-    tool: str,
+    app_display: str,
+    tool_display: str,
+    tool_name: str,
     description: str,
+    category_text: str,
     input_schema: dict[str, Any],
-    examples: list[Any],
+    example_prompts: list[Any] | None = None,
 ) -> str:
+    """Build Layer 1-normalized tool embedding text from value fields only.
+
+    Front-loaded by signal: the app/tool header, the identifier-split tool-name
+    leaf (keyword anchor), the description, harvested categories, parameter names,
+    and any example prompts. The dotted function name, argspec, and raw JSON
+    example dump are intentionally dropped; ``normalize_embedding_text`` then
+    strips noise and splits identifiers across the whole text.
+    """
+
     properties, _required = _schema_properties(input_schema)
-    parts = [
-        f"Function Name: {name}",
-        f"Signature: {signature}",
-        f"App: {app}",
-        f"Tool: {tool}",
-        f"Purpose: {description}",
-    ]
     parameter_names = ", ".join(str(key) for key in properties.keys())
-    if parameter_names:
-        parts.append(f"Parameters: {parameter_names}")
-    example_terms = [
-        json.dumps(example, sort_keys=True)
-        for example in examples
-        if isinstance(example, dict)
-    ][:2]
-    if example_terms:
-        parts.append(f"Examples: {'; '.join(example_terms)}")
-    return "\n".join(parts)
+    parts = [
+        f"{app_display} - {tool_display}",
+        tool_name,
+        description,
+        category_text,
+        parameter_names,
+    ]
+    parts.extend(str(prompt) for prompt in (example_prompts or []) if prompt)
+    return normalize_embedding_text(parts)
 
 
 def tool_catalog_row(
@@ -492,6 +550,14 @@ def tool_catalog_row(
     input_schema = item.get("input_schema") or item.get("input_schema_json") or {}
     output_schema = item.get("output_schema") or item.get("output_schema_json") or {}
     examples = item.get("examples") or item.get("examples_json") or []
+    tag_categories = [
+        tag for tag in (item.get("tags") or []) if tag and tag != app_slug
+    ]
+    category_text = ", ".join(
+        dict.fromkeys(
+            value for value in (item.get("category"), *tag_categories) if value
+        ),
+    )
     signature = _schema_argspec(input_schema)
     parameter_doc = _parameter_doc(input_schema)
     examples_doc = _examples_doc(
@@ -550,19 +616,20 @@ def tool_catalog_row(
         "function_id": _provider_integration_function_id(str(tool_id)),
         "language": "python",
         "name": name,
+        "description": str(item.get("description") or ""),
         "argspec": signature,
         "docstring": docstring,
         "implementation": None,
         "depends_on": [],
         "precondition": None,
         "embedding_text": _embedding_text(
-            name=name,
-            signature=signature,
-            app=str(app),
-            tool=str(tool_label),
+            app_display=str(app),
+            tool_display=str(tool_label),
+            tool_name=tool_name,
             description=str(item.get("description") or ""),
+            category_text=category_text,
             input_schema=input_schema,
-            examples=examples,
+            example_prompts=item.get("example_prompts"),
         ),
         "guidance_ids": item.get("guidance_ids") or [],
         "verify": confirmation_required
@@ -579,210 +646,94 @@ def fetch_provider_catalog(
     session: Session,
     body: IntegrationCatalogSyncRequest,
 ) -> ProviderCatalogFetchResult:
-    """Fetch and normalize provider catalog rows without writing legacy tables."""
+    """Fetch and normalize a provider catalog into canonical, provider-neutral rows.
 
-    if body.backend_id != "composio":
-        raise NotImplementedError(
-            f"Builtins direct sync currently supports composio, got {body.backend_id}",
-        )
+    Provider-specific selection, auth-config creation, scope/credential-schema
+    extraction, and tool normalization all live behind the adapter's
+    ``list_app_entries`` / ``list_tool_entries`` contract. This function only
+    resolves the backend adapter and orchestrates the app -> tool phases with
+    bounded-concurrency tool fetches; it holds no provider wire-format knowledge.
+    """
 
-    from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
     from orchestra.web.api.integrations.operations import (
-        _action_class_from_behavior_hints,
-        _composio_auth_modes,
-        _composio_behavior_hints,
-        _composio_canonical_app_slug,
-        _composio_icon_url,
-        _composio_tool_input_schema,
-        _composio_tool_name,
-        _composio_tool_output_schema,
-        _composio_tool_scopes,
-        _composio_toolkit_slug,
         get_provider_adapter,
         seed_default_provider_catalog,
     )
 
     seed_default_provider_catalog(session)
-    backend = IntegrationProviderDAO(session).get_backend("composio")
+    backend = IntegrationProviderDAO(session).get_backend(body.backend_id)
     config = (backend.config_json if backend else {}) or {}
     adapter = get_provider_adapter(
-        "composio",
+        body.backend_id,
         backend_config=config,
         backend_status=backend.status if backend else "enabled",
         require_live=True,
     )
-    requested_slugs = [slug.strip().upper() for slug in body.app_slugs if slug.strip()]
-    requested_set = set(requested_slugs)
-    toolkits = adapter.list_toolkits()
-    toolkits_by_slug = {
-        str(
-            toolkit.get("slug")
-            or toolkit.get("toolkit_slug")
-            or toolkit.get("id")
-            or "",
-        ).upper(): toolkit
-        for toolkit in toolkits
-        if toolkit.get("slug") or toolkit.get("toolkit_slug") or toolkit.get("id")
-    }
-    selected_toolkit_slugs = (
-        sorted(toolkits_by_slug)
-        if body.include_all_managed_apps or not requested_slugs
-        else [slug for slug in requested_slugs if slug in toolkits_by_slug]
+
+    # The tool phase never materializes app rows, so skip the (expensive) per-app
+    # detail enrichment when fetching tools and only pay for it in the app phase.
+    app_entries = adapter.list_app_entries(
+        app_slugs=body.app_slugs,
+        include_all=body.include_all_managed_apps,
+        create_auth_configs=body.create_auth_configs,
+        include_detail=not body.sync_tools,
     )
-    skipped_apps = [
-        {"slug": slug, "reason": "not_found"}
-        for slug in requested_slugs
-        if slug not in toolkits_by_slug
-    ]
-    if requested_slugs and not selected_toolkit_slugs:
+    requested_app_slugs = list(adapter.last_requested_app_slugs)
+    skipped_apps = list(adapter.last_skipped_apps)
+    sync_mode = body.sync_mode or (
+        "full" if body.include_all_managed_apps else "partial"
+    )
+    if requested_app_slugs and not app_entries:
         return ProviderCatalogFetchResult(
             apps=[],
             tools=[],
             skipped_apps=skipped_apps,
-            requested_app_slugs=requested_slugs,
+            requested_app_slugs=requested_app_slugs,
             matched_app_slugs=[],
-            sync_mode=body.sync_mode or "partial",
+            sync_mode=sync_mode,
             cache_version=body.cache_version,
-            warning="No requested Composio apps matched the live provider catalog.",
+            warning=(
+                f"No requested {body.backend_id} apps matched the live provider "
+                "catalog."
+            ),
         )
 
-    apps: list[dict[str, Any]] = []
+    apps = [dict(entry) for entry in app_entries]
     tools: list[dict[str, Any]] = []
-    auth_configs_created = 0
-    auth_configs_reused = 0
-    should_create_auth_configs = body.create_auth_configs and bool(requested_slugs)
-    syncable_toolkit_slugs: list[str] = []
-    for toolkit_slug in selected_toolkit_slugs:
-        toolkit = toolkits_by_slug[toolkit_slug]
-        canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
-        auth_config_id = None
-        if should_create_auth_configs and "oauth" in _composio_auth_modes(toolkit):
-            try:
-                auth_config_id = adapter.get_or_create_auth_config(toolkit_slug)
-            except Exception as exc:
-                skipped_apps.append(
-                    {
-                        "slug": toolkit_slug,
-                        "reason": "auth_config_failed",
-                        "message": str(exc)[:300],
-                    },
-                )
-                continue
-            if getattr(adapter, "last_auth_config_was_created", False):
-                auth_configs_created += 1
-            elif auth_config_id:
-                auth_configs_reused += 1
-        raw_provider_metadata = {
-            "source": "composio_live_sync",
-            "toolkit_slug": toolkit_slug,
-            "toolkit_version": toolkit.get("version"),
-            "managed_auth": True,
-            "raw_toolkit": toolkit,
-        }
-        if auth_config_id:
-            raw_provider_metadata["auth_config_id"] = auth_config_id
-        apps.append(
-            {
-                "backend_id": "composio",
-                "provider_app_id": toolkit_slug,
-                "canonical_app_slug": canonical_app_slug,
-                "display_name": toolkit.get("name")
-                or canonical_app_slug.replace("_", " ").title(),
-                "description": toolkit.get("description"),
-                "category": toolkit.get("category"),
-                "icon_url": _composio_icon_url(toolkit),
-                "auth_modes": _composio_auth_modes(toolkit),
-                "available_scopes": [],
-                "raw_provider_metadata": raw_provider_metadata,
-            },
-        )
-        syncable_toolkit_slugs.append(toolkit_slug)
-
-    if body.sync_tools and syncable_toolkit_slugs:
+    if body.sync_tools and app_entries:
         tool_limit = body.tool_limit_per_app if body.tool_limit_per_app > 0 else None
         tool_fetch_concurrency = max(1, int(config.get("tool_fetch_concurrency", 8)))
+        workers = min(tool_fetch_concurrency, len(app_entries))
 
-        def fetch_tools(toolkit_slug: str) -> tuple[str, list[dict[str, Any]]]:
-            return (
-                toolkit_slug,
-                adapter.list_tools(toolkit_slug=toolkit_slug, limit=tool_limit),
-            )
-
-        raw_tools_by_toolkit: dict[str, list[dict[str, Any]]] = {}
-        with ThreadPoolExecutor(max_workers=tool_fetch_concurrency) as executor:
-            future_by_slug = {
-                executor.submit(fetch_tools, toolkit_slug): toolkit_slug
-                for toolkit_slug in syncable_toolkit_slugs
-            }
-            for future in as_completed(future_by_slug):
-                toolkit_slug, toolkit_tools = future.result()
-                raw_tools_by_toolkit[toolkit_slug] = toolkit_tools
-
-        for toolkit_slug in syncable_toolkit_slugs:
-            toolkit = toolkits_by_slug[toolkit_slug]
-            canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
-            for tool in raw_tools_by_toolkit.get(toolkit_slug, []):
-                provider_tool_id = str(tool.get("slug") or tool.get("id") or "")
-                if not provider_tool_id:
-                    continue
-                tool_app_slug = (_composio_toolkit_slug(tool) or toolkit_slug).upper()
-                if (
-                    not body.include_all_managed_apps
-                    and requested_set
-                    and tool_app_slug not in requested_set
-                    and tool_app_slug != toolkit_slug
-                ):
-                    continue
-                tool_name = _composio_tool_name(provider_tool_id, toolkit_slug)
-                behavior_hints = _composio_behavior_hints(tool)
-                action_class = _action_class_from_behavior_hints(behavior_hints)
-                tools.append(
-                    {
-                        "backend_id": "composio",
-                        "provider_app_id": toolkit_slug,
-                        "canonical_app_slug": canonical_app_slug,
-                        "provider_tool_id": provider_tool_id,
-                        "name": tool_name,
-                        "display_name": tool.get("name")
-                        or tool_name.replace("_", " ").title(),
-                        "description": tool.get("description")
-                        or tool_name.replace("_", " ").title(),
-                        "required_scopes": _composio_tool_scopes(tool),
-                        "input_schema": _composio_tool_input_schema(tool),
-                        "output_schema": _composio_tool_output_schema(tool),
-                        "action_class": action_class,
-                        "behavior_hints": behavior_hints,
-                        "confirmation_required": action_class
-                        in {"write", "destructive", "bulk_export"},
-                        "category": toolkit.get("category"),
-                        "tags": [
-                            canonical_app_slug,
-                            str(toolkit.get("category") or "").lower(),
-                        ],
-                        "raw_provider_metadata": {
-                            "source": "composio_live_sync",
-                            "toolkit_slug": toolkit_slug,
-                            "tool_version": tool.get("version"),
-                            "raw_tool": tool,
-                        },
-                    },
+        def fetch_tool_entries(entry: dict[str, Any]) -> list[dict[str, Any]]:
+            return [
+                dict(tool_entry)
+                for tool_entry in adapter.list_tool_entries(
+                    app_slug=str(entry.get("canonical_app_slug") or ""),
+                    provider_app_id=entry.get("provider_app_id"),
+                    limit=tool_limit,
                 )
+            ]
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(fetch_tool_entries, entry) for entry in apps]
+            for future in as_completed(futures):
+                tools.extend(future.result())
 
     return ProviderCatalogFetchResult(
         apps=apps,
         tools=tools,
         skipped_apps=skipped_apps,
-        requested_app_slugs=requested_slugs,
+        requested_app_slugs=requested_app_slugs,
         matched_app_slugs=[
             str(app["canonical_app_slug"])
             for app in apps
             if app.get("canonical_app_slug")
         ],
-        sync_mode=body.sync_mode
-        or ("full" if body.include_all_managed_apps else "partial"),
+        sync_mode=sync_mode,
         cache_version=body.cache_version,
-        auth_configs_created=auth_configs_created,
-        auth_configs_reused=auth_configs_reused,
+        auth_configs_created=adapter.last_auth_configs_created,
+        auth_configs_reused=adapter.last_auth_configs_reused,
     )
 
 
@@ -1474,6 +1425,8 @@ def _checkpoint_complete(
         request=request,
         checkpoint_key=key,
     )
+    if request.force:
+        return False
     existing = _get_meta_row_by_id(
         session,
         context_id=meta_context_id,
@@ -1533,6 +1486,8 @@ def _unit_hash_matches(
     unit_key: str,
     unit_hash: str,
 ) -> bool:
+    if request.force:
+        return False
     row = _meta_row(
         kind="unit_hash",
         request=request,
@@ -1662,6 +1617,7 @@ def _materialize_tools(
             fields=(
                 "function_id",
                 "name",
+                "description",
                 "argspec",
                 "docstring",
                 "metadata",
