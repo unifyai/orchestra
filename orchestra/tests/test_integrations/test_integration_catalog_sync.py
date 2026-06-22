@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestra.db.models.core_models import Project
 from orchestra.integrations.providers.base import ProviderExecutionRequest
 from orchestra.integrations.providers.composio import ComposioProviderAdapter
-from orchestra.integrations.providers.pagination import ProviderPaginationError
+from orchestra.integrations.providers.utils.pagination import ProviderPaginationError
 from orchestra.services import builtins_integration_sync
 from orchestra.services.builtins_integration_sync import (
     COMPOSITE_KEY_FIELD,

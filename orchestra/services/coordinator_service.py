@@ -32,17 +32,18 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.services import onboarding_graph
 from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.contact_membership_service import (
     PERSONAL_BOSS_CONTACT_ID,
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
 )
-from orchestra.services.universal_droid_email import (
-    ensure_coordinator_universal_email_contact,
-)
 from orchestra.services.universal_droid_discord import (
     ensure_coordinator_universal_discord_contact,
+)
+from orchestra.services.universal_droid_email import (
+    ensure_coordinator_universal_email_contact,
 )
 from orchestra.services.universal_droid_phone import (
     ensure_coordinator_universal_phone_contact,
@@ -978,6 +979,7 @@ def _coordinator_state_entry(
     skipped_step_ids: Sequence[str],
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
+    onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
 
@@ -1013,6 +1015,17 @@ def _coordinator_state_entry(
     next_intro_watched = bool((previous or {}).get("intro_watched")) or bool(
         intro_watched,
     )
+    # ``onboarding_deferred`` is the global "do onboarding later" switch.
+    # Unlike ``intro_watched`` it is freely reversible — the user can defer
+    # the whole onboarding phase to start using the platform, then resume
+    # it later — so we carry the previous value forward only when the
+    # current write doesn't explicitly set it.
+    if onboarding_deferred is None:
+        next_onboarding_deferred = bool(
+            (previous or {}).get("onboarding_deferred", False),
+        )
+    else:
+        next_onboarding_deferred = bool(onboarding_deferred)
     return {
         "mode": mode,
         "onboarding_step": onboarding_step,
@@ -1020,6 +1033,7 @@ def _coordinator_state_entry(
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
+        "onboarding_deferred": next_onboarding_deferred,
         "timestamp": now,
     }
 
@@ -1081,6 +1095,7 @@ def get_coordinator_state(
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
+            "onboarding_deferred": False,
         }
     mode = row.get("mode")
     if mode not in COORDINATOR_MODES:
@@ -1095,6 +1110,7 @@ def get_coordinator_state(
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
+        "onboarding_deferred": bool(row.get("onboarding_deferred", False)),
     }
 
 
@@ -1153,6 +1169,7 @@ def set_coordinator_state(
     skip_onboarding_step: str | None = None,
     unskip_onboarding_step: str | None = None,
     intro_watched: bool | None = None,
+    onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1247,6 +1264,7 @@ def set_coordinator_state(
         skipped_step_ids=next_skipped_step_ids,
         previous=previous,
         intro_watched=intro_watched,
+        onboarding_deferred=onboarding_deferred,
     )
     _write_coordinator_state_row(
         session,
@@ -1589,7 +1607,8 @@ def _has_assistant_transcript_message(
         session,
         project_id=project.id,
         context_name=_coordinator_context_name(
-            coordinator, COORDINATOR_TRANSCRIPTS_CONTEXT
+            coordinator,
+            COORDINATOR_TRANSCRIPTS_CONTEXT,
         ),
     )
     if context is None:
@@ -1703,12 +1722,94 @@ def derive_onboarding_progress(
     ]
 
 
+def compute_onboarding_render(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> dict[str, Any]:
+    """Build the precomputed onboarding rendering for the brains + Console.
+
+    This is the single place that turns raw progress into the explicit
+    "what's done / what's a valid next target" picture every downstream
+    consumer reads without re-deriving anything:
+
+      - ``steps``: every graph step with a resolved ``status`` of
+        ``done`` / ``skipped`` / ``available`` / ``locked``.
+      - ``next_targets``: the steps the Coordinator may nudge toward
+        right now (``status == available``), each carrying ready-to-use
+        chat and voice copy plus its channel. There can be more than one
+        once the ``depends_on`` graph branches.
+      - ``active_step_id``: the step the user is currently mid-flow on.
+
+    Completion of the reference-quiz *trigger* rows isn't derivable from
+    durable state, so we infer it from the paired reply step exactly as
+    the Console checklist did: a trigger is done once its reply is done
+    or is the active step, and skipped once its reply is skipped.
+    """
+    completed: set[str] = set(
+        derive_onboarding_progress(session, coordinator=coordinator),
+    )
+    state = get_coordinator_state(session, coordinator=coordinator)
+    skipped: set[str] = set(
+        normalize_onboarding_step_ids(state.get("skipped_step_ids")),
+    )
+    active = state.get("onboarding_step")
+    active_id = active if isinstance(active, str) else None
+
+    for trigger_id, reply_id in onboarding_graph.TRIGGER_TO_REPLY.items():
+        if reply_id in completed or reply_id == active_id:
+            completed.add(trigger_id)
+        elif reply_id in skipped:
+            skipped.add(trigger_id)
+
+    steps: list[dict[str, Any]] = []
+    next_targets: list[dict[str, Any]] = []
+    for step in onboarding_graph.ONBOARDING_GRAPH:
+        if step.id in completed:
+            status = "done"
+        elif step.id in skipped:
+            status = "skipped"
+        elif onboarding_graph.dependencies_satisfied(
+            step.depends_on,
+            completed,
+            skipped,
+        ):
+            status = "available"
+        else:
+            status = "locked"
+        steps.append(
+            {
+                "id": step.id,
+                "title": step.title,
+                "phase": step.phase,
+                "status": status,
+                "can_skip": step.can_skip,
+            },
+        )
+        if status == "available":
+            next_targets.append(
+                {
+                    "id": step.id,
+                    "title": step.title,
+                    "nudge_chat": step.nudge_chat,
+                    "nudge_voice": step.nudge_voice,
+                    "channel": step.channel,
+                },
+            )
+
+    return {
+        "active_step_id": active_id,
+        "steps": steps,
+        "next_targets": next_targets,
+    }
+
+
 def _is_coordinator_in_onboarding(
     session: Session,
     *,
     coordinator: Assistant,
 ) -> bool:
-    """Return ``True`` only when the Coordinator is still in onboarding.
+    """Return ``True`` only when the Coordinator is actively onboarding.
 
     Pulled out as a tiny helper because both the per-coordinator and
     the via-sibling-assistant entry points share the gate, and
@@ -1716,6 +1817,14 @@ def _is_coordinator_in_onboarding(
     strictly best-effort — if state lookup blows up we'd rather stay
     silent than crash the user-facing endpoint that wrapped the
     call.
+
+    A Coordinator counts as onboarding only when it is in
+    ``onboarding`` mode *and* the user has not deferred the whole
+    onboarding phase. The reversible ``onboarding_deferred`` switch
+    lets the user start using the platform without ever finishing
+    onboarding: while it's set we suppress every onboarding narration
+    event exactly as if onboarding were complete, without touching
+    per-step state, so flipping it back resumes the flow untouched.
     """
     try:
         state = get_coordinator_state(session, coordinator=coordinator)
@@ -1725,6 +1834,8 @@ def _is_coordinator_in_onboarding(
             getattr(coordinator, "agent_id", None),
             exc,
         )
+        return False
+    if state.get("onboarding_deferred"):
         return False
     return state.get("mode") == COORDINATOR_MODE_ONBOARDING
 
@@ -1756,6 +1867,36 @@ def _resolve_target_coordinator(
         user_id=assistant.user_id,
         organization_id=assistant.organization_id,
     )
+
+
+def _with_onboarding_render(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    details: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Attach the precomputed onboarding render to an event's details.
+
+    Every onboarding event carries the same ``onboarding`` rendering the
+    state endpoint returns (steps + statuses + valid next targets with
+    nudge copy), so Droid's ConversationManager can refresh its standing
+    progress model the moment an event lands — without an extra fetch and
+    without re-deriving anything. Best-effort: a derivation failure
+    leaves the original details untouched rather than dropping the event.
+    """
+    merged = dict(details or {})
+    try:
+        merged["onboarding"] = compute_onboarding_render(
+            session,
+            coordinator=coordinator,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Skipping onboarding render on event for %s: %s",
+            getattr(coordinator, "agent_id", None),
+            exc,
+        )
+    return merged
 
 
 def _build_onboarding_event_payload(
@@ -1854,7 +1995,11 @@ async def notify_coordinator_onboarding_event(
         coordinator=coordinator,
         subtype=subtype,
         message=message,
-        details=details,
+        details=_with_onboarding_render(
+            session,
+            coordinator=coordinator,
+            details=details,
+        ),
     )
     try:
         await _post_droid_system_event(
@@ -1900,7 +2045,11 @@ def notify_coordinator_onboarding_event_safe_sync(
         coordinator=coordinator,
         subtype=subtype,
         message=message,
-        details=details,
+        details=_with_onboarding_render(
+            session,
+            coordinator=coordinator,
+            details=details,
+        ),
     )
     _fire_and_forget_onboarding_event(payload)
     return True
@@ -2032,7 +2181,7 @@ async def emit_onboarding_step_started_event(
     """Notify Droid that the user selected one onboarding checklist step."""
     completed = list(
         completed_step_ids
-        or derive_onboarding_progress(session, coordinator=coordinator)
+        or derive_onboarding_progress(session, coordinator=coordinator),
     )
     skipped = normalize_onboarding_step_ids(
         skipped_step_ids
@@ -2064,12 +2213,12 @@ async def emit_onboarding_step_skipped_event(
     """Notify Droid that the user intentionally skipped one onboarding step."""
     completed = list(
         completed_step_ids
-        or derive_onboarding_progress(session, coordinator=coordinator)
+        or derive_onboarding_progress(session, coordinator=coordinator),
     )
     skipped = normalize_onboarding_step_ids(
         skipped_step_ids
         or get_coordinator_state(session, coordinator=coordinator).get(
-            "skipped_step_ids"
+            "skipped_step_ids",
         ),
     )
     return await notify_coordinator_onboarding_event(

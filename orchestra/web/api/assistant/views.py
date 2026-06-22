@@ -88,6 +88,7 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
+    compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
     emit_onboarding_step_skipped_event,
@@ -609,6 +610,7 @@ def _build_assistant_read(
     # The full per-user desktop map is admin/runtime-only so members of a shared
     # assistant don't see each other's machine URLs.
     user_desktops: list[AssistantUserDesktopLink] = []
+    user_desktop_filesync_keys: dict[str, str] = {}
     if include_internal:
         for link, desktop in desktop_dao.list_links_for_assistant(a.agent_id):
             user_desktops.append(
@@ -617,8 +619,14 @@ def _build_assistant_read(
                     url=desktop.url,
                     os=desktop.os,
                     filesys_sync=link.filesys_sync,
+                    sftp_tunnel_host=link.sftp_tunnel_host,
+                    sftp_tunnel_port=link.sftp_tunnel_port,
                 ),
             )
+            # Private keys ride a separate admin/runtime-only field so they
+            # never leak into the assistant pod env via user_desktops.
+            if link.filesync_sshkey:
+                user_desktop_filesync_keys[link.owner_user_id] = link.filesync_sshkey
 
     team_dao = TeamDAO(session)
     if team_ids is None:
@@ -685,6 +693,7 @@ def _build_assistant_read(
         user_desktop_url=user_desktop_url,
         user_desktop_mode=user_desktop_mode,
         user_desktops=user_desktops,
+        user_desktop_filesync_keys=user_desktop_filesync_keys,
         about=a.about,
         phone_country=(phone_contact.country_code if phone_contact else None),
         weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
@@ -1479,14 +1488,25 @@ def _coordinator_state_response(
     checklist no longer renders.
     """
     state = get_coordinator_state(session, coordinator=coordinator)
+    actively_onboarding = state[
+        "mode"
+    ] == COORDINATOR_MODE_ONBOARDING and not state.get(
+        "onboarding_deferred",
+    )
     completed_step_ids = (
         derive_onboarding_progress(session, coordinator=coordinator)
-        if state["mode"] == COORDINATOR_MODE_ONBOARDING
+        if actively_onboarding
         else []
+    )
+    onboarding = (
+        compute_onboarding_render(session, coordinator=coordinator)
+        if actively_onboarding
+        else None
     )
     return CoordinatorStateResponse(
         coordinator_id=coordinator.agent_id,
         completed_step_ids=completed_step_ids,
+        onboarding=onboarding,
         **state,
     )
 
@@ -1550,6 +1570,7 @@ async def update_coordinator_state_endpoint(
         skip_onboarding_step=update.skip_onboarding_step,
         unskip_onboarding_step=update.unskip_onboarding_step,
         intro_watched=update.intro_watched,
+        onboarding_deferred=update.onboarding_deferred,
     )
     if (
         update.onboarding_step

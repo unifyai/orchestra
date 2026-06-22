@@ -18,10 +18,19 @@ class EmbeddingDAO:
         log_event_ids: Optional[List[int]],
         project_id: Optional[int],
     ) -> None:
-        if log_event_ids is not None and project_id is not None:
-            raise ValueError("Provide exactly one of log_event_ids or project_id")
         if log_event_ids is None and project_id is None:
-            raise ValueError("Provide exactly one of log_event_ids or project_id")
+            raise ValueError("Provide log_event_ids and/or project_id")
+
+    @staticmethod
+    def _prune_clause(project_id: Optional[int], column: str = "project_id") -> str:
+        """Optional partition-pruning predicate for the log_event_ids paths.
+
+        The heavy tables are LIST(project_id)-partitioned; a ``ref_id``/``id``
+        predicate alone cannot prune partitions. When the owning ``project_id``
+        is known it is added purely as a pruning filter -- the targeted rows all
+        belong to that project, so the matched set is unchanged.
+        """
+        return f"AND {column} = :pid " if project_id is not None else ""
 
     def cancel_queue(
         self,
@@ -40,6 +49,9 @@ class EmbeddingDAO:
         if log_event_ids is not None:
             if not log_event_ids:
                 return 0
+            params = {"ids": log_event_ids, "reason": reason}
+            if project_id is not None:
+                params["pid"] = project_id
             result = self.session.execute(
                 text(
                     f"""
@@ -47,10 +59,10 @@ class EmbeddingDAO:
                     SET status = 'cancelled',
                         error_message = :reason
                     WHERE ref_id = ANY(:ids)
-                      AND status IN {ACTIVE_QUEUE_STATUSES}
+                      {self._prune_clause(project_id)}AND status IN {ACTIVE_QUEUE_STATUSES}
                 """,
                 ),
-                {"ids": log_event_ids, "reason": reason},
+                params,
             )
         else:
             result = self.session.execute(
@@ -96,16 +108,19 @@ class EmbeddingDAO:
                 return 0
             for i in range(0, len(log_event_ids), batch_size):
                 chunk = log_event_ids[i : i + batch_size]
+                params = {"ids": chunk}
+                if project_id is not None:
+                    params["pid"] = project_id
                 result = self.session.execute(
                     text(
-                        """
+                        f"""
                         UPDATE embedding
                         SET is_deleted = true
                         WHERE ref_id = ANY(:ids)
-                          AND is_deleted = false
+                          {self._prune_clause(project_id)}AND is_deleted = false
                     """,
                     ),
-                    {"ids": chunk},
+                    params,
                 )
                 total += result.rowcount
                 self.session.commit()
@@ -160,15 +175,19 @@ class EmbeddingDAO:
         if log_event_ids is not None:
             if not log_event_ids:
                 return 0
+            params = {"ids": log_event_ids}
+            if project_id is not None:
+                params["pid"] = project_id
             result = self.session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE embedding
                     SET ref_id = NULL
                     WHERE ref_id = ANY(:ids)
+                      {self._prune_clause(project_id)}
                 """,
                 ),
-                {"ids": log_event_ids},
+                params,
             )
         else:
             result = self.session.execute(

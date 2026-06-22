@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
+import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Iterable
 
 from orchestra.integrations.providers.base import (
     BaseIntegrationProviderAdapter,
+    ProviderAppEntry,
     ProviderExecutionRequest,
     ProviderExecutionResult,
+    ProviderToolEntry,
 )
-from orchestra.integrations.providers.pagination import (
+from orchestra.integrations.providers.utils.normalization import (
+    action_class_from_behavior_hints,
+    confirmation_required_for_action_class,
+    normalized_behavior_hints,
+    provider_tags,
+    slugify,
+)
+from orchestra.integrations.providers.utils.pagination import (
     CursorPage,
     PaginationLimits,
     collect_cursor_pages,
     int_or_none,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
@@ -33,7 +46,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         timeout_seconds: int = 30,
         max_pages: int = 500,
         max_items: int = 100_000,
+        detail_fetch_concurrency: int = 8,
     ) -> None:
+        super().__init__()
         self.api_key = api_key or os.getenv("COMPOSIO_API_KEY")
         self.base_url = (
             base_url
@@ -48,7 +63,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         self.timeout_seconds = timeout_seconds
         self.max_pages = max_pages
         self.max_items = max_items
+        self.detail_fetch_concurrency = max(1, int(detail_fetch_concurrency))
         self.last_auth_config_was_created = False
+        self._toolkit_by_provider_slug: dict[str, dict[str, Any]] = {}
 
     def _api_key_headers(self) -> dict[str, str]:
         return {
@@ -177,6 +194,208 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             ),
         )
         return items[:limit] if limit is not None else items
+
+    def get_toolkit(self, slug: str) -> dict[str, Any]:
+        """Fetch one toolkit's full detail document (auth schemes, scopes, meta)."""
+
+        if not self.api_key:
+            raise ValueError("COMPOSIO_API_KEY is required for Composio catalog sync.")
+
+        import requests
+
+        response = requests.get(
+            f"{self.base_url}/toolkits/{slug.lower()}",
+            headers=self._api_key_headers(),
+            params={},
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {}
+
+    def list_app_entries(
+        self,
+        *,
+        app_slugs: list[str] | None = None,
+        include_all: bool = False,
+        create_auth_configs: bool = False,
+        include_detail: bool = True,
+    ) -> list[ProviderAppEntry]:
+        """Select Composio toolkits and emit canonical app entries.
+
+        Owns toolkit selection, optional managed-auth config creation, and the
+        per-toolkit detail fetch (bounded concurrency) used to populate OAuth
+        scopes, the API-key credential schema, and tool counts. The detail fetch
+        is skipped when ``include_detail`` is false (e.g. the tool phase only
+        needs the toolkit list to resolve slugs).
+        """
+
+        self._reset_catalog_accounting()
+        toolkits = self.list_toolkits()
+        self._toolkit_by_provider_slug = {
+            str(
+                toolkit.get("slug")
+                or toolkit.get("toolkit_slug")
+                or toolkit.get("id")
+                or "",
+            ).upper(): toolkit
+            for toolkit in toolkits
+            if toolkit.get("slug") or toolkit.get("toolkit_slug") or toolkit.get("id")
+        }
+        requested = [slug.strip().upper() for slug in (app_slugs or []) if slug.strip()]
+        self.last_requested_app_slugs = requested
+        requested_set = set(requested)
+        selected = (
+            sorted(self._toolkit_by_provider_slug)
+            if include_all or not requested
+            else [slug for slug in requested if slug in self._toolkit_by_provider_slug]
+        )
+        self.last_skipped_apps = [
+            {"slug": slug, "reason": "not_found"}
+            for slug in requested
+            if slug not in self._toolkit_by_provider_slug
+        ]
+        should_create_auth_configs = create_auth_configs and bool(requested)
+
+        details: dict[str, dict[str, Any]] = {}
+        if include_detail and selected:
+            details = self._fetch_toolkit_details(selected)
+
+        entries: list[ProviderAppEntry] = []
+        for toolkit_slug in selected:
+            toolkit = self._toolkit_by_provider_slug[toolkit_slug]
+            canonical_app_slug = _composio_canonical_app_slug(
+                toolkit_slug,
+                toolkit.get("name"),
+            )
+            detail = details.get(toolkit_slug) or {}
+            auth_modes = _composio_auth_modes(toolkit, detail)
+            auth_config_id = None
+            if should_create_auth_configs and "oauth" in auth_modes:
+                try:
+                    auth_config_id = self.get_or_create_auth_config(toolkit_slug)
+                except Exception as exc:
+                    self.last_skipped_apps.append(
+                        {
+                            "slug": toolkit_slug,
+                            "reason": "auth_config_failed",
+                            "message": str(exc)[:300],
+                        },
+                    )
+                    continue
+                if self.last_auth_config_was_created:
+                    self.last_auth_configs_created += 1
+                elif auth_config_id:
+                    self.last_auth_configs_reused += 1
+            raw_provider_metadata: dict[str, Any] = {
+                "source": "composio_live_sync",
+                "toolkit_slug": toolkit_slug,
+                "toolkit_version": toolkit.get("version"),
+                "managed_auth": True,
+                "raw_toolkit": toolkit,
+            }
+            if detail:
+                raw_provider_metadata["raw_toolkit_detail"] = detail
+            if auth_config_id:
+                raw_provider_metadata["auth_config_id"] = auth_config_id
+            entry: ProviderAppEntry = {
+                "backend_id": "composio",
+                "provider_app_id": toolkit_slug,
+                "canonical_app_slug": canonical_app_slug,
+                "display_name": toolkit.get("name")
+                or canonical_app_slug.replace("_", " ").title(),
+                "description": _composio_description(toolkit, detail),
+                "category": _composio_primary_category(toolkit, detail),
+                "icon_url": _composio_icon_url(toolkit),
+                "auth_modes": auth_modes,
+                "available_scopes": _composio_oauth_scopes(detail),
+                "recommended_scopes": _composio_oauth_scopes(detail),
+                "api_key_schema": _composio_api_key_schema(detail),
+                "tool_count": _composio_tool_count(detail),
+                "raw_provider_metadata": raw_provider_metadata,
+            }
+            entries.append(entry)
+        return entries
+
+    def list_tool_entries(
+        self,
+        *,
+        app_slug: str,
+        provider_app_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[ProviderToolEntry]:
+        """Fetch one toolkit's tools and emit canonical tool entries."""
+
+        provider_slug = str(provider_app_id or app_slug or "").upper()
+        if not provider_slug:
+            return []
+        toolkit = self._toolkit_by_provider_slug.get(provider_slug, {})
+        canonical_app_slug = _composio_canonical_app_slug(
+            provider_slug,
+            toolkit.get("name"),
+        )
+        category_names = _composio_category_names(toolkit, {})
+        category = category_names[0] if category_names else None
+        entries: list[ProviderToolEntry] = []
+        for tool in self.list_tools(toolkit_slug=provider_slug, limit=limit):
+            provider_tool_id = str(tool.get("slug") or tool.get("id") or "")
+            if not provider_tool_id:
+                continue
+            tool_name = _composio_tool_name(provider_tool_id, provider_slug)
+            behavior_hints = _composio_behavior_hints(tool)
+            action_class = action_class_from_behavior_hints(behavior_hints)
+            entries.append(
+                {
+                    "backend_id": "composio",
+                    "provider_app_id": provider_slug,
+                    "canonical_app_slug": canonical_app_slug,
+                    "provider_tool_id": provider_tool_id,
+                    "name": tool_name,
+                    "display_name": tool.get("name")
+                    or tool_name.replace("_", " ").title(),
+                    "description": tool.get("description")
+                    or tool_name.replace("_", " ").title(),
+                    "required_scopes": _composio_tool_scopes(tool),
+                    "input_schema": _composio_tool_input_schema(tool),
+                    "output_schema": _composio_tool_output_schema(tool),
+                    "action_class": action_class,
+                    "behavior_hints": behavior_hints,
+                    "confirmation_required": confirmation_required_for_action_class(
+                        action_class,
+                    ),
+                    "category": category,
+                    "tags": [canonical_app_slug, *category_names],
+                    "raw_provider_metadata": {
+                        "source": "composio_live_sync",
+                        "toolkit_slug": provider_slug,
+                        "tool_version": tool.get("version"),
+                        "raw_tool": tool,
+                    },
+                },
+            )
+        return entries
+
+    def _fetch_toolkit_details(
+        self,
+        provider_slugs: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        details: dict[str, dict[str, Any]] = {}
+        workers = min(self.detail_fetch_concurrency, len(provider_slugs))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_by_slug = {
+                executor.submit(self.get_toolkit, slug): slug for slug in provider_slugs
+            }
+            for future in as_completed(future_by_slug):
+                slug = future_by_slug[future]
+                try:
+                    details[slug] = future.result()
+                except Exception as exc:
+                    logger.warning(
+                        "Composio toolkit detail fetch failed slug=%s error=%s",
+                        slug,
+                        exc,
+                    )
+        return details
 
     def get_or_create_auth_config(self, toolkit_slug: str) -> str | None:
         """Reuse or create a Composio-managed auth config for a toolkit."""
@@ -463,3 +682,268 @@ def _items_from_response(
         if isinstance(batch, list)
         else []
     )
+
+
+# ---------------------------------------------------------------------------
+# Composio wire-format normalizers
+#
+# Everything below maps Composio's toolkit/tool payloads onto Orchestra's
+# canonical, provider-neutral catalog shapes. These functions are private to the
+# Composio adapter; the generic sync layer never imports them.
+# ---------------------------------------------------------------------------
+
+
+def _toolkit_meta(toolkit: dict[str, Any]) -> dict[str, Any]:
+    meta = toolkit.get("meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _composio_canonical_app_slug(
+    provider_app_id: str,
+    display_name: str | None = None,
+) -> str:
+    """Derive the canonical app slug, recovering word boundaries from the name.
+
+    Composio toolkit slugs concatenate multi-word names without separators
+    (``GOOGLEDRIVE``), so slugifying the slug alone cannot recover the boundary.
+    The human display name carries it (``"Google Drive"`` -> ``google_drive``),
+    which generalizes to every app with no per-app curation. Single-word brands
+    are unaffected (``"Ably"`` -> ``ably``). Falls back to the slug when no name
+    is available.
+    """
+
+    if display_name and display_name.strip():
+        slug = slugify(display_name)
+        if slug:
+            return slug
+    return slugify(provider_app_id)
+
+
+def _composio_tool_name(provider_tool_id: str, provider_app_id: str) -> str:
+    normalized_tool = provider_tool_id.strip().upper()
+    normalized_app = provider_app_id.strip().upper()
+    for prefix in (f"{normalized_app}_", f"{normalized_app}."):
+        if normalized_tool.startswith(prefix):
+            return slugify(normalized_tool[len(prefix) :])
+    return slugify(normalized_tool)
+
+
+def _composio_auth_modes(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> list[str]:
+    schemes = (
+        toolkit.get("auth_schemes")
+        or toolkit.get("authSchemes")
+        or toolkit.get("auth")
+        or []
+    )
+    if isinstance(schemes, str):
+        schemes = [schemes]
+    raw_modes = [str(scheme) for scheme in schemes]
+    for entry in _auth_config_details(detail):
+        mode = entry.get("mode")
+        if mode:
+            raw_modes.append(str(mode))
+    modes: list[str] = []
+    for raw in raw_modes:
+        normalized = raw.upper()
+        if "OAUTH" in normalized:
+            mode = "oauth"
+        elif "API" in normalized or "TOKEN" in normalized or "KEY" in normalized:
+            mode = "api_key"
+        elif "NO_AUTH" in normalized:
+            mode = "custom"
+        else:
+            continue
+        if mode not in modes:
+            modes.append(mode)
+    return modes or ["oauth"]
+
+
+def _composio_icon_url(toolkit: dict[str, Any]) -> str | None:
+    meta = _toolkit_meta(toolkit)
+    for value in (
+        toolkit.get("logo"),
+        toolkit.get("icon_url"),
+        toolkit.get("iconUrl"),
+        meta.get("logo"),
+        meta.get("icon_url"),
+        meta.get("iconUrl"),
+    ):
+        if value:
+            return str(value)
+    return None
+
+
+def _composio_description(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> str | None:
+    detail_meta = _toolkit_meta(detail or {})
+    list_meta = _toolkit_meta(toolkit)
+    for value in (
+        detail_meta.get("description"),
+        list_meta.get("description"),
+        toolkit.get("description"),
+        (detail or {}).get("description"),
+    ):
+        if value:
+            return str(value)
+    return None
+
+
+def _composio_category_names(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> list[str]:
+    names: list[str] = []
+    lowered: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text.lower() not in lowered:
+            lowered.add(text.lower())
+            names.append(text)
+
+    for meta in (_toolkit_meta(detail or {}), _toolkit_meta(toolkit)):
+        categories = meta.get("categories")
+        if isinstance(categories, list):
+            for entry in categories:
+                if isinstance(entry, dict):
+                    add(entry.get("name") or entry.get("slug") or entry.get("id"))
+                else:
+                    add(entry)
+    add(toolkit.get("category"))
+    return names
+
+
+def _composio_primary_category(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> str | None:
+    names = _composio_category_names(toolkit, detail)
+    return names[0] if names else None
+
+
+def _composio_tool_count(detail: dict[str, Any] | None) -> int:
+    meta = _toolkit_meta(detail or {})
+    try:
+        return int(meta.get("tools_count") or meta.get("toolsCount") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _auth_config_details(detail: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(detail, dict):
+        return []
+    entries = detail.get("auth_config_details")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _auth_fields(entry: dict[str, Any], section: str) -> list[dict[str, Any]]:
+    fields = entry.get("fields")
+    if not isinstance(fields, dict):
+        return []
+    bucket = fields.get(section)
+    if not isinstance(bucket, dict):
+        return []
+    collected: list[dict[str, Any]] = []
+    for key in ("required", "optional"):
+        items = bucket.get(key)
+        if isinstance(items, list):
+            collected.extend(item for item in items if isinstance(item, dict))
+    return collected
+
+
+def _composio_oauth_scopes(detail: dict[str, Any] | None) -> list[dict[str, Any]]:
+    for entry in _auth_config_details(detail):
+        if "OAUTH" not in str(entry.get("mode") or "").upper():
+            continue
+        for field_def in _auth_fields(entry, "auth_config_creation"):
+            if field_def.get("name") != "scopes":
+                continue
+            default = field_def.get("default")
+            if not isinstance(default, str) or not default.strip():
+                return []
+            return [
+                {"name": scope.strip()} for scope in default.split(",") if scope.strip()
+            ]
+    return []
+
+
+def _composio_api_key_schema(detail: dict[str, Any] | None) -> dict[str, Any] | None:
+    for entry in _auth_config_details(detail):
+        if str(entry.get("mode") or "").upper() != "API_KEY":
+            continue
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for field_def in _auth_fields(entry, "connected_account_initiation"):
+            name = field_def.get("name")
+            if not name:
+                continue
+            properties[str(name)] = {
+                "type": field_def.get("type") or "string",
+                "title": field_def.get("displayName") or field_def.get("name"),
+                "description": field_def.get("description") or "",
+                "secret": bool(field_def.get("is_secret")),
+            }
+            if field_def.get("required"):
+                required.append(str(name))
+        if properties:
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            }
+    return None
+
+
+def _composio_tool_scopes(tool: dict[str, Any]) -> list[str]:
+    scopes = tool.get("scopes") or []
+    if isinstance(scopes, dict):
+        scopes = list(scopes.keys())
+    if not isinstance(scopes, list):
+        return []
+    return [str(scope) for scope in scopes if scope]
+
+
+def _composio_tool_input_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    schema = (
+        tool.get("input_parameters")
+        or tool.get("inputParameters")
+        or tool.get("input_schema")
+        or tool.get("inputSchema")
+        or {}
+    )
+    return schema if isinstance(schema, dict) else {"type": "object"}
+
+
+def _composio_tool_output_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    schema = (
+        tool.get("output_parameters")
+        or tool.get("outputParameters")
+        or tool.get("output_schema")
+        or tool.get("outputSchema")
+        or {}
+    )
+    return schema if isinstance(schema, dict) else {"type": "object"}
+
+
+def _composio_toolkit_slug(tool: dict[str, Any]) -> str | None:
+    toolkit = tool.get("toolkit")
+    if isinstance(toolkit, dict):
+        slug = toolkit.get("slug")
+        if slug:
+            return str(slug)
+    return None
+
+
+def _composio_behavior_hints(tool: dict[str, Any]) -> list[str]:
+    return normalized_behavior_hints(tags=provider_tags(tool.get("tags")))
+
+
+def _composio_action_class(tool: dict[str, Any]) -> str:
+    return action_class_from_behavior_hints(_composio_behavior_hints(tool))

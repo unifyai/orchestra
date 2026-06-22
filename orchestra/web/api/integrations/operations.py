@@ -37,6 +37,40 @@ from orchestra.integrations.providers import (
     ProviderExecutionRequest,
     get_provider_adapter,
 )
+
+# Composio wire-format normalizers live in the Composio adapter (single source of
+# truth). They are re-exported here under their historical names so the legacy
+# catalog-sync handler and existing tests keep importing them from this module.
+from orchestra.integrations.providers.composio import (  # noqa: F401
+    _composio_action_class,
+    _composio_auth_modes,
+    _composio_behavior_hints,
+    _composio_canonical_app_slug,
+    _composio_icon_url,
+    _composio_tool_input_schema,
+    _composio_tool_name,
+    _composio_tool_output_schema,
+    _composio_tool_scopes,
+    _composio_toolkit_slug,
+)
+
+# Pipedream wire-format normalizers live in the Pipedream adapter; re-exported
+# here under their historical names for the legacy catalog-sync handler and tests.
+from orchestra.integrations.providers.pipedream import (  # noqa: F401
+    _pipedream_action_class,
+    _pipedream_app_slug,
+    _pipedream_behavior_hints,
+    _pipedream_category,
+    _pipedream_input_schema,
+    _pipedream_tool_name,
+)
+
+# Provider-neutral conventions live in providers/utils; aliased to the historical
+# underscore names still referenced by the legacy catalog-sync handlers below.
+from orchestra.integrations.providers.utils.normalization import (
+    action_class_from_behavior_hints as _action_class_from_behavior_hints,
+)
+from orchestra.integrations.providers.utils.normalization import slugify as _slugify
 from orchestra.web.api.integrations.schema import (
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
@@ -135,286 +169,8 @@ def seed_default_provider_catalog(session: Session) -> None:
     session.commit()
 
 
-def _slugify(value: str) -> str:
-    normalized = "".join(
-        char.lower() if char.isalnum() else "_" for char in value.strip()
-    )
-    return "_".join(part for part in normalized.split("_") if part)
-
-
-_COMPOSIO_APP_SLUG_OVERRIDES = {
-    "GOOGLEDRIVE": "google_drive",
-    "GOOGLECALENDAR": "google_calendar",
-    "GOOGLEDOCS": "google_docs",
-}
-
-
-def _composio_canonical_app_slug(provider_app_id: str) -> str:
-    normalized = provider_app_id.strip().upper()
-    return _COMPOSIO_APP_SLUG_OVERRIDES.get(normalized, _slugify(normalized))
-
-
-def _composio_tool_name(provider_tool_id: str, provider_app_id: str) -> str:
-    normalized_tool = provider_tool_id.strip().upper()
-    normalized_app = provider_app_id.strip().upper()
-    for prefix in (f"{normalized_app}_", f"{normalized_app}."):
-        if normalized_tool.startswith(prefix):
-            return _slugify(normalized_tool[len(prefix) :])
-    return _slugify(normalized_tool)
-
-
-def _composio_auth_modes(toolkit: dict[str, Any]) -> list[str]:
-    schemes = (
-        toolkit.get("auth_schemes")
-        or toolkit.get("authSchemes")
-        or toolkit.get("auth")
-        or []
-    )
-    if isinstance(schemes, str):
-        schemes = [schemes]
-    modes: list[str] = []
-    for scheme in schemes:
-        normalized = str(scheme).upper()
-        if "OAUTH" in normalized:
-            modes.append("oauth")
-        elif "API" in normalized or "TOKEN" in normalized or "KEY" in normalized:
-            modes.append("api_key")
-        elif "NO_AUTH" in normalized:
-            modes.append("custom")
-    return modes or ["oauth"]
-
-
-def _composio_icon_url(toolkit: dict[str, Any]) -> str | None:
-    meta = toolkit.get("meta") if isinstance(toolkit.get("meta"), dict) else {}
-    for value in (
-        toolkit.get("logo"),
-        toolkit.get("icon_url"),
-        toolkit.get("iconUrl"),
-        meta.get("logo"),
-        meta.get("icon_url"),
-        meta.get("iconUrl"),
-    ):
-        if value:
-            return str(value)
-    return None
-
-
-def _composio_toolkit_slug(tool: dict[str, Any]) -> str | None:
-    toolkit = tool.get("toolkit")
-    if isinstance(toolkit, dict):
-        slug = toolkit.get("slug")
-        if slug:
-            return str(slug)
-    return None
-
-
-def _composio_tool_scopes(tool: dict[str, Any]) -> list[str]:
-    scopes = tool.get("scopes") or []
-    if isinstance(scopes, dict):
-        scopes = list(scopes.keys())
-    if not isinstance(scopes, list):
-        return []
-    return [str(scope) for scope in scopes if scope]
-
-
 def _normalize_account_label(value: Optional[str]) -> Optional[str]:
     return (value or "").strip() or None
-
-
-def _provider_tags(value: Any) -> set[str]:
-    if isinstance(value, list):
-        return {str(tag) for tag in value if tag}
-    if isinstance(value, dict):
-        return {str(tag) for tag, enabled in value.items() if enabled}
-    return set()
-
-
-ORCHESTRA_BEHAVIOR_HINT_ORDER = (
-    "read_only",
-    "mutates_state",
-    "destructive",
-    "sensitive_data",
-    "bulk_data",
-    "idempotent",
-    "external",
-    "creates_resource",
-    "updates_resource",
-    "unknown_effects",
-)
-
-
-def _normalized_behavior_hints(
-    *,
-    tags: set[str],
-    annotations: dict[str, Any] | None = None,
-) -> list[str]:
-    annotations = annotations or {}
-    destructive = (
-        "destructiveHint" in tags or annotations.get("destructiveHint") is True
-    )
-    creates = "createHint" in tags or annotations.get("createHint") is True
-    updates = "updateHint" in tags or annotations.get("updateHint") is True
-    read_only = "readOnlyHint" in tags or annotations.get("readOnlyHint") is True
-    mutates = (
-        destructive or creates or updates or annotations.get("readOnlyHint") is False
-    )
-
-    hints: set[str] = set()
-    if read_only and not mutates:
-        hints.add("read_only")
-    if mutates:
-        hints.add("mutates_state")
-    if destructive:
-        hints.add("destructive")
-    if "idempotentHint" in tags or annotations.get("idempotentHint") is True:
-        hints.add("idempotent")
-    if "openWorldHint" in tags or annotations.get("openWorldHint") is True:
-        hints.add("external")
-    if creates:
-        hints.add("creates_resource")
-    if updates:
-        hints.add("updates_resource")
-    if not hints:
-        hints.add("unknown_effects")
-    return [hint for hint in ORCHESTRA_BEHAVIOR_HINT_ORDER if hint in hints]
-
-
-def _normalize_behavior_hints(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    allowed = set(ORCHESTRA_BEHAVIOR_HINT_ORDER)
-    normalized = [str(hint) for hint in value if str(hint) in allowed]
-    seen: set[str] = set()
-    return [hint for hint in normalized if not (hint in seen or seen.add(hint))]
-
-
-def _action_class_from_behavior_hints(behavior_hints: list[str]) -> str:
-    hints = set(behavior_hints)
-    if "destructive" in hints:
-        return "destructive"
-    if "bulk_data" in hints:
-        return "bulk_export"
-    if "sensitive_data" in hints and "read_only" in hints:
-        return "sensitive_read"
-    if (
-        "mutates_state" in hints
-        or "creates_resource" in hints
-        or "updates_resource" in hints
-    ):
-        return "write"
-    if "read_only" in hints:
-        return "read"
-    return "write"
-
-
-def _behavior_hints_from_action_class(action_class: str | None) -> list[str]:
-    if action_class == "read":
-        return ["read_only"]
-    if action_class == "sensitive_read":
-        return ["read_only", "sensitive_data"]
-    if action_class == "bulk_export":
-        return ["read_only", "bulk_data"]
-    if action_class == "destructive":
-        return ["mutates_state", "destructive"]
-    if action_class == "write":
-        return ["mutates_state"]
-    return ["unknown_effects"]
-
-
-def _action_class_from_hints(
-    *,
-    tags: set[str],
-    annotations: dict[str, Any] | None = None,
-) -> str:
-    return _action_class_from_behavior_hints(
-        _normalized_behavior_hints(tags=tags, annotations=annotations),
-    )
-
-
-def _composio_behavior_hints(tool: dict[str, Any]) -> list[str]:
-    return _normalized_behavior_hints(tags=_provider_tags(tool.get("tags")))
-
-
-def _composio_action_class(tool: dict[str, Any]) -> str:
-    return _action_class_from_behavior_hints(_composio_behavior_hints(tool))
-
-
-def _pipedream_behavior_hints(component: dict[str, Any]) -> list[str]:
-    annotations = component.get("annotations")
-    return _normalized_behavior_hints(
-        tags=set(),
-        annotations=annotations if isinstance(annotations, dict) else None,
-    )
-
-
-def _pipedream_action_class(component: dict[str, Any]) -> str:
-    return _action_class_from_behavior_hints(_pipedream_behavior_hints(component))
-
-
-def _pipedream_app_slug(app: dict[str, Any]) -> str:
-    value = (
-        app.get("name_slug")
-        or app.get("slug")
-        or app.get("id")
-        or app.get("name")
-        or ""
-    )
-    return _slugify(str(value))
-
-
-def _pipedream_tool_name(provider_tool_id: str, canonical_app_slug: str) -> str:
-    normalized_tool = provider_tool_id.strip()
-    for prefix in (
-        f"{canonical_app_slug}-",
-        f"{canonical_app_slug}_",
-        f"{canonical_app_slug}.",
-    ):
-        if normalized_tool.startswith(prefix):
-            return _slugify(normalized_tool[len(prefix) :])
-    return _slugify(normalized_tool)
-
-
-def _pipedream_category(app: dict[str, Any]) -> str | None:
-    category = app.get("category")
-    if isinstance(category, dict):
-        return category.get("name") or category.get("slug")
-    categories = app.get("categories")
-    if isinstance(categories, list) and categories:
-        first = categories[0]
-        if isinstance(first, dict):
-            return first.get("name") or first.get("slug")
-        return str(first)
-    return str(category) if category else None
-
-
-def _pipedream_input_schema(component: dict[str, Any]) -> dict[str, Any]:
-    props = component.get("props")
-    if isinstance(props, dict):
-        return {"type": "object", "properties": props}
-    schema = component.get("input_schema") or component.get("inputSchema") or {}
-    return schema if isinstance(schema, dict) else {"type": "object"}
-
-
-def _composio_tool_input_schema(tool: dict[str, Any]) -> dict[str, Any]:
-    schema = (
-        tool.get("input_parameters")
-        or tool.get("inputParameters")
-        or tool.get("input_schema")
-        or tool.get("inputSchema")
-        or {}
-    )
-    return schema if isinstance(schema, dict) else {"type": "object"}
-
-
-def _composio_tool_output_schema(tool: dict[str, Any]) -> dict[str, Any]:
-    schema = (
-        tool.get("output_parameters")
-        or tool.get("outputParameters")
-        or tool.get("output_schema")
-        or tool.get("outputSchema")
-        or {}
-    )
-    return schema if isinstance(schema, dict) else {"type": "object"}
 
 
 def _confirmation_secret() -> bytes:
@@ -600,7 +356,10 @@ def _composio_live_catalog_handler(
 
     for index, toolkit_slug in enumerate(selected_toolkit_slugs, start=1):
         toolkit = toolkits_by_slug[toolkit_slug]
-        canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
+        canonical_app_slug = _composio_canonical_app_slug(
+            toolkit_slug,
+            toolkit.get("name"),
+        )
         auth_config_id = None
         if should_create_auth_configs and "oauth" in _composio_auth_modes(toolkit):
             try:
@@ -691,7 +450,10 @@ def _composio_live_catalog_handler(
 
         for toolkit_slug in syncable_toolkit_slugs:
             toolkit = toolkits_by_slug[toolkit_slug]
-            canonical_app_slug = _composio_canonical_app_slug(toolkit_slug)
+            canonical_app_slug = _composio_canonical_app_slug(
+                toolkit_slug,
+                toolkit.get("name"),
+            )
             for tool in raw_tools_by_toolkit.get(toolkit_slug, []):
                 provider_tool_id = str(tool.get("slug") or tool.get("id") or "")
                 if not provider_tool_id:
@@ -767,7 +529,8 @@ def _composio_live_catalog_handler(
         apps=apps,
         tools=tools,
         app_slugs=[
-            _composio_canonical_app_slug(slug) for slug in selected_toolkit_slugs
+            _composio_canonical_app_slug(slug, toolkits_by_slug[slug].get("name"))
+            for slug in selected_toolkit_slugs
         ],
         prune_unlisted_apps=_catalog_prune_requested(body),
     )

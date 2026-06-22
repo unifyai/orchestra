@@ -1,0 +1,412 @@
+"""Canonical Coordinator onboarding graph — single source of truth.
+
+This module owns the *structure* of Coordinator onboarding: the ordered
+set of steps, how they depend on one another, which channel each belongs
+to, whether the user can defer it, and the ready-to-use copy the
+Coordinator should say to nudge the user toward each one.
+
+It deliberately consolidates what used to be scattered across three
+places:
+  - Console's ``ONBOARDING_CHECKLIST`` (titles, phases, ``depends_on``).
+  - Droid's ``_VOICE_ONBOARDING_STEP_SUGGESTIONS`` /
+    ``_VOICE_ONBOARDING_TRIGGER_REPLY_STEPS`` (spoken nudge copy + the
+    trigger→reply pairing).
+  - The linear ``DERIVABLE_ONBOARDING_STEPS`` tuple in
+    ``coordinator_service`` (which steps are server-derivable).
+
+Both Droid brains and the Console checklist consume a rendering computed
+from this graph (see ``coordinator_service.compute_onboarding_render``)
+so nothing downstream has to re-derive "what's done / what's next".
+
+Dependency levels mirror the original Console semantics:
+  - ``ADDRESSED`` (0): the dependency unlocks this step once it is
+    *resolved* — completed OR skipped/deferred.
+  - ``COMPLETED`` (1): the dependency must be genuinely completed; a
+    skip does not unlock the dependent (such a dependency must not be
+    skippable, asserted below).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+ADDRESSED = 0
+COMPLETED = 1
+
+
+@dataclass(frozen=True)
+class OnboardingStep:
+    """One node in the onboarding graph.
+
+    ``derivable`` marks steps whose completion Orchestra reads from
+    durable domain state (``derive_onboarding_progress``). Non-derivable
+    steps are the reference-quiz *trigger* rows, whose completion is
+    inferred from their paired reply step (see ``paired_reply``).
+    """
+
+    id: str
+    title: str
+    phase: str
+    kind: str
+    depends_on: dict[str, int]
+    can_skip: bool
+    derivable: bool
+    channel: str | None = None
+    paired_reply: str | None = None
+    nudge_chat: str = ""
+    nudge_voice: str = ""
+
+
+# Phase labels, in display order.
+PHASE_QUIZ = "Quiz"
+PHASE_CONNECT = "Connect"
+PHASE_DELEGATE = "Delegate"
+
+
+def _trigger(
+    step_id: str,
+    title: str,
+    *,
+    depends_on: dict[str, int],
+    channel: str,
+    paired_reply: str,
+    nudge_chat: str,
+    nudge_voice: str,
+) -> OnboardingStep:
+    return OnboardingStep(
+        id=step_id,
+        title=title,
+        phase=PHASE_QUIZ,
+        kind="trigger",
+        depends_on=depends_on,
+        can_skip=False,
+        derivable=False,
+        channel=channel,
+        paired_reply=paired_reply,
+        nudge_chat=nudge_chat,
+        nudge_voice=nudge_voice,
+    )
+
+
+# Ordered graph. Order is the default display / tie-break order; the real
+# gating comes from ``depends_on``.
+ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
+    _trigger(
+        "email-reference",
+        "Email the first reference",
+        depends_on={},
+        channel="email",
+        paired_reply="email-reply",
+        nudge_chat="Invite them to click \u201cEmail the first reference\u201d to get their first clue by email.",
+        nudge_voice="clicking Email the first reference",
+    ),
+    OnboardingStep(
+        id="email-reply",
+        title="Reply to email",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"email-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="email",
+        nudge_chat="Prompt them to reply with their guess to the email clue you sent.",
+        nudge_voice="replying with their guess for the email clue",
+    ),
+    OnboardingStep(
+        id="whatsapp-number",
+        title="Add your WhatsApp number",
+        phase=PHASE_QUIZ,
+        kind="setup",
+        depends_on={"email-reply": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="whatsapp",
+        nudge_chat="Guide them to add their WhatsApp number in Account \u2192 Contact info.",
+        nudge_voice="adding their WhatsApp number",
+    ),
+    _trigger(
+        "whatsapp-message-reference",
+        "WhatsApp the next reference",
+        depends_on={"whatsapp-number": ADDRESSED},
+        channel="whatsapp",
+        paired_reply="whatsapp-message",
+        nudge_chat="Invite them to click \u201cWhatsApp the next reference\u201d to get a clue over WhatsApp.",
+        nudge_voice="clicking WhatsApp the next reference",
+    ),
+    OnboardingStep(
+        id="whatsapp-message",
+        title="Guess a WhatsApp clue",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"whatsapp-message-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="whatsapp",
+        nudge_chat="Prompt them to reply with their guess to the WhatsApp clue you sent.",
+        nudge_voice="guessing the WhatsApp clue",
+    ),
+    _trigger(
+        "whatsapp-call-reference",
+        "WhatsApp call for the next reference",
+        depends_on={"whatsapp-message": ADDRESSED},
+        channel="whatsapp",
+        paired_reply="whatsapp-call",
+        nudge_chat="Invite them to click \u201cWhatsApp call for the next reference\u201d to get a clue over a WhatsApp call.",
+        nudge_voice="clicking WhatsApp call for the next reference",
+    ),
+    OnboardingStep(
+        id="whatsapp-call",
+        title="Guess a WhatsApp call clue",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"whatsapp-call-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="whatsapp",
+        nudge_chat="On the WhatsApp call, give the clue and let them guess.",
+        nudge_voice="guessing the WhatsApp voice clue",
+    ),
+    OnboardingStep(
+        id="phone-number",
+        title="Add your phone number",
+        phase=PHASE_QUIZ,
+        kind="setup",
+        depends_on={"whatsapp-call": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="phone",
+        nudge_chat="Guide them to add their phone number in Account \u2192 Contact info.",
+        nudge_voice="adding their phone number",
+    ),
+    _trigger(
+        "sms-reference",
+        "Text the next reference",
+        depends_on={"phone-number": ADDRESSED},
+        channel="sms",
+        paired_reply="sms-message",
+        nudge_chat="Invite them to click \u201cText the next reference\u201d to get a clue over SMS.",
+        nudge_voice="clicking Text the next reference",
+    ),
+    OnboardingStep(
+        id="sms-message",
+        title="Guess an SMS clue",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"sms-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="sms",
+        nudge_chat="Prompt them to reply with their guess to the SMS clue you sent.",
+        nudge_voice="guessing the SMS clue",
+    ),
+    _trigger(
+        "phone-call-reference",
+        "Call for the next reference",
+        depends_on={"sms-message": ADDRESSED},
+        channel="phone",
+        paired_reply="phone-call",
+        nudge_chat="Invite them to click \u201cCall for the next reference\u201d to get a clue over a phone call.",
+        nudge_voice="clicking Call for the next reference",
+    ),
+    OnboardingStep(
+        id="phone-call",
+        title="Guess a phone call clue",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"phone-call-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="phone",
+        nudge_chat="On the phone call, give the clue and let them guess.",
+        nudge_voice="guessing the phone-call clue",
+    ),
+    OnboardingStep(
+        id="slack-connect",
+        title="Connect Slack",
+        phase=PHASE_QUIZ,
+        kind="connect",
+        depends_on={"phone-call": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="slack",
+        nudge_chat="Guide them to connect Slack through the Unify Slack app.",
+        nudge_voice="connecting Slack through the Unify Slack app",
+    ),
+    _trigger(
+        "slack-reference",
+        "Send the next reference via Slack",
+        depends_on={"slack-connect": ADDRESSED},
+        channel="slack",
+        paired_reply="slack-message",
+        nudge_chat="Invite them to click \u201cSend the next reference via Slack\u201d to get a clue in Slack.",
+        nudge_voice="clicking Send the next reference via Slack",
+    ),
+    OnboardingStep(
+        id="slack-message",
+        title="Guess a Slack clue",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"slack-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="slack",
+        nudge_chat="Prompt them to reply with their guess to the Slack clue you sent.",
+        nudge_voice="guessing the Slack clue",
+    ),
+    OnboardingStep(
+        id="discord-connect",
+        title="Connect Discord",
+        phase=PHASE_QUIZ,
+        kind="connect",
+        depends_on={"slack-message": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="discord",
+        nudge_chat="Guide them to add their Discord ID and install the public Discord bot.",
+        nudge_voice="connecting Discord through the public bot",
+    ),
+    _trigger(
+        "discord-reference",
+        "Send the next reference via discord",
+        depends_on={"discord-connect": ADDRESSED},
+        channel="discord",
+        paired_reply="discord-message",
+        nudge_chat="Invite them to click \u201cSend the next reference via Discord\u201d to get a clue in Discord.",
+        nudge_voice="clicking Send the next reference via discord",
+    ),
+    OnboardingStep(
+        id="discord-message",
+        title="Guess a Discord clue",
+        phase=PHASE_QUIZ,
+        kind="reply",
+        depends_on={"discord-reference": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        channel="discord",
+        nudge_chat="Prompt them to reply with their guess to the Discord clue you sent.",
+        nudge_voice="guessing the Discord clue",
+    ),
+    OnboardingStep(
+        id="workspace",
+        title="Give me access to your workspace",
+        phase=PHASE_CONNECT,
+        kind="connect",
+        depends_on={"discord-message": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        nudge_chat="Point them at \u201cGive me access to your workspace\u201d and have them connect Google or Microsoft.",
+        nudge_voice="connecting their workspace (Google or Microsoft)",
+    ),
+    OnboardingStep(
+        id="apps",
+        title="Connect me with your apps",
+        phase=PHASE_CONNECT,
+        kind="connect",
+        depends_on={"workspace": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        nudge_chat="Have them open Integrations and connect at least one app (Slack, Gmail, Notion, \u2026).",
+        nudge_voice="connecting one of their apps (Slack, Gmail, Notion, \u2026) from the Integrations panel",
+    ),
+    OnboardingStep(
+        id="act",
+        title="Ask me to do something now",
+        phase=PHASE_DELEGATE,
+        kind="act",
+        depends_on={"apps": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        nudge_chat="Invite them to hand off a one-off job right now (e.g. \u201csummarize my unread emails\u201d) and watch it run in Actions.",
+        nudge_voice="handing me a one-off job right now so they can watch it run live",
+    ),
+    OnboardingStep(
+        id="schedule",
+        title="Schedule a task for later",
+        phase=PHASE_DELEGATE,
+        kind="schedule",
+        depends_on={"act": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        nudge_chat="Invite them to set up a recurring or event-triggered task for later.",
+        nudge_voice="scheduling a recurring or event-triggered task for later",
+    ),
+)
+
+
+STEP_BY_ID: dict[str, OnboardingStep] = {step.id: step for step in ONBOARDING_GRAPH}
+
+# Trigger row id → its paired reply step id. Built from the graph so the
+# pairing can't drift from the step definitions.
+TRIGGER_TO_REPLY: dict[str, str] = {
+    step.id: step.paired_reply
+    for step in ONBOARDING_GRAPH
+    if step.kind == "trigger" and step.paired_reply
+}
+
+# Steps whose completion Orchestra derives from durable domain state.
+DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
+    step.id for step in ONBOARDING_GRAPH if step.derivable
+)
+
+
+def dependencies_satisfied(
+    depends_on: dict[str, int],
+    completed: set[str],
+    skipped: set[str],
+) -> bool:
+    """Whether every gate on a step is open at its declared level.
+
+    ``COMPLETED`` (1) needs the dependency in ``completed``; ``ADDRESSED``
+    (0) also accepts a ``skipped`` dependency. An empty map is always
+    satisfied.
+    """
+    for dep_id, level in depends_on.items():
+        if level == COMPLETED:
+            if dep_id not in completed:
+                return False
+        elif dep_id not in completed and dep_id not in skipped:
+            return False
+    return True
+
+
+def _assert_graph_integrity() -> None:
+    """Fail loudly on a malformed hand-authored graph.
+
+    Catches the three ways the graph can rot: a dependency id that does
+    not exist, a dependency cycle, and a ``COMPLETED`` edge pointing at a
+    skippable step (which a skip could strand forever). Runs once at
+    import so a mistake surfaces immediately rather than as a confusing
+    empty/locked checklist at runtime.
+    """
+    for step in ONBOARDING_GRAPH:
+        for dep_id, level in step.depends_on.items():
+            dep = STEP_BY_ID.get(dep_id)
+            if dep is None:
+                raise ValueError(
+                    f"Onboarding graph: '{step.id}' depends on unknown step '{dep_id}'.",
+                )
+            if level == COMPLETED and dep.can_skip:
+                raise ValueError(
+                    f"Onboarding graph: '{step.id}' requires '{dep_id}' completed, "
+                    f"but '{dep_id}' is skippable.",
+                )
+
+    visiting, done = 1, 2
+    state: dict[str, int] = {}
+
+    def visit(step_id: str) -> None:
+        current = state.get(step_id)
+        if current == done:
+            return
+        if current == visiting:
+            raise ValueError(f"Onboarding graph: dependency cycle through '{step_id}'.")
+        state[step_id] = visiting
+        for dep_id in STEP_BY_ID[step_id].depends_on:
+            visit(dep_id)
+        state[step_id] = done
+
+    for step in ONBOARDING_GRAPH:
+        visit(step.id)
+
+
+_assert_graph_integrity()

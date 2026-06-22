@@ -328,6 +328,7 @@ class BuiltinsIntegrationSyncRequest(BaseModel):
     request_uri: Optional[str] = None
     batch_size: int = Field(25, ge=1, le=500)
     workers: int = Field(4, ge=1, le=64)
+    force: bool = False
 
 
 class BuiltinsIntegrationSyncResponse(BaseModel):

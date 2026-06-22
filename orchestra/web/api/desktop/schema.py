@@ -87,3 +87,15 @@ class DesktopLinkRead(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class DesktopPubkeyRead(BaseModel):
+    public_key: str = Field(
+        ...,
+        description="OpenSSH public key to install in the device's authorized_keys",
+    )
+
+
+class SftpTunnelUpdate(BaseModel):
+    host: str = Field(..., description="Public SFTP tunnel host (e.g. tunnel.unify.ai)")
+    port: int = Field(..., description="Public SFTP tunnel port for this device")

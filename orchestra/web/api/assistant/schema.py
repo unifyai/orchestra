@@ -293,6 +293,14 @@ class AssistantUserDesktopLink(BaseModel):
     url: str = Field(..., description="Public tunnel URL of the linked desktop")
     os: str = Field(..., description="Operating system of the linked desktop")
     filesys_sync: bool = Field(..., description="Whether filesystem sync is enabled")
+    sftp_tunnel_host: Optional[str] = Field(
+        None,
+        description="Host for on-demand SFTP access to the user's home",
+    )
+    sftp_tunnel_port: Optional[int] = Field(
+        None,
+        description="Port for on-demand SFTP access to the user's home",
+    )
 
 
 class AssistantRead(AssistantCreate):
@@ -329,6 +337,15 @@ class AssistantRead(AssistantCreate):
         description=(
             "All per-user desktops linked to this assistant (admin/runtime only). "
             "Maps each user to their own machine for an assistant several users share."
+        ),
+    )
+    # Admin/runtime only; deliberately NOT part of user_desktops so the private
+    # keys never reach the assistant pod env.
+    user_desktop_filesync_keys: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-user private SSH keys (keyed by owner_user_id) for on-demand "
+            "user-home access. Populated only in admin/runtime responses."
         ),
     )
     user_desktop_mode: Optional[str] = Field(
@@ -661,6 +678,13 @@ class CoordinatorStateUpdate(BaseModel):
     picker (started the call or chose chat) so the ringing picker and
     auto-playing intro never re-appear on a later page load. It is
     one-way sticky: once ``True`` it cannot be reset to ``False``.
+
+    ``onboarding_deferred`` is the global "do onboarding later" switch.
+    Setting it ``True`` suppresses every onboarding narration/opener
+    event and the server-side step derivation exactly as if onboarding
+    were complete, without touching ``mode`` or any per-step state, so
+    the user can start using the platform first. It is freely
+    reversible: setting it back to ``False`` resumes the flow untouched.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -671,6 +695,45 @@ class CoordinatorStateUpdate(BaseModel):
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_step: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
+    onboarding_deferred: Optional[bool] = Field(None)
+
+
+class OnboardingStepStatus(BaseModel):
+    """One onboarding step with its resolved status.
+
+    ``status`` is one of ``done`` / ``skipped`` / ``available`` /
+    ``locked`` — computed server-side from the canonical graph so
+    consumers never re-derive it.
+    """
+
+    id: str
+    title: str
+    phase: str
+    status: str
+    can_skip: bool = False
+
+
+class OnboardingNextTarget(BaseModel):
+    """A step the Coordinator may nudge toward right now.
+
+    Carries ready-to-use copy so neither brain has to phrase the nudge
+    itself. ``channel`` is set for quiz steps (email/whatsapp/sms/phone/
+    slack/discord) and ``None`` for workspace/apps/act/schedule.
+    """
+
+    id: str
+    title: str
+    nudge_chat: str
+    nudge_voice: str
+    channel: Optional[str] = None
+
+
+class OnboardingRender(BaseModel):
+    """Precomputed onboarding picture shared by both brains and Console."""
+
+    active_step_id: Optional[str] = None
+    steps: List[OnboardingStepStatus] = Field(default_factory=list)
+    next_targets: List[OnboardingNextTarget] = Field(default_factory=list)
 
 
 class CoordinatorStateResponse(BaseModel):
@@ -692,6 +755,11 @@ class CoordinatorStateResponse(BaseModel):
     completed_step_ids: List[str] = Field(default_factory=list)
     skipped_step_ids: List[str] = Field(default_factory=list)
     intro_watched: bool = False
+    onboarding_deferred: bool = False
+    # Precomputed depends_on-aware rendering (steps + statuses + valid
+    # next targets with nudge copy). Present only while actively
+    # onboarding; ``None`` once complete, working, or deferred.
+    onboarding: Optional[OnboardingRender] = None
 
 
 class DemoAssistantCreate(BaseModel):

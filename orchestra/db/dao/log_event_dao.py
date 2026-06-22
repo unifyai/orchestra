@@ -433,6 +433,7 @@ class LogEventDAO:
                     UPDATE log_event
                     SET data = (data - :old_key) || jsonb_build_object(:new_key, data->:old_key)
                     WHERE id = ANY(:log_event_ids)
+                    AND project_id = :project_id
                     AND data ? :old_key
                     """,
                 ),
@@ -440,6 +441,7 @@ class LogEventDAO:
                     "old_key": old_field_name,
                     "new_key": new_field_name,
                     "log_event_ids": log_event_ids,
+                    "project_id": project_id,
                 },
             )
 
@@ -1056,9 +1058,16 @@ class LogEventDAO:
         updates: List[Dict[str, Any]],
         overwrite: bool = False,
         field_types: Optional[Dict] = None,
+        scope_project_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Update multiple LogEvent.data JSONB fields with partial success support.
+
+        ``scope_project_id`` (the owning project, known at the project-scoped call
+        sites) is an optional partition-pruning filter on the heavy ``log_event``
+        table: the target ids all belong to that project, so it does not change
+        which rows match, but it lets Postgres prune to the project's partition
+        and use the (project_id, id) index instead of scanning every partition.
         """
         import json
 
@@ -1078,12 +1087,14 @@ class LogEventDAO:
             return update_result
 
         all_log_ids = list(updates_by_log_id.keys())
-        log_events = (
-            self.session.query(LogEvent)
-            .filter(LogEvent.id.in_(all_log_ids))
-            .with_for_update()
-            .all()
+        log_event_query = self.session.query(LogEvent).filter(
+            LogEvent.id.in_(all_log_ids),
         )
+        if scope_project_id is not None:
+            log_event_query = log_event_query.filter(
+                LogEvent.project_id == scope_project_id,
+            )
+        log_events = log_event_query.with_for_update().all()
 
         log_event_map = {le.id: le for le in log_events}
 
@@ -1333,26 +1344,27 @@ class LogEventDAO:
             ids_array = [log_id for log_id, _ in batch_updates]
             data_array = [json_str for _, json_str in batch_updates]
 
+            pid_clause = (
+                " AND log_event.project_id = :project_id"
+                if scope_project_id is not None
+                else ""
+            )
             update_sql = text(
-                """
+                f"""
                 UPDATE log_event
-                SET data = COALESCE(log_event.data, '{}'::jsonb) || update_data.data::jsonb,
+                SET data = COALESCE(log_event.data, '{{}}'::jsonb) || update_data.data::jsonb,
                     updated_at = :now
                 FROM (
                     SELECT unnest(:ids) AS id,
                            unnest(:data) AS data
                 ) AS update_data
-                WHERE log_event.id = update_data.id
+                WHERE log_event.id = update_data.id{pid_clause}
                 """,
             )
-            self.session.execute(
-                update_sql,
-                {
-                    "now": now,
-                    "ids": ids_array,
-                    "data": data_array,
-                },
-            )
+            params = {"now": now, "ids": ids_array, "data": data_array}
+            if scope_project_id is not None:
+                params["project_id"] = scope_project_id
+            self.session.execute(update_sql, params)
 
         self.session.commit()
         return update_result
@@ -1362,9 +1374,15 @@ class LogEventDAO:
         patches: List[Dict[str, Any]],
         overwrite: bool = False,
         field_types: Optional[Dict[str, Any]] = None,
+        scope_project_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Apply JSONB patches to nested paths within LogEvent.data.
+
+        ``scope_project_id`` (the owning project) is an optional partition-pruning
+        filter on ``log_event`` -- the target ids all belong to it, so the matched
+        set is unchanged, but Postgres can prune to the project's partition and use
+        the (project_id, id) index instead of scanning every partition.
         """
         result = {
             "successful_update_ids": [],
@@ -1388,12 +1406,14 @@ class LogEventDAO:
                 grouped.setdefault((le_id, base_key), []).append(patch)
 
             all_log_ids = list(set(le_id for (le_id, _) in grouped.keys()))
-            log_events = (
-                self.session.query(LogEvent)
-                .filter(LogEvent.id.in_(all_log_ids))
-                .with_for_update()
-                .all()
+            patch_query = self.session.query(LogEvent).filter(
+                LogEvent.id.in_(all_log_ids),
             )
+            if scope_project_id is not None:
+                patch_query = patch_query.filter(
+                    LogEvent.project_id == scope_project_id,
+                )
+            log_events = patch_query.with_for_update().all()
 
             log_event_map = {le.id: le for le in log_events}
 
@@ -1518,30 +1538,35 @@ class LogEventDAO:
                     new_key_order = extract_key_order(update_data)
                     key_order_array.append(json.dumps(new_key_order))
 
+                pid_clause = (
+                    " AND log_event.project_id = :project_id"
+                    if scope_project_id is not None
+                    else ""
+                )
                 update_sql = text(
-                    """
+                    f"""
                     UPDATE log_event
-                    SET data = COALESCE(log_event.data, '{}'::jsonb) || update_data.data::jsonb,
-                        key_order = COALESCE(log_event.key_order, '{}'::jsonb) || update_data.key_order::jsonb,
+                    SET data = COALESCE(log_event.data, '{{}}'::jsonb) || update_data.data::jsonb,
+                        key_order = COALESCE(log_event.key_order, '{{}}'::jsonb) || update_data.key_order::jsonb,
                         updated_at = :now
                     FROM (
                         SELECT unnest(:ids) AS id,
                                unnest(:data) AS data,
                                unnest(:key_orders) AS key_order
                     ) AS update_data
-                    WHERE log_event.id = update_data.id
+                    WHERE log_event.id = update_data.id{pid_clause}
                     """,
                 )
 
-                self.session.execute(
-                    update_sql,
-                    {
-                        "now": now,
-                        "ids": ids_array,
-                        "data": data_array,
-                        "key_orders": key_order_array,
-                    },
-                )
+                params = {
+                    "now": now,
+                    "ids": ids_array,
+                    "data": data_array,
+                    "key_orders": key_order_array,
+                }
+                if scope_project_id is not None:
+                    params["project_id"] = scope_project_id
+                self.session.execute(update_sql, params)
 
             self.session.commit()
 
@@ -1603,6 +1628,7 @@ class LogEventDAO:
                 self.session.execute(
                     update(Embedding)
                     .where(
+                        Embedding.project_id == template.project_id,
                         Embedding.ref_id.in_(log_ids),
                         Embedding.key == template.key,
                         Embedding.is_deleted == False,  # noqa: E712
@@ -1613,7 +1639,10 @@ class LogEventDAO:
 
             log_ids_subq = (
                 select(LogEvent.id.label("id"))
-                .where(LogEvent.id.in_(log_ids))
+                .where(
+                    LogEvent.project_id == template.project_id,
+                    LogEvent.id.in_(log_ids),
+                )
                 .subquery("recompute_log_ids")
             )
 
@@ -1669,7 +1698,10 @@ class LogEventDAO:
 
                     stmt = (
                         update(LogEvent)
-                        .where(LogEvent.id == log_event_id)
+                        .where(
+                            LogEvent.project_id == template.project_id,
+                            LogEvent.id == log_event_id,
+                        )
                         .values(
                             data=LogEvent.data.concat(
                                 func.jsonb_build_object(template.key, val),

@@ -46,14 +46,16 @@ def delete_orphaned_log_events(
             SELECT le.id
             FROM log_event le
             WHERE le.id = ANY(:log_event_ids)
+              AND le.project_id = :project_id
               AND NOT EXISTS (
                 SELECT 1
                 FROM log_event_context lec
                 WHERE lec.log_event_id = le.id
+                  AND lec.project_id = :project_id
               );
             """,
             ),
-            {"log_event_ids": log_event_ids},
+            {"log_event_ids": log_event_ids, "project_id": project_id},
         ).fetchall()
     else:
         # Project-wide fallback: scans all logs in the project.
@@ -85,12 +87,13 @@ def delete_orphaned_log_events(
         embedding_dao = EmbeddingDAO(session)
         embedding_dao.cancel_queue(
             log_event_ids=orphaned_ids,
+            project_id=project_id,
             reason="Context deleted",
         )
-        embedding_dao.soft_delete(log_event_ids=orphaned_ids)
+        embedding_dao.soft_delete(log_event_ids=orphaned_ids, project_id=project_id)
         # The embedding -> log_event FK was removed for partitioning, so deleting
         # the log events below no longer nulls these ref_ids; do it explicitly.
-        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids, project_id=project_id)
 
     # The log_unique_constraint -> log_event FK was also removed for partitioning
     # (log_event's PK is now composite), so the constraint rows are no longer
@@ -102,8 +105,11 @@ def delete_orphaned_log_events(
     )
 
     session.execute(
-        text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
-        {"log_event_ids": orphaned_ids},
+        text(
+            "DELETE FROM log_event "
+            "WHERE id = ANY(:log_event_ids) AND project_id = :project_id",
+        ),
+        {"log_event_ids": orphaned_ids, "project_id": project_id},
     )
 
 
@@ -122,6 +128,7 @@ def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
             SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
             """,
         ),
@@ -171,6 +178,7 @@ def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) ->
             SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
             """,
         ),
@@ -1347,6 +1355,20 @@ class ContextDAO:
 
         return stats
 
+    def _project_id_for_context(self, context_id: int) -> Optional[int]:
+        """Resolve a context's owning project_id.
+
+        Used to add a partition-pruning ``project_id`` predicate to heavy-table
+        statements that are otherwise keyed only by ``log_event`` id within a
+        single context. The targeted logs all belong to this project (a log has
+        one project, associations are same-project), so the predicate prunes to
+        the project's partition without changing the matched set.
+        """
+        return self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :cid"),
+            {"cid": context_id},
+        ).scalar()
+
     def _cascade_delete(
         self,
         context_id: int,
@@ -1369,6 +1391,7 @@ class ContextDAO:
             SELECT DISTINCT le.id, le.project_id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
         """,
@@ -1452,6 +1475,7 @@ class ContextDAO:
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, CAST(:old_value AS jsonb))
             )
@@ -1490,6 +1514,7 @@ class ContextDAO:
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
             )
@@ -1567,6 +1592,7 @@ class ContextDAO:
                 SELECT DISTINCT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, old_val.v)
@@ -1634,6 +1660,7 @@ class ContextDAO:
                 SELECT DISTINCT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, old_val.v)
@@ -1871,6 +1898,7 @@ class ContextDAO:
             SELECT DISTINCT le.id, le.data, le.project_id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -1980,6 +2008,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -2026,6 +2055,7 @@ class ContextDAO:
         log_event_ids = [log_event_id for log_event_id, _ in updates]
         data_values = [json.dumps(new_data) for _, new_data in updates]
 
+        project_id = self._project_id_for_context(context_id)
         bulk_update = text(
             """
             UPDATE log_event
@@ -2035,6 +2065,7 @@ class ContextDAO:
                        unnest(CAST(:new_data_values AS text[])) as new_data
             ) v
             WHERE log_event.id = v.id
+              AND log_event.project_id = :project_id
         """,
         )
 
@@ -2043,6 +2074,7 @@ class ContextDAO:
             {
                 "log_event_ids": log_event_ids,
                 "new_data_values": data_values,
+                "project_id": project_id,
             },
         )
 
@@ -2131,6 +2163,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -2177,6 +2210,7 @@ class ContextDAO:
         log_event_ids = [log_event_id for log_event_id, _ in updates]
         data_values = [json.dumps(new_data) for _, new_data in updates]
 
+        project_id = self._project_id_for_context(context_id)
         bulk_update = text(
             """
             UPDATE log_event
@@ -2186,6 +2220,7 @@ class ContextDAO:
                        unnest(CAST(:new_data_values AS text[])) as new_data
             ) v
             WHERE log_event.id = v.id
+              AND log_event.project_id = :project_id
         """,
         )
 
@@ -2194,6 +2229,7 @@ class ContextDAO:
             {
                 "log_event_ids": log_event_ids,
                 "new_data_values": data_values,
+                "project_id": project_id,
             },
         )
 
@@ -2278,6 +2314,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -2324,6 +2361,7 @@ class ContextDAO:
         log_event_ids = [log_event_id for log_event_id, _ in updates]
         data_values = [json.dumps(new_data) for _, new_data in updates]
 
+        project_id = self._project_id_for_context(context_id)
         bulk_update = text(
             """
             UPDATE log_event
@@ -2333,6 +2371,7 @@ class ContextDAO:
                        unnest(CAST(:new_data_values AS text[])) as new_data
             ) v
             WHERE log_event.id = v.id
+              AND log_event.project_id = :project_id
         """,
         )
 
@@ -2341,6 +2380,7 @@ class ContextDAO:
             {
                 "log_event_ids": log_event_ids,
                 "new_data_values": data_values,
+                "project_id": project_id,
             },
         )
 
@@ -3100,12 +3140,14 @@ class ContextDAO:
                             text(
                                 "SELECT le.id FROM log_event le "
                                 "WHERE le.id = ANY(:ids) "
+                                "AND le.project_id = :pid "
                                 "AND NOT EXISTS ("
                                 "  SELECT 1 FROM log_event_context lec "
                                 "  WHERE lec.log_event_id = le.id"
+                                "  AND lec.project_id = :pid"
                                 ")",
                             ),
-                            {"ids": log_event_ids},
+                            {"ids": log_event_ids, "pid": project_id},
                         ).fetchall()
                     ]
 
@@ -3113,14 +3155,19 @@ class ContextDAO:
                         embedding_dao = EmbeddingDAO(self.session)
                         cancelled = embedding_dao.cancel_queue(
                             log_event_ids=orphaned_ids,
+                            project_id=project_id,
                             reason="Context deleted",
                         )
                         soft_deleted = embedding_dao.soft_delete(
                             log_event_ids=orphaned_ids,
+                            project_id=project_id,
                         )
                         # FK to log_event was dropped for partitioning, so the
                         # orphan log deletion below won't null these ref_ids.
-                        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+                        embedding_dao.null_ref_ids(
+                            log_event_ids=orphaned_ids,
+                            project_id=project_id,
+                        )
 
                         if soft_deleted > 0 or cancelled > 0:
                             logger.info(
@@ -3151,14 +3198,17 @@ class ContextDAO:
                                     "WITH batch AS ("
                                     "  SELECT id FROM log_event"
                                     "  WHERE id = ANY(:ids)"
+                                    "  AND project_id = :pid"
                                     "  LIMIT :batch_size"
                                     "  FOR UPDATE SKIP LOCKED"
                                     ") "
                                     "DELETE FROM log_event "
-                                    "WHERE id IN (SELECT id FROM batch)",
+                                    "WHERE id IN (SELECT id FROM batch)"
+                                    "  AND project_id = :pid",
                                 ),
                                 {
                                     "ids": orphaned_ids,
+                                    "pid": project_id,
                                     "batch_size": batch_size,
                                 },
                             )
@@ -3431,6 +3481,7 @@ class ContextDAO:
             SELECT le.id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id AND le.id != :log_event_id
         ),
         potential_duplicates AS (
@@ -3494,6 +3545,7 @@ class ContextDAO:
             SELECT le.id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id AND le.id != :log_event_id
         ),
         matching_other AS (
@@ -3551,11 +3603,13 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             WHERE le.id = ANY(:log_event_ids)
+              AND le.project_id = :project_id
         ),
         existing_logs AS (
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
@@ -3577,12 +3631,14 @@ class ContextDAO:
         )
         SELECT id FROM duplicates
         """
+        project_id = self._project_id_for_context(context_id)
         result = self.session.execute(
             text(query),
             {
                 "context_id": context_id,
                 "log_event_ids": log_event_ids,
                 "keys": keys_to_check,
+                "project_id": project_id,
             },
         )
         return [row[0] for row in result.fetchall()]
@@ -3616,11 +3672,13 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             WHERE le.id = ANY(:log_event_ids)
+              AND le.project_id = :project_id
         ),
         existing_logs AS (
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
@@ -3634,9 +3692,14 @@ class ContextDAO:
         )
         SELECT id FROM duplicates
         """
+        project_id = self._project_id_for_context(context_id)
         result = self.session.execute(
             text(query),
-            {"context_id": context_id, "log_event_ids": log_event_ids},
+            {
+                "context_id": context_id,
+                "log_event_ids": log_event_ids,
+                "project_id": project_id,
+            },
         )
         return [row[0] for row in result.fetchall()]
 

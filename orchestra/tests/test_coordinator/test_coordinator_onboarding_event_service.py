@@ -30,6 +30,11 @@ from orchestra.services import coordinator_service as svc
 ONBOARDING_STATE = {"mode": "onboarding", "onboarding_step": None}
 WORKING_STATE = {"mode": "working", "onboarding_step": None}
 
+# Sentinel onboarding render attached to every emitted event by
+# ``_with_onboarding_render``. Patched in so payload assertions stay
+# focused on the per-subtype fields rather than re-deriving the graph.
+_RENDER = {"active_step_id": None, "steps": [], "next_targets": []}
+
 
 def _fake_coordinator(agent_id: int = 1, *, is_coord: bool = True) -> SimpleNamespace:
     """Lightweight stand-in for the ORM ``Assistant`` row.
@@ -91,6 +96,7 @@ async def test_async_notify_emits_when_mode_is_onboarding() -> None:
     coordinator = _fake_coordinator(agent_id=42)
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.notify_coordinator_onboarding_event(
@@ -107,10 +113,11 @@ async def test_async_notify_emits_when_mode_is_onboarding() -> None:
     assert kwargs["event_type"] == svc.COORDINATOR_ONBOARDING_EVENT_TYPE
     assert kwargs["message"] == "user just connected Slack"
     # ``None`` values in ``details`` are stripped so the published
-    # payload stays compact and JSON-clean.
+    # payload stays compact and JSON-clean; every event also carries the
+    # precomputed onboarding render for the brains.
     assert kwargs["extra_event_fields"] == {
         "subtype": svc.SUBTYPE_INTEGRATION_CONNECTED,
-        "details": {"secret_name": "SLACK_TOKEN"},
+        "details": {"secret_name": "SLACK_TOKEN", "onboarding": _RENDER},
     }
 
 
@@ -222,6 +229,7 @@ async def test_step_skipped_event_embeds_step_snapshots() -> None:
     coordinator = _fake_coordinator(agent_id=15)
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_step_skipped_event(
@@ -239,6 +247,7 @@ async def test_step_skipped_event_embeds_step_snapshots() -> None:
             "step_id": "workspace",
             "completed_step_ids": ["apps"],
             "skipped_step_ids": ["workspace"],
+            "onboarding": _RENDER,
         },
     }
 
@@ -327,6 +336,7 @@ async def test_step_started_event_embeds_active_step_snapshot() -> None:
     coordinator = _fake_coordinator(agent_id=16)
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_step_started_event(
@@ -344,6 +354,7 @@ async def test_step_started_event_embeds_active_step_snapshot() -> None:
             "step_id": "email-reply",
             "completed_step_ids": ["meet"],
             "skipped_step_ids": ["phone-call"],
+            "onboarding": _RENDER,
         },
     }
 
@@ -368,6 +379,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
             "derive_onboarding_progress",
             return_value=["workspace", "apps"],
         ) as derive,
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(
@@ -383,6 +395,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
         "medium": "chat",
         "completed_step_ids": ["workspace", "apps"],
         "skipped_step_ids": ["schedule"],
+        "onboarding": _RENDER,
     }
 
 
@@ -393,6 +406,7 @@ async def test_session_started_event_omits_empty_step_snapshot() -> None:
     with (
         patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
         patch.object(svc, "derive_onboarding_progress", return_value=[]),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(
@@ -402,4 +416,4 @@ async def test_session_started_event_omits_empty_step_snapshot() -> None:
         )
     assert result is True
     fields = post.await_args.kwargs["extra_event_fields"]
-    assert fields["details"] == {"medium": "chat"}
+    assert fields["details"] == {"medium": "chat", "onboarding": _RENDER}
