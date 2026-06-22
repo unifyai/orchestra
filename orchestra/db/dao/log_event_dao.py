@@ -503,7 +503,7 @@ class LogEventDAO:
                         clean_value = value.strip("\"'")
                         if clean_value.startswith(gcs_url_prefix):
                             urls_to_delete.append(
-                                (log_event_id, field_name, clean_value)
+                                (log_event_id, field_name, clean_value),
                             )
 
         if not urls_to_delete:
@@ -546,8 +546,6 @@ class LogEventDAO:
                 all_columns.append(col)
 
         reserved_counters: Dict[tuple, int] = {}
-        reserved_values: Dict[tuple, set[int]] = {}
-        reserved_next: Dict[tuple, int] = {}
 
         def _lock_counter(col_name: str, parent_values: Dict[str, Any]) -> None:
             lock_key = json.dumps(
@@ -564,165 +562,238 @@ class LogEventDAO:
                 {"lock_key": lock_key},
             )
 
+        def _counter_identity(
+            parent_values: Dict[str, Any],
+        ) -> tuple[str, str]:
+            parent_values_json = json.dumps(parent_values, sort_keys=True)
+            parent_values_hash = hashlib.md5(
+                parent_values_json.encode("utf-8"),
+                usedforsecurity=False,
+            ).hexdigest()
+            return parent_values_json, parent_values_hash
+
+        def _seed_counter_if_missing(
+            col_name: str,
+            parent_values: Dict[str, Any],
+            parent_values_json: str,
+            parent_values_hash: str,
+        ) -> None:
+            """Bootstrap the context_counter row for ``col_name`` within the
+            given parent scope when it does not yet exist.
+
+            ``next_value`` is seeded to ``MAX(existing committed value) + 1``
+            (the first free value) so the materialized counter cleanly
+            continues from whatever is already in the context — including a
+            partially-ingested context on resume. This one-time O(n) seed
+            replaces the previous per-batch full-context scan. Idempotent and
+            race-safe via the advisory lock + ``ON CONFLICT DO NOTHING``.
+            """
+            query = (
+                self.session.query(
+                    func.max(
+                        cast(
+                            func.nullif(
+                                LogEvent.data.op("->>")(col_name),
+                                "null",
+                            ),
+                            Integer,
+                        ),
+                    ),
+                )
+                .join(
+                    LogEventContext,
+                    LogEventContext.log_event_id == LogEvent.id,
+                )
+                # project_id prunes the partitioned log_event table to the
+                # owning project's partition (PK leads with project_id); the
+                # context already belongs to this project so the matched set
+                # is unchanged. Mirrors the partition-pruning convention.
+                .filter(LogEvent.project_id == project_id)
+                .filter(LogEventContext.context_id == context_id)
+            )
+            for parent_key, parent_value in parent_values.items():
+                query = query.filter(
+                    LogEvent.data.op("->>")(parent_key) == str(parent_value),
+                )
+            max_val = query.scalar()
+            first_value = (max_val if max_val is not None else -1) + 1
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO context_counter (
+                        context_id,
+                        column_name,
+                        parent_values_hash,
+                        parent_values,
+                        next_value,
+                        updated_at
+                    )
+                    VALUES (
+                        :context_id,
+                        :column_name,
+                        :parent_values_hash,
+                        CAST(:parent_values AS jsonb),
+                        :next_value,
+                        now()
+                    )
+                    ON CONFLICT (
+                        context_id,
+                        column_name,
+                        parent_values_hash
+                    ) DO NOTHING
+                    """,
+                ),
+                {
+                    "context_id": context_id,
+                    "column_name": col_name,
+                    "parent_values_hash": parent_values_hash,
+                    "parent_values": parent_values_json,
+                    "next_value": first_value,
+                },
+            )
+
         def _next_counter_value(
             col_name: str,
             parent_values: Dict[str, Any],
         ) -> int:
+            """Reserve the next counter value for ``col_name`` within the
+            given parent scope.
+
+            ALL counting columns are served from the materialized
+            ``context_counter`` table (an O(1) ``UPDATE ... RETURNING`` per
+            reservation, with a one-time seed from existing data) — regardless
+            of whether the column is also a unique key. This replaces the old
+            fallback that re-scanned the entire context per batch for
+            auto_counting-only columns, which made bulk ingest O(n^2).
+            """
             counter_key = (col_name, tuple(sorted(parent_values.items())))
-            if col_name in unique_key_columns:
-                parent_values_json = json.dumps(parent_values, sort_keys=True)
-                parent_values_hash = hashlib.md5(
-                    parent_values_json.encode("utf-8"),
-                    usedforsecurity=False,
-                ).hexdigest()
+            parent_values_json, parent_values_hash = _counter_identity(
+                parent_values,
+            )
+            counter_params = {
+                "context_id": context_id,
+                "column_name": col_name,
+                "parent_values_hash": parent_values_hash,
+            }
 
-                counter_params = {
-                    "context_id": context_id,
-                    "column_name": col_name,
-                    "parent_values_hash": parent_values_hash,
-                }
-
-                if counter_key not in reserved_counters:
-                    _lock_counter(col_name, parent_values)
-                    reserved_value = self.session.execute(
-                        text(
-                            """
-                            UPDATE context_counter
-                            SET next_value = next_value + 1,
-                                updated_at = now()
-                            WHERE context_id = :context_id
-                              AND column_name = :column_name
-                              AND parent_values_hash = :parent_values_hash
-                            RETURNING next_value - 1 AS reserved_value
-                            """,
-                        ),
-                        counter_params,
-                    ).scalar_one_or_none()
-
-                    if reserved_value is not None:
-                        reserved_counters[counter_key] = int(reserved_value)
-                        return reserved_counters[counter_key]
-
-                    query = (
-                        self.session.query(
-                            func.max(
-                                cast(
-                                    func.nullif(
-                                        LogEvent.data.op("->>")(col_name),
-                                        "null",
-                                    ),
-                                    Integer,
-                                ),
-                            ),
-                        )
-                        .join(
-                            LogEventContext,
-                            LogEventContext.log_event_id == LogEvent.id,
-                        )
-                        .filter(LogEventContext.context_id == context_id)
-                    )
-                    for parent_key, parent_value in parent_values.items():
-                        query = query.filter(
-                            LogEvent.data.op("->>")(parent_key) == str(parent_value),
-                        )
-                    max_val = query.scalar()
-                    first_value = (max_val if max_val is not None else -1) + 1
-                    reserved_value = self.session.execute(
-                        text(
-                            """
-                            INSERT INTO context_counter (
-                                context_id,
-                                column_name,
-                                parent_values_hash,
-                                parent_values,
-                                next_value,
-                                updated_at
-                            )
-                            VALUES (
-                                :context_id,
-                                :column_name,
-                                :parent_values_hash,
-                                CAST(:parent_values AS jsonb),
-                                :next_value,
-                                now()
-                            )
-                            ON CONFLICT (
-                                context_id,
-                                column_name,
-                                parent_values_hash
-                            ) DO NOTHING
-                            RETURNING next_value - 1 AS reserved_value
-                            """,
-                        ),
-                        {
-                            **counter_params,
-                            "parent_values": parent_values_json,
-                            "next_value": first_value + 1,
-                        },
-                    ).scalar_one_or_none()
-
-                    if reserved_value is None:
-                        reserved_value = self.session.execute(
-                            text(
-                                """
-                                UPDATE context_counter
-                                SET next_value = next_value + 1,
-                                    updated_at = now()
-                                WHERE context_id = :context_id
-                                  AND column_name = :column_name
-                                  AND parent_values_hash = :parent_values_hash
-                                RETURNING next_value - 1 AS reserved_value
-                                """,
-                            ),
-                            counter_params,
-                        ).scalar_one()
-
-                    reserved_counters[counter_key] = int(reserved_value)
-                else:
-                    reserved_counters[counter_key] += 1
-                    self.session.execute(
-                        text(
-                            """
-                            UPDATE context_counter
-                            SET next_value = next_value + 1,
-                                updated_at = now()
-                            WHERE context_id = :context_id
-                              AND column_name = :column_name
-                              AND parent_values_hash = :parent_values_hash
-                            """,
-                        ),
-                        counter_params,
-                    )
-                return reserved_counters[counter_key]
-
-            if counter_key not in reserved_values:
+            if counter_key not in reserved_counters:
                 _lock_counter(col_name, parent_values)
-                values_query = (
-                    self.session.query(
-                        cast(
-                            func.nullif(LogEvent.data.op("->>")(col_name), "null"),
-                            Integer,
-                        ),
-                    )
-                    .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                    .filter(LogEventContext.context_id == context_id)
-                )
-                for parent_key, parent_value in parent_values.items():
-                    values_query = values_query.filter(
-                        LogEvent.data.op("->>")(parent_key) == str(parent_value),
-                    )
-                existing_values = {
-                    row[0] for row in values_query.all() if row[0] is not None
-                }
-                reserved_values[counter_key] = existing_values
-                reserved_next[counter_key] = 0
+                reserved_value = self.session.execute(
+                    text(
+                        """
+                        UPDATE context_counter
+                        SET next_value = next_value + 1,
+                            updated_at = now()
+                        WHERE context_id = :context_id
+                          AND column_name = :column_name
+                          AND parent_values_hash = :parent_values_hash
+                        RETURNING next_value - 1 AS reserved_value
+                        """,
+                    ),
+                    counter_params,
+                ).scalar_one_or_none()
 
-            next_value = reserved_next[counter_key]
-            while next_value in reserved_values[counter_key]:
-                next_value += 1
-            reserved_values[counter_key].add(next_value)
-            reserved_next[counter_key] = next_value + 1
-            return next_value
+                if reserved_value is None:
+                    _seed_counter_if_missing(
+                        col_name,
+                        parent_values,
+                        parent_values_json,
+                        parent_values_hash,
+                    )
+                    reserved_value = self.session.execute(
+                        text(
+                            """
+                            UPDATE context_counter
+                            SET next_value = next_value + 1,
+                                updated_at = now()
+                            WHERE context_id = :context_id
+                              AND column_name = :column_name
+                              AND parent_values_hash = :parent_values_hash
+                            RETURNING next_value - 1 AS reserved_value
+                            """,
+                        ),
+                        counter_params,
+                    ).scalar_one()
+
+                reserved_counters[counter_key] = int(reserved_value)
+            else:
+                reserved_counters[counter_key] += 1
+                self.session.execute(
+                    text(
+                        """
+                        UPDATE context_counter
+                        SET next_value = next_value + 1,
+                            updated_at = now()
+                        WHERE context_id = :context_id
+                          AND column_name = :column_name
+                          AND parent_values_hash = :parent_values_hash
+                        """,
+                    ),
+                    counter_params,
+                )
+            return reserved_counters[counter_key]
+
+        def _reconcile_provided_value(
+            col_name: str,
+            parent_values: Dict[str, Any],
+            max_provided: int,
+        ) -> None:
+            """Keep the counter strictly ahead of client-provided values.
+
+            auto_counting columns may ALSO be client-assigned per entry (the
+            server only assigns when the entry omits the key). An
+            auto_counting-only column has no unique constraint to catch a
+            collision, so we proactively raise ``next_value`` past the largest
+            value the client provided for this column+scope in this batch. Runs
+            before any server-side assignment, so same-batch auto values also
+            avoid the provided ones. O(batch) — uses in-memory data only, no
+            ``log_event`` scan (except the one-time seed when the row is new).
+            """
+            parent_values_json, parent_values_hash = _counter_identity(
+                parent_values,
+            )
+            counter_params = {
+                "context_id": context_id,
+                "column_name": col_name,
+                "parent_values_hash": parent_values_hash,
+            }
+            floor_params = {**counter_params, "floor": max_provided + 1}
+            _lock_counter(col_name, parent_values)
+            updated = self.session.execute(
+                text(
+                    """
+                    UPDATE context_counter
+                    SET next_value = GREATEST(next_value, :floor),
+                        updated_at = now()
+                    WHERE context_id = :context_id
+                      AND column_name = :column_name
+                      AND parent_values_hash = :parent_values_hash
+                    RETURNING next_value
+                    """,
+                ),
+                floor_params,
+            ).scalar_one_or_none()
+
+            if updated is None:
+                _seed_counter_if_missing(
+                    col_name,
+                    parent_values,
+                    parent_values_json,
+                    parent_values_hash,
+                )
+                self.session.execute(
+                    text(
+                        """
+                        UPDATE context_counter
+                        SET next_value = GREATEST(next_value, :floor),
+                            updated_at = now()
+                        WHERE context_id = :context_id
+                          AND column_name = :column_name
+                          AND parent_values_hash = :parent_values_hash
+                        """,
+                    ),
+                    floor_params,
+                )
 
         completed = []
         provided_key_sets: List[set] = []
@@ -748,6 +819,7 @@ class LogEventDAO:
             existing = (
                 self.session.query(LogEvent.id)
                 .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_id)
                 .filter(LogEventContext.context_id == context_id)
                 .filter(
                     LogEvent.data.op("@>")(
@@ -759,6 +831,53 @@ class LogEventDAO:
             exists = existing is not None
             existing_parent_cache[cache_key] = exists
             return exists
+
+        # Pre-pass: keep the materialized counter ahead of any client-provided
+        # values for counting columns. auto_counting columns can be assigned by
+        # the client per entry, and an auto_counting-only column has no unique
+        # constraint to catch a collision, so we bump the counter past the
+        # largest provided value (per column + parent scope) BEFORE assigning
+        # any server-side values this batch. Uses in-memory batch data only.
+        provided_counter_maxima: Dict[tuple, tuple[Dict[str, Any], int]] = {}
+        for provided_value in provided_values:
+            row_values = dict(provided_value or {})
+            for col_name in counting_columns:
+                if col_name not in row_values:
+                    continue
+                try:
+                    provided_int = int(row_values[col_name])
+                except (TypeError, ValueError):
+                    continue
+                parent_values = {}
+                current_col = auto_counting.get(col_name)
+                missing_parent = False
+                while current_col is not None:
+                    if current_col in row_values:
+                        parent_values[current_col] = row_values[current_col]
+                        current_col = auto_counting.get(current_col)
+                        continue
+                    missing_parent = True
+                    break
+                if missing_parent:
+                    continue
+                scope_key = (col_name, tuple(sorted(parent_values.items())))
+                existing = provided_counter_maxima.get(scope_key)
+                if existing is None or provided_int > existing[1]:
+                    provided_counter_maxima[scope_key] = (
+                        parent_values,
+                        provided_int,
+                    )
+        # Reconcile in a deterministic (column, parent-scope) order so concurrent
+        # writers to the same context always take the per-counter advisory locks
+        # in the same order, avoiding lock-ordering deadlocks between batches.
+        for (col_name, _scope), (
+            parent_values,
+            max_provided,
+        ) in sorted(
+            provided_counter_maxima.items(),
+            key=lambda item: (item[0][0], json.dumps(item[1][0], sort_keys=True)),
+        ):
+            _reconcile_provided_value(col_name, parent_values, max_provided)
 
         for provided_value in provided_values:
             row_values = dict(provided_value or {})
@@ -929,6 +1048,109 @@ class LogEventDAO:
                             row[col] = _next_counter_value(col, pv)
 
         return completed
+
+    def resync_context_counters(
+        self,
+        context_id: int,
+        project_id: int,
+    ) -> None:
+        """Re-sync a context's materialized ``context_counter`` rows after a
+        verbatim bulk copy of ``log_event`` data into the context.
+
+        Paths such as context copy/clone and version rollback insert
+        ``log_event`` rows with their ``data`` (including any counter columns
+        like ``row_id``) copied verbatim, WITHOUT routing through
+        ``get_next_composite_ids``. If the destination context already has a
+        materialized counter, the copied rows can carry values at or above the
+        counter's ``next_value``, so the next server-assigned value would
+        collide. (Auto_counting-only columns have no unique constraint to catch
+        this.)
+
+        For every existing counter row of this context we recompute
+        ``MAX(existing value) + 1`` within the row's stored parent scope and
+        bump ``next_value`` to ``GREATEST(next_value, recomputed)`` under the
+        per-counter advisory lock. Using the counter row's own stored
+        ``parent_values`` avoids reconstructing scope hashes/types. Rows that do
+        not yet exist need no action: the next reservation seeds them from
+        ``MAX(existing)`` (which now includes the copied data), so no drift is
+        possible. No-op when the context has no materialized counters.
+        """
+        # ORDER BY gives a deterministic advisory-lock acquisition order so a
+        # re-sync running concurrently with ingest (or another re-sync) on the
+        # same context cannot deadlock on the per-counter locks.
+        counter_rows = self.session.execute(
+            text(
+                """
+                SELECT column_name, parent_values_hash, parent_values
+                FROM context_counter
+                WHERE context_id = :context_id
+                ORDER BY column_name, parent_values_hash
+                """,
+            ),
+            {"context_id": context_id},
+        ).fetchall()
+
+        for column_name, parent_values_hash, parent_values in counter_rows:
+            parent_values = parent_values or {}
+
+            lock_key = json.dumps(
+                {
+                    "project_id": project_id,
+                    "context_id": context_id,
+                    "key": column_name,
+                    "parents": parent_values,
+                },
+                sort_keys=True,
+            )
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": lock_key},
+            )
+
+            query = (
+                self.session.query(
+                    func.max(
+                        cast(
+                            func.nullif(
+                                LogEvent.data.op("->>")(column_name),
+                                "null",
+                            ),
+                            Integer,
+                        ),
+                    ),
+                )
+                .join(
+                    LogEventContext,
+                    LogEventContext.log_event_id == LogEvent.id,
+                )
+                .filter(LogEvent.project_id == project_id)
+                .filter(LogEventContext.context_id == context_id)
+            )
+            for parent_key, parent_value in parent_values.items():
+                query = query.filter(
+                    LogEvent.data.op("->>")(parent_key) == str(parent_value),
+                )
+            max_val = query.scalar()
+            recomputed_next = (max_val if max_val is not None else -1) + 1
+
+            self.session.execute(
+                text(
+                    """
+                    UPDATE context_counter
+                    SET next_value = GREATEST(next_value, :recomputed_next),
+                        updated_at = now()
+                    WHERE context_id = :context_id
+                      AND column_name = :column_name
+                      AND parent_values_hash = :parent_values_hash
+                    """,
+                ),
+                {
+                    "context_id": context_id,
+                    "column_name": column_name,
+                    "parent_values_hash": parent_values_hash,
+                    "recomputed_next": recomputed_next,
+                },
+            )
 
     def _handle_enum_field_type(
         self,
@@ -1801,7 +2023,8 @@ class LogEventDAO:
             query = query.where(LogEvent.project_id == project_id)
         if context_id:
             query = query.join(
-                LogEventContext, LogEventContext.log_event_id == LogEvent.id
+                LogEventContext,
+                LogEventContext.log_event_id == LogEvent.id,
             ).where(
                 LogEventContext.context_id == context_id,
             )
