@@ -1110,7 +1110,9 @@ def get_coordinator_state(
         "mode": mode,
         "onboarding_step": onboarding_step,
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
-        "skipped_phase_ids": normalize_onboarding_phase_ids(row.get("skipped_phase_ids")),
+        "skipped_phase_ids": normalize_onboarding_phase_ids(
+            row.get("skipped_phase_ids")
+        ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
@@ -1295,9 +1297,14 @@ def set_coordinator_state(
         ]
     if unskip_onboarding_phase is not None:
         next_skipped_phase_ids = [
-            phase for phase in next_skipped_phase_ids if phase != unskip_onboarding_phase
+            phase
+            for phase in next_skipped_phase_ids
+            if phase != unskip_onboarding_phase
         ]
-    if next_step is not None and _onboarding_step_phase(next_step) in next_skipped_phase_ids:
+    if (
+        next_step is not None
+        and _onboarding_step_phase(next_step) in next_skipped_phase_ids
+    ):
         next_step = None
     entry = _coordinator_state_entry(
         mode=next_mode,
@@ -1866,7 +1873,9 @@ def compute_onboarding_render(
         "active_step_id": active_id,
         "steps": steps,
         "next_targets": next_targets,
-        "skipped_phase_ids": normalize_onboarding_phase_ids(state.get("skipped_phase_ids")),
+        "skipped_phase_ids": normalize_onboarding_phase_ids(
+            state.get("skipped_phase_ids")
+        ),
     }
 
 
