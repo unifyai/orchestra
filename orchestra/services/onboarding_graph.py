@@ -57,10 +57,66 @@ class OnboardingStep:
     nudge_voice: str = ""
 
 
+@dataclass(frozen=True)
+class OnboardingChip:
+    """A read-only 'try one of these' suggestion shown under a step row.
+
+    ``id`` is a stable key for the UI; ``label`` is the user-facing copy.
+    """
+
+    id: str
+    label: str
+
+
 # Phase labels, in display order.
 PHASE_QUIZ = "Quiz"
 PHASE_CONNECT = "Connect"
 PHASE_DELEGATE = "Delegate"
+
+
+@dataclass(frozen=True)
+class OnboardingPhase:
+    """A checklist phase header — the grouping row shown above its steps.
+
+    ``label`` is the value stamped on each step's ``phase`` field (and the
+    short legend label in the progress bar); ``id`` is the stable header-row
+    id consumers key off (Console test ids, Droid prose grouping).
+    ``local_only`` hides the whole phase — header and every step in it — on
+    hosted deployments, leaving it visible only on a local self-host install.
+    """
+
+    id: str
+    label: str
+    title: str
+    description: str
+    local_only: bool = False
+
+
+# Phase headers, in display order. The single source of truth for phase
+# grouping copy and per-phase deployment visibility.
+ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
+    OnboardingPhase(
+        id="comms",
+        label=PHASE_QUIZ,
+        title="Guess the reference",
+        description="Identify clues sent over email, WhatsApp, phone, Slack, and Discord.",
+        local_only=True,
+    ),
+    OnboardingPhase(
+        id="connect",
+        label=PHASE_CONNECT,
+        title="Connect me",
+        description="Plug me into your workspace and apps.",
+        local_only=False,
+    ),
+    OnboardingPhase(
+        id="work",
+        label=PHASE_DELEGATE,
+        title="Get work done",
+        description="Hand off real work and see it run.",
+        local_only=True,
+    ),
+)
 
 
 def _trigger(
@@ -350,6 +406,142 @@ DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
     step.id for step in ONBOARDING_GRAPH if step.derivable
 )
 
+# Phase header lookup by the label stamped on each step.
+PHASE_BY_LABEL: dict[str, OnboardingPhase] = {
+    phase.label: phase for phase in ONBOARDING_PHASES
+}
+
+
+@dataclass(frozen=True)
+class StepPresentation:
+    """Per-step presentation copy: the info-tooltip ``description`` and rough
+    ``estimated_time`` shown in Console, plus the read-only suggestion chips
+    rendered under the act/schedule rows (split by surface for ``act``)."""
+
+    description: str = ""
+    estimated_time: str = ""
+    chips_chat: tuple[OnboardingChip, ...] = ()
+    chips_call: tuple[OnboardingChip, ...] = ()
+
+
+_ACT_CHIPS_CHAT: tuple[OnboardingChip, ...] = (
+    OnboardingChip("summarize-email", "Summarize my unread emails"),
+    OnboardingChip("catch-up-news", "Catch me up on today's news"),
+    OnboardingChip("draft-reply", "Draft a reply to my latest email"),
+)
+_ACT_CHIPS_CALL: tuple[OnboardingChip, ...] = (
+    OnboardingChip("screen-share", "Walk me through this website"),
+    OnboardingChip("next-meetings", "Tell me about my next meetings"),
+    OnboardingChip("inbox-readout", "Read me a rundown of my inbox"),
+)
+_SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip("morning-briefing", "Send me a briefing tomorrow at 8am"),
+    OnboardingChip("weekly-recap", "Every Friday, recap my week"),
+    OnboardingChip("email-trigger", "When I get an email from my boss, alert me"),
+)
+
+# Presentation copy keyed by step id. Lives beside the graph so every
+# consumer (Console checklist, Droid prose) reads the same descriptions,
+# time estimates, and suggestion chips from one place.
+STEP_PRESENTATION: dict[str, StepPresentation] = {
+    "email-reference": StepPresentation(
+        "Twin sends the first reference clue over email.", "~10s"
+    ),
+    "email-reply": StepPresentation("Twin sends you a quick email.", "~30s"),
+    "whatsapp-number": StepPresentation(
+        "Add the WhatsApp number Twin should use.", "~30s"
+    ),
+    "whatsapp-message-reference": StepPresentation(
+        "Twin sends the next reference clue over WhatsApp.", "~10s"
+    ),
+    "whatsapp-message": StepPresentation(
+        "Twin sends you a reference clue over WhatsApp.", "~1 min"
+    ),
+    "whatsapp-call-reference": StepPresentation(
+        "Twin calls with the next reference clue over WhatsApp.", "~10s"
+    ),
+    "whatsapp-call": StepPresentation(
+        "Twin gives you a reference clue over WhatsApp voice.", "~1 min"
+    ),
+    "phone-number": StepPresentation(
+        "Add the phone number Twin should use for calls and SMS.", "~30s"
+    ),
+    "sms-reference": StepPresentation(
+        "Twin sends the next reference clue over SMS.", "~10s"
+    ),
+    "sms-message": StepPresentation(
+        "Twin sends you a reference clue over SMS.", "~1 min"
+    ),
+    "phone-call-reference": StepPresentation(
+        "Twin calls with the next reference clue.", "~10s"
+    ),
+    "phone-call": StepPresentation(
+        "Twin gives you a reference clue over a phone call.", "~1 min"
+    ),
+    "slack-connect": StepPresentation(
+        "Connect Twin through the Unify Slack app.", "~1 min"
+    ),
+    "slack-reference": StepPresentation(
+        "Twin sends the next reference clue in Slack.", "~10s"
+    ),
+    "slack-message": StepPresentation(
+        "Twin sends you a reference clue in Slack.", "~1 min"
+    ),
+    "discord-connect": StepPresentation(
+        "Connect Twin through the public Discord bot.", "~1 min"
+    ),
+    "discord-reference": StepPresentation(
+        "Twin sends the next reference clue in Discord.", "~10s"
+    ),
+    "discord-message": StepPresentation(
+        "Twin sends you a reference clue in Discord.", "~1 min"
+    ),
+    "workspace": StepPresentation(
+        "Required for everything else in onboarding.", "~30s"
+    ),
+    "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
+    "act": StepPresentation(
+        "Give me a one-off job and watch it run live.",
+        "~2 min",
+        _ACT_CHIPS_CHAT,
+        _ACT_CHIPS_CALL,
+    ),
+    "schedule": StepPresentation(
+        "Set up a recurring or event-triggered task.",
+        "~1 min",
+        _SCHEDULE_CHIPS,
+        _SCHEDULE_CHIPS,
+    ),
+}
+
+_EMPTY_PRESENTATION = StepPresentation()
+
+
+def presentation_for(step_id: str) -> StepPresentation:
+    """Presentation copy for a step (empty when none is registered)."""
+    return STEP_PRESENTATION.get(step_id, _EMPTY_PRESENTATION)
+
+
+def phase_is_visible(phase_label: str, *, local_mode: bool) -> bool:
+    """Whether a phase — and therefore its steps — renders on this deployment.
+
+    ``local_only`` phases show only on a local self-host install; hosted
+    staging/production omit them entirely. Unknown labels stay visible.
+    """
+    phase = PHASE_BY_LABEL.get(phase_label)
+    if phase is None:
+        return True
+    return local_mode or not phase.local_only
+
+
+def visible_phases(*, local_mode: bool) -> tuple[OnboardingPhase, ...]:
+    """Phase headers visible on this deployment, in display order."""
+    return tuple(
+        phase
+        for phase in ONBOARDING_PHASES
+        if local_mode or not phase.local_only
+    )
+
 
 def dependencies_satisfied(
     depends_on: dict[str, int],
@@ -392,6 +584,18 @@ def _assert_graph_integrity() -> None:
                     f"Onboarding graph: '{step.id}' requires '{dep_id}' completed, "
                     f"but '{dep_id}' is skippable.",
                 )
+        if step.phase not in PHASE_BY_LABEL:
+            raise ValueError(
+                f"Onboarding graph: '{step.id}' has phase '{step.phase}' with no "
+                f"registered OnboardingPhase header.",
+            )
+
+    unknown_presentation = set(STEP_PRESENTATION) - set(STEP_BY_ID)
+    if unknown_presentation:
+        raise ValueError(
+            f"Onboarding graph: STEP_PRESENTATION has unknown step ids "
+            f"{sorted(unknown_presentation)}.",
+        )
 
     visiting, done = 1, 2
     state: dict[str, int] = {}

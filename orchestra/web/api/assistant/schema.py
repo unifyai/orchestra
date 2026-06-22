@@ -703,12 +703,36 @@ class CoordinatorStateUpdate(BaseModel):
     onboarding_deferred: Optional[bool] = Field(None)
 
 
+class OnboardingChip(BaseModel):
+    """A read-only suggestion chip shown under the act/schedule rows."""
+
+    id: str
+    label: str
+
+
+class OnboardingPhaseInfo(BaseModel):
+    """A checklist phase header (grouping row) with its display copy.
+
+    ``id`` is the stable header-row id (``comms`` / ``connect`` / ``work``);
+    ``phase`` is the label stamped on each step in the phase (and the short
+    progress-bar legend). Only phases visible on this deployment are sent —
+    ``local_only`` phases are omitted on hosted staging/production.
+    """
+
+    id: str
+    phase: str
+    title: str
+    description: str = ""
+
+
 class OnboardingStepStatus(BaseModel):
-    """One onboarding step with its resolved status.
+    """One onboarding step with its resolved status and presentation copy.
 
     ``status`` is one of ``done`` / ``skipped`` / ``available`` /
     ``locked`` — computed server-side from the canonical graph so
-    consumers never re-derive it.
+    consumers never re-derive it. ``description`` / ``estimated_time`` /
+    ``chips_*`` carry the per-step display copy from the canonical graph so
+    Console renders straight from this payload without its own copy.
     """
 
     id: str
@@ -716,6 +740,10 @@ class OnboardingStepStatus(BaseModel):
     phase: str
     status: str
     can_skip: bool = False
+    description: str = ""
+    estimated_time: str = ""
+    chips_chat: List[OnboardingChip] = Field(default_factory=list)
+    chips_call: List[OnboardingChip] = Field(default_factory=list)
 
 
 class OnboardingNextTarget(BaseModel):
@@ -737,9 +765,38 @@ class OnboardingRender(BaseModel):
     """Precomputed onboarding picture shared by both brains and Console."""
 
     active_step_id: Optional[str] = None
+    phases: List[OnboardingPhaseInfo] = Field(default_factory=list)
     steps: List[OnboardingStepStatus] = Field(default_factory=list)
     next_targets: List[OnboardingNextTarget] = Field(default_factory=list)
     skipped_phase_ids: List[str] = Field(default_factory=list)
+
+
+class OnboardingCatalogStep(BaseModel):
+    """One step in the static onboarding catalog (no per-user status)."""
+
+    id: str
+    title: str
+    phase: str
+    kind: str
+    channel: Optional[str] = None
+    can_skip: bool = False
+    description: str = ""
+    estimated_time: str = ""
+    chips_chat: List[OnboardingChip] = Field(default_factory=list)
+    chips_call: List[OnboardingChip] = Field(default_factory=list)
+
+
+class OnboardingCatalog(BaseModel):
+    """Static, deployment-gated onboarding structure + copy.
+
+    The single source of truth for the *shape* of onboarding, independent
+    of any user's progress. Consumers (Console checklist, Droid prose) read
+    phase/step copy from here; ``local_only`` phases are already omitted on
+    hosted deployments.
+    """
+
+    phases: List[OnboardingPhaseInfo] = Field(default_factory=list)
+    steps: List[OnboardingCatalogStep] = Field(default_factory=list)
 
 
 class CoordinatorStateResponse(BaseModel):
