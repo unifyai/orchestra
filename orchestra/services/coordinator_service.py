@@ -977,6 +977,7 @@ def _coordinator_state_entry(
     mode: str,
     onboarding_step: str | None,
     skipped_step_ids: Sequence[str],
+    skipped_phase_ids: Sequence[str],
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
     onboarding_deferred: bool | None = None,
@@ -1030,6 +1031,7 @@ def _coordinator_state_entry(
         "mode": mode,
         "onboarding_step": onboarding_step,
         "skipped_step_ids": list(skipped_step_ids),
+        "skipped_phase_ids": list(skipped_phase_ids),
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
@@ -1092,6 +1094,7 @@ def get_coordinator_state(
             "mode": COORDINATOR_MODE_ONBOARDING,
             "onboarding_step": None,
             "skipped_step_ids": [],
+            "skipped_phase_ids": [],
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
@@ -1107,6 +1110,9 @@ def get_coordinator_state(
         "mode": mode,
         "onboarding_step": onboarding_step,
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
+        "skipped_phase_ids": normalize_onboarding_phase_ids(
+            row.get("skipped_phase_ids")
+        ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
@@ -1147,6 +1153,7 @@ def seed_initial_coordinator_state(
         mode=COORDINATOR_MODE_ONBOARDING,
         onboarding_step=None,
         skipped_step_ids=[],
+        skipped_phase_ids=[],
         previous=None,
         intro_watched=intro_watched,
     )
@@ -1168,6 +1175,8 @@ def set_coordinator_state(
     clear_onboarding_step: bool = False,
     skip_onboarding_step: str | None = None,
     unskip_onboarding_step: str | None = None,
+    skip_onboarding_phase: str | None = None,
+    unskip_onboarding_phase: str | None = None,
     intro_watched: bool | None = None,
     onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
@@ -1218,6 +1227,22 @@ def set_coordinator_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_unskip_onboarding_step",
         )
+    if skip_onboarding_phase is not None and (
+        not isinstance(skip_onboarding_phase, str)
+        or skip_onboarding_phase not in SKIPPABLE_ONBOARDING_PHASES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_skip_onboarding_phase",
+        )
+    if unskip_onboarding_phase is not None and (
+        not isinstance(unskip_onboarding_phase, str)
+        or unskip_onboarding_phase not in SKIPPABLE_ONBOARDING_PHASES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_unskip_onboarding_phase",
+        )
     _lock_coordinator_context(
         session,
         coordinator=coordinator,
@@ -1258,10 +1283,34 @@ def set_coordinator_state(
             for step_id in next_skipped_step_ids
             if step_id != unskip_onboarding_step
         ]
+    next_skipped_phase_ids = normalize_onboarding_phase_ids(
+        (previous or {}).get("skipped_phase_ids"),
+    )
+    if (
+        skip_onboarding_phase is not None
+        and skip_onboarding_phase not in next_skipped_phase_ids
+    ):
+        next_skipped_phase_ids = [
+            phase
+            for phase in SKIPPABLE_ONBOARDING_PHASES
+            if phase == skip_onboarding_phase or phase in next_skipped_phase_ids
+        ]
+    if unskip_onboarding_phase is not None:
+        next_skipped_phase_ids = [
+            phase
+            for phase in next_skipped_phase_ids
+            if phase != unskip_onboarding_phase
+        ]
+    if (
+        next_step is not None
+        and _onboarding_step_phase(next_step) in next_skipped_phase_ids
+    ):
+        next_step = None
     entry = _coordinator_state_entry(
         mode=next_mode,
         onboarding_step=next_step,
         skipped_step_ids=next_skipped_step_ids,
+        skipped_phase_ids=next_skipped_phase_ids,
         previous=previous,
         intro_watched=intro_watched,
         onboarding_deferred=onboarding_deferred,
@@ -1459,6 +1508,11 @@ SKIPPABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
+SKIPPABLE_ONBOARDING_PHASES = (
+    onboarding_graph.PHASE_QUIZ,
+    onboarding_graph.PHASE_CONNECT,
+    onboarding_graph.PHASE_DELEGATE,
+)
 
 COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
 COORDINATOR_TASKS_CONTEXT = "Tasks"
@@ -1470,6 +1524,19 @@ def normalize_onboarding_step_ids(value: Any) -> list[str]:
         return []
     seen = {str(item) for item in value if isinstance(item, str)}
     return [step_id for step_id in SKIPPABLE_ONBOARDING_STEPS if step_id in seen]
+
+
+def normalize_onboarding_phase_ids(value: Any) -> list[str]:
+    """Return unique onboarding phase ids in checklist order."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    seen = {str(item) for item in value if isinstance(item, str)}
+    return [phase for phase in SKIPPABLE_ONBOARDING_PHASES if phase in seen]
+
+
+def _onboarding_step_phase(step_id: str) -> str | None:
+    step = onboarding_graph.STEP_BY_ID.get(step_id)
+    return step.phase if step is not None else None
 
 
 def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
@@ -1753,8 +1820,13 @@ def compute_onboarding_render(
     skipped: set[str] = set(
         normalize_onboarding_step_ids(state.get("skipped_step_ids")),
     )
+    skipped_phases: set[str] = set(
+        normalize_onboarding_phase_ids(state.get("skipped_phase_ids")),
+    )
     active = state.get("onboarding_step")
     active_id = active if isinstance(active, str) else None
+    if active_id and _onboarding_step_phase(active_id) in skipped_phases:
+        active_id = None
 
     for trigger_id, reply_id in onboarding_graph.TRIGGER_TO_REPLY.items():
         if reply_id in completed or reply_id == active_id:
@@ -1786,7 +1858,7 @@ def compute_onboarding_render(
                 "can_skip": step.can_skip,
             },
         )
-        if status == "available":
+        if status == "available" and step.phase not in skipped_phases:
             next_targets.append(
                 {
                     "id": step.id,
@@ -1801,6 +1873,9 @@ def compute_onboarding_render(
         "active_step_id": active_id,
         "steps": steps,
         "next_targets": next_targets,
+        "skipped_phase_ids": normalize_onboarding_phase_ids(
+            state.get("skipped_phase_ids")
+        ),
     }
 
 

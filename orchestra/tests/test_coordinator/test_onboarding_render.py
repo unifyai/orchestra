@@ -55,7 +55,12 @@ def test_dependencies_satisfied_levels() -> None:
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, set(), {"a"}) is False
 
 
-def _render_with(completed: list[str], skipped: list[str], active: str | None) -> dict:
+def _render_with(
+    completed: list[str],
+    skipped: list[str],
+    active: str | None,
+    skipped_phases: list[str] | None = None,
+) -> dict:
     with (
         patch.object(svc, "derive_onboarding_progress", return_value=list(completed)),
         patch.object(
@@ -65,6 +70,7 @@ def _render_with(completed: list[str], skipped: list[str], active: str | None) -
                 "mode": "onboarding",
                 "onboarding_step": active,
                 "skipped_step_ids": list(skipped),
+                "skipped_phase_ids": list(skipped_phases or []),
             },
         ),
     ):
@@ -74,17 +80,21 @@ def _render_with(completed: list[str], skipped: list[str], active: str | None) -
         )
 
 
-def test_render_fresh_start_only_first_trigger_available() -> None:
-    """With nothing done, only the chain head (a trigger row) is a target."""
+def test_render_fresh_start_exposes_each_section_head() -> None:
+    """With nothing done, the first step in each independent section is a target."""
     render = _render_with(completed=[], skipped=[], active=None)
     statuses = _statuses(render)
     assert statuses["email-reference"] == "available"
     assert statuses["email-reply"] == "locked"
-    assert _next_ids(render) == ["email-reference"]
-    # The next target carries spoken + chat nudge copy.
-    target = render["next_targets"][0]
-    assert target["nudge_voice"]
-    assert target["nudge_chat"]
+    assert statuses["workspace"] == "available"
+    assert statuses["apps"] == "locked"
+    assert statuses["act"] == "available"
+    assert statuses["schedule"] == "locked"
+    assert _next_ids(render) == ["email-reference", "workspace", "act"]
+    # Every next target carries spoken + chat nudge copy.
+    for target in render["next_targets"]:
+        assert target["nudge_voice"]
+        assert target["nudge_chat"]
 
 
 def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
@@ -94,7 +104,7 @@ def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
     assert statuses["email-reference"] == "done"  # inferred from the reply
     assert statuses["email-reply"] == "done"
     assert statuses["whatsapp-number"] == "available"
-    assert _next_ids(render) == ["whatsapp-number"]
+    assert _next_ids(render) == ["whatsapp-number", "workspace", "act"]
 
 
 def test_render_active_reply_infers_trigger_done() -> None:
@@ -113,3 +123,18 @@ def test_render_skipped_dependency_unlocks_addressed_dependent() -> None:
     assert statuses["email-reply"] == "skipped"
     assert statuses["email-reference"] == "skipped"
     assert statuses["whatsapp-number"] == "available"
+
+
+def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -> None:
+    """A section-level defer is separate from per-step skip status."""
+    render = _render_with(
+        completed=[],
+        skipped=[],
+        active=None,
+        skipped_phases=[graph.PHASE_CONNECT],
+    )
+    statuses = _statuses(render)
+    assert statuses["workspace"] == "available"
+    assert statuses["apps"] == "locked"
+    assert render["skipped_phase_ids"] == [graph.PHASE_CONNECT]
+    assert _next_ids(render) == ["email-reference", "act"]

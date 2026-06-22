@@ -89,7 +89,9 @@ def _trigger(
 
 
 # Ordered graph. Order is the default display / tie-break order; the real
-# gating comes from ``depends_on``.
+# gating comes from ``depends_on``. Phase boundaries do not create dependencies:
+# the first step in a phase starts independently unless an explicit product
+# constraint belongs on that step.
 ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "email-reference",
@@ -291,7 +293,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Give me access to your workspace",
         phase=PHASE_CONNECT,
         kind="connect",
-        depends_on={"discord-message": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat="Point them at \u201cGive me access to your workspace\u201d and have them connect Google or Microsoft.",
@@ -313,7 +315,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Ask me to do something now",
         phase=PHASE_DELEGATE,
         kind="act",
-        depends_on={"apps": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat="Invite them to hand off a one-off job right now (e.g. \u201csummarize my unread emails\u201d) and watch it run in Actions.",
