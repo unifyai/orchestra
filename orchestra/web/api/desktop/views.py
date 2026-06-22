@@ -10,8 +10,10 @@ from orchestra.web.api.desktop.schema import (
     DesktopCreate,
     DesktopLinkCreate,
     DesktopLinkRead,
+    DesktopPubkeyRead,
     DesktopRead,
     DesktopUpdate,
+    SftpTunnelUpdate,
 )
 
 router = APIRouter(tags=["Desktops"])
@@ -223,3 +225,68 @@ def unlink_desktop(
     session.commit()
 
     return InfoResponse(info="Desktop unlinked successfully.")
+
+
+@router.get(
+    "/desktop/link/{assistant_id}/pubkey",
+    response_model=InfoResponse[DesktopPubkeyRead],
+    status_code=status.HTTP_200_OK,
+    summary="Get the public key for on-demand filesystem access",
+    description=(
+        "Return the OpenSSH public key the desktop app must install in its "
+        "app-owned authorized_keys so this assistant can reach the user's home "
+        "over SFTP. Available only when the link has filesystem sync enabled."
+    ),
+)
+def get_link_pubkey(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[DesktopPubkeyRead]:
+    user_id = request.state.user_id
+    dao = DesktopDAO(session)
+
+    public_key = dao.get_link_pubkey(assistant_id, user_id)
+    if public_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No filesystem-sync link found for this assistant.",
+        )
+    session.commit()
+
+    return InfoResponse(info=DesktopPubkeyRead(public_key=public_key))
+
+
+@router.post(
+    "/desktop/link/{assistant_id}/sftp-tunnel",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Report the SFTP tunnel coordinates for the caller's device",
+    description=(
+        "The desktop app reports the public host/port of the raw-TCP tunnel "
+        "fronting its local SFTP server, so the assistant can dial it on demand."
+    ),
+)
+def set_link_sftp_tunnel(
+    assistant_id: int,
+    tunnel_in: SftpTunnelUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    dao = DesktopDAO(session)
+
+    link = dao.set_sftp_tunnel(
+        assistant_id,
+        user_id,
+        host=tunnel_in.host,
+        port=tunnel_in.port,
+    )
+    if link is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No linked desktop found for this assistant.",
+        )
+    session.commit()
+
+    return InfoResponse(info="SFTP tunnel coordinates updated.")

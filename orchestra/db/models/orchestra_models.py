@@ -1845,6 +1845,12 @@ class AssistantUserDesktop(Base):
         default=False,
         server_default="false",
     )
+    # On-demand SFTP access to the user's home for this link. The private key
+    # never leaves Orchestra except to the CM via the admin assistant read; only
+    # the derived public key is installed on the device.
+    filesync_sshkey = Column(String, nullable=True)
+    sftp_tunnel_host = Column(String, nullable=True)
+    sftp_tunnel_port = Column(Integer, nullable=True)
     created_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,

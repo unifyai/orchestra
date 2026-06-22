@@ -610,6 +610,7 @@ def _build_assistant_read(
     # The full per-user desktop map is admin/runtime-only so members of a shared
     # assistant don't see each other's machine URLs.
     user_desktops: list[AssistantUserDesktopLink] = []
+    user_desktop_filesync_keys: dict[str, str] = {}
     if include_internal:
         for link, desktop in desktop_dao.list_links_for_assistant(a.agent_id):
             user_desktops.append(
@@ -618,8 +619,14 @@ def _build_assistant_read(
                     url=desktop.url,
                     os=desktop.os,
                     filesys_sync=link.filesys_sync,
+                    sftp_tunnel_host=link.sftp_tunnel_host,
+                    sftp_tunnel_port=link.sftp_tunnel_port,
                 ),
             )
+            # Private keys ride a separate admin/runtime-only field so they
+            # never leak into the assistant pod env via user_desktops.
+            if link.filesync_sshkey:
+                user_desktop_filesync_keys[link.owner_user_id] = link.filesync_sshkey
 
     team_dao = TeamDAO(session)
     if team_ids is None:
@@ -686,6 +693,7 @@ def _build_assistant_read(
         user_desktop_url=user_desktop_url,
         user_desktop_mode=user_desktop_mode,
         user_desktops=user_desktops,
+        user_desktop_filesync_keys=user_desktop_filesync_keys,
         about=a.about,
         phone_country=(phone_contact.country_code if phone_contact else None),
         weekly_limit=(float(a.weekly_limit) if a.weekly_limit is not None else None),
@@ -1480,7 +1488,9 @@ def _coordinator_state_response(
     checklist no longer renders.
     """
     state = get_coordinator_state(session, coordinator=coordinator)
-    actively_onboarding = state["mode"] == COORDINATOR_MODE_ONBOARDING and not state.get(
+    actively_onboarding = state[
+        "mode"
+    ] == COORDINATOR_MODE_ONBOARDING and not state.get(
         "onboarding_deferred",
     )
     completed_step_ids = (

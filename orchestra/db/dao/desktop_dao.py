@@ -100,6 +100,7 @@ class DesktopDAO:
         if existing is not None:
             existing.user_desktop_id = desktop_id
             existing.filesys_sync = filesys_sync
+            self._reconcile_filesync_key(existing)
             self.session.flush()
             return existing
 
@@ -109,7 +110,73 @@ class DesktopDAO:
             owner_user_id=requesting_user_id,
             filesys_sync=filesys_sync,
         )
+        self._reconcile_filesync_key(link)
         self.session.add(link)
+        self.session.flush()
+        return link
+
+    @staticmethod
+    def _reconcile_filesync_key(link: AssistantUserDesktop) -> None:
+        """Mint a per-link key when sync is enabled; clear all SFTP state when off.
+
+        The keypair is the CM's client identity for this user's home. Enabling
+        sync mints one (if absent); disabling drops the key and the tunnel
+        coordinates so a stale device can no longer be reached.
+        """
+        if link.filesys_sync:
+            if not link.filesync_sshkey:
+                from orchestra.web.api.desktop.keys import generate_filesync_keypair
+
+                link.filesync_sshkey, _ = generate_filesync_keypair()
+        else:
+            link.filesync_sshkey = None
+            link.sftp_tunnel_host = None
+            link.sftp_tunnel_port = None
+
+    def get_link_pubkey(self, assistant_id: int, user_id: str) -> Optional[str]:
+        """Return the OpenSSH public key for the caller's link.
+
+        Returns ``None`` when no link exists or filesystem sync is disabled.
+        Generates the keypair on first read if sync is enabled but no key has
+        been minted yet.
+        """
+        link = self.session.execute(
+            select(AssistantUserDesktop).where(
+                AssistantUserDesktop.assistant_id == assistant_id,
+                AssistantUserDesktop.owner_user_id == user_id,
+            ),
+        ).scalar_one_or_none()
+        if link is None or not link.filesys_sync:
+            return None
+        from orchestra.web.api.desktop.keys import (
+            generate_filesync_keypair,
+            public_from_private,
+        )
+
+        if not link.filesync_sshkey:
+            link.filesync_sshkey, public = generate_filesync_keypair()
+            self.session.flush()
+            return public
+        return public_from_private(link.filesync_sshkey)
+
+    def set_sftp_tunnel(
+        self,
+        assistant_id: int,
+        user_id: str,
+        host: str,
+        port: int,
+    ) -> Optional[AssistantUserDesktop]:
+        """Record the public SFTP tunnel coordinates for the caller's link."""
+        link = self.session.execute(
+            select(AssistantUserDesktop).where(
+                AssistantUserDesktop.assistant_id == assistant_id,
+                AssistantUserDesktop.owner_user_id == user_id,
+            ),
+        ).scalar_one_or_none()
+        if link is None:
+            return None
+        link.sftp_tunnel_host = host
+        link.sftp_tunnel_port = port
         self.session.flush()
         return link
 

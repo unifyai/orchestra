@@ -293,6 +293,14 @@ class AssistantUserDesktopLink(BaseModel):
     url: str = Field(..., description="Public tunnel URL of the linked desktop")
     os: str = Field(..., description="Operating system of the linked desktop")
     filesys_sync: bool = Field(..., description="Whether filesystem sync is enabled")
+    sftp_tunnel_host: Optional[str] = Field(
+        None,
+        description="Host for on-demand SFTP access to the user's home",
+    )
+    sftp_tunnel_port: Optional[int] = Field(
+        None,
+        description="Port for on-demand SFTP access to the user's home",
+    )
 
 
 class AssistantRead(AssistantCreate):
@@ -329,6 +337,15 @@ class AssistantRead(AssistantCreate):
         description=(
             "All per-user desktops linked to this assistant (admin/runtime only). "
             "Maps each user to their own machine for an assistant several users share."
+        ),
+    )
+    # Admin/runtime only; deliberately NOT part of user_desktops so the private
+    # keys never reach the assistant pod env.
+    user_desktop_filesync_keys: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-user private SSH keys (keyed by owner_user_id) for on-demand "
+            "user-home access. Populated only in admin/runtime responses."
         ),
     )
     user_desktop_mode: Optional[str] = Field(
