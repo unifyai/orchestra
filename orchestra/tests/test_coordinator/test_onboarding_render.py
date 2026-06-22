@@ -55,7 +55,12 @@ def test_dependencies_satisfied_levels() -> None:
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, set(), {"a"}) is False
 
 
-def _render_with(completed: list[str], skipped: list[str], active: str | None) -> dict:
+def _render_with(
+    completed: list[str],
+    skipped: list[str],
+    active: str | None,
+    skipped_phases: list[str] | None = None,
+) -> dict:
     with (
         patch.object(svc, "derive_onboarding_progress", return_value=list(completed)),
         patch.object(
@@ -65,6 +70,7 @@ def _render_with(completed: list[str], skipped: list[str], active: str | None) -
                 "mode": "onboarding",
                 "onboarding_step": active,
                 "skipped_step_ids": list(skipped),
+                "skipped_phase_ids": list(skipped_phases or []),
             },
         ),
     ):
@@ -117,3 +123,18 @@ def test_render_skipped_dependency_unlocks_addressed_dependent() -> None:
     assert statuses["email-reply"] == "skipped"
     assert statuses["email-reference"] == "skipped"
     assert statuses["whatsapp-number"] == "available"
+
+
+def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -> None:
+    """A section-level defer is separate from per-step skip status."""
+    render = _render_with(
+        completed=[],
+        skipped=[],
+        active=None,
+        skipped_phases=[graph.PHASE_CONNECT],
+    )
+    statuses = _statuses(render)
+    assert statuses["workspace"] == "available"
+    assert statuses["apps"] == "locked"
+    assert render["skipped_phase_ids"] == [graph.PHASE_CONNECT]
+    assert _next_ids(render) == ["email-reference", "act"]
