@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 RUN curl https://sdk.cloud.google.com > install.sh
 RUN bash install.sh --disable-prompts
 
-RUN pip install poetry>=2.1.0
+RUN pip install poetry>=2.1.0 'wheel>=0.46.2'
 
 # Configuring poetry
 RUN poetry config virtualenvs.create false
