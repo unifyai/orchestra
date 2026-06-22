@@ -837,6 +837,7 @@ def create_from_logs(
                     updates,
                     overwrite=True,
                     field_types=field_types,
+                    scope_project_id=project_obj.id,
                 )
 
                 # 6) Create or update field type record
@@ -1043,6 +1044,7 @@ def create_from_logs(
                     updates,
                     field_types=field_types,
                     overwrite=True,
+                    scope_project_id=project_obj.id,
                 )
 
             # Create/update ActiveDerivedLog template only when derived=True
@@ -2465,6 +2467,7 @@ def _update_logs(
                 all_flat_updates,
                 field_types=field_types,
                 overwrite=body.overwrite,
+                scope_project_id=project_id,
             )
 
             # Add bulk_update failures to our failed_updates list
@@ -2519,6 +2522,7 @@ def _update_logs(
         nested_result = log_dao.apply_jsonb_patch(
             all_nested_updates,
             field_types=field_types,
+            scope_project_id=project_id,
         )
 
         # Add any failures from nested updates
