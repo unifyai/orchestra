@@ -51,6 +51,7 @@ from orchestra.services.universal_droid_phone import (
 from orchestra.services.universal_droid_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
+from orchestra.settings import settings
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 from orchestra.web.api.utils.assistant_infra import (
@@ -1789,10 +1790,89 @@ def derive_onboarding_progress(
     ]
 
 
+_HOSTED_ENVIRONMENTS = ("staging", "production")
+
+
+def onboarding_local_mode() -> bool:
+    """Whether onboarding runs in local mode for this deployment.
+
+    Local mode covers a self-host install (``SELF_HOST=1``) and any
+    non-hosted environment (local dev, CI/E2E, tests — i.e. anything whose
+    ``environment`` is not ``staging``/``production``). Only the hosted
+    staging and production deployments are *not* local mode, and they alone
+    omit the ``local_only`` onboarding phases (Quiz / Delegate). This is the
+    single gate; both Console and Droid consume the already-filtered
+    render/catalog instead of re-deriving deployment topology themselves.
+    """
+    if settings.is_self_host:
+        return True
+    return settings.environment not in _HOSTED_ENVIRONMENTS
+
+
+def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, str]:
+    return {"id": chip.id, "label": chip.label}
+
+
+def _step_presentation_fields(step_id: str) -> dict[str, Any]:
+    """The presentation copy a step carries to consumers (tooltip
+    description, time estimate, and the suggestion chips for act/schedule)."""
+    presentation = onboarding_graph.presentation_for(step_id)
+    return {
+        "description": presentation.description,
+        "estimated_time": presentation.estimated_time,
+        "chips_chat": [_serialize_chip(c) for c in presentation.chips_chat],
+        "chips_call": [_serialize_chip(c) for c in presentation.chips_call],
+    }
+
+
+def _serialize_phase(phase: onboarding_graph.OnboardingPhase) -> dict[str, Any]:
+    return {
+        "id": phase.id,
+        "phase": phase.label,
+        "title": phase.title,
+        "description": phase.description,
+    }
+
+
+def build_onboarding_catalog(local_mode: bool | None = None) -> dict[str, Any]:
+    """Static, deployment-gated onboarding structure + copy.
+
+    The single source of truth every consumer reads for the *shape* of
+    onboarding independent of any user's progress: the ordered phase
+    headers and steps with their titles, descriptions, time estimates, and
+    suggestion chips. ``local_only`` phases (and their steps) are dropped
+    on hosted deployments so neither Console nor Droid has to re-implement
+    the gate. Defaults to this deployment's resolved local mode.
+    """
+    if local_mode is None:
+        local_mode = onboarding_local_mode()
+    phases = onboarding_graph.visible_phases(local_mode=local_mode)
+    steps: list[dict[str, Any]] = []
+    for step in onboarding_graph.ONBOARDING_GRAPH:
+        if not onboarding_graph.phase_is_visible(step.phase, local_mode=local_mode):
+            continue
+        steps.append(
+            {
+                "id": step.id,
+                "title": step.title,
+                "phase": step.phase,
+                "kind": step.kind,
+                "channel": step.channel,
+                "can_skip": step.can_skip,
+                **_step_presentation_fields(step.id),
+            },
+        )
+    return {
+        "phases": [_serialize_phase(phase) for phase in phases],
+        "steps": steps,
+    }
+
+
 def compute_onboarding_render(
     session: Session,
     *,
     coordinator: Assistant,
+    local_mode: bool | None = None,
 ) -> dict[str, Any]:
     """Build the precomputed onboarding rendering for the brains + Console.
 
@@ -1800,19 +1880,27 @@ def compute_onboarding_render(
     "what's done / what's a valid next target" picture every downstream
     consumer reads without re-deriving anything:
 
-      - ``steps``: every graph step with a resolved ``status`` of
-        ``done`` / ``skipped`` / ``available`` / ``locked``.
+      - ``phases``: the visible phase headers (id + label + title +
+        description), in display order, already deployment-gated.
+      - ``steps``: every visible graph step with a resolved ``status`` of
+        ``done`` / ``skipped`` / ``available`` / ``locked``, plus the
+        presentation copy (description, time estimate, suggestion chips)
+        consumers render directly.
       - ``next_targets``: the steps the Coordinator may nudge toward
         right now (``status == available``), each carrying ready-to-use
         chat and voice copy plus its channel. There can be more than one
         once the ``depends_on`` graph branches.
       - ``active_step_id``: the step the user is currently mid-flow on.
 
-    Completion of the reference-quiz *trigger* rows isn't derivable from
-    durable state, so we infer it from the paired reply step exactly as
-    the Console checklist did: a trigger is done once its reply is done
-    or is the active step, and skipped once its reply is skipped.
+    Steps in a ``local_only`` phase are omitted entirely on hosted
+    deployments (see ``onboarding_local_mode``). Completion of the
+    reference-quiz *trigger* rows isn't derivable from durable state, so we
+    infer it from the paired reply step exactly as the Console checklist
+    did: a trigger is done once its reply is done or is the active step,
+    and skipped once its reply is skipped.
     """
+    if local_mode is None:
+        local_mode = onboarding_local_mode()
     completed: set[str] = set(
         derive_onboarding_progress(session, coordinator=coordinator),
     )
@@ -1837,6 +1925,8 @@ def compute_onboarding_render(
     steps: list[dict[str, Any]] = []
     next_targets: list[dict[str, Any]] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:
+        if not onboarding_graph.phase_is_visible(step.phase, local_mode=local_mode):
+            continue
         if step.id in completed:
             status = "done"
         elif step.id in skipped:
@@ -1856,6 +1946,7 @@ def compute_onboarding_render(
                 "phase": step.phase,
                 "status": status,
                 "can_skip": step.can_skip,
+                **_step_presentation_fields(step.id),
             },
         )
         if status == "available" and step.phase not in skipped_phases:
@@ -1871,6 +1962,10 @@ def compute_onboarding_render(
 
     return {
         "active_step_id": active_id,
+        "phases": [
+            _serialize_phase(phase)
+            for phase in onboarding_graph.visible_phases(local_mode=local_mode)
+        ],
         "steps": steps,
         "next_targets": next_targets,
         "skipped_phase_ids": normalize_onboarding_phase_ids(

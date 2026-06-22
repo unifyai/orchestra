@@ -88,6 +88,7 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
+    build_onboarding_catalog,
     compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
@@ -165,6 +166,7 @@ from orchestra.web.api.assistant.schema import (
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
     InfoResponse,
+    OnboardingCatalog,
     OnboardingSessionStarted,
     OnboardingSessionStartedResponse,
     PhotoGenerateRequest,
@@ -1509,6 +1511,24 @@ def _coordinator_state_response(
         onboarding=onboarding,
         **state,
     )
+
+
+@router.get(
+    "/assistant/onboarding/catalog",
+    response_model=InfoResponse[OnboardingCatalog],
+    status_code=status.HTTP_200_OK,
+    summary="Read the static, deployment-gated onboarding catalog",
+    tags=["Assistant Management"],
+)
+async def get_onboarding_catalog_endpoint() -> InfoResponse[OnboardingCatalog]:
+    """Return the canonical onboarding structure + copy for this deployment.
+
+    Static (no per-user state) and the single source of truth both Console
+    and Droid read for phase/step titles, descriptions, time estimates, and
+    suggestion chips. ``local_only`` phases are already filtered out on
+    hosted deployments, so consumers never re-implement the gate.
+    """
+    return InfoResponse(info=OnboardingCatalog(**build_onboarding_catalog()))
 
 
 @router.get(

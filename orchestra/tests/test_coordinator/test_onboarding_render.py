@@ -60,6 +60,7 @@ def _render_with(
     skipped: list[str],
     active: str | None,
     skipped_phases: list[str] | None = None,
+    local_mode: bool = True,
 ) -> dict:
     with (
         patch.object(svc, "derive_onboarding_progress", return_value=list(completed)),
@@ -77,6 +78,7 @@ def _render_with(
         return svc.compute_onboarding_render(
             MagicMock(),
             coordinator=_fake_coordinator(),
+            local_mode=local_mode,
         )
 
 
@@ -138,3 +140,96 @@ def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -
     assert statuses["apps"] == "locked"
     assert render["skipped_phase_ids"] == [graph.PHASE_CONNECT]
     assert _next_ids(render) == ["email-reference", "act"]
+
+
+# ---------------------------------------------------------------------------
+# Presentation copy carried on the render
+# ---------------------------------------------------------------------------
+
+
+def test_render_carries_phase_headers_and_step_presentation() -> None:
+    """The render carries phase headers + per-step copy so Console renders
+    straight from it without its own duplicated presentation map."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    assert [p["id"] for p in render["phases"]] == ["comms", "connect", "work"]
+    comms = next(p for p in render["phases"] if p["id"] == "comms")
+    assert comms["title"] == "Guess the reference"
+    assert comms["phase"] == graph.PHASE_QUIZ
+    steps = {s["id"]: s for s in render["steps"]}
+    assert steps["email-reference"]["description"]
+    assert steps["email-reference"]["estimated_time"]
+    act = steps["act"]
+    assert [c["id"] for c in act["chips_chat"]] == [
+        "summarize-email",
+        "catch-up-news",
+        "draft-reply",
+    ]
+    assert [c["id"] for c in act["chips_call"]]
+    # Non-chip steps carry empty chip lists rather than omitting the field.
+    assert steps["workspace"]["chips_chat"] == []
+
+
+# ---------------------------------------------------------------------------
+# Deployment gating — local_only phases omitted on hosted deployments
+# ---------------------------------------------------------------------------
+
+
+def test_render_hosted_omits_local_only_phases() -> None:
+    """On hosted (non-self-host) deployments the Quiz + Delegate phases are
+    dropped entirely; only Connect renders."""
+    render = _render_with(completed=[], skipped=[], active=None, local_mode=False)
+    assert [p["id"] for p in render["phases"]] == ["connect"]
+    phases_present = {s["phase"] for s in render["steps"]}
+    assert phases_present == {graph.PHASE_CONNECT}
+    assert _next_ids(render) == ["workspace"]
+    # Quiz / Delegate steps are gone, not merely locked.
+    assert all(s["id"] not in {"email-reference", "act"} for s in render["steps"])
+
+
+def test_render_local_keeps_all_phases() -> None:
+    """A local self-host install keeps every phase visible."""
+    render = _render_with(completed=[], skipped=[], active=None, local_mode=True)
+    assert [p["id"] for p in render["phases"]] == ["comms", "connect", "work"]
+
+
+def test_phase_visibility_helper() -> None:
+    assert graph.phase_is_visible(graph.PHASE_CONNECT, local_mode=False) is True
+    assert graph.phase_is_visible(graph.PHASE_QUIZ, local_mode=False) is False
+    assert graph.phase_is_visible(graph.PHASE_DELEGATE, local_mode=False) is False
+    assert graph.phase_is_visible(graph.PHASE_QUIZ, local_mode=True) is True
+
+
+# ---------------------------------------------------------------------------
+# Static catalog
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_local_lists_all_phases_with_copy() -> None:
+    catalog = svc.build_onboarding_catalog(local_mode=True)
+    assert [p["id"] for p in catalog["phases"]] == ["comms", "connect", "work"]
+    assert len(catalog["steps"]) == len(graph.ONBOARDING_GRAPH)
+    act = next(s for s in catalog["steps"] if s["id"] == "act")
+    assert act["description"]
+    assert [c["id"] for c in act["chips_chat"]]
+
+
+def test_catalog_hosted_drops_local_only_phases() -> None:
+    catalog = svc.build_onboarding_catalog(local_mode=False)
+    assert [p["id"] for p in catalog["phases"]] == ["connect"]
+    assert {s["id"] for s in catalog["steps"]} == {"workspace", "apps"}
+
+
+def test_onboarding_local_mode_signal() -> None:
+    """Only hosted staging/production resolve to non-local; self-host and
+    every non-hosted environment (dev, CI, tests) are local mode."""
+    cases = [
+        (SimpleNamespace(is_self_host=True, environment="production"), True),
+        (SimpleNamespace(is_self_host=True, environment="staging"), True),
+        (SimpleNamespace(is_self_host=False, environment="dev"), True),
+        (SimpleNamespace(is_self_host=False, environment="test"), True),
+        (SimpleNamespace(is_self_host=False, environment="staging"), False),
+        (SimpleNamespace(is_self_host=False, environment="production"), False),
+    ]
+    for fake_settings, expected in cases:
+        with patch.object(svc, "settings", fake_settings):
+            assert svc.onboarding_local_mode() is expected

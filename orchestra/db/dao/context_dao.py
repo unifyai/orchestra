@@ -4115,6 +4115,16 @@ class ContextDAO:
             stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
             self.session.execute(stmt_assoc)
 
+        # The restored rows carry their counter columns (e.g. row_id) verbatim
+        # and bypass get_next_composite_ids, so re-sync the materialized counter
+        # to MAX(existing)+1 to keep future server-assigned values collision-free.
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        LogEventDAO(self.session).resync_context_counters(
+            context_id=context_id,
+            project_id=context.project_id,
+        )
+
     # -------------------------------------------------------------------------
     # Deep-copy helpers (used by admin_copy_context endpoint)
     # -------------------------------------------------------------------------
@@ -4203,6 +4213,19 @@ class ContextDAO:
             ]
             self.session.execute(pg_insert(LogEventContext).values(lec_values))
 
+            self.session.commit()
+
+        # Copied rows carry their counter columns (e.g. row_id) verbatim and
+        # bypass get_next_composite_ids; re-sync the target context's
+        # materialized counter so future server-assigned values stay ahead of
+        # the copied data. No-op when the target has no materialized counters.
+        if id_map:
+            from orchestra.db.dao.log_event_dao import LogEventDAO
+
+            LogEventDAO(self.session).resync_context_counters(
+                context_id=target_context_id,
+                project_id=target_project_id,
+            )
             self.session.commit()
 
         return id_map

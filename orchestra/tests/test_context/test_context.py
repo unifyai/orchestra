@@ -2595,7 +2595,11 @@ async def test_independent_auto_counting(client: AsyncClient):
     assert logs[1]["entries"]["message_id"] == 2
     assert logs[1]["entries"]["exchange_id"] == 5  # Auto-incremented
     assert logs[0]["entries"]["message_id"] == 3
-    assert logs[0]["entries"]["exchange_id"] == 2  # Auto-incremented back from 1
+    # Monotonic counter (context_counter): after the explicit exchange_id=5 the
+    # counter advances to 6 rather than back-filling the gap at 2. This replaces
+    # the old O(n^2) full-scan gap-fill and matches sequence-style id semantics
+    # (the same behavior unique-key counters already had).
+    assert logs[0]["entries"]["exchange_id"] == 6
 
 
 @pytest.mark.anyio
