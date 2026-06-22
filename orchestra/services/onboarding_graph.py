@@ -537,9 +537,7 @@ def phase_is_visible(phase_label: str, *, local_mode: bool) -> bool:
 def visible_phases(*, local_mode: bool) -> tuple[OnboardingPhase, ...]:
     """Phase headers visible on this deployment, in display order."""
     return tuple(
-        phase
-        for phase in ONBOARDING_PHASES
-        if local_mode or not phase.local_only
+        phase for phase in ONBOARDING_PHASES if local_mode or not phase.local_only
     )
 
 
