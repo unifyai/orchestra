@@ -66,6 +66,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         self.detail_fetch_concurrency = max(1, int(detail_fetch_concurrency))
         self.last_auth_config_was_created = False
         self._toolkit_by_provider_slug: dict[str, dict[str, Any]] = {}
+        self._toolkit_alias: dict[str, str] = {}
 
     def _api_key_headers(self) -> dict[str, str]:
         return {
@@ -242,18 +243,36 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             for toolkit in toolkits
             if toolkit.get("slug") or toolkit.get("toolkit_slug") or toolkit.get("id")
         }
+        # Requests can arrive keyed by the provider's real toolkit slug or by the
+        # derived canonical app slug. The canonical slug recovers word boundaries
+        # from the display name, so it diverges from the provider slug for most
+        # multi-word apps (``LISTENNOTES`` -> ``listen_notes``). Resolve either
+        # spelling back to the real toolkit slug so tool fetches never silently
+        # drop renamed apps.
+        self._toolkit_alias = {}
+        for real_slug, toolkit in self._toolkit_by_provider_slug.items():
+            self._toolkit_alias.setdefault(real_slug, real_slug)
+            canonical = _composio_canonical_app_slug(
+                real_slug,
+                toolkit.get("name"),
+            ).upper()
+            self._toolkit_alias.setdefault(canonical, real_slug)
         requested = [slug.strip().upper() for slug in (app_slugs or []) if slug.strip()]
         self.last_requested_app_slugs = requested
-        requested_set = set(requested)
-        selected = (
-            sorted(self._toolkit_by_provider_slug)
-            if include_all or not requested
-            else [slug for slug in requested if slug in self._toolkit_by_provider_slug]
-        )
+        if include_all or not requested:
+            selected = sorted(self._toolkit_by_provider_slug)
+        else:
+            selected = list(
+                dict.fromkeys(
+                    self._toolkit_alias[slug]
+                    for slug in requested
+                    if slug in self._toolkit_alias
+                ),
+            )
         self.last_skipped_apps = [
             {"slug": slug, "reason": "not_found"}
             for slug in requested
-            if slug not in self._toolkit_by_provider_slug
+            if slug not in self._toolkit_alias
         ]
         should_create_auth_configs = create_auth_configs and bool(requested)
 
@@ -329,6 +348,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         provider_slug = str(provider_app_id or app_slug or "").upper()
         if not provider_slug:
             return []
+        # Tolerate being called with either the real toolkit slug or the derived
+        # canonical app slug; both resolve to the real slug the provider expects.
+        provider_slug = self._toolkit_alias.get(provider_slug, provider_slug)
         toolkit = self._toolkit_by_provider_slug.get(provider_slug, {})
         canonical_app_slug = _composio_canonical_app_slug(
             provider_slug,
