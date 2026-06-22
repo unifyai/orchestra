@@ -116,7 +116,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
             "id": "email-reference",
             "title": "Email the first reference",
             "status": "available",
-            "resolution": "addressed",
+            "resolution": "completed",
             "satisfied": False,
         },
     ]
@@ -125,7 +125,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
             "id": "phone-number",
             "title": "Add your phone number",
             "status": "available",
-            "resolution": "addressed",
+            "resolution": "completed",
             "satisfied": False,
         },
     ]
@@ -170,13 +170,33 @@ def test_render_active_reply_infers_trigger_done() -> None:
     assert statuses["email-reply"] == "available"
 
 
-def test_render_skipped_dependency_unlocks_addressed_dependent() -> None:
-    """An ADDRESSED edge opens once its dependency is skipped (not just done)."""
+def test_render_skipped_completed_dependency_cascades_to_dependents() -> None:
+    """A skipped completed-only prerequisite renders dependent rows as skipped."""
     render = _render_with(completed=[], skipped=["phone-number"], active=None)
     statuses = _statuses(render)
     assert statuses["phone-number"] == "skipped"
-    assert statuses["sms-reference"] == "available"
-    assert statuses["phone-call-reference"] == "available"
+    assert statuses["sms-reference"] == "skipped"
+    assert statuses["sms-message"] == "skipped"
+    assert statuses["phone-call-reference"] == "skipped"
+    assert statuses["phone-call"] == "skipped"
+
+
+def test_completed_dependency_skip_cascade() -> None:
+    """Skipping a setup step cascades to descendants that require completion."""
+    assert graph.completion_coupled_steps("phone-number") == (
+        "phone-number",
+        "sms-reference",
+        "sms-message",
+        "phone-call-reference",
+        "phone-call",
+    )
+    assert graph.completion_coupled_steps("sms-message") == (
+        "phone-number",
+        "sms-reference",
+        "sms-message",
+        "phone-call-reference",
+        "phone-call",
+    )
 
 
 def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -> None:

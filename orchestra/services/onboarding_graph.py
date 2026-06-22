@@ -22,8 +22,7 @@ Dependency levels mirror the original Console semantics:
   - ``ADDRESSED`` (0): the dependency unlocks this step once it is
     *resolved* — completed OR skipped/deferred.
   - ``COMPLETED`` (1): the dependency must be genuinely completed; a
-    skip does not unlock the dependent (such a dependency must not be
-    skippable, asserted below).
+    skip does not unlock the dependent.
 """
 
 from __future__ import annotations
@@ -221,7 +220,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Reply to email",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"email-reference": ADDRESSED},
+        depends_on={"email-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="email",
@@ -243,7 +242,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "whatsapp-message-reference",
         "WhatsApp the next reference",
-        depends_on={"whatsapp-number": ADDRESSED},
+        depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-message",
         nudge_chat="Invite them to click \u201cWhatsApp the next reference\u201d to get a clue over WhatsApp.",
@@ -254,7 +253,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Guess a WhatsApp clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"whatsapp-message-reference": ADDRESSED},
+        depends_on={"whatsapp-message-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="whatsapp",
@@ -264,7 +263,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "whatsapp-call-reference",
         "WhatsApp call for the next reference",
-        depends_on={"whatsapp-number": ADDRESSED},
+        depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-call",
         nudge_chat="Invite them to click \u201cWhatsApp call for the next reference\u201d to get a clue over a WhatsApp call.",
@@ -275,7 +274,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Guess a WhatsApp call clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"whatsapp-call-reference": ADDRESSED},
+        depends_on={"whatsapp-call-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="whatsapp",
@@ -297,7 +296,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "sms-reference",
         "Text the next reference",
-        depends_on={"phone-number": ADDRESSED},
+        depends_on={"phone-number": COMPLETED},
         channel="sms",
         paired_reply="sms-message",
         nudge_chat="Invite them to click \u201cText the next reference\u201d to get a clue over SMS.",
@@ -308,7 +307,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Guess an SMS clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"sms-reference": ADDRESSED},
+        depends_on={"sms-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="sms",
@@ -318,7 +317,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "phone-call-reference",
         "Call for the next reference",
-        depends_on={"phone-number": ADDRESSED},
+        depends_on={"phone-number": COMPLETED},
         channel="phone",
         paired_reply="phone-call",
         nudge_chat="Invite them to click \u201cCall for the next reference\u201d to get a clue over a phone call.",
@@ -329,7 +328,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Guess a phone call clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"phone-call-reference": ADDRESSED},
+        depends_on={"phone-call-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="phone",
@@ -351,7 +350,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "slack-reference",
         "Send the next reference via Slack",
-        depends_on={"slack-connect": ADDRESSED},
+        depends_on={"slack-connect": COMPLETED},
         channel="slack",
         paired_reply="slack-message",
         nudge_chat="Invite them to click \u201cSend the next reference via Slack\u201d to get a clue in Slack.",
@@ -362,7 +361,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Guess a Slack clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"slack-reference": ADDRESSED},
+        depends_on={"slack-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="slack",
@@ -384,7 +383,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "discord-reference",
         "Send the next reference via discord",
-        depends_on={"discord-connect": ADDRESSED},
+        depends_on={"discord-connect": COMPLETED},
         channel="discord",
         paired_reply="discord-message",
         nudge_chat="Invite them to click \u201cSend the next reference via Discord\u201d to get a clue in Discord.",
@@ -395,7 +394,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Guess a Discord clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"discord-reference": ADDRESSED},
+        depends_on={"discord-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="discord",
@@ -418,7 +417,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Connect me with your apps",
         phase=PHASE_INTEGRATIONS,
         kind="connect",
-        depends_on={"workspace": ADDRESSED},
+        depends_on={"workspace": COMPLETED},
         can_skip=True,
         derivable=True,
         nudge_chat="Have them open Integrations and connect at least one app (Slack, Gmail, Notion, \u2026).",
@@ -616,14 +615,65 @@ def dependencies_satisfied(
     return True
 
 
+def completion_blocked_descendants(step_id: str) -> tuple[str, ...]:
+    """Steps that become unreachable when ``step_id`` is skipped.
+
+    Only ``COMPLETED`` edges cascade: ``ADDRESSED`` edges intentionally accept
+    skipped dependencies.
+    """
+    blocked = {step_id}
+    descendants: list[str] = []
+    changed = True
+    while changed:
+        changed = False
+        for step in ONBOARDING_GRAPH:
+            if step.id in blocked:
+                continue
+            if any(
+                dep_id in blocked and level == COMPLETED
+                for dep_id, level in step.depends_on.items()
+            ):
+                blocked.add(step.id)
+                descendants.append(step.id)
+                changed = True
+    return tuple(descendants)
+
+
+def completion_required_ancestors(step_id: str) -> tuple[str, ...]:
+    """Completion-required prerequisites for ``step_id``, nearest first."""
+    ancestors: list[str] = []
+    seen: set[str] = set()
+
+    def visit(current_id: str) -> None:
+        current = STEP_BY_ID.get(current_id)
+        if current is None:
+            return
+        for dep_id, level in current.depends_on.items():
+            if level != COMPLETED or dep_id in seen:
+                continue
+            seen.add(dep_id)
+            ancestors.append(dep_id)
+            visit(dep_id)
+
+    visit(step_id)
+    return tuple(ancestors)
+
+
+def completion_coupled_steps(step_id: str) -> tuple[str, ...]:
+    """Steps coupled by completed-only dependency edges around ``step_id``."""
+    coupled = {step_id, *completion_required_ancestors(step_id)}
+    for coupled_id in tuple(coupled):
+        coupled.update(completion_blocked_descendants(coupled_id))
+    return tuple(step.id for step in ONBOARDING_GRAPH if step.id in coupled)
+
+
 def _assert_graph_integrity() -> None:
     """Fail loudly on a malformed hand-authored graph.
 
     Catches the three ways the graph can rot: a dependency id that does
-    not exist, a dependency cycle, and a ``COMPLETED`` edge pointing at a
-    skippable step (which a skip could strand forever). Runs once at
-    import so a mistake surfaces immediately rather than as a confusing
-    empty/locked checklist at runtime.
+    not exist, a phase that does not exist, and a dependency cycle. Runs
+    once at import so a mistake surfaces immediately rather than as a
+    confusing empty/locked checklist at runtime.
     """
     for step in ONBOARDING_GRAPH:
         for dep_id, level in step.depends_on.items():
@@ -631,11 +681,6 @@ def _assert_graph_integrity() -> None:
             if dep is None:
                 raise ValueError(
                     f"Onboarding graph: '{step.id}' depends on unknown step '{dep_id}'.",
-                )
-            if level == COMPLETED and dep.can_skip:
-                raise ValueError(
-                    f"Onboarding graph: '{step.id}' requires '{dep_id}' completed, "
-                    f"but '{dep_id}' is skippable.",
                 )
         if step.phase not in PHASE_BY_LABEL:
             raise ValueError(

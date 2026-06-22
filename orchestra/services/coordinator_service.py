@@ -1269,20 +1269,24 @@ def set_coordinator_state(
     next_skipped_step_ids = normalize_onboarding_step_ids(
         (previous or {}).get("skipped_step_ids"),
     )
-    if (
-        skip_onboarding_step is not None
-        and skip_onboarding_step not in next_skipped_step_ids
-    ):
+    if skip_onboarding_step is not None:
+        skipped_step_set = {
+            *onboarding_graph.completion_coupled_steps(skip_onboarding_step),
+            *next_skipped_step_ids,
+        }
         next_skipped_step_ids = [
             step_id
             for step_id in SKIPPABLE_ONBOARDING_STEPS
-            if step_id == skip_onboarding_step or step_id in next_skipped_step_ids
+            if step_id in skipped_step_set
         ]
     if unskip_onboarding_step is not None:
+        unskipped_step_set = {
+            *onboarding_graph.completion_coupled_steps(unskip_onboarding_step),
+        }
         next_skipped_step_ids = [
             step_id
             for step_id in next_skipped_step_ids
-            if step_id != unskip_onboarding_step
+            if step_id not in unskipped_step_set
         ]
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
@@ -1497,7 +1501,7 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_SCHEDULE,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
-    *DERIVABLE_ONBOARDING_STEPS,
+    *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
     ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
@@ -1876,6 +1880,9 @@ def compute_onboarding_render(
             completed.add(trigger_id)
         elif reply_id in skipped:
             skipped.add(trigger_id)
+
+    for skipped_id in list(skipped):
+        skipped.update(onboarding_graph.completion_blocked_descendants(skipped_id))
 
     steps: list[dict[str, Any]] = []
     next_targets: list[dict[str, Any]] = []
