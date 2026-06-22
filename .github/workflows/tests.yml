@@ -70,11 +70,27 @@ jobs:
   black:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: psf/black@stable
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
       with:
-        options: "--check"
-        version: "26.1.0"
+        python-version: "3.12"
+    - name: Install Poetry
+      run: pip install 'poetry==2.2.1'
+    - name: Cache poetry dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pypoetry
+        key: poetry-black-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+        restore-keys: |
+          poetry-black-${{ runner.os }}-
+    # Use the black version pinned in poetry.lock so CI, pre-commit, and local
+    # dev all format with one source of truth (no duplicated version string to
+    # drift, and the lock stays at or above the CVE-patched floor in pyproject).
+    - name: Install black (locked version)
+      run: poetry install --only dev --no-root
+    - name: Check formatting
+      run: poetry run black --check .
 
   # flake8:
   #   runs-on: ubuntu-latest
