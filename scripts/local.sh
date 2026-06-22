@@ -787,6 +787,16 @@ start_orchestra_server() {
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && export ANTHROPIC_API_KEY
   [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && export GOOGLE_APPLICATION_CREDENTIALS
 
+  # Comms gateway URL so /v0/features can probe channel availability (phone,
+  # whatsapp, discord) and Console can surface those channels. In self-host the
+  # bundled droid.gateway serves comms locally; default to it when unset.
+  if [[ -z "${DROID_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
+    DROID_COMMS_URL="http://127.0.0.1:${DROID_GATEWAY_PORT:-8001}"
+  fi
+  [[ -n "${DROID_COMMS_URL:-}" ]] && export DROID_COMMS_URL
+  [[ -n "${COMMUNICATION_URL:-}" ]] && export COMMUNICATION_URL
+  [[ -n "${COMMS_URL:-}" ]] && export COMMS_URL
+
   # Optional logging directories
   if [[ -n "${ORCHESTRA_LOG_DIR:-}" ]]; then
     mkdir -p "$ORCHESTRA_LOG_DIR"
