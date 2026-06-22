@@ -1285,6 +1285,77 @@ def prune_stale_tool_rows(
     )
 
 
+def prune_tool_rows_for_unlisted_apps(
+    session: Session,
+    *,
+    context_id: int,
+    backend_id: str,
+    keep_app_slugs: Iterable[str],
+) -> int:
+    """Delete tool rows whose app is no longer present in the catalog.
+
+    The per-batch tool prune is scoped by ``app_slug`` and so can only remove
+    tools for apps it revisits. When an app is renamed (its canonical slug
+    changes) or removed from the provider, its old rows live under a slug that no
+    batch ever requests again and therefore leak permanently. This finalization
+    prune removes any tool row whose stored ``app_slug`` is not in the current
+    catalog's canonical app-slug set, regardless of which batch produced it.
+    """
+
+    normalized_keep = sorted(
+        {_normalize_app_slug(slug) for slug in keep_app_slugs if str(slug).strip()},
+    )
+    if not normalized_keep:
+        return 0
+    deleted_ids = session.execute(
+        text(
+            """
+            WITH stale AS (
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON lec.log_event_id = le.id
+                WHERE lec.context_id = :context_id
+                  AND le.data ->> 'backend_id' = :backend_id
+                  AND (le.data #>> '{metadata,integration,app_slug}')
+                      <> ALL(CAST(:keep_app_slugs AS text[]))
+            ),
+            deleted_unique AS (
+                DELETE FROM log_unique_constraint luc
+                USING stale
+                WHERE luc.context_id = :context_id
+                  AND luc.log_event_id = stale.id
+                RETURNING luc.log_event_id
+            ),
+            deleted_context AS (
+                DELETE FROM log_event_context lec
+                USING stale
+                WHERE lec.context_id = :context_id
+                  AND lec.log_event_id = stale.id
+                RETURNING lec.log_event_id
+            ),
+            deleted_orphans AS (
+                DELETE FROM log_event le
+                USING stale
+                WHERE le.id = stale.id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM log_event_context remaining
+                      WHERE remaining.log_event_id = le.id
+                  )
+                RETURNING le.id
+            )
+            SELECT COUNT(*) FROM stale
+            """,
+        ),
+        {
+            "context_id": context_id,
+            "backend_id": backend_id,
+            "keep_app_slugs": normalized_keep,
+        },
+    ).scalar_one()
+    return int(deleted_ids or 0)
+
+
 def _meta_id(kind: str, *parts: Any) -> int:
     return _stable_int_id("integration_meta", f"{kind}:{_json_dumps(parts)}")
 
@@ -1718,6 +1789,14 @@ def run_builtins_sync(
         result.apps_pruned = app_counts.get("pruned", 0)
         result.matched_app_slugs = app_fetch.matched_app_slugs
         result.skipped_apps = app_fetch.skipped_apps
+        if request.prune_unlisted_apps and not request.app_slugs:
+            result.tools_pruned += prune_tool_rows_for_unlisted_apps(
+                session,
+                context_id=contexts["tools"].id,
+                backend_id=request.backend_id,
+                keep_app_slugs=app_fetch.matched_app_slugs,
+            )
+            session.commit()
         result.diagnostics.update(
             {
                 "sync_mode": app_fetch.sync_mode,
