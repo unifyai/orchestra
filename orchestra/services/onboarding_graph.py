@@ -135,7 +135,7 @@ def _trigger(
         phase=PHASE_QUIZ,
         kind="trigger",
         depends_on=depends_on,
-        can_skip=False,
+        can_skip=True,
         derivable=False,
         channel=channel,
         paired_reply=paired_reply,
@@ -445,59 +445,77 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(
-        "Twin sends the first reference clue over email.", "~10s"
+        "Twin sends the first reference clue over email.",
+        "~10s",
     ),
     "email-reply": StepPresentation("Twin sends you a quick email.", "~30s"),
     "whatsapp-number": StepPresentation(
-        "Add the WhatsApp number Twin should use.", "~30s"
+        "Add the WhatsApp number Twin should use.",
+        "~30s",
     ),
     "whatsapp-message-reference": StepPresentation(
-        "Twin sends the next reference clue over WhatsApp.", "~10s"
+        "Twin sends the next reference clue over WhatsApp.",
+        "~10s",
     ),
     "whatsapp-message": StepPresentation(
-        "Twin sends you a reference clue over WhatsApp.", "~1 min"
+        "Twin sends you a reference clue over WhatsApp.",
+        "~1 min",
     ),
     "whatsapp-call-reference": StepPresentation(
-        "Twin calls with the next reference clue over WhatsApp.", "~10s"
+        "Twin calls with the next reference clue over WhatsApp.",
+        "~10s",
     ),
     "whatsapp-call": StepPresentation(
-        "Twin gives you a reference clue over WhatsApp voice.", "~1 min"
+        "Twin gives you a reference clue over WhatsApp voice.",
+        "~1 min",
     ),
     "phone-number": StepPresentation(
-        "Add the phone number Twin should use for calls and SMS.", "~30s"
+        "Add the phone number Twin should use for calls and SMS.",
+        "~30s",
     ),
     "sms-reference": StepPresentation(
-        "Twin sends the next reference clue over SMS.", "~10s"
+        "Twin sends the next reference clue over SMS.",
+        "~10s",
     ),
     "sms-message": StepPresentation(
-        "Twin sends you a reference clue over SMS.", "~1 min"
+        "Twin sends you a reference clue over SMS.",
+        "~1 min",
     ),
     "phone-call-reference": StepPresentation(
-        "Twin calls with the next reference clue.", "~10s"
+        "Twin calls with the next reference clue.",
+        "~10s",
     ),
     "phone-call": StepPresentation(
-        "Twin gives you a reference clue over a phone call.", "~1 min"
+        "Twin gives you a reference clue over a phone call.",
+        "~1 min",
     ),
     "slack-connect": StepPresentation(
-        "Connect Twin through the Unify Slack app.", "~1 min"
+        "Connect Twin through the Unify Slack app.",
+        "~1 min",
     ),
     "slack-reference": StepPresentation(
-        "Twin sends the next reference clue in Slack.", "~10s"
+        "Twin sends the next reference clue in Slack.",
+        "~10s",
     ),
     "slack-message": StepPresentation(
-        "Twin sends you a reference clue in Slack.", "~1 min"
+        "Twin sends you a reference clue in Slack.",
+        "~1 min",
     ),
     "discord-connect": StepPresentation(
-        "Connect Twin through the public Discord bot.", "~1 min"
+        "Connect Twin through the public Discord bot.",
+        "~1 min",
     ),
     "discord-reference": StepPresentation(
-        "Twin sends the next reference clue in Discord.", "~10s"
+        "Twin sends the next reference clue in Discord.",
+        "~10s",
     ),
     "discord-message": StepPresentation(
-        "Twin sends you a reference clue in Discord.", "~1 min"
+        "Twin sends you a reference clue in Discord.",
+        "~1 min",
     ),
     "workspace": StepPresentation(
-        "Required for everything else in onboarding.", "~30s"
+        "Required for everything else in onboarding.",
+        "~30s",
     ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
     "act": StepPresentation(

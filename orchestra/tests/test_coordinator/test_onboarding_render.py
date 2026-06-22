@@ -41,7 +41,9 @@ def test_graph_integrity_and_pairing() -> None:
     assert len(graph.TRIGGER_TO_REPLY) == 7
     # Every trigger points at a real reply step.
     for trigger_id, reply_id in graph.TRIGGER_TO_REPLY.items():
-        assert graph.STEP_BY_ID[trigger_id].kind == "trigger"
+        trigger = graph.STEP_BY_ID[trigger_id]
+        assert trigger.kind == "trigger"
+        assert trigger.can_skip is True
         assert reply_id in graph.STEP_BY_ID
 
 
@@ -92,6 +94,26 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
     assert statuses["apps"] == "locked"
     assert statuses["act"] == "available"
     assert statuses["schedule"] == "locked"
+    steps = {step["id"]: step for step in render["steps"]}
+    assert steps["email-reference"]["can_skip"] is True
+    assert steps["email-reply"]["dependencies"] == [
+        {
+            "id": "email-reference",
+            "title": "Email the first reference",
+            "status": "available",
+            "resolution": "addressed",
+            "satisfied": False,
+        },
+    ]
+    assert steps["schedule"]["dependencies"] == [
+        {
+            "id": "act",
+            "title": "Ask me to do something now",
+            "status": "available",
+            "resolution": "addressed",
+            "satisfied": False,
+        },
+    ]
     assert _next_ids(render) == ["email-reference", "workspace", "act"]
     # Every next target carries spoken + chat nudge copy.
     for target in render["next_targets"]:

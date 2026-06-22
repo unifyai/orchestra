@@ -1112,7 +1112,7 @@ def get_coordinator_state(
         "onboarding_step": onboarding_step,
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "skipped_phase_ids": normalize_onboarding_phase_ids(
-            row.get("skipped_phase_ids")
+            row.get("skipped_phase_ids"),
         ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
@@ -1924,6 +1924,7 @@ def compute_onboarding_render(
 
     steps: list[dict[str, Any]] = []
     next_targets: list[dict[str, Any]] = []
+    step_statuses: dict[str, str] = {}
     for step in onboarding_graph.ONBOARDING_GRAPH:
         if not onboarding_graph.phase_is_visible(step.phase, local_mode=local_mode):
             continue
@@ -1939,6 +1940,30 @@ def compute_onboarding_render(
             status = "available"
         else:
             status = "locked"
+        dependencies: list[dict[str, Any]] = []
+        for dep_id, level in step.depends_on.items():
+            dep = onboarding_graph.STEP_BY_ID[dep_id]
+            if not onboarding_graph.phase_is_visible(dep.phase, local_mode=local_mode):
+                continue
+            satisfied = (
+                dep_id in completed
+                if level == onboarding_graph.COMPLETED
+                else dep_id in completed or dep_id in skipped
+            )
+            dependencies.append(
+                {
+                    "id": dep.id,
+                    "title": dep.title,
+                    "status": step_statuses.get(dep.id, "locked"),
+                    "resolution": (
+                        "completed"
+                        if level == onboarding_graph.COMPLETED
+                        else "addressed"
+                    ),
+                    "satisfied": satisfied,
+                },
+            )
+        step_statuses[step.id] = status
         steps.append(
             {
                 "id": step.id,
@@ -1946,6 +1971,7 @@ def compute_onboarding_render(
                 "phase": step.phase,
                 "status": status,
                 "can_skip": step.can_skip,
+                "dependencies": dependencies,
                 **_step_presentation_fields(step.id),
             },
         )
@@ -1969,7 +1995,7 @@ def compute_onboarding_render(
         "steps": steps,
         "next_targets": next_targets,
         "skipped_phase_ids": normalize_onboarding_phase_ids(
-            state.get("skipped_phase_ids")
+            state.get("skipped_phase_ids"),
         ),
     }
 
