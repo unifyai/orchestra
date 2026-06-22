@@ -37,7 +37,7 @@ def _next_ids(render: dict) -> list[str]:
 def test_graph_integrity_and_pairing() -> None:
     """The graph imports cleanly and exposes a consistent trigger pairing."""
     # Import already ran ``_assert_graph_integrity`` without raising.
-    assert len(graph.ONBOARDING_GRAPH) == 22
+    assert len(graph.ONBOARDING_GRAPH) == 27
     assert len(graph.TRIGGER_TO_REPLY) == 7
     # Every trigger points at a real reply step.
     for trigger_id, reply_id in graph.TRIGGER_TO_REPLY.items():
@@ -102,8 +102,13 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
     assert statuses["discord-reference"] == "locked"
     assert statuses["workspace"] == "available"
     assert statuses["apps"] == "locked"
-    assert statuses["act"] == "available"
-    assert statuses["schedule"] == "locked"
+    assert statuses["schedule"] == "available"
+    assert statuses["learning-coming-soon"] == "coming_soon"
+    assert statuses["canvas-coming-soon"] == "coming_soon"
+    assert statuses["my-computer-coming-soon"] == "coming_soon"
+    assert statuses["your-computer-coming-soon"] == "coming_soon"
+    assert statuses["teams-coming-soon"] == "coming_soon"
+    assert statuses["hiring-coming-soon"] == "coming_soon"
     steps = {step["id"]: step for step in render["steps"]}
     assert steps["email-reference"]["can_skip"] is True
     assert steps["email-reply"]["dependencies"] == [
@@ -124,15 +129,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
             "satisfied": False,
         },
     ]
-    assert steps["schedule"]["dependencies"] == [
-        {
-            "id": "act",
-            "title": "Ask me to do something now",
-            "status": "available",
-            "resolution": "addressed",
-            "satisfied": False,
-        },
-    ]
+    assert steps["schedule"]["dependencies"] == []
     assert _next_ids(render) == [
         "email-reference",
         "whatsapp-number",
@@ -140,7 +137,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         "slack-connect",
         "discord-connect",
         "workspace",
-        "act",
+        "schedule",
     ]
     # Every next target carries spoken + chat nudge copy.
     for target in render["next_targets"]:
@@ -161,7 +158,7 @@ def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
         "slack-connect",
         "discord-connect",
         "workspace",
-        "act",
+        "schedule",
     ]
 
 
@@ -188,19 +185,19 @@ def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -
         completed=[],
         skipped=[],
         active=None,
-        skipped_phases=[graph.PHASE_CONNECT],
+        skipped_phases=[graph.PHASE_WORKSPACE],
     )
     statuses = _statuses(render)
     assert statuses["workspace"] == "available"
     assert statuses["apps"] == "locked"
-    assert render["skipped_phase_ids"] == [graph.PHASE_CONNECT]
+    assert render["skipped_phase_ids"] == [graph.PHASE_WORKSPACE]
     assert _next_ids(render) == [
         "email-reference",
         "whatsapp-number",
         "phone-number",
         "slack-connect",
         "discord-connect",
-        "act",
+        "schedule",
     ]
 
 
@@ -213,52 +210,66 @@ def test_render_carries_phase_headers_and_step_presentation() -> None:
     """The render carries phase headers + per-step copy so Console renders
     straight from it without its own duplicated presentation map."""
     render = _render_with(completed=[], skipped=[], active=None)
-    assert [p["id"] for p in render["phases"]] == ["comms", "connect", "work"]
-    comms = next(p for p in render["phases"] if p["id"] == "comms")
-    assert comms["title"] == "Guess the reference"
-    assert comms["phase"] == graph.PHASE_QUIZ
+    assert [p["title"] for p in render["phases"]] == [
+        "Communication",
+        "Workspace",
+        "Integrations",
+        "Tasks",
+        "Learning",
+        "Canvas",
+        "My Computer",
+        "Your Computer",
+        "Teams",
+        "Hiring",
+    ]
+    comms = next(p for p in render["phases"] if p["id"] == "communication")
+    assert comms["title"] == "Communication"
+    assert comms["phase"] == graph.PHASE_COMMUNICATION
     steps = {s["id"]: s for s in render["steps"]}
     assert steps["email-reference"]["description"]
     assert steps["email-reference"]["estimated_time"]
-    act = steps["act"]
-    assert [c["id"] for c in act["chips_chat"]] == [
-        "summarize-email",
-        "catch-up-news",
-        "draft-reply",
-    ]
-    assert [c["id"] for c in act["chips_call"]]
+    schedule = steps["schedule"]
+    assert [c["id"] for c in schedule["chips_chat"]]
     # Non-chip steps carry empty chip lists rather than omitting the field.
     assert steps["workspace"]["chips_chat"] == []
+    assert steps["learning-coming-soon"]["title"] == "[Coming soon]"
+    assert steps["learning-coming-soon"]["status"] == "coming_soon"
 
 
 # ---------------------------------------------------------------------------
-# Deployment gating — local_only phases omitted on hosted deployments
+# Deployment gating
 # ---------------------------------------------------------------------------
 
 
-def test_render_hosted_omits_local_only_phases() -> None:
-    """On hosted (non-self-host) deployments the Quiz + Delegate phases are
-    dropped entirely; only Connect renders."""
+def test_render_hosted_keeps_onboarding_catalog() -> None:
+    """Hosted and self-host deployments share the Coordinator onboarding catalog."""
     render = _render_with(completed=[], skipped=[], active=None, local_mode=False)
-    assert [p["id"] for p in render["phases"]] == ["connect"]
-    phases_present = {s["phase"] for s in render["steps"]}
-    assert phases_present == {graph.PHASE_CONNECT}
-    assert _next_ids(render) == ["workspace"]
-    # Quiz / Delegate steps are gone, not merely locked.
-    assert all(s["id"] not in {"email-reference", "act"} for s in render["steps"])
+    assert [p["id"] for p in render["phases"]] == [
+        "communication",
+        "workspace",
+        "integrations",
+        "tasks",
+        "learning",
+        "canvas",
+        "my-computer",
+        "your-computer",
+        "teams",
+        "hiring",
+    ]
+    assert "email-reference" in {s["id"] for s in render["steps"]}
+    assert "my-computer-coming-soon" in {s["id"] for s in render["steps"]}
 
 
 def test_render_local_keeps_all_phases() -> None:
     """A local self-host install keeps every phase visible."""
     render = _render_with(completed=[], skipped=[], active=None, local_mode=True)
-    assert [p["id"] for p in render["phases"]] == ["comms", "connect", "work"]
+    assert len(render["phases"]) == 10
 
 
 def test_phase_visibility_helper() -> None:
-    assert graph.phase_is_visible(graph.PHASE_CONNECT, local_mode=False) is True
-    assert graph.phase_is_visible(graph.PHASE_QUIZ, local_mode=False) is False
-    assert graph.phase_is_visible(graph.PHASE_DELEGATE, local_mode=False) is False
-    assert graph.phase_is_visible(graph.PHASE_QUIZ, local_mode=True) is True
+    assert graph.phase_is_visible(graph.PHASE_WORKSPACE, local_mode=False) is True
+    assert graph.phase_is_visible(graph.PHASE_COMMUNICATION, local_mode=False) is True
+    assert graph.phase_is_visible(graph.PHASE_MY_COMPUTER, local_mode=True) is True
 
 
 # ---------------------------------------------------------------------------
@@ -268,17 +279,17 @@ def test_phase_visibility_helper() -> None:
 
 def test_catalog_local_lists_all_phases_with_copy() -> None:
     catalog = svc.build_onboarding_catalog(local_mode=True)
-    assert [p["id"] for p in catalog["phases"]] == ["comms", "connect", "work"]
+    assert len(catalog["phases"]) == 10
     assert len(catalog["steps"]) == len(graph.ONBOARDING_GRAPH)
-    act = next(s for s in catalog["steps"] if s["id"] == "act")
-    assert act["description"]
-    assert [c["id"] for c in act["chips_chat"]]
+    schedule = next(s for s in catalog["steps"] if s["id"] == "schedule")
+    assert schedule["description"]
+    assert [c["id"] for c in schedule["chips_chat"]]
 
 
-def test_catalog_hosted_drops_local_only_phases() -> None:
+def test_catalog_hosted_keeps_onboarding_catalog() -> None:
     catalog = svc.build_onboarding_catalog(local_mode=False)
-    assert [p["id"] for p in catalog["phases"]] == ["connect"]
-    assert {s["id"] for s in catalog["steps"]} == {"workspace", "apps"}
+    assert len(catalog["phases"]) == 10
+    assert "learning-coming-soon" in {s["id"] for s in catalog["steps"]}
 
 
 def test_onboarding_local_mode_signal() -> None:

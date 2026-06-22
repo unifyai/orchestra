@@ -310,7 +310,6 @@ def test_derive_onboarding_progress_orders_steps_canonically() -> None:
         patch.object(svc, "_has_discord_message", return_value=False),
         patch.object(svc, "_has_workspace_email", return_value=True),
         patch.object(svc, "_has_app_secret", return_value=False),
-        patch.object(svc, "_has_root_action", return_value=True),
         patch.object(svc, "_has_scheduled_task", return_value=True),
     ):
         derived = svc.derive_onboarding_progress(
@@ -325,7 +324,6 @@ def test_derive_onboarding_progress_orders_steps_canonically() -> None:
         svc.ONBOARDING_STEP_SLACK_CONNECT,
         svc.ONBOARDING_STEP_DISCORD_CONNECT,
         svc.ONBOARDING_STEP_WORKSPACE,
-        svc.ONBOARDING_STEP_ACT,
         svc.ONBOARDING_STEP_SCHEDULE,
     ]
 
