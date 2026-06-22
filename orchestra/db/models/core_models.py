@@ -295,6 +295,12 @@ class LogEvent(Base):
         # owner_key`` (per-assistant/team purge) O(the owner's rows) instead of a
         # scan of the whole shared Assistants project.
         Index("idx_log_event_project_owner", "project_id", "owner_key"),
+        # The composite PK leads with ``project_id``, so a lookup by bare ``id``
+        # (point reads that resolve a log's project/owner -- e.g. get_ts,
+        # get_user_id -- where project_id is not yet known) has no usable index
+        # and would scan every partition. This single-column index restores an
+        # indexed by-id probe across the partition tree.
+        Index("idx_log_event_id", "id"),
         {"postgresql_partition_by": "LIST (project_id)"},
     )
 
