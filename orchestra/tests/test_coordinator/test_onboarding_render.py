@@ -90,6 +90,16 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
     statuses = _statuses(render)
     assert statuses["email-reference"] == "available"
     assert statuses["email-reply"] == "locked"
+    assert statuses["whatsapp-number"] == "available"
+    assert statuses["whatsapp-message-reference"] == "locked"
+    assert statuses["whatsapp-call-reference"] == "locked"
+    assert statuses["phone-number"] == "available"
+    assert statuses["sms-reference"] == "locked"
+    assert statuses["phone-call-reference"] == "locked"
+    assert statuses["slack-connect"] == "available"
+    assert statuses["slack-reference"] == "locked"
+    assert statuses["discord-connect"] == "available"
+    assert statuses["discord-reference"] == "locked"
     assert statuses["workspace"] == "available"
     assert statuses["apps"] == "locked"
     assert statuses["act"] == "available"
@@ -105,6 +115,15 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
             "satisfied": False,
         },
     ]
+    assert steps["sms-reference"]["dependencies"] == [
+        {
+            "id": "phone-number",
+            "title": "Add your phone number",
+            "status": "available",
+            "resolution": "addressed",
+            "satisfied": False,
+        },
+    ]
     assert steps["schedule"]["dependencies"] == [
         {
             "id": "act",
@@ -114,7 +133,15 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
             "satisfied": False,
         },
     ]
-    assert _next_ids(render) == ["email-reference", "workspace", "act"]
+    assert _next_ids(render) == [
+        "email-reference",
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "workspace",
+        "act",
+    ]
     # Every next target carries spoken + chat nudge copy.
     for target in render["next_targets"]:
         assert target["nudge_voice"]
@@ -122,13 +149,20 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
 
 
 def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
-    """A completed reply marks its trigger done and opens the next step."""
+    """A completed reply marks its trigger done without gating other media."""
     render = _render_with(completed=["email-reply"], skipped=[], active=None)
     statuses = _statuses(render)
     assert statuses["email-reference"] == "done"  # inferred from the reply
     assert statuses["email-reply"] == "done"
     assert statuses["whatsapp-number"] == "available"
-    assert _next_ids(render) == ["whatsapp-number", "workspace", "act"]
+    assert _next_ids(render) == [
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "workspace",
+        "act",
+    ]
 
 
 def test_render_active_reply_infers_trigger_done() -> None:
@@ -141,12 +175,11 @@ def test_render_active_reply_infers_trigger_done() -> None:
 
 def test_render_skipped_dependency_unlocks_addressed_dependent() -> None:
     """An ADDRESSED edge opens once its dependency is skipped (not just done)."""
-    # Skipping a reply still resolves its trigger and unlocks downstream.
-    render = _render_with(completed=[], skipped=["email-reply"], active=None)
+    render = _render_with(completed=[], skipped=["phone-number"], active=None)
     statuses = _statuses(render)
-    assert statuses["email-reply"] == "skipped"
-    assert statuses["email-reference"] == "skipped"
-    assert statuses["whatsapp-number"] == "available"
+    assert statuses["phone-number"] == "skipped"
+    assert statuses["sms-reference"] == "available"
+    assert statuses["phone-call-reference"] == "available"
 
 
 def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -> None:
@@ -161,7 +194,14 @@ def test_render_skipped_phase_suppresses_next_targets_without_skipping_steps() -
     assert statuses["workspace"] == "available"
     assert statuses["apps"] == "locked"
     assert render["skipped_phase_ids"] == [graph.PHASE_CONNECT]
-    assert _next_ids(render) == ["email-reference", "act"]
+    assert _next_ids(render) == [
+        "email-reference",
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "act",
+    ]
 
 
 # ---------------------------------------------------------------------------
