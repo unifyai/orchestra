@@ -128,6 +128,7 @@ def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
             SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
             """,
         ),
@@ -177,6 +178,7 @@ def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) ->
             SELECT DISTINCT jsonb_object_keys(le.data) AS field_name
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
             """,
         ),
@@ -1375,6 +1377,7 @@ class ContextDAO:
             SELECT DISTINCT le.id, le.project_id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
         """,
@@ -1458,6 +1461,7 @@ class ContextDAO:
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, CAST(:old_value AS jsonb))
             )
@@ -1496,6 +1500,7 @@ class ContextDAO:
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
             )
@@ -1573,6 +1578,7 @@ class ContextDAO:
                 SELECT DISTINCT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, old_val.v)
@@ -1640,6 +1646,7 @@ class ContextDAO:
                 SELECT DISTINCT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
                 CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
                 WHERE lec.context_id = :context_id
                   AND le.data @> jsonb_build_object(:fk_column, old_val.v)
@@ -1877,6 +1884,7 @@ class ContextDAO:
             SELECT DISTINCT le.id, le.data, le.project_id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -1986,6 +1994,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -2137,6 +2146,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -2284,6 +2294,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.data ? :root_field
         """,
@@ -3447,6 +3458,7 @@ class ContextDAO:
             SELECT le.id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id AND le.id != :log_event_id
         ),
         potential_duplicates AS (
@@ -3510,6 +3522,7 @@ class ContextDAO:
             SELECT le.id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id AND le.id != :log_event_id
         ),
         matching_other AS (
@@ -3572,6 +3585,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
@@ -3637,6 +3651,7 @@ class ContextDAO:
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
