@@ -68,7 +68,10 @@ def _render_with(completed: list[str], skipped: list[str], active: str | None) -
             },
         ),
     ):
-        return svc.compute_onboarding_render(MagicMock(), coordinator=_fake_coordinator())
+        return svc.compute_onboarding_render(
+            MagicMock(),
+            coordinator=_fake_coordinator(),
+        )
 
 
 def test_render_fresh_start_only_first_trigger_available() -> None:

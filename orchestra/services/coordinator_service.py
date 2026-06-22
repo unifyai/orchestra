@@ -39,11 +39,11 @@ from orchestra.services.contact_membership_service import (
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
 )
-from orchestra.services.universal_droid_email import (
-    ensure_coordinator_universal_email_contact,
-)
 from orchestra.services.universal_droid_discord import (
     ensure_coordinator_universal_discord_contact,
+)
+from orchestra.services.universal_droid_email import (
+    ensure_coordinator_universal_email_contact,
 )
 from orchestra.services.universal_droid_phone import (
     ensure_coordinator_universal_phone_contact,
@@ -1021,7 +1021,9 @@ def _coordinator_state_entry(
     # it later — so we carry the previous value forward only when the
     # current write doesn't explicitly set it.
     if onboarding_deferred is None:
-        next_onboarding_deferred = bool((previous or {}).get("onboarding_deferred", False))
+        next_onboarding_deferred = bool(
+            (previous or {}).get("onboarding_deferred", False),
+        )
     else:
         next_onboarding_deferred = bool(onboarding_deferred)
     return {
@@ -1605,7 +1607,8 @@ def _has_assistant_transcript_message(
         session,
         project_id=project.id,
         context_name=_coordinator_context_name(
-            coordinator, COORDINATOR_TRANSCRIPTS_CONTEXT
+            coordinator,
+            COORDINATOR_TRANSCRIPTS_CONTEXT,
         ),
     )
     if context is None:
@@ -1743,9 +1746,13 @@ def compute_onboarding_render(
     the Console checklist did: a trigger is done once its reply is done
     or is the active step, and skipped once its reply is skipped.
     """
-    completed: set[str] = set(derive_onboarding_progress(session, coordinator=coordinator))
+    completed: set[str] = set(
+        derive_onboarding_progress(session, coordinator=coordinator),
+    )
     state = get_coordinator_state(session, coordinator=coordinator)
-    skipped: set[str] = set(normalize_onboarding_step_ids(state.get("skipped_step_ids")))
+    skipped: set[str] = set(
+        normalize_onboarding_step_ids(state.get("skipped_step_ids")),
+    )
     active = state.get("onboarding_step")
     active_id = active if isinstance(active, str) else None
 
@@ -1762,7 +1769,11 @@ def compute_onboarding_render(
             status = "done"
         elif step.id in skipped:
             status = "skipped"
-        elif onboarding_graph.dependencies_satisfied(step.depends_on, completed, skipped):
+        elif onboarding_graph.dependencies_satisfied(
+            step.depends_on,
+            completed,
+            skipped,
+        ):
             status = "available"
         else:
             status = "locked"
@@ -1875,7 +1886,10 @@ def _with_onboarding_render(
     """
     merged = dict(details or {})
     try:
-        merged["onboarding"] = compute_onboarding_render(session, coordinator=coordinator)
+        merged["onboarding"] = compute_onboarding_render(
+            session,
+            coordinator=coordinator,
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "Skipping onboarding render on event for %s: %s",
@@ -1981,7 +1995,11 @@ async def notify_coordinator_onboarding_event(
         coordinator=coordinator,
         subtype=subtype,
         message=message,
-        details=_with_onboarding_render(session, coordinator=coordinator, details=details),
+        details=_with_onboarding_render(
+            session,
+            coordinator=coordinator,
+            details=details,
+        ),
     )
     try:
         await _post_droid_system_event(
@@ -2027,7 +2045,11 @@ def notify_coordinator_onboarding_event_safe_sync(
         coordinator=coordinator,
         subtype=subtype,
         message=message,
-        details=_with_onboarding_render(session, coordinator=coordinator, details=details),
+        details=_with_onboarding_render(
+            session,
+            coordinator=coordinator,
+            details=details,
+        ),
     )
     _fire_and_forget_onboarding_event(payload)
     return True
@@ -2159,7 +2181,7 @@ async def emit_onboarding_step_started_event(
     """Notify Droid that the user selected one onboarding checklist step."""
     completed = list(
         completed_step_ids
-        or derive_onboarding_progress(session, coordinator=coordinator)
+        or derive_onboarding_progress(session, coordinator=coordinator),
     )
     skipped = normalize_onboarding_step_ids(
         skipped_step_ids
@@ -2191,12 +2213,12 @@ async def emit_onboarding_step_skipped_event(
     """Notify Droid that the user intentionally skipped one onboarding step."""
     completed = list(
         completed_step_ids
-        or derive_onboarding_progress(session, coordinator=coordinator)
+        or derive_onboarding_progress(session, coordinator=coordinator),
     )
     skipped = normalize_onboarding_step_ids(
         skipped_step_ids
         or get_coordinator_state(session, coordinator=coordinator).get(
-            "skipped_step_ids"
+            "skipped_step_ids",
         ),
     )
     return await notify_coordinator_onboarding_event(
