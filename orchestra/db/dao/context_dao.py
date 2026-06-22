@@ -46,14 +46,16 @@ def delete_orphaned_log_events(
             SELECT le.id
             FROM log_event le
             WHERE le.id = ANY(:log_event_ids)
+              AND le.project_id = :project_id
               AND NOT EXISTS (
                 SELECT 1
                 FROM log_event_context lec
                 WHERE lec.log_event_id = le.id
+                  AND lec.project_id = :project_id
               );
             """,
             ),
-            {"log_event_ids": log_event_ids},
+            {"log_event_ids": log_event_ids, "project_id": project_id},
         ).fetchall()
     else:
         # Project-wide fallback: scans all logs in the project.
@@ -85,12 +87,13 @@ def delete_orphaned_log_events(
         embedding_dao = EmbeddingDAO(session)
         embedding_dao.cancel_queue(
             log_event_ids=orphaned_ids,
+            project_id=project_id,
             reason="Context deleted",
         )
-        embedding_dao.soft_delete(log_event_ids=orphaned_ids)
+        embedding_dao.soft_delete(log_event_ids=orphaned_ids, project_id=project_id)
         # The embedding -> log_event FK was removed for partitioning, so deleting
         # the log events below no longer nulls these ref_ids; do it explicitly.
-        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids, project_id=project_id)
 
     # The log_unique_constraint -> log_event FK was also removed for partitioning
     # (log_event's PK is now composite), so the constraint rows are no longer
@@ -102,8 +105,11 @@ def delete_orphaned_log_events(
     )
 
     session.execute(
-        text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
-        {"log_event_ids": orphaned_ids},
+        text(
+            "DELETE FROM log_event "
+            "WHERE id = ANY(:log_event_ids) AND project_id = :project_id",
+        ),
+        {"log_event_ids": orphaned_ids, "project_id": project_id},
     )
 
 
@@ -3100,12 +3106,14 @@ class ContextDAO:
                             text(
                                 "SELECT le.id FROM log_event le "
                                 "WHERE le.id = ANY(:ids) "
+                                "AND le.project_id = :pid "
                                 "AND NOT EXISTS ("
                                 "  SELECT 1 FROM log_event_context lec "
                                 "  WHERE lec.log_event_id = le.id"
+                                "  AND lec.project_id = :pid"
                                 ")",
                             ),
-                            {"ids": log_event_ids},
+                            {"ids": log_event_ids, "pid": project_id},
                         ).fetchall()
                     ]
 
@@ -3113,14 +3121,19 @@ class ContextDAO:
                         embedding_dao = EmbeddingDAO(self.session)
                         cancelled = embedding_dao.cancel_queue(
                             log_event_ids=orphaned_ids,
+                            project_id=project_id,
                             reason="Context deleted",
                         )
                         soft_deleted = embedding_dao.soft_delete(
                             log_event_ids=orphaned_ids,
+                            project_id=project_id,
                         )
                         # FK to log_event was dropped for partitioning, so the
                         # orphan log deletion below won't null these ref_ids.
-                        embedding_dao.null_ref_ids(log_event_ids=orphaned_ids)
+                        embedding_dao.null_ref_ids(
+                            log_event_ids=orphaned_ids,
+                            project_id=project_id,
+                        )
 
                         if soft_deleted > 0 or cancelled > 0:
                             logger.info(
@@ -3151,14 +3164,17 @@ class ContextDAO:
                                     "WITH batch AS ("
                                     "  SELECT id FROM log_event"
                                     "  WHERE id = ANY(:ids)"
+                                    "  AND project_id = :pid"
                                     "  LIMIT :batch_size"
                                     "  FOR UPDATE SKIP LOCKED"
                                     ") "
                                     "DELETE FROM log_event "
-                                    "WHERE id IN (SELECT id FROM batch)",
+                                    "WHERE id IN (SELECT id FROM batch)"
+                                    "  AND project_id = :pid",
                                 ),
                                 {
                                     "ids": orphaned_ids,
+                                    "pid": project_id,
                                     "batch_size": batch_size,
                                 },
                             )
