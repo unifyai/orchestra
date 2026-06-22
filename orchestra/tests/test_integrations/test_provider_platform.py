@@ -1063,6 +1063,207 @@ async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
 
 
 @pytest.mark.anyio
+async def test_run_tool_executes_when_connection_holds_superscope(
+    client: AsyncClient,
+) -> None:
+    """A connection holding only a broad superscope must not be blocked.
+
+    The tool declares narrower scope variants the connection does not literally
+    hold; a local subset prediction would wrongly block it. Authorization is the
+    provider's job, so the run must reach the adapter and succeed.
+    """
+
+    assistant_id = 79_000 + (uuid.uuid4().int % 1000)
+    start_response = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "gmail",
+            "backend_id": "composio",
+            "provider_app_id": "gmail",
+            "requested_scopes": ["https://mail.google.com/"],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert start_response.status_code == status.HTTP_200_OK, start_response.json()
+    connection_id = start_response.json()["connection"]["connection_id"]
+    granted = start_response.json()["connection"]["granted_scopes"]
+    assert granted == ["https://mail.google.com/"]
+
+    tool_metadata = _tool_metadata(
+        app_slug="gmail",
+        tool_name="fetch_emails",
+        display_name="Fetch Gmail emails",
+        required_scopes=[
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.readonly",
+        ],
+    )
+
+    run = await client.post(
+        "/v0/integrations/tools/composio:gmail:fetch_emails/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
+            "connection_id": connection_id,
+            "arguments": {"query": "is:unread"},
+        },
+    )
+    assert run.status_code == status.HTTP_200_OK, run.json()
+    assert run.json()["status"] == "ok"
+    assert run.json()["activation_state"] == "connected_ready"
+
+
+@pytest.mark.anyio
+async def test_run_tool_maps_provider_403_to_missing_scope(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider 403 (insufficient permissions) is surfaced as missing_scope
+    using the provider's own response, not a local scope comparison."""
+
+    from orchestra.integrations.providers.base import ProviderExecutionResult
+    from orchestra.web.api.integrations import operations as ops
+
+    assistant_id = 79_500 + (uuid.uuid4().int % 1000)
+    start_response = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "gmail",
+            "backend_id": "composio",
+            "provider_app_id": "gmail",
+            "requested_scopes": ["https://mail.google.com/"],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert start_response.status_code == status.HTTP_200_OK, start_response.json()
+    connection_id = start_response.json()["connection"]["connection_id"]
+
+    class _ForbiddenAdapter:
+        def execute(self, request: object) -> ProviderExecutionResult:
+            return ProviderExecutionResult(
+                status="error",
+                error={
+                    "code": "provider_request_failed",
+                    "message": "403 Client Error",
+                    "provider_status_code": 403,
+                    "provider_response_body": "insufficient authentication scopes",
+                },
+            )
+
+    monkeypatch.setattr(
+        ops,
+        "get_provider_adapter",
+        lambda *a, **k: _ForbiddenAdapter(),
+    )
+
+    tool_metadata = _tool_metadata(
+        app_slug="gmail",
+        tool_name="fetch_emails",
+        display_name="Fetch Gmail emails",
+        required_scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+    )
+    run = await client.post(
+        "/v0/integrations/tools/composio:gmail:fetch_emails/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
+            "connection_id": connection_id,
+            "arguments": {"query": "is:unread"},
+        },
+    )
+    assert run.status_code == status.HTTP_200_OK, run.json()
+    body = run.json()
+    assert body["status"] == "missing_scope"
+    assert body["activation_state"] == "missing_scope"
+    assert body["error"]["code"] == "missing_scope"
+    assert body["error"]["required_scopes"] == [
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ]
+    assert (
+        body["error"]["provider_response_body"] == "insufficient authentication scopes"
+    )
+
+
+@pytest.mark.anyio
+async def test_run_tool_maps_provider_401_to_reconnect_required(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider 401 (unauthenticated token) is surfaced as a reconnect
+    outcome derived from the provider response."""
+
+    from orchestra.integrations.providers.base import ProviderExecutionResult
+    from orchestra.web.api.integrations import operations as ops
+
+    assistant_id = 80_000 + (uuid.uuid4().int % 1000)
+    start_response = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            "canonical_app_slug": "gmail",
+            "backend_id": "composio",
+            "provider_app_id": "gmail",
+            "requested_scopes": ["https://mail.google.com/"],
+            "auth_mode": "api_key",
+            "api_key_fields": {"token": "secret"},
+        },
+    )
+    assert start_response.status_code == status.HTTP_200_OK, start_response.json()
+    connection_id = start_response.json()["connection"]["connection_id"]
+
+    class _UnauthenticatedAdapter:
+        def execute(self, request: object) -> ProviderExecutionResult:
+            return ProviderExecutionResult(
+                status="error",
+                error={
+                    "code": "provider_request_failed",
+                    "message": "401 Client Error",
+                    "provider_status_code": 401,
+                    "provider_response_body": "invalid credentials",
+                },
+            )
+
+    monkeypatch.setattr(
+        ops,
+        "get_provider_adapter",
+        lambda *a, **k: _UnauthenticatedAdapter(),
+    )
+
+    tool_metadata = _tool_metadata(
+        app_slug="gmail",
+        tool_name="fetch_emails",
+        display_name="Fetch Gmail emails",
+        required_scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+    )
+    run = await client.post(
+        "/v0/integrations/tools/composio:gmail:fetch_emails/run",
+        headers=HEADERS,
+        json={
+            **_owner_payload(assistant_id=assistant_id),
+            **tool_metadata,
+            "connection_id": connection_id,
+            "arguments": {"query": "is:unread"},
+        },
+    )
+    assert run.status_code == status.HTTP_200_OK, run.json()
+    body = run.json()
+    assert body["status"] == "reconnect_required"
+    assert body["activation_state"] == "expired"
+    assert body["error"]["code"] == "reconnect_required"
+    assert body["error"]["provider_response_body"] == "invalid credentials"
+
+
+@pytest.mark.anyio
 async def test_run_tool_confirmation_envelope(
     client: AsyncClient,
     dbsession: Session,
