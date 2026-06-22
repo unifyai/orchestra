@@ -2702,15 +2702,6 @@ async def connect_assistant_account(
             detail="Assistant not found.",
         )
 
-    # Coordinator contacts are platform-managed (shared universal pools), so
-    # BYOD suite OAuth (email / calendar / drive) must never attach to a
-    # Coordinator. The console hides this flow for Coordinators; enforce it
-    # server-side too so a direct API call can't slip a personal mailbox in.
-    if assistant.is_coordinator:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="coordinator_contacts_are_platform_managed",
-        )
     if organization_id is not None:
         ra_dao = ResourceAccessDAO(session)
         if not ra_dao.check_user_permission(
@@ -2760,14 +2751,22 @@ async def connect_assistant_account(
                     headers={"Authorization": f"Bearer {admin_key}"},
                 )
 
+    # A Coordinator connects a personal workspace for *outbound* access only:
+    # the CodeActActor reads and acts on the user's mailbox / calendar / drive /
+    # Teams through the stored OAuth tokens. Its inbound contacts stay on the
+    # platform-managed universal pools, so we must not register the personal
+    # mailbox as a contact or wire an email / Teams watch — that would route the
+    # user's own inbox into the ConversationManager. Regular assistants get the
+    # full inbound wiring.
+    wire_inbound = not assistant.is_coordinator
     state_dict: dict = {
         "assistant_id": assistant_id,
         "provider": provider,
         "features": features,
         "actions": {
-            "register_email_contact": "email" in features,
-            "setup_email_watch": "email" in features,
-            "setup_teams_watch": "teams" in features,
+            "register_email_contact": wire_inbound and "email" in features,
+            "setup_email_watch": wire_inbound and "email" in features,
+            "setup_teams_watch": wire_inbound and "teams" in features,
         },
         "redirect_after": redirect_after,
         "byod": True,

@@ -5624,14 +5624,16 @@ class TestConnectEndpointOrg:
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.anyio
-    async def test_coordinator_owner_cannot_connect_byod(
+    async def test_coordinator_owner_connects_workspace_without_inbound_wiring(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """Even the owner can't BYOD-connect a Coordinator — contacts are
-        platform-managed (shared universal pools)."""
+        """A Coordinator owner can BYOD-connect a personal workspace so the
+        CodeActActor gets mailbox / calendar / drive access, but the OAuth state
+        must not wire inbound routing (no contact registration, no email watch),
+        since the Coordinator's inbound contacts are platform-managed pools."""
         _, org, agent_id, _, _ = await _setup_org_coordinator_with_members(
             client,
             dbsession,
@@ -5651,8 +5653,72 @@ class TestConnectEndpointOrg:
                 headers=org["headers"],
             )
 
-        assert resp.status_code == status.HTTP_409_CONFLICT
-        assert resp.json()["detail"] == "coordinator_contacts_are_platform_managed"
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        state = json.loads(
+            base64.urlsafe_b64decode(
+                parse_qs(urlparse(oauth_url).query)["state"][0],
+            ),
+        )
+        assert state["features"] == ["email"]
+        assert state["actions"] == {
+            "register_email_contact": False,
+            "setup_email_watch": False,
+            "setup_teams_watch": False,
+        }
+
+    @pytest.mark.anyio
+    async def test_coordinator_connect_microsoft_suppresses_teams_watch(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_all_infra,
+    ):
+        """Teams behaves like email for a Coordinator: the workspace connection
+        grants CodeActActor access, but the OAuth state never sets up a Teams
+        watch that would route the user's Teams into the ConversationManager."""
+        _, org, agent_id, _, _ = await _setup_org_coordinator_with_members(
+            client,
+            dbsession,
+        )
+
+        with patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings:
+            mock_settings.google_oauth_client_id = None
+            mock_settings.microsoft_byod_client_id = "test-ms-id"
+            mock_settings.oauth_state_signing_key = None
+            mock_settings.is_staging = True
+            mock_settings.charges_billing = False
+
+            resp = await client.post(
+                f"/v0/assistant/{agent_id}/connect",
+                json={"provider": "microsoft", "features": ["email", "teams"]},
+                headers=org["headers"],
+            )
+
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        oauth_url = resp.json()["info"]["oauth_url"]
+
+        import base64
+        import json
+        from urllib.parse import parse_qs, urlparse
+
+        state = json.loads(
+            base64.urlsafe_b64decode(
+                parse_qs(urlparse(oauth_url).query)["state"][0],
+            ),
+        )
+        assert state["actions"] == {
+            "register_email_contact": False,
+            "setup_email_watch": False,
+            "setup_teams_watch": False,
+        }
 
     @pytest.mark.anyio
     async def test_coordinator_owner_cannot_create_contact(
