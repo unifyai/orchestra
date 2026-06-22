@@ -681,6 +681,194 @@ def test_builtins_sync_prunes_stale_builtins_app_and_tool_rows(
     assert remaining == 0
 
 
+def _seed_orphan_tool_row(dbsession: Session, contexts, *, function_id: int) -> None:
+    upsert_context_rows(
+        dbsession,
+        project_id=contexts["project"].id,
+        context_id=contexts["tools"].id,
+        key_columns=["function_id"],
+        rows=[
+            {
+                "function_id": function_id,
+                "backend_id": "composio",
+                "name": "primitives.integrations.listennotes.search",
+                "metadata": {"integration": {"app_slug": "listennotes"}},
+            },
+        ],
+    )
+    dbsession.commit()
+
+
+def _listen_notes_fetch(session: Session, body):
+    if not body.sync_tools:
+        return builtins_integration_sync.ProviderCatalogFetchResult(
+            apps=[
+                {
+                    "backend_id": "composio",
+                    "provider_app_id": "LISTENNOTES",
+                    "canonical_app_slug": "listen_notes",
+                    "display_name": "Listen Notes",
+                    "description": "Podcasts.",
+                },
+            ],
+            tools=[],
+            skipped_apps=[],
+            requested_app_slugs=list(body.app_slugs),
+            matched_app_slugs=["listen_notes"],
+            sync_mode="full" if not body.app_slugs else "partial",
+            cache_version="cache-orphan-v1",
+        )
+    return builtins_integration_sync.ProviderCatalogFetchResult(
+        apps=[],
+        tools=[
+            {
+                "backend_id": "composio",
+                "provider_app_id": "LISTENNOTES",
+                "canonical_app_slug": "listen_notes",
+                "provider_tool_id": "LISTENNOTES_SEARCH",
+                "name": "search",
+                "display_name": "Search",
+                "description": "Search podcasts.",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        ],
+        skipped_apps=[],
+        requested_app_slugs=list(body.app_slugs),
+        matched_app_slugs=["listen_notes"],
+        sync_mode="partial",
+        cache_version="cache-orphan-v1",
+    )
+
+
+def _count_tool_rows(dbsession: Session, contexts, *, where: str, params: dict) -> int:
+    return dbsession.execute(
+        text(
+            f"""
+            SELECT COUNT(*)
+            FROM log_event le
+            JOIN log_event_context lec ON lec.log_event_id = le.id
+            WHERE lec.context_id = :tools_context_id
+              AND {where}
+            """,
+        ),
+        {"tools_context_id": contexts["tools"].id, **params},
+    ).scalar_one()
+
+
+def test_builtins_full_sync_prunes_renamed_or_removed_app_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    dbsession: Session,
+    _engine,
+) -> None:
+    """A full sync removes tool rows whose app slug is no longer in the catalog.
+
+    The old ``listennotes`` rows live under a slug no batch revisits (the app is
+    now ``listen_notes``), so only the finalization prune can reach them.
+    """
+
+    _ensure_builtins_project(dbsession, user_id="builtins-orphan-full")
+    contexts = ensure_builtins_catalog_contexts(dbsession)
+    _seed_orphan_tool_row(dbsession, contexts, function_id=992001)
+    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+    monkeypatch.setattr(
+        builtins_integration_sync,
+        "fetch_provider_catalog",
+        _listen_notes_fetch,
+    )
+
+    result = run_builtins_sync(
+        SessionLocal,
+        BuiltinsSyncRequest(
+            backend_id="composio",
+            environment="test",
+            desired_hash="desired-orphan-1",
+            cache_version="cache-orphan-v1",
+            prune_unlisted_apps=True,
+            sync_payload={
+                "backend_id": "composio",
+                "sync_mode": "full",
+                "include_all_managed_apps": True,
+                "sync_tools": True,
+            },
+            batch_size=1,
+            workers=1,
+        ),
+    )
+
+    assert result.tools_pruned >= 1
+    assert (
+        _count_tool_rows(
+            dbsession,
+            contexts,
+            where="le.data ->> 'function_id' = '992001'",
+            params={},
+        )
+        == 0
+    )
+    assert (
+        _count_tool_rows(
+            dbsession,
+            contexts,
+            where="(le.data #>> '{metadata,integration,app_slug}') = :slug",
+            params={"slug": "listen_notes"},
+        )
+        >= 1
+    )
+
+
+def test_builtins_partial_sync_keeps_unlisted_app_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    dbsession: Session,
+    _engine,
+) -> None:
+    """A partial sync must not run the finalization prune (it would delete tools
+    for every app outside the requested subset)."""
+
+    _ensure_builtins_project(dbsession, user_id="builtins-orphan-partial")
+    contexts = ensure_builtins_catalog_contexts(dbsession)
+    _seed_orphan_tool_row(dbsession, contexts, function_id=993001)
+    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+    monkeypatch.setattr(
+        builtins_integration_sync,
+        "fetch_provider_catalog",
+        _listen_notes_fetch,
+    )
+
+    run_builtins_sync(
+        SessionLocal,
+        BuiltinsSyncRequest(
+            backend_id="composio",
+            environment="test",
+            desired_hash="desired-orphan-2",
+            cache_version="cache-orphan-v1",
+            mode="partial",
+            app_slugs=["listen_notes"],
+            prune_unlisted_apps=True,
+            sync_payload={
+                "backend_id": "composio",
+                "sync_mode": "partial",
+                "app_slugs": ["listen_notes"],
+                "sync_tools": True,
+            },
+            batch_size=1,
+            workers=1,
+        ),
+    )
+
+    assert (
+        _count_tool_rows(
+            dbsession,
+            contexts,
+            where="le.data ->> 'function_id' = '993001'",
+            params={},
+        )
+        == 1
+    )
+
+
 def test_builtins_worker_loads_request_file_without_gcp(tmp_path) -> None:
     request_file = tmp_path / "request.json"
     request_file.write_text(
@@ -1063,6 +1251,57 @@ def test_composio_adapter_fetches_catalog_and_manages_auth_configs(
     ]
     assert adapter.get_or_create_auth_config("DISCORD") == "authcfg_discord"
     assert {call["method"] for call in calls} == {"GET", "POST"}
+
+
+def test_composio_canonical_slug_request_still_fetches_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requests keyed by the derived canonical slug must resolve to the real
+    provider toolkit slug.
+
+    The display name "Listen Notes" derives the canonical slug ``listen_notes``,
+    which differs from the provider's real slug ``LISTENNOTES``. The tool phase
+    batches by canonical slug, so without alias resolution the toolkit is dropped
+    as ``not_found`` and the app silently materializes zero tools.
+    """
+
+    def fake_get(url, *, headers, params=None, timeout):
+        if url.endswith("/toolkits"):
+            return FakeResponse(
+                {"items": [{"slug": "LISTENNOTES", "name": "Listen Notes"}]},
+            )
+        if url.endswith("/tools"):
+            assert (params or {}).get("toolkit_slug") == "LISTENNOTES"
+            return FakeResponse(
+                {
+                    "items": [
+                        {
+                            "slug": "LISTENNOTES_SEARCH",
+                            "toolkit": {"slug": "LISTENNOTES"},
+                        },
+                    ],
+                },
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    adapter = ComposioProviderAdapter(api_key="composio-key", timeout_seconds=9)
+
+    app_entries = adapter.list_app_entries(
+        app_slugs=["listen_notes"],
+        include_detail=False,
+    )
+    assert [entry["canonical_app_slug"] for entry in app_entries] == ["listen_notes"]
+    assert [entry["provider_app_id"] for entry in app_entries] == ["LISTENNOTES"]
+    assert adapter.last_skipped_apps == []
+
+    tool_entries = adapter.list_tool_entries(
+        app_slug=app_entries[0]["canonical_app_slug"],
+        provider_app_id=app_entries[0]["provider_app_id"],
+    )
+    assert [tool["canonical_app_slug"] for tool in tool_entries] == ["listen_notes"]
+    assert tool_entries[0]["provider_app_id"] == "LISTENNOTES"
+    assert tool_entries[0]["name"] == "search"
 
 
 def test_composio_adapter_uses_bounded_cursor_pagination(
