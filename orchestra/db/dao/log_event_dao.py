@@ -1628,6 +1628,7 @@ class LogEventDAO:
                 self.session.execute(
                     update(Embedding)
                     .where(
+                        Embedding.project_id == template.project_id,
                         Embedding.ref_id.in_(log_ids),
                         Embedding.key == template.key,
                         Embedding.is_deleted == False,  # noqa: E712
@@ -1638,7 +1639,10 @@ class LogEventDAO:
 
             log_ids_subq = (
                 select(LogEvent.id.label("id"))
-                .where(LogEvent.id.in_(log_ids))
+                .where(
+                    LogEvent.project_id == template.project_id,
+                    LogEvent.id.in_(log_ids),
+                )
                 .subquery("recompute_log_ids")
             )
 
@@ -1694,7 +1698,10 @@ class LogEventDAO:
 
                     stmt = (
                         update(LogEvent)
-                        .where(LogEvent.id == log_event_id)
+                        .where(
+                            LogEvent.project_id == template.project_id,
+                            LogEvent.id == log_event_id,
+                        )
                         .values(
                             data=LogEvent.data.concat(
                                 func.jsonb_build_object(template.key, val),

@@ -1068,6 +1068,7 @@ def _get_logs_query(
         embedding_exists = (
             session.query(Embedding.ref_id)
             .filter(
+                Embedding.project_id == LogEvent.project_id,
                 Embedding.ref_id == LogEvent.id,
                 Embedding.key.in_(allowed_fields),
                 Embedding.is_deleted
@@ -1535,7 +1536,10 @@ def _get_logs_query(
             Embedding.ref_id,
             Embedding.key,
             func.to_jsonb(Embedding.vector).label("vector_list"),
-        ).where(Embedding.ref_id.in_(page_ids))
+        ).where(
+            Embedding.project_id == project_id,
+            Embedding.ref_id.in_(page_ids),
+        )
 
         if from_fields:
             allowed = from_fields.split("&")
@@ -2009,6 +2013,7 @@ def _create_logs_internal(
                         key_order = v.new_key_order::jsonb
                     FROM unnest(:ids, :data, :key_orders) AS v(id, new_data, new_key_order)
                     WHERE log_event.id = v.id
+                      AND log_event.project_id = :project_id
                 """,
                 )
                 session.execute(
@@ -2017,6 +2022,7 @@ def _create_logs_internal(
                         "ids": ids_array,
                         "data": data_array,
                         "key_orders": key_order_array,
+                        "project_id": project_id,
                     },
                 )
                 session.flush()
@@ -2026,7 +2032,10 @@ def _create_logs_internal(
             for idx, (log_event_id, log_data, key_order) in enumerate(log_data_updates):
                 original_index = successful_indices[idx]
                 try:
-                    session.query(LogEvent).filter(LogEvent.id == log_event_id).update(
+                    session.query(LogEvent).filter(
+                        LogEvent.id == log_event_id,
+                        LogEvent.project_id == project_id,
+                    ).update(
                         {"data": log_data, "key_order": key_order},
                         synchronize_session=False,
                     )
