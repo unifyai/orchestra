@@ -74,17 +74,21 @@ def _render_with(completed: list[str], skipped: list[str], active: str | None) -
         )
 
 
-def test_render_fresh_start_only_first_trigger_available() -> None:
-    """With nothing done, only the chain head (a trigger row) is a target."""
+def test_render_fresh_start_exposes_each_section_head() -> None:
+    """With nothing done, the first step in each independent section is a target."""
     render = _render_with(completed=[], skipped=[], active=None)
     statuses = _statuses(render)
     assert statuses["email-reference"] == "available"
     assert statuses["email-reply"] == "locked"
-    assert _next_ids(render) == ["email-reference"]
-    # The next target carries spoken + chat nudge copy.
-    target = render["next_targets"][0]
-    assert target["nudge_voice"]
-    assert target["nudge_chat"]
+    assert statuses["workspace"] == "available"
+    assert statuses["apps"] == "locked"
+    assert statuses["act"] == "available"
+    assert statuses["schedule"] == "locked"
+    assert _next_ids(render) == ["email-reference", "workspace", "act"]
+    # Every next target carries spoken + chat nudge copy.
+    for target in render["next_targets"]:
+        assert target["nudge_voice"]
+        assert target["nudge_chat"]
 
 
 def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
@@ -94,7 +98,7 @@ def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
     assert statuses["email-reference"] == "done"  # inferred from the reply
     assert statuses["email-reply"] == "done"
     assert statuses["whatsapp-number"] == "available"
-    assert _next_ids(render) == ["whatsapp-number"]
+    assert _next_ids(render) == ["whatsapp-number", "workspace", "act"]
 
 
 def test_render_active_reply_infers_trigger_done() -> None:
