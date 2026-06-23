@@ -697,6 +697,7 @@ class CoordinatorStateUpdate(BaseModel):
     clear_onboarding_step: bool = Field(False)
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_step: Optional[str] = Field(None, min_length=1)
+    reset_onboarding_step: Optional[str] = Field(None, min_length=1)
     skip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)

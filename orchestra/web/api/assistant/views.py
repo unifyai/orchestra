@@ -1496,7 +1496,7 @@ def _coordinator_state_response(
         "onboarding_deferred",
     )
     completed_step_ids = (
-        derive_onboarding_progress(session, coordinator=coordinator)
+        derive_onboarding_progress(session, coordinator=coordinator, state=state)
         if actively_onboarding
         else []
     )
@@ -1589,6 +1589,7 @@ async def update_coordinator_state_endpoint(
         clear_onboarding_step=update.clear_onboarding_step,
         skip_onboarding_step=update.skip_onboarding_step,
         unskip_onboarding_step=update.unskip_onboarding_step,
+        reset_onboarding_step=update.reset_onboarding_step,
         skip_onboarding_phase=update.skip_onboarding_phase,
         unskip_onboarding_phase=update.unskip_onboarding_phase,
         intro_watched=update.intro_watched,

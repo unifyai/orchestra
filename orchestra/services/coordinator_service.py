@@ -979,6 +979,7 @@ def _coordinator_state_entry(
     onboarding_step: str | None,
     skipped_step_ids: Sequence[str],
     skipped_phase_ids: Sequence[str],
+    onboarding_reset_at: dict[str, str] | None,
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
     onboarding_deferred: bool | None = None,
@@ -1033,6 +1034,7 @@ def _coordinator_state_entry(
         "onboarding_step": onboarding_step,
         "skipped_step_ids": list(skipped_step_ids),
         "skipped_phase_ids": list(skipped_phase_ids),
+        "onboarding_reset_at": dict(onboarding_reset_at or {}),
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
@@ -1096,6 +1098,7 @@ def get_coordinator_state(
             "onboarding_step": None,
             "skipped_step_ids": [],
             "skipped_phase_ids": [],
+            "onboarding_reset_at": {},
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
@@ -1113,6 +1116,9 @@ def get_coordinator_state(
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "skipped_phase_ids": normalize_onboarding_phase_ids(
             row.get("skipped_phase_ids"),
+        ),
+        "onboarding_reset_at": normalize_onboarding_reset_at(
+            row.get("onboarding_reset_at"),
         ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
@@ -1155,6 +1161,7 @@ def seed_initial_coordinator_state(
         onboarding_step=None,
         skipped_step_ids=[],
         skipped_phase_ids=[],
+        onboarding_reset_at={},
         previous=None,
         intro_watched=intro_watched,
     )
@@ -1176,6 +1183,7 @@ def set_coordinator_state(
     clear_onboarding_step: bool = False,
     skip_onboarding_step: str | None = None,
     unskip_onboarding_step: str | None = None,
+    reset_onboarding_step: str | None = None,
     skip_onboarding_phase: str | None = None,
     unskip_onboarding_phase: str | None = None,
     intro_watched: bool | None = None,
@@ -1228,6 +1236,14 @@ def set_coordinator_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_unskip_onboarding_step",
         )
+    if reset_onboarding_step is not None and (
+        not isinstance(reset_onboarding_step, str)
+        or reset_onboarding_step not in onboarding_graph.STEP_BY_ID
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid_reset_onboarding_step",
+        )
     if skip_onboarding_phase is not None and (
         not isinstance(skip_onboarding_phase, str)
         or skip_onboarding_phase not in SKIPPABLE_ONBOARDING_PHASES
@@ -1259,6 +1275,23 @@ def set_coordinator_state(
         project=project,
         state_context_name=state_context_name,
     )
+    reset_at = normalize_onboarding_reset_at(
+        (previous or {}).get("onboarding_reset_at"),
+    )
+    reset_step_ids: tuple[str, ...] = ()
+    if reset_onboarding_step is not None:
+        reset_step_ids = onboarding_graph.completion_coupled_steps(
+            reset_onboarding_step,
+        )
+        reset_timestamp = datetime.now(timezone.utc).isoformat()
+        for step_id in reset_step_ids:
+            reset_at[step_id] = reset_timestamp
+        user = session.get(User, coordinator.user_id)
+        if user is not None:
+            if ONBOARDING_STEP_WHATSAPP_NUMBER in reset_step_ids:
+                user.whatsapp_number = None
+            if ONBOARDING_STEP_PHONE_NUMBER in reset_step_ids:
+                user.phone_number = None
     next_mode = mode or (previous or {}).get("mode") or COORDINATOR_MODE_ONBOARDING
     if onboarding_step is not None:
         next_step: str | None = onboarding_step
@@ -1288,6 +1321,13 @@ def set_coordinator_state(
             for step_id in next_skipped_step_ids
             if step_id not in unskipped_step_set
         ]
+    if reset_step_ids:
+        reset_step_set = set(reset_step_ids)
+        next_skipped_step_ids = [
+            step_id
+            for step_id in next_skipped_step_ids
+            if step_id not in reset_step_set
+        ]
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
     )
@@ -1311,11 +1351,14 @@ def set_coordinator_state(
         and _onboarding_step_phase(next_step) in next_skipped_phase_ids
     ):
         next_step = None
+    if next_step in reset_step_ids:
+        next_step = None
     entry = _coordinator_state_entry(
         mode=next_mode,
         onboarding_step=next_step,
         skipped_step_ids=next_skipped_step_ids,
         skipped_phase_ids=next_skipped_phase_ids,
+        onboarding_reset_at=reset_at,
         previous=previous,
         intro_watched=intro_watched,
         onboarding_deferred=onboarding_deferred,
@@ -1529,6 +1572,32 @@ def normalize_onboarding_phase_ids(value: Any) -> list[str]:
     return [phase for phase in SKIPPABLE_ONBOARDING_PHASES if phase in seen]
 
 
+def _parse_onboarding_reset_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def normalize_onboarding_reset_at(value: Any) -> dict[str, str]:
+    """Return reset cutoffs keyed by valid onboarding step id."""
+    if not isinstance(value, dict):
+        return {}
+    valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
+    return {
+        step_id: timestamp
+        for step_id, timestamp in value.items()
+        if step_id in valid_step_ids
+        and isinstance(timestamp, str)
+        and _parse_onboarding_reset_at(timestamp) is not None
+    }
+
+
 def _onboarding_step_phase(step_id: str) -> str | None:
     step = onboarding_graph.STEP_BY_ID.get(step_id)
     return step.phase if step is not None else None
@@ -1624,11 +1693,12 @@ def _has_discord_connection(session: Session, *, coordinator: Assistant) -> bool
     return bool(contact and contact.contact_value and contact.contact_value.strip())
 
 
-def _has_assistant_transcript_message(
+def _has_user_transcript_message(
     session: Session,
     *,
     coordinator: Assistant,
     mediums: Sequence[str],
+    reset_after: datetime | None = None,
 ) -> bool:
     project = _project_for_coordinator(session, coordinator)
     context = _get_context(
@@ -1641,73 +1711,118 @@ def _has_assistant_transcript_message(
     )
     if context is None:
         return False
-    row = session.scalar(
+    query = (
         select(LogEvent.id)
         .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data["medium"].astext.in_(tuple(mediums)),
-            LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
-            LogEvent.data["receiver_ids"].contains([PERSONAL_BOSS_CONTACT_ID]),
+            LogEvent.data["sender_id"].astext == str(PERSONAL_BOSS_CONTACT_ID),
+            LogEvent.data["receiver_ids"].contains([PERSONAL_SELF_CONTACT_ID]),
         )
-        .limit(1),
+        .limit(1)
     )
+    if reset_after is not None:
+        query = query.where(LogEvent.created_at > reset_after)
+    row = session.scalar(query)
     return row is not None
 
 
-def _has_email_reply(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_email_reply(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("email",),
+        reset_after=reset_after,
     )
 
 
-def _has_whatsapp_message(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_whatsapp_message(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("whatsapp_message",),
+        reset_after=reset_after,
     )
 
 
-def _has_whatsapp_call(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_whatsapp_call(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("whatsapp_call",),
+        reset_after=reset_after,
     )
 
 
-def _has_sms_message(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_sms_message(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("sms_message",),
+        reset_after=reset_after,
     )
 
 
-def _has_phone_call(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_phone_call(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("phone_call",),
+        reset_after=reset_after,
     )
 
 
-def _has_slack_message(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_slack_message(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("slack_message", "slack_channel_message"),
+        reset_after=reset_after,
     )
 
 
-def _has_discord_message(session: Session, *, coordinator: Assistant) -> bool:
-    return _has_assistant_transcript_message(
+def _has_discord_message(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    reset_after: datetime | None = None,
+) -> bool:
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=("discord_message", "discord_channel_message"),
+        reset_after=reset_after,
     )
 
 
@@ -1715,6 +1830,7 @@ def derive_onboarding_progress(
     session: Session,
     *,
     coordinator: Assistant,
+    state: dict[str, Any] | None = None,
 ) -> list[str]:
     """Derive the completed onboarding steps from durable domain state.
 
@@ -1728,6 +1844,17 @@ def derive_onboarding_progress(
     connected last week reads as done without any transition event
     having fired this session.
     """
+    state = state or get_coordinator_state(session, coordinator=coordinator)
+    reset_at = normalize_onboarding_reset_at(state.get("onboarding_reset_at"))
+    transcript_checks: dict[str, Any] = {
+        ONBOARDING_STEP_EMAIL_REPLY: _has_email_reply,
+        ONBOARDING_STEP_WHATSAPP_MESSAGE: _has_whatsapp_message,
+        ONBOARDING_STEP_WHATSAPP_CALL: _has_whatsapp_call,
+        ONBOARDING_STEP_SMS_MESSAGE: _has_sms_message,
+        ONBOARDING_STEP_PHONE_CALL: _has_phone_call,
+        ONBOARDING_STEP_SLACK_MESSAGE: _has_slack_message,
+        ONBOARDING_STEP_DISCORD_MESSAGE: _has_discord_message,
+    }
     checks: tuple[tuple[str, Any], ...] = (
         (ONBOARDING_STEP_EMAIL_REPLY, _has_email_reply),
         (ONBOARDING_STEP_WHATSAPP_NUMBER, _has_user_whatsapp_number),
@@ -1745,7 +1872,17 @@ def derive_onboarding_progress(
         (ONBOARDING_STEP_SCHEDULE, _has_scheduled_task),
     )
     return [
-        step_id for step_id, check in checks if check(session, coordinator=coordinator)
+        step_id
+        for step_id, check in checks
+        if (
+            check(
+                session,
+                coordinator=coordinator,
+                reset_after=_parse_onboarding_reset_at(reset_at.get(step_id)),
+            )
+            if step_id in transcript_checks
+            else check(session, coordinator=coordinator)
+        )
     ]
 
 
@@ -1860,10 +1997,10 @@ def compute_onboarding_render(
     """
     if local_mode is None:
         local_mode = onboarding_local_mode()
-    completed: set[str] = set(
-        derive_onboarding_progress(session, coordinator=coordinator),
-    )
     state = get_coordinator_state(session, coordinator=coordinator)
+    completed: set[str] = set(
+        derive_onboarding_progress(session, coordinator=coordinator, state=state),
+    )
     skipped: set[str] = set(
         normalize_onboarding_step_ids(state.get("skipped_step_ids")),
     )

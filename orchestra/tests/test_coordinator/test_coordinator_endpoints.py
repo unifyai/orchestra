@@ -1031,6 +1031,27 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
 
     project = _assistants_project(dbsession, coordinator=coordinator)
     transcripts_context = _assistant_context_name(coordinator, "Transcripts")
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=transcripts_context,
+        data={
+            "medium": "email",
+            "sender_id": 0,
+            "receiver_ids": [1],
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "content": "outbound clue",
+        },
+    )
+    dbsession.commit()
+
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert "email-reply" not in response.json()["info"]["completed_step_ids"]
+
     for medium in (
         "email",
         "whatsapp_message",
@@ -1046,8 +1067,8 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
             context_name=transcripts_context,
             data={
                 "medium": medium,
-                "sender_id": 0,
-                "receiver_ids": [1],
+                "sender_id": 1,
+                "receiver_ids": [0],
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "content": f"{medium} proof",
             },
@@ -1073,6 +1094,61 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
         "discord-connect",
         "discord-message",
     ]
+
+    reset_email = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "email-reply"},
+        headers=owner["headers"],
+    )
+    assert reset_email.status_code == status.HTTP_200_OK, reset_email.json()
+    completed = reset_email.json()["info"]["completed_step_ids"]
+    assert "email-reply" not in completed
+
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=transcripts_context,
+        data={
+            "medium": "email",
+            "sender_id": 1,
+            "receiver_ids": [0],
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "content": "email proof after reset",
+        },
+    )
+    dbsession.commit()
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert "email-reply" in response.json()["info"]["completed_step_ids"]
+
+    reset_whatsapp = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "whatsapp-number"},
+        headers=owner["headers"],
+    )
+    assert reset_whatsapp.status_code == status.HTTP_200_OK, reset_whatsapp.json()
+    dbsession.refresh(user)
+    assert user.whatsapp_number is None
+    completed = reset_whatsapp.json()["info"]["completed_step_ids"]
+    assert "whatsapp-number" not in completed
+    assert "whatsapp-message" not in completed
+    assert "whatsapp-call" not in completed
+
+    reset_phone = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "phone-number"},
+        headers=owner["headers"],
+    )
+    assert reset_phone.status_code == status.HTTP_200_OK, reset_phone.json()
+    dbsession.refresh(user)
+    assert user.phone_number is None
+    completed = reset_phone.json()["info"]["completed_step_ids"]
+    assert "phone-number" not in completed
+    assert "sms-message" not in completed
+    assert "phone-call" not in completed
 
 
 @pytest.mark.anyio
