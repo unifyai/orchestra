@@ -79,51 +79,6 @@ class OnboardingChip:
     label: str
 
 
-@dataclass(frozen=True)
-class ReferenceQuizClue:
-    quote: str
-    answer: str
-
-    @property
-    def clue(self) -> str:
-        return f'The clue is: "{self.quote}"'
-
-    @property
-    def accepted_answers(self) -> tuple[str, ...]:
-        return tuple(part.strip() for part in self.answer.split("/") if part.strip())
-
-
-REFERENCE_QUIZ_CLUES: dict[str, ReferenceQuizClue] = {
-    "email-reference": ReferenceQuizClue(
-        quote="Ground Control to Major Tom.",
-        answer="Space Oddity",
-    ),
-    "whatsapp-message-reference": ReferenceQuizClue(
-        quote="Wait a minute, Doc. Are you telling me you built a time machine... out of a DeLorean?!",
-        answer="Back to the Future",
-    ),
-    "whatsapp-call-reference": ReferenceQuizClue(
-        quote="I am completely operational, and all my circuits are functioning perfectly.",
-        answer="2001: A Space Odyssey",
-    ),
-    "sms-reference": ReferenceQuizClue(
-        quote="Do or do not. There is no try.",
-        answer="E.T. the Extra-Terrestrial / E.T.",
-    ),
-    "phone-call-reference": ReferenceQuizClue(
-        quote="To infinity and beyond!",
-        answer="The Empire Strikes Back / Luke",
-    ),
-    "slack-reference": ReferenceQuizClue(
-        quote="Phone home.",
-        answer="Battlestar Galactica",
-    ),
-    "discord-reference": ReferenceQuizClue(
-        quote="The needs of the many outweigh the needs of the few.",
-        answer="Star Trek",
-    ),
-}
-
 REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
     "email": "send_email",
     "whatsapp_message": "send_whatsapp",
@@ -160,10 +115,12 @@ PHASE_HIRING = "Hiring"
 COMMUNICATION_FRAMING = (
     "Start onboarding by proving that Twin can communicate with the user "
     "across channels. Frame this as a light sci-fi and pop-culture reference "
-    "quiz before sending any clue: Twin sends one quote clue on each channel, "
-    "the user guesses the reference on that channel or call, Twin supports "
-    "repeats and gentle hints, reveals the answer if asked or if the user is "
-    "stuck, then closes naturally before moving on."
+    "quiz. There is no fixed list of clues: on each channel Twin invents its "
+    "own short quote clue on the spot — a fresh, different reference each time, "
+    "Twin's own creative choice — sends it on that channel, the user guesses "
+    "the reference there, Twin supports repeats and gentle hints, reveals the "
+    "answer if asked or if the user is stuck, then closes naturally before "
+    "moving on."
 )
 
 
@@ -263,48 +220,44 @@ def _trigger(
     nudge_chat: str,
     nudge_voice: str,
 ) -> OnboardingStep:
-    clue = REFERENCE_QUIZ_CLUES.get(step_id)
     event_channel = REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP.get(paired_reply, channel)
     tool_name = REFERENCE_QUIZ_TOOL_BY_CHANNEL.get(event_channel, "")
-    interaction = (
-        {
-            "type": "reference_quiz",
+    interaction = {
+        "type": "reference_quiz",
+        "trigger_step_id": step_id,
+        "reply_step_id": paired_reply,
+        "channel": event_channel,
+        "tool_name": tool_name,
+        "instructions": COMMUNICATION_FRAMING,
+    }
+    # The event is a *poll*, not a command: clicking the row tells Twin the
+    # user is now expecting the clue on this channel. Twin may already have
+    # sent it of its own accord (e.g. the user also asked verbally on a call) —
+    # in that case the click and the spoken ask are the same directive in two
+    # forms, and Twin must not send a duplicate.
+    event = OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}', so they're now expecting the "
+            "reference-quiz clue on that channel and are checking whether it "
+            "has been sent. This is a poll, not a request to send another one: "
+            "if you have already sent the clue (for example because they asked "
+            "you to on a call), treat this as confirmation and do NOT send a "
+            "duplicate."
+        ),
+        subtype="reference_quiz_clue_requested",
+        details={
+            "game": "guess_the_reference",
             "trigger_step_id": step_id,
             "reply_step_id": paired_reply,
             "channel": event_channel,
             "tool_name": tool_name,
-            "clue": clue.clue,
-            "quote": clue.quote,
-            "answer": clue.answer,
-            "accepted_answers": list(clue.accepted_answers),
-            "instructions": COMMUNICATION_FRAMING,
-        }
-        if clue is not None
-        else None
-    )
-    event = (
-        OnboardingEventSpec(
-            event_type="coordinator_onboarding_event",
-            message="The user triggered an onboarding communication task.",
-            subtype="reference_quiz_clue_requested",
-            details={
-                "game": "guess_the_reference",
-                "trigger_step_id": step_id,
-                "reply_step_id": paired_reply,
-                "channel": event_channel,
-                "tool_name": tool_name,
-                "clue": clue.clue,
-                "quote": clue.quote,
-                "answer": clue.answer,
-                "framing": COMMUNICATION_FRAMING,
-                "phase": PHASE_COMMUNICATION,
-                "phase_id": "communication",
-                "phase_framing": COMMUNICATION_FRAMING,
-                "interaction": interaction,
-            },
-        )
-        if clue is not None
-        else None
+            "framing": COMMUNICATION_FRAMING,
+            "phase": PHASE_COMMUNICATION,
+            "phase_id": "communication",
+            "phase_framing": COMMUNICATION_FRAMING,
+            "interaction": interaction,
+        },
     )
     return OnboardingStep(
         id=step_id,
@@ -800,8 +753,10 @@ _EMPTY_PRESENTATION = StepPresentation()
 
 STEP_FLOW_NOTES: dict[str, str] = {
     "email-reference": (
-        "Clicking the 'Trigger email from Twin' row asks me to introduce the "
-        "reference quiz and send the first clue over email."
+        "Clicking the 'Trigger email from Twin' row tells me the user is ready "
+        "for the reference-quiz clue over email; if I haven't sent it yet I "
+        "introduce the quiz and send my own clue, and if I already have I just "
+        "confirm it's on the way rather than sending another."
     ),
     "email-reply": "The user replies with their guess once they receive the email clue.",
     "whatsapp-number": (
@@ -809,37 +764,52 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "info so the user can add or verify the WhatsApp number."
     ),
     "whatsapp-message-reference": (
-        "Clicking the 'Trigger WhatsApp message from Twin' row sends the next "
-        "clue over WhatsApp."
+        "Clicking the 'Trigger WhatsApp message from Twin' row tells me the "
+        "user is ready for the clue over WhatsApp; I send my own clue if I "
+        "haven't already, otherwise I just confirm it."
     ),
     "whatsapp-message": "The user guesses the WhatsApp clue.",
     "whatsapp-call-reference": (
-        "Clicking the 'Trigger WhatsApp call from Twin' row starts or requests "
-        "a WhatsApp voice clue."
+        "Clicking the 'Trigger WhatsApp call from Twin' row tells me the user "
+        "is ready for a WhatsApp voice clue; I start or request the call unless "
+        "I have already done so."
     ),
     "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
     "phone-number": (
         "Clicking the 'Add your phone number' row opens Account -> Contact info "
         "so the user can add or verify the phone number."
     ),
-    "sms-reference": "Clicking the 'Trigger SMS message from Twin' row texts the next clue.",
+    "sms-reference": (
+        "Clicking the 'Trigger SMS message from Twin' row tells me the user is "
+        "ready for the clue by text; I send my own clue if I haven't already, "
+        "otherwise I just confirm it."
+    ),
     "sms-message": "The user guesses the SMS clue.",
     "phone-call-reference": (
-        "Clicking the 'Trigger phone call from Twin' row starts or requests a "
-        "phone-call clue."
+        "Clicking the 'Trigger phone call from Twin' row tells me the user is "
+        "ready for a phone-call clue; I start or request the call unless I have "
+        "already done so."
     ),
     "phone-call": "The user guesses during the phone call.",
     "slack-connect": (
         "Clicking the 'Connect Slack' row opens the Slack setup path for the "
         "Unify Slack app."
     ),
-    "slack-reference": "Clicking the 'Trigger Slack message from Twin' row sends the next clue via Slack.",
+    "slack-reference": (
+        "Clicking the 'Trigger Slack message from Twin' row tells me the user "
+        "is ready for the clue in Slack; I send my own clue if I haven't "
+        "already, otherwise I just confirm it."
+    ),
     "slack-message": "The user guesses the Slack clue.",
     "discord-connect": (
         "Clicking the 'Connect Discord' row opens the Discord setup path for "
         "adding their Discord ID and installing the public Discord bot."
     ),
-    "discord-reference": "Clicking the 'Trigger Discord message from Twin' row sends the next clue via Discord.",
+    "discord-reference": (
+        "Clicking the 'Trigger Discord message from Twin' row tells me the "
+        "user is ready for the clue in Discord; I send my own clue if I haven't "
+        "already, otherwise I just confirm it."
+    ),
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
         "Clicking the 'Give me access to your workspace' row opens the workspace "

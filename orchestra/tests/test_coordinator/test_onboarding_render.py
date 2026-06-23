@@ -311,8 +311,12 @@ def test_render_carries_phase_headers_and_step_presentation() -> None:
     assert "reference quiz" in steps["email-reference"]["flow_note"]
     interaction = steps["email-reference"]["interaction"]
     assert interaction["type"] == "reference_quiz"
-    assert interaction["quote"] == "Ground Control to Major Tom."
-    assert interaction["accepted_answers"] == ["Space Oddity"]
+    assert interaction["channel"] == "email"
+    assert interaction["tool_name"] == "send_email"
+    # Clues are invented by the model at runtime, never hard-coded in the graph.
+    assert "quote" not in interaction
+    assert "answer" not in interaction
+    assert "accepted_answers" not in interaction
     schedule = steps["schedule"]
     assert [c["id"] for c in schedule["chips_chat"]]
     # Non-chip steps carry empty chip lists rather than omitting the field.
