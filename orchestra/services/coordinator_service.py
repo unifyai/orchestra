@@ -1909,6 +1909,19 @@ def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, str]:
     return {"id": chip.id, "label": chip.label}
 
 
+def _serialize_onboarding_event(
+    event: onboarding_graph.OnboardingEventSpec | None,
+) -> dict[str, Any] | None:
+    if event is None:
+        return None
+    return {
+        "event_type": event.event_type,
+        "message": event.message,
+        "subtype": event.subtype,
+        "details": dict(event.details),
+    }
+
+
 def _step_presentation_fields(step_id: str) -> dict[str, Any]:
     """The presentation copy a step carries to consumers (tooltip
     description, time estimate, and suggestion chips)."""
@@ -1918,6 +1931,9 @@ def _step_presentation_fields(step_id: str) -> dict[str, Any]:
         "estimated_time": presentation.estimated_time,
         "chips_chat": [_serialize_chip(c) for c in presentation.chips_chat],
         "chips_call": [_serialize_chip(c) for c in presentation.chips_call],
+        "event": _serialize_onboarding_event(
+            onboarding_graph.STEP_BY_ID[step_id].event,
+        ),
     }
 
 
@@ -1927,6 +1943,7 @@ def _serialize_phase(phase: onboarding_graph.OnboardingPhase) -> dict[str, Any]:
         "phase": phase.label,
         "title": phase.title,
         "description": phase.description,
+        "framing": phase.framing,
     }
 
 

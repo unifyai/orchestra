@@ -724,6 +724,16 @@ class OnboardingPhaseInfo(BaseModel):
     phase: str
     title: str
     description: str = ""
+    framing: str = ""
+
+
+class OnboardingEventSpec(BaseModel):
+    """Structured onboarding event Console can dispatch without owning semantics."""
+
+    event_type: str
+    message: str
+    subtype: str
+    details: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OnboardingStepDependency(BaseModel):
@@ -756,6 +766,7 @@ class OnboardingStepStatus(BaseModel):
     estimated_time: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)
     chips_call: List[OnboardingChip] = Field(default_factory=list)
+    event: Optional[OnboardingEventSpec] = None
 
 
 class OnboardingNextTarget(BaseModel):
@@ -796,6 +807,7 @@ class OnboardingCatalogStep(BaseModel):
     estimated_time: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)
     chips_call: List[OnboardingChip] = Field(default_factory=list)
+    event: Optional[OnboardingEventSpec] = None
 
 
 class OnboardingCatalog(BaseModel):

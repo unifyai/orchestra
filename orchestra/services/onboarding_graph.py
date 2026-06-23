@@ -34,6 +34,16 @@ COMPLETED = 1
 
 
 @dataclass(frozen=True)
+class OnboardingEventSpec:
+    """Structured event payload Console can dispatch without knowing semantics."""
+
+    event_type: str
+    message: str
+    subtype: str
+    details: dict[str, str]
+
+
+@dataclass(frozen=True)
 class OnboardingStep:
     """One node in the onboarding graph.
 
@@ -54,6 +64,7 @@ class OnboardingStep:
     paired_reply: str | None = None
     nudge_chat: str = ""
     nudge_voice: str = ""
+    event: OnboardingEventSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +78,68 @@ class OnboardingChip:
     label: str
 
 
+@dataclass(frozen=True)
+class ReferenceQuizClue:
+    quote: str
+    answer: str
+
+    @property
+    def clue(self) -> str:
+        return f'The clue is: "{self.quote}"'
+
+
+REFERENCE_QUIZ_CLUES: dict[str, ReferenceQuizClue] = {
+    "email-reference": ReferenceQuizClue(
+        quote="Ground Control to Major Tom.",
+        answer="Space Oddity",
+    ),
+    "whatsapp-message-reference": ReferenceQuizClue(
+        quote="Wait a minute, Doc. Are you telling me you built a time machine... out of a DeLorean?!",
+        answer="Back to the Future",
+    ),
+    "whatsapp-call-reference": ReferenceQuizClue(
+        quote="I am completely operational, and all my circuits are functioning perfectly.",
+        answer="2001: A Space Odyssey",
+    ),
+    "sms-reference": ReferenceQuizClue(
+        quote="Do or do not. There is no try.",
+        answer="E.T. the Extra-Terrestrial / E.T.",
+    ),
+    "phone-call-reference": ReferenceQuizClue(
+        quote="To infinity and beyond!",
+        answer="The Empire Strikes Back / Luke",
+    ),
+    "slack-reference": ReferenceQuizClue(
+        quote="Phone home.",
+        answer="Battlestar Galactica",
+    ),
+    "discord-reference": ReferenceQuizClue(
+        quote="The needs of the many outweigh the needs of the few.",
+        answer="Star Trek",
+    ),
+}
+
+REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
+    "email": "send_email",
+    "whatsapp_message": "send_whatsapp",
+    "whatsapp_call": "make_whatsapp_call_to_boss",
+    "sms_message": "send_sms",
+    "phone_call": "make_call_to_boss",
+    "slack_message": "send_slack_message",
+    "discord_message": "send_discord_message",
+}
+
+REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
+    "email-reply": "email",
+    "whatsapp-message": "whatsapp_message",
+    "whatsapp-call": "whatsapp_call",
+    "sms-message": "sms_message",
+    "phone-call": "phone_call",
+    "slack-message": "slack_message",
+    "discord-message": "discord_message",
+}
+
+
 # Phase labels, in display order.
 PHASE_COMMUNICATION = "Communication"
 PHASE_WORKSPACE = "Workspace"
@@ -78,6 +151,16 @@ PHASE_MY_COMPUTER = "My Computer"
 PHASE_YOUR_COMPUTER = "Your Computer"
 PHASE_TEAMS = "Teams"
 PHASE_HIRING = "Hiring"
+
+COMMUNICATION_FRAMING = (
+    "This section proves that Twin can communicate with the user across "
+    "channels. Reference-trigger steps start a light guess-the-reference "
+    "mini-game: send the supplied clue through the requested channel, "
+    "do not reveal the answer up front, wait for the user's guess on "
+    "that channel or call, support repeats and gentle hints, reveal "
+    "the answer if asked or if the user is stuck, and close naturally "
+    "before moving on."
+)
 
 
 @dataclass(frozen=True)
@@ -95,6 +178,7 @@ class OnboardingPhase:
     label: str
     title: str
     description: str
+    framing: str = ""
     local_only: bool = False
 
 
@@ -106,6 +190,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_COMMUNICATION,
         title="Communication",
         description="Try the communication channels I can use with you.",
+        framing=COMMUNICATION_FRAMING,
     ),
     OnboardingPhase(
         id="workspace",
@@ -174,6 +259,28 @@ def _trigger(
     nudge_chat: str,
     nudge_voice: str,
 ) -> OnboardingStep:
+    clue = REFERENCE_QUIZ_CLUES.get(step_id)
+    event_channel = REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP.get(paired_reply, channel)
+    event = (
+        OnboardingEventSpec(
+            event_type="coordinator_onboarding_event",
+            message="The user triggered an onboarding communication task.",
+            subtype="reference_quiz_clue_requested",
+            details={
+                "game": "guess_the_reference",
+                "trigger_step_id": step_id,
+                "reply_step_id": paired_reply,
+                "channel": event_channel,
+                "tool_name": REFERENCE_QUIZ_TOOL_BY_CHANNEL.get(event_channel, ""),
+                "clue": clue.clue,
+                "quote": clue.quote,
+                "answer": clue.answer,
+                "framing": COMMUNICATION_FRAMING,
+            },
+        )
+        if clue is not None
+        else None
+    )
     return OnboardingStep(
         id=step_id,
         title=title,
@@ -186,6 +293,7 @@ def _trigger(
         paired_reply=paired_reply,
         nudge_chat=nudge_chat,
         nudge_voice=nudge_voice,
+        event=event,
     )
 
 
@@ -208,12 +316,12 @@ def _coming_soon(step_id: str, phase: str) -> OnboardingStep:
 ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "email-reference",
-        "Email the first reference",
+        "Receive email from Twin",
         depends_on={},
         channel="email",
         paired_reply="email-reply",
-        nudge_chat="Invite them to click \u201cEmail the first reference\u201d to get their first clue by email.",
-        nudge_voice="clicking Email the first reference",
+        nudge_chat="Invite them to click \u201cReceive email from Twin\u201d to get their first clue by email.",
+        nudge_voice="clicking Receive email from Twin",
     ),
     OnboardingStep(
         id="email-reply",
@@ -241,16 +349,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "whatsapp-message-reference",
-        "WhatsApp the next reference",
+        "Receive WhatsApp message from Twin",
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-message",
-        nudge_chat="Invite them to click \u201cWhatsApp the next reference\u201d to get a clue over WhatsApp.",
-        nudge_voice="clicking WhatsApp the next reference",
+        nudge_chat="Invite them to click \u201cReceive WhatsApp message from Twin\u201d to get a clue over WhatsApp.",
+        nudge_voice="clicking Receive WhatsApp message from Twin",
     ),
     OnboardingStep(
         id="whatsapp-message",
-        title="Guess a WhatsApp clue",
+        title="Reply to WhatsApp message",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"whatsapp-message-reference": COMPLETED},
@@ -258,20 +366,20 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="whatsapp",
         nudge_chat="Prompt them to reply with their guess to the WhatsApp clue you sent.",
-        nudge_voice="guessing the WhatsApp clue",
+        nudge_voice="replying to the WhatsApp message",
     ),
     _trigger(
         "whatsapp-call-reference",
-        "WhatsApp call for the next reference",
+        "Receive WhatsApp call from Twin",
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-call",
-        nudge_chat="Invite them to click \u201cWhatsApp call for the next reference\u201d to get a clue over a WhatsApp call.",
-        nudge_voice="clicking WhatsApp call for the next reference",
+        nudge_chat="Invite them to click \u201cReceive WhatsApp call from Twin\u201d to get a clue over a WhatsApp call.",
+        nudge_voice="clicking Receive WhatsApp call from Twin",
     ),
     OnboardingStep(
         id="whatsapp-call",
-        title="Guess a WhatsApp call clue",
+        title="Answer WhatsApp call",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"whatsapp-call-reference": COMPLETED},
@@ -279,7 +387,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="whatsapp",
         nudge_chat="On the WhatsApp call, give the clue and let them guess.",
-        nudge_voice="guessing the WhatsApp voice clue",
+        nudge_voice="answering the WhatsApp call",
     ),
     OnboardingStep(
         id="phone-number",
@@ -295,16 +403,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "sms-reference",
-        "Text the next reference",
+        "Receive SMS message from Twin",
         depends_on={"phone-number": COMPLETED},
         channel="sms",
         paired_reply="sms-message",
-        nudge_chat="Invite them to click \u201cText the next reference\u201d to get a clue over SMS.",
-        nudge_voice="clicking Text the next reference",
+        nudge_chat="Invite them to click \u201cReceive SMS message from Twin\u201d to get a clue over SMS.",
+        nudge_voice="clicking Receive SMS message from Twin",
     ),
     OnboardingStep(
         id="sms-message",
-        title="Guess an SMS clue",
+        title="Reply to SMS message",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"sms-reference": COMPLETED},
@@ -312,20 +420,20 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="sms",
         nudge_chat="Prompt them to reply with their guess to the SMS clue you sent.",
-        nudge_voice="guessing the SMS clue",
+        nudge_voice="replying to the SMS message",
     ),
     _trigger(
         "phone-call-reference",
-        "Call for the next reference",
+        "Receive phone call from Twin",
         depends_on={"phone-number": COMPLETED},
         channel="phone",
         paired_reply="phone-call",
-        nudge_chat="Invite them to click \u201cCall for the next reference\u201d to get a clue over a phone call.",
-        nudge_voice="clicking Call for the next reference",
+        nudge_chat="Invite them to click \u201cReceive phone call from Twin\u201d to get a clue over a phone call.",
+        nudge_voice="clicking Receive phone call from Twin",
     ),
     OnboardingStep(
         id="phone-call",
-        title="Guess a phone call clue",
+        title="Answer phone call",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"phone-call-reference": COMPLETED},
@@ -333,7 +441,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="phone",
         nudge_chat="On the phone call, give the clue and let them guess.",
-        nudge_voice="guessing the phone-call clue",
+        nudge_voice="answering the phone call",
     ),
     OnboardingStep(
         id="slack-connect",
@@ -487,10 +595,10 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(
-        "Twin sends the first reference clue over email.",
+        "Twin sends the first reference clue to your email.",
         "~10s",
     ),
-    "email-reply": StepPresentation("Twin sends you a quick email.", "~30s"),
+    "email-reply": StepPresentation("Reply to Twin's email with your guess.", "~30s"),
     "whatsapp-number": StepPresentation(
         "Add the WhatsApp number Twin should use.",
         "~30s",
@@ -500,7 +608,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~10s",
     ),
     "whatsapp-message": StepPresentation(
-        "Twin sends you a reference clue over WhatsApp.",
+        "Reply to Twin's WhatsApp message with your guess.",
         "~1 min",
     ),
     "whatsapp-call-reference": StepPresentation(
@@ -508,7 +616,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~10s",
     ),
     "whatsapp-call": StepPresentation(
-        "Twin gives you a reference clue over WhatsApp voice.",
+        "Answer Twin's WhatsApp call and guess the clue.",
         "~1 min",
     ),
     "phone-number": StepPresentation(
@@ -520,7 +628,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~10s",
     ),
     "sms-message": StepPresentation(
-        "Twin sends you a reference clue over SMS.",
+        "Reply to Twin's SMS message with your guess.",
         "~1 min",
     ),
     "phone-call-reference": StepPresentation(
@@ -528,7 +636,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~10s",
     ),
     "phone-call": StepPresentation(
-        "Twin gives you a reference clue over a phone call.",
+        "Answer Twin's phone call and guess the clue.",
         "~1 min",
     ),
     "slack-connect": StepPresentation(
