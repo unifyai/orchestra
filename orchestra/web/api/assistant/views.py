@@ -89,6 +89,7 @@ from orchestra.services.contact_membership_service import (
 from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
     build_onboarding_catalog,
+    compose_voice_intro_briefing,
     compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
@@ -1512,6 +1513,9 @@ def _coordinator_state_response(
         coordinator_id=coordinator.agent_id,
         completed_step_ids=completed_step_ids,
         onboarding=onboarding,
+        voice_intro_briefing=(
+            compose_voice_intro_briefing(onboarding) if onboarding else ""
+        ),
         **state,
     )
 

@@ -2215,6 +2215,71 @@ def compute_onboarding_render(
     }
 
 
+def compose_voice_intro_briefing(render: dict[str, Any]) -> str:
+    """Compose the first-call voice orientation briefing for the Coordinator.
+
+    Returns a self-contained system briefing a fresh onboarding voice call can
+    speak the instant it connects — without waiting for the slow-brain wakeup
+    or the per-call onboarding-state fetch. It is derived entirely from the
+    canonical onboarding graph (visible phase titles, the Communication phase
+    framing, and the first valid next target's voice nudge), so the orientation
+    copy stays single-sourced here rather than being re-authored in the call
+    initiator.
+    """
+    next_targets = render.get("next_targets") or []
+    phases = render.get("phases") or []
+    primary = next_targets[0] if next_targets else None
+
+    lines: list[str] = [
+        "[Briefing for your opening turn]",
+        "This is the user's first onboarding voice call with you. Open with a "
+        "warm, natural first-meeting introduction (roughly 20-35 seconds) in "
+        "your own words — not a scripted recital. Cover:",
+        "- Greet the user by first name and introduce yourself as Twin, their "
+        "digital twin / stand-in.",
+    ]
+
+    phase_titles = [
+        str(phase.get("title")).strip()
+        for phase in phases
+        if str(phase.get("title") or "").strip()
+    ]
+    if phase_titles:
+        lines.append(
+            "- Explain that onboarding is a short shared walkthrough covering "
+            + ", ".join(phase_titles)
+            + ", and that they can go start-to-finish or skip ahead.",
+        )
+
+    primary_phase = primary.get("phase") if primary else None
+    communication_framing = next(
+        (
+            str(phase.get("framing")).strip()
+            for phase in phases
+            if phase.get("phase") == onboarding_graph.PHASE_COMMUNICATION
+            and str(phase.get("framing") or "").strip()
+        ),
+        "",
+    )
+    if communication_framing and primary_phase == onboarding_graph.PHASE_COMMUNICATION:
+        lines.append(f"- {communication_framing}")
+
+    if primary:
+        nudge = str(primary.get("nudge_voice") or primary.get("title") or "").strip()
+        if nudge:
+            lines.append(f"- Make this the concrete next step: {nudge}.")
+
+    lines.append(
+        "- Reassure them they can pause onboarding at any time and just start "
+        "asking for help or sharing documents; it can be resumed later.",
+    )
+    lines.append(
+        "The user may interrupt at any point — if they do, respond to what "
+        "they say and only weave in the remaining points if still relevant.",
+    )
+    return "\n".join(lines)
+
+
 def _is_coordinator_in_onboarding(
     session: Session,
     *,

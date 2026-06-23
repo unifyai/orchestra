@@ -883,6 +883,10 @@ class CoordinatorStateResponse(BaseModel):
     # next targets with nudge copy). Present only while actively
     # onboarding; ``None`` once complete, working, or deferred.
     onboarding: Optional[OnboardingRender] = None
+    # Self-contained orientation briefing for a fresh onboarding voice call,
+    # derived from the graph so the call initiator can pass it straight to the
+    # voice agent as a ``briefed`` opening. Empty outside active onboarding.
+    voice_intro_briefing: str = ""
 
 
 class DemoAssistantCreate(BaseModel):

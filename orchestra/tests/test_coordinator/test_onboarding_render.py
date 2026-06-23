@@ -411,3 +411,42 @@ def test_onboarding_local_mode_signal() -> None:
     for fake_settings, expected in cases:
         with patch.object(svc, "settings", fake_settings):
             assert svc.onboarding_local_mode() is expected
+
+
+# ---------------------------------------------------------------------------
+# Voice intro briefing
+# ---------------------------------------------------------------------------
+
+
+def test_voice_intro_briefing_fresh_start() -> None:
+    """A fresh-start render yields a self-contained first-call orientation
+    briefing: introduces Twin, lists the phases, carries the Communication
+    framing and the first valid next target's voice nudge, and offers the
+    pause escape hatch."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    briefing = svc.compose_voice_intro_briefing(render)
+
+    assert "Twin" in briefing
+    # Phase titles enumerated from the graph.
+    assert "Communication" in briefing
+    # First valid next target is the email reference quiz; its voice nudge is
+    # surfaced verbatim as the concrete next step.
+    primary = render["next_targets"][0]
+    assert primary["id"] == "email-reference"
+    assert primary["nudge_voice"] in briefing
+    # Communication-phase framing is included because the primary target is in
+    # the Communication phase.
+    assert graph.COMMUNICATION_FRAMING in briefing
+    # Pause escape hatch + interruption guidance.
+    assert "pause onboarding" in briefing.lower()
+    assert "interrupt" in briefing.lower()
+
+
+def test_voice_intro_briefing_tolerates_empty_render() -> None:
+    """With no phases/targets the briefing still returns the orientation frame
+    without a next-step or framing line, and never raises."""
+    briefing = svc.compose_voice_intro_briefing({})
+
+    assert "Twin" in briefing
+    assert "concrete next step" not in briefing
+    assert graph.COMMUNICATION_FRAMING not in briefing
