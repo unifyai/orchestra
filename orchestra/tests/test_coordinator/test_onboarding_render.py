@@ -130,6 +130,10 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         },
     ]
     assert steps["schedule"]["dependencies"] == []
+    assert steps["slack-reference"]["title"] == "Trigger Slack message from Twin"
+    assert steps["slack-message"]["title"] == "Reply to Slack message"
+    assert steps["discord-reference"]["title"] == "Trigger Discord message from Twin"
+    assert steps["discord-message"]["title"] == "Reply to Discord message"
     assert _next_ids(render) == [
         "email-reference",
         "whatsapp-number",
