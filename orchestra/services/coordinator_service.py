@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 import httpx
 from fastapi import HTTPException, status
-from sqlalchemy import Integer, and_, func, literal, select, text
+from sqlalchemy import Integer, and_, literal, select, text
 from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
@@ -1112,7 +1112,7 @@ def get_coordinator_state(
         "onboarding_step": onboarding_step,
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "skipped_phase_ids": normalize_onboarding_phase_ids(
-            row.get("skipped_phase_ids")
+            row.get("skipped_phase_ids"),
         ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
@@ -1269,20 +1269,24 @@ def set_coordinator_state(
     next_skipped_step_ids = normalize_onboarding_step_ids(
         (previous or {}).get("skipped_step_ids"),
     )
-    if (
-        skip_onboarding_step is not None
-        and skip_onboarding_step not in next_skipped_step_ids
-    ):
+    if skip_onboarding_step is not None:
+        skipped_step_set = {
+            *onboarding_graph.completion_coupled_steps(skip_onboarding_step),
+            *next_skipped_step_ids,
+        }
         next_skipped_step_ids = [
             step_id
             for step_id in SKIPPABLE_ONBOARDING_STEPS
-            if step_id == skip_onboarding_step or step_id in next_skipped_step_ids
+            if step_id in skipped_step_set
         ]
     if unskip_onboarding_step is not None:
+        unskipped_step_set = {
+            *onboarding_graph.completion_coupled_steps(unskip_onboarding_step),
+        }
         next_skipped_step_ids = [
             step_id
             for step_id in next_skipped_step_ids
-            if step_id != unskip_onboarding_step
+            if step_id not in unskipped_step_set
         ]
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
@@ -1461,12 +1465,6 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
 # (src/hooks/Assistants/useAssistantIntegrations.ts) — keep in sync.
 _WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_", "AZURE_")
 
-# Managers whose event trees are hidden from the Actions panel and
-# therefore must not count as "the user saw work happen" for the
-# ``act`` step. Mirrors Console's ``EXCLUDED_MANAGERS``
-# (src/lib/assistants/event-filters.ts).
-_ACTION_EXCLUDED_MANAGERS: tuple[str, ...] = ("MemoryManager",)
-
 # Onboarding checklist step ids derivable from durable domain state.
 # ``meet`` (picker resolution) is deliberately absent because it is
 # session-local to Console. ``hire-specialist`` ends onboarding by
@@ -1484,7 +1482,6 @@ ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
-ONBOARDING_STEP_ACT = "act"
 ONBOARDING_STEP_SCHEDULE = "schedule"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
 DERIVABLE_ONBOARDING_STEPS = (
@@ -1501,18 +1498,15 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
-    ONBOARDING_STEP_ACT,
     ONBOARDING_STEP_SCHEDULE,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
-    *DERIVABLE_ONBOARDING_STEPS,
+    *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
     ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
 SKIPPABLE_ONBOARDING_PHASES = (
-    onboarding_graph.PHASE_QUIZ,
-    onboarding_graph.PHASE_CONNECT,
-    onboarding_graph.PHASE_DELEGATE,
+    *(phase.label for phase in onboarding_graph.ONBOARDING_PHASES),
 )
 
 COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
@@ -1566,40 +1560,6 @@ def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
     return any(
         not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES) for name in secret_names
     )
-
-
-def _has_root_action(session: Session, *, coordinator: Assistant) -> bool:
-    """Act step: any root manager-method event was ever dispatched.
-
-    Mirrors the Actions-panel query: root events are
-    ``len(hierarchy) == 1`` rows in the per-assistant
-    ``Events/ManagerMethod`` context, excluding managers the panel
-    hides entirely.
-    """
-    project = _project_for_coordinator(session, coordinator)
-    context = _get_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT,
-        ),
-    )
-    if context is None:
-        return False
-    row = session.scalar(
-        select(LogEvent.id)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(
-            LogEventContext.context_id == context.id,
-            func.jsonb_array_length(LogEvent.data["hierarchy"]) == 1,
-            func.coalesce(LogEvent.data["manager"].astext, "").notin_(
-                _ACTION_EXCLUDED_MANAGERS,
-            ),
-        )
-        .limit(1),
-    )
-    return row is not None
 
 
 def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
@@ -1782,7 +1742,6 @@ def derive_onboarding_progress(
         (ONBOARDING_STEP_DISCORD_MESSAGE, _has_discord_message),
         (ONBOARDING_STEP_WORKSPACE, _has_workspace_email),
         (ONBOARDING_STEP_APPS, _has_app_secret),
-        (ONBOARDING_STEP_ACT, _has_root_action),
         (ONBOARDING_STEP_SCHEDULE, _has_scheduled_task),
     )
     return [
@@ -1815,7 +1774,7 @@ def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, str]:
 
 def _step_presentation_fields(step_id: str) -> dict[str, Any]:
     """The presentation copy a step carries to consumers (tooltip
-    description, time estimate, and the suggestion chips for act/schedule)."""
+    description, time estimate, and suggestion chips)."""
     presentation = onboarding_graph.presentation_for(step_id)
     return {
         "description": presentation.description,
@@ -1922,12 +1881,18 @@ def compute_onboarding_render(
         elif reply_id in skipped:
             skipped.add(trigger_id)
 
+    for skipped_id in list(skipped):
+        skipped.update(onboarding_graph.completion_blocked_descendants(skipped_id))
+
     steps: list[dict[str, Any]] = []
     next_targets: list[dict[str, Any]] = []
+    step_statuses: dict[str, str] = {}
     for step in onboarding_graph.ONBOARDING_GRAPH:
         if not onboarding_graph.phase_is_visible(step.phase, local_mode=local_mode):
             continue
-        if step.id in completed:
+        if step.kind == "coming_soon":
+            status = "coming_soon"
+        elif step.id in completed:
             status = "done"
         elif step.id in skipped:
             status = "skipped"
@@ -1939,6 +1904,30 @@ def compute_onboarding_render(
             status = "available"
         else:
             status = "locked"
+        dependencies: list[dict[str, Any]] = []
+        for dep_id, level in step.depends_on.items():
+            dep = onboarding_graph.STEP_BY_ID[dep_id]
+            if not onboarding_graph.phase_is_visible(dep.phase, local_mode=local_mode):
+                continue
+            satisfied = (
+                dep_id in completed
+                if level == onboarding_graph.COMPLETED
+                else dep_id in completed or dep_id in skipped
+            )
+            dependencies.append(
+                {
+                    "id": dep.id,
+                    "title": dep.title,
+                    "status": step_statuses.get(dep.id, "locked"),
+                    "resolution": (
+                        "completed"
+                        if level == onboarding_graph.COMPLETED
+                        else "addressed"
+                    ),
+                    "satisfied": satisfied,
+                },
+            )
+        step_statuses[step.id] = status
         steps.append(
             {
                 "id": step.id,
@@ -1946,6 +1935,7 @@ def compute_onboarding_render(
                 "phase": step.phase,
                 "status": status,
                 "can_skip": step.can_skip,
+                "dependencies": dependencies,
                 **_step_presentation_fields(step.id),
             },
         )
@@ -1969,7 +1959,7 @@ def compute_onboarding_render(
         "steps": steps,
         "next_targets": next_targets,
         "skipped_phase_ids": normalize_onboarding_phase_ids(
-            state.get("skipped_phase_ids")
+            state.get("skipped_phase_ids"),
         ),
     }
 

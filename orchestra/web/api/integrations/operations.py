@@ -1637,10 +1637,6 @@ def _activation_state(
         return "not_connected"
     if conn.status in EXPIRED_STATUSES:
         return "expired" if conn.status != "error" else "error"
-    required = set(tool.required_scopes_json or [])
-    granted = set(conn.granted_scopes_json or [])
-    if required and not required.issubset(granted):
-        return "missing_scope"
     return "connected_ready"
 
 
@@ -1973,6 +1969,55 @@ def _resolve_tool_approval(
     )
 
 
+def _provider_error_outcome(
+    error: dict[str, Any] | None,
+    *,
+    required_scopes: list[str],
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Map a provider execution error onto a run outcome.
+
+    The provider is the single source of truth for whether a connection may run
+    an action. Authorization failures are surfaced as actionable reconnect
+    outcomes derived from the provider's own response, never from a locally
+    predicted scope comparison. Returns ``(status, activation_state_override,
+    error)`` where the override is ``None`` when the local activation state
+    should stand.
+    """
+
+    error = error or {"code": "provider_error", "message": "Provider execution failed."}
+    provider_status_code = error.get("provider_status_code")
+    if provider_status_code == 403:
+        return (
+            "missing_scope",
+            "missing_scope",
+            {
+                "code": "missing_scope",
+                "message": (
+                    "The connected account is missing the permissions required "
+                    "for this action. Reconnect the integration to grant them."
+                ),
+                "required_scopes": required_scopes,
+                "provider_status_code": provider_status_code,
+                "provider_response_body": error.get("provider_response_body"),
+            },
+        )
+    if provider_status_code == 401:
+        return (
+            "reconnect_required",
+            "expired",
+            {
+                "code": "reconnect_required",
+                "message": (
+                    "The connected account is no longer authenticated. "
+                    "Reconnect the integration."
+                ),
+                "provider_status_code": provider_status_code,
+                "provider_response_body": error.get("provider_response_body"),
+            },
+        )
+    return ("provider_error", None, error)
+
+
 def run_tool(
     session: Session,
     *,
@@ -2021,13 +2066,6 @@ def run_tool(
         error = {
             "code": "connect_required",
             "message": f"Connect {tool.canonical_app_slug} in Console before using this tool.",
-        }
-    elif activation_state == "missing_scope":
-        status = "missing_scope"
-        error = {
-            "code": "missing_scope",
-            "message": "Reconnect this integration with the required scopes.",
-            "required_scopes": tool.required_scopes_json or [],
         }
     elif activation_state == "disabled_by_policy":
         status = "blocked_by_policy"
@@ -2083,11 +2121,12 @@ def run_tool(
             if adapter_result.status == "ok":
                 result = adapter_result.result
             else:
-                status = "provider_error"
-                error = adapter_result.error or {
-                    "code": "provider_error",
-                    "message": "Provider execution failed.",
-                }
+                status, activation_override, error = _provider_error_outcome(
+                    adapter_result.error,
+                    required_scopes=tool.required_scopes_json or [],
+                )
+                if activation_override:
+                    activation_state = activation_override
 
     audit_values = _audit_values(
         body=body,

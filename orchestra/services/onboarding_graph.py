@@ -22,8 +22,7 @@ Dependency levels mirror the original Console semantics:
   - ``ADDRESSED`` (0): the dependency unlocks this step once it is
     *resolved* — completed OR skipped/deferred.
   - ``COMPLETED`` (1): the dependency must be genuinely completed; a
-    skip does not unlock the dependent (such a dependency must not be
-    skippable, asserted below).
+    skip does not unlock the dependent.
 """
 
 from __future__ import annotations
@@ -69,9 +68,16 @@ class OnboardingChip:
 
 
 # Phase labels, in display order.
-PHASE_QUIZ = "Quiz"
-PHASE_CONNECT = "Connect"
-PHASE_DELEGATE = "Delegate"
+PHASE_COMMUNICATION = "Communication"
+PHASE_WORKSPACE = "Workspace"
+PHASE_INTEGRATIONS = "Integrations"
+PHASE_TASKS = "Tasks"
+PHASE_LEARNING = "Learning"
+PHASE_CANVAS = "Canvas"
+PHASE_MY_COMPUTER = "My Computer"
+PHASE_YOUR_COMPUTER = "Your Computer"
+PHASE_TEAMS = "Teams"
+PHASE_HIRING = "Hiring"
 
 
 @dataclass(frozen=True)
@@ -96,25 +102,64 @@ class OnboardingPhase:
 # grouping copy and per-phase deployment visibility.
 ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
     OnboardingPhase(
-        id="comms",
-        label=PHASE_QUIZ,
-        title="Guess the reference",
-        description="Identify clues sent over email, WhatsApp, phone, Slack, and Discord.",
-        local_only=True,
+        id="communication",
+        label=PHASE_COMMUNICATION,
+        title="Communication",
+        description="Try the communication channels I can use with you.",
     ),
     OnboardingPhase(
-        id="connect",
-        label=PHASE_CONNECT,
-        title="Connect me",
-        description="Plug me into your workspace and apps.",
-        local_only=False,
+        id="workspace",
+        label=PHASE_WORKSPACE,
+        title="Workspace",
+        description="Give me access to your Google or Microsoft workspace.",
     ),
     OnboardingPhase(
-        id="work",
-        label=PHASE_DELEGATE,
-        title="Get work done",
-        description="Hand off real work and see it run.",
-        local_only=True,
+        id="integrations",
+        label=PHASE_INTEGRATIONS,
+        title="Integrations",
+        description="Connect the apps and services I should work with.",
+    ),
+    OnboardingPhase(
+        id="tasks",
+        label=PHASE_TASKS,
+        title="Tasks",
+        description="Set up recurring or event-triggered work.",
+    ),
+    OnboardingPhase(
+        id="learning",
+        label=PHASE_LEARNING,
+        title="Learning",
+        description="Teach me the background I should remember.",
+    ),
+    OnboardingPhase(
+        id="canvas",
+        label=PHASE_CANVAS,
+        title="Canvas",
+        description="Use a shared visual workspace.",
+    ),
+    OnboardingPhase(
+        id="my-computer",
+        label=PHASE_MY_COMPUTER,
+        title="My Computer",
+        description="Ask me to operate from my computer.",
+    ),
+    OnboardingPhase(
+        id="your-computer",
+        label=PHASE_YOUR_COMPUTER,
+        title="Your Computer",
+        description="Let me help on your computer.",
+    ),
+    OnboardingPhase(
+        id="teams",
+        label=PHASE_TEAMS,
+        title="Teams",
+        description="Work with your teammates.",
+    ),
+    OnboardingPhase(
+        id="hiring",
+        label=PHASE_HIRING,
+        title="Hiring",
+        description="Hire and configure assistants.",
     ),
 )
 
@@ -132,15 +177,27 @@ def _trigger(
     return OnboardingStep(
         id=step_id,
         title=title,
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="trigger",
         depends_on=depends_on,
-        can_skip=False,
+        can_skip=True,
         derivable=False,
         channel=channel,
         paired_reply=paired_reply,
         nudge_chat=nudge_chat,
         nudge_voice=nudge_voice,
+    )
+
+
+def _coming_soon(step_id: str, phase: str) -> OnboardingStep:
+    return OnboardingStep(
+        id=step_id,
+        title="[Coming soon]",
+        phase=phase,
+        kind="coming_soon",
+        depends_on={},
+        can_skip=False,
+        derivable=False,
     )
 
 
@@ -161,9 +218,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="email-reply",
         title="Reply to email",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"email-reference": ADDRESSED},
+        depends_on={"email-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="email",
@@ -173,9 +230,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="whatsapp-number",
         title="Add your WhatsApp number",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="setup",
-        depends_on={"email-reply": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         channel="whatsapp",
@@ -185,7 +242,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "whatsapp-message-reference",
         "WhatsApp the next reference",
-        depends_on={"whatsapp-number": ADDRESSED},
+        depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-message",
         nudge_chat="Invite them to click \u201cWhatsApp the next reference\u201d to get a clue over WhatsApp.",
@@ -194,9 +251,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="whatsapp-message",
         title="Guess a WhatsApp clue",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"whatsapp-message-reference": ADDRESSED},
+        depends_on={"whatsapp-message-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="whatsapp",
@@ -206,7 +263,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "whatsapp-call-reference",
         "WhatsApp call for the next reference",
-        depends_on={"whatsapp-message": ADDRESSED},
+        depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-call",
         nudge_chat="Invite them to click \u201cWhatsApp call for the next reference\u201d to get a clue over a WhatsApp call.",
@@ -215,9 +272,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="whatsapp-call",
         title="Guess a WhatsApp call clue",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"whatsapp-call-reference": ADDRESSED},
+        depends_on={"whatsapp-call-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="whatsapp",
@@ -227,9 +284,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="phone-number",
         title="Add your phone number",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="setup",
-        depends_on={"whatsapp-call": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         channel="phone",
@@ -239,7 +296,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "sms-reference",
         "Text the next reference",
-        depends_on={"phone-number": ADDRESSED},
+        depends_on={"phone-number": COMPLETED},
         channel="sms",
         paired_reply="sms-message",
         nudge_chat="Invite them to click \u201cText the next reference\u201d to get a clue over SMS.",
@@ -248,9 +305,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="sms-message",
         title="Guess an SMS clue",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"sms-reference": ADDRESSED},
+        depends_on={"sms-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="sms",
@@ -260,7 +317,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "phone-call-reference",
         "Call for the next reference",
-        depends_on={"sms-message": ADDRESSED},
+        depends_on={"phone-number": COMPLETED},
         channel="phone",
         paired_reply="phone-call",
         nudge_chat="Invite them to click \u201cCall for the next reference\u201d to get a clue over a phone call.",
@@ -269,9 +326,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="phone-call",
         title="Guess a phone call clue",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"phone-call-reference": ADDRESSED},
+        depends_on={"phone-call-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="phone",
@@ -281,9 +338,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="slack-connect",
         title="Connect Slack",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="connect",
-        depends_on={"phone-call": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         channel="slack",
@@ -293,7 +350,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "slack-reference",
         "Send the next reference via Slack",
-        depends_on={"slack-connect": ADDRESSED},
+        depends_on={"slack-connect": COMPLETED},
         channel="slack",
         paired_reply="slack-message",
         nudge_chat="Invite them to click \u201cSend the next reference via Slack\u201d to get a clue in Slack.",
@@ -302,9 +359,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="slack-message",
         title="Guess a Slack clue",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"slack-reference": ADDRESSED},
+        depends_on={"slack-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="slack",
@@ -314,9 +371,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="discord-connect",
         title="Connect Discord",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="connect",
-        depends_on={"slack-message": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         channel="discord",
@@ -326,7 +383,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "discord-reference",
         "Send the next reference via discord",
-        depends_on={"discord-connect": ADDRESSED},
+        depends_on={"discord-connect": COMPLETED},
         channel="discord",
         paired_reply="discord-message",
         nudge_chat="Invite them to click \u201cSend the next reference via Discord\u201d to get a clue in Discord.",
@@ -335,9 +392,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="discord-message",
         title="Guess a Discord clue",
-        phase=PHASE_QUIZ,
+        phase=PHASE_COMMUNICATION,
         kind="reply",
-        depends_on={"discord-reference": ADDRESSED},
+        depends_on={"discord-reference": COMPLETED},
         can_skip=True,
         derivable=True,
         channel="discord",
@@ -347,7 +404,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="workspace",
         title="Give me access to your workspace",
-        phase=PHASE_CONNECT,
+        phase=PHASE_WORKSPACE,
         kind="connect",
         depends_on={},
         can_skip=True,
@@ -358,36 +415,31 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     OnboardingStep(
         id="apps",
         title="Connect me with your apps",
-        phase=PHASE_CONNECT,
+        phase=PHASE_INTEGRATIONS,
         kind="connect",
-        depends_on={"workspace": ADDRESSED},
+        depends_on={"workspace": COMPLETED},
         can_skip=True,
         derivable=True,
         nudge_chat="Have them open Integrations and connect at least one app (Slack, Gmail, Notion, \u2026).",
         nudge_voice="connecting one of their apps (Slack, Gmail, Notion, \u2026) from the Integrations panel",
     ),
     OnboardingStep(
-        id="act",
-        title="Ask me to do something now",
-        phase=PHASE_DELEGATE,
-        kind="act",
-        depends_on={},
-        can_skip=True,
-        derivable=True,
-        nudge_chat="Invite them to hand off a one-off job right now (e.g. \u201csummarize my unread emails\u201d) and watch it run in Actions.",
-        nudge_voice="handing me a one-off job right now so they can watch it run live",
-    ),
-    OnboardingStep(
         id="schedule",
         title="Schedule a task for later",
-        phase=PHASE_DELEGATE,
+        phase=PHASE_TASKS,
         kind="schedule",
-        depends_on={"act": ADDRESSED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat="Invite them to set up a recurring or event-triggered task for later.",
         nudge_voice="scheduling a recurring or event-triggered task for later",
     ),
+    _coming_soon("learning-coming-soon", PHASE_LEARNING),
+    _coming_soon("canvas-coming-soon", PHASE_CANVAS),
+    _coming_soon("my-computer-coming-soon", PHASE_MY_COMPUTER),
+    _coming_soon("your-computer-coming-soon", PHASE_YOUR_COMPUTER),
+    _coming_soon("teams-coming-soon", PHASE_TEAMS),
+    _coming_soon("hiring-coming-soon", PHASE_HIRING),
 )
 
 
@@ -416,7 +468,7 @@ PHASE_BY_LABEL: dict[str, OnboardingPhase] = {
 class StepPresentation:
     """Per-step presentation copy: the info-tooltip ``description`` and rough
     ``estimated_time`` shown in Console, plus the read-only suggestion chips
-    rendered under the act/schedule rows (split by surface for ``act``)."""
+    rendered under rows that carry examples."""
 
     description: str = ""
     estimated_time: str = ""
@@ -424,16 +476,6 @@ class StepPresentation:
     chips_call: tuple[OnboardingChip, ...] = ()
 
 
-_ACT_CHIPS_CHAT: tuple[OnboardingChip, ...] = (
-    OnboardingChip("summarize-email", "Summarize my unread emails"),
-    OnboardingChip("catch-up-news", "Catch me up on today's news"),
-    OnboardingChip("draft-reply", "Draft a reply to my latest email"),
-)
-_ACT_CHIPS_CALL: tuple[OnboardingChip, ...] = (
-    OnboardingChip("screen-share", "Walk me through this website"),
-    OnboardingChip("next-meetings", "Tell me about my next meetings"),
-    OnboardingChip("inbox-readout", "Read me a rundown of my inbox"),
-)
 _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
     OnboardingChip("morning-briefing", "Send me a briefing tomorrow at 8am"),
     OnboardingChip("weekly-recap", "Every Friday, recap my week"),
@@ -445,67 +487,79 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(
-        "Twin sends the first reference clue over email.", "~10s"
+        "Twin sends the first reference clue over email.",
+        "~10s",
     ),
     "email-reply": StepPresentation("Twin sends you a quick email.", "~30s"),
     "whatsapp-number": StepPresentation(
-        "Add the WhatsApp number Twin should use.", "~30s"
+        "Add the WhatsApp number Twin should use.",
+        "~30s",
     ),
     "whatsapp-message-reference": StepPresentation(
-        "Twin sends the next reference clue over WhatsApp.", "~10s"
+        "Twin sends the next reference clue over WhatsApp.",
+        "~10s",
     ),
     "whatsapp-message": StepPresentation(
-        "Twin sends you a reference clue over WhatsApp.", "~1 min"
+        "Twin sends you a reference clue over WhatsApp.",
+        "~1 min",
     ),
     "whatsapp-call-reference": StepPresentation(
-        "Twin calls with the next reference clue over WhatsApp.", "~10s"
+        "Twin calls with the next reference clue over WhatsApp.",
+        "~10s",
     ),
     "whatsapp-call": StepPresentation(
-        "Twin gives you a reference clue over WhatsApp voice.", "~1 min"
+        "Twin gives you a reference clue over WhatsApp voice.",
+        "~1 min",
     ),
     "phone-number": StepPresentation(
-        "Add the phone number Twin should use for calls and SMS.", "~30s"
+        "Add the phone number Twin should use for calls and SMS.",
+        "~30s",
     ),
     "sms-reference": StepPresentation(
-        "Twin sends the next reference clue over SMS.", "~10s"
+        "Twin sends the next reference clue over SMS.",
+        "~10s",
     ),
     "sms-message": StepPresentation(
-        "Twin sends you a reference clue over SMS.", "~1 min"
+        "Twin sends you a reference clue over SMS.",
+        "~1 min",
     ),
     "phone-call-reference": StepPresentation(
-        "Twin calls with the next reference clue.", "~10s"
+        "Twin calls with the next reference clue.",
+        "~10s",
     ),
     "phone-call": StepPresentation(
-        "Twin gives you a reference clue over a phone call.", "~1 min"
+        "Twin gives you a reference clue over a phone call.",
+        "~1 min",
     ),
     "slack-connect": StepPresentation(
-        "Connect Twin through the Unify Slack app.", "~1 min"
+        "Connect Twin through the Unify Slack app.",
+        "~1 min",
     ),
     "slack-reference": StepPresentation(
-        "Twin sends the next reference clue in Slack.", "~10s"
+        "Twin sends the next reference clue in Slack.",
+        "~10s",
     ),
     "slack-message": StepPresentation(
-        "Twin sends you a reference clue in Slack.", "~1 min"
+        "Twin sends you a reference clue in Slack.",
+        "~1 min",
     ),
     "discord-connect": StepPresentation(
-        "Connect Twin through the public Discord bot.", "~1 min"
+        "Connect Twin through the public Discord bot.",
+        "~1 min",
     ),
     "discord-reference": StepPresentation(
-        "Twin sends the next reference clue in Discord.", "~10s"
+        "Twin sends the next reference clue in Discord.",
+        "~10s",
     ),
     "discord-message": StepPresentation(
-        "Twin sends you a reference clue in Discord.", "~1 min"
+        "Twin sends you a reference clue in Discord.",
+        "~1 min",
     ),
     "workspace": StepPresentation(
-        "Required for everything else in onboarding.", "~30s"
+        "Required for everything else in onboarding.",
+        "~30s",
     ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
-    "act": StepPresentation(
-        "Give me a one-off job and watch it run live.",
-        "~2 min",
-        _ACT_CHIPS_CHAT,
-        _ACT_CHIPS_CALL,
-    ),
     "schedule": StepPresentation(
         "Set up a recurring or event-triggered task.",
         "~1 min",
@@ -561,14 +615,65 @@ def dependencies_satisfied(
     return True
 
 
+def completion_blocked_descendants(step_id: str) -> tuple[str, ...]:
+    """Steps that become unreachable when ``step_id`` is skipped.
+
+    Only ``COMPLETED`` edges cascade: ``ADDRESSED`` edges intentionally accept
+    skipped dependencies.
+    """
+    blocked = {step_id}
+    descendants: list[str] = []
+    changed = True
+    while changed:
+        changed = False
+        for step in ONBOARDING_GRAPH:
+            if step.id in blocked:
+                continue
+            if any(
+                dep_id in blocked and level == COMPLETED
+                for dep_id, level in step.depends_on.items()
+            ):
+                blocked.add(step.id)
+                descendants.append(step.id)
+                changed = True
+    return tuple(descendants)
+
+
+def completion_required_ancestors(step_id: str) -> tuple[str, ...]:
+    """Completion-required prerequisites for ``step_id``, nearest first."""
+    ancestors: list[str] = []
+    seen: set[str] = set()
+
+    def visit(current_id: str) -> None:
+        current = STEP_BY_ID.get(current_id)
+        if current is None:
+            return
+        for dep_id, level in current.depends_on.items():
+            if level != COMPLETED or dep_id in seen:
+                continue
+            seen.add(dep_id)
+            ancestors.append(dep_id)
+            visit(dep_id)
+
+    visit(step_id)
+    return tuple(ancestors)
+
+
+def completion_coupled_steps(step_id: str) -> tuple[str, ...]:
+    """Steps coupled by completed-only dependency edges around ``step_id``."""
+    coupled = {step_id, *completion_required_ancestors(step_id)}
+    for coupled_id in tuple(coupled):
+        coupled.update(completion_blocked_descendants(coupled_id))
+    return tuple(step.id for step in ONBOARDING_GRAPH if step.id in coupled)
+
+
 def _assert_graph_integrity() -> None:
     """Fail loudly on a malformed hand-authored graph.
 
     Catches the three ways the graph can rot: a dependency id that does
-    not exist, a dependency cycle, and a ``COMPLETED`` edge pointing at a
-    skippable step (which a skip could strand forever). Runs once at
-    import so a mistake surfaces immediately rather than as a confusing
-    empty/locked checklist at runtime.
+    not exist, a phase that does not exist, and a dependency cycle. Runs
+    once at import so a mistake surfaces immediately rather than as a
+    confusing empty/locked checklist at runtime.
     """
     for step in ONBOARDING_GRAPH:
         for dep_id, level in step.depends_on.items():
@@ -576,11 +681,6 @@ def _assert_graph_integrity() -> None:
             if dep is None:
                 raise ValueError(
                     f"Onboarding graph: '{step.id}' depends on unknown step '{dep_id}'.",
-                )
-            if level == COMPLETED and dep.can_skip:
-                raise ValueError(
-                    f"Onboarding graph: '{step.id}' requires '{dep_id}' completed, "
-                    f"but '{dep_id}' is skippable.",
                 )
         if step.phase not in PHASE_BY_LABEL:
             raise ValueError(

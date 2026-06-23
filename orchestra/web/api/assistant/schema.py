@@ -725,6 +725,16 @@ class OnboardingPhaseInfo(BaseModel):
     description: str = ""
 
 
+class OnboardingStepDependency(BaseModel):
+    """Direct dependency metadata for explaining why a step is locked."""
+
+    id: str
+    title: str
+    status: str
+    resolution: str
+    satisfied: bool = False
+
+
 class OnboardingStepStatus(BaseModel):
     """One onboarding step with its resolved status and presentation copy.
 
@@ -740,6 +750,7 @@ class OnboardingStepStatus(BaseModel):
     phase: str
     status: str
     can_skip: bool = False
+    dependencies: List[OnboardingStepDependency] = Field(default_factory=list)
     description: str = ""
     estimated_time: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)

@@ -534,7 +534,9 @@ async def test_coordinator_opt_in_repairs_missing_owner_contact_row(
 
     assert response.status_code == status.HTTP_200_OK, response.json()
     _assert_owner_contact_row(
-        dbsession, coordinator=coordinator, owner_user_id=owner["id"]
+        dbsession,
+        coordinator=coordinator,
+        owner_user_id=owner["id"],
     )
 
 
@@ -1129,8 +1131,40 @@ async def test_coordinator_state_patch_records_skipped_steps(
         assert unskip_apps.status_code == status.HTTP_200_OK, unskip_apps.json()
         assert unskip_apps.json()["info"]["skipped_step_ids"] == ["workspace"]
 
-    assert emit.await_count == 3
-    assert emit.await_args.kwargs["skipped_step_ids"] == ["workspace", "apps"]
+        skip_phone = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "phone-number"},
+            headers=owner["headers"],
+        )
+        assert skip_phone.status_code == status.HTTP_200_OK, skip_phone.json()
+        assert skip_phone.json()["info"]["skipped_step_ids"] == [
+            "phone-number",
+            "sms-reference",
+            "sms-message",
+            "phone-call-reference",
+            "phone-call",
+            "workspace",
+        ]
+
+        unskip_sms_message = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"unskip_onboarding_step": "sms-message"},
+            headers=owner["headers"],
+        )
+        assert (
+            unskip_sms_message.status_code == status.HTTP_200_OK
+        ), unskip_sms_message.json()
+        assert unskip_sms_message.json()["info"]["skipped_step_ids"] == ["workspace"]
+
+    assert emit.await_count == 4
+    assert emit.await_args.kwargs["skipped_step_ids"] == [
+        "phone-number",
+        "sms-reference",
+        "sms-message",
+        "phone-call-reference",
+        "phone-call",
+        "workspace",
+    ]
 
     promote = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",

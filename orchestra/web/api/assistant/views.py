@@ -3110,20 +3110,6 @@ def _load_assistant_for_file_access(
     return assistant
 
 
-def _byod_account_email(session: Session, assistant_id: int) -> str | None:
-    """Return the BYOD (user-connected) email contact for the assistant."""
-    contact_dao = AssistantContactDAO(session)
-    contacts = contact_dao.get_active_contacts_for_assistant(assistant_id)
-    return next(
-        (
-            c.contact_value
-            for c in contacts
-            if c.contact_type == "email" and c.provisioned_by == "user"
-        ),
-        None,
-    )
-
-
 # Drive/item identifiers are base64url-style tokens (Microsoft) or opaque ids
 # (Google). They must never carry URL-structural characters, since they are
 # interpolated into the gateway request path; anything outside this allowlist
@@ -3216,18 +3202,20 @@ async def list_workspace_file_roots(
 ) -> InfoResponse[WorkspaceFileListResponse]:
     _require_file_provider(provider)
     _load_assistant_for_file_access(session, request, assistant_id, write=False)
-    email = _byod_account_email(session, assistant_id)
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No connected account found for this assistant.",
-        )
 
     if provider == "google":
-        data = await _gateway_browse("google", "roots", {"user_email": email})
+        data = await _gateway_browse(
+            "google",
+            "roots",
+            {"assistant_id": assistant_id},
+        )
         items = [_google_node(n) for n in data.get("roots", [])]
     else:
-        data = await _gateway_browse("microsoft", "drives", {"user_email": email})
+        data = await _gateway_browse(
+            "microsoft",
+            "drives",
+            {"assistant_id": assistant_id},
+        )
         items = [
             WorkspaceFileNode(
                 drive_id=str(d.get("id") or ""),
@@ -3260,22 +3248,16 @@ async def list_workspace_file_children(
     drive_id = _validate_workspace_id(drive_id, "drive_id")
     if item_id and item_id != "root":
         item_id = _validate_workspace_id(item_id, "item_id")
-    email = _byod_account_email(session, assistant_id)
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No connected account found for this assistant.",
-        )
 
     if provider == "google":
         data = await _gateway_browse(
             "google",
             "children",
-            {"user_email": email, "drive_id": drive_id, "item_id": item_id},
+            {"assistant_id": assistant_id, "drive_id": drive_id, "item_id": item_id},
         )
         items = [_google_node(n) for n in data.get("items", [])]
     else:
-        params = {"user_email": email}
+        params: dict = {"assistant_id": assistant_id}
         if item_id and item_id != "root":
             params["item_id"] = item_id
         data = await _gateway_browse("microsoft", f"drives/{drive_id}/items", params)

@@ -6,6 +6,10 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orchestra.db.models.coordinator_voice import (
+    COORDINATOR_VOICE_ID,
+    COORDINATOR_VOICE_PROVIDER,
+)
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
@@ -14,6 +18,7 @@ from orchestra.db.models.orchestra_models import (
     ContactMembership,
     Organization,
     User,
+    Voice,
 )
 from orchestra.web.api.assistant.views import _build_assistant_read
 
@@ -155,6 +160,51 @@ def test_is_coordinator_is_immutable_after_persistence(
 
     with pytest.raises(ValueError, match="is_coordinator is immutable"):
         assistant.is_coordinator = False
+
+
+def test_coordinator_voice_defaults_on_insert(dbsession: Session) -> None:
+    """Coordinator rows start with the canonical voice."""
+    owner = _make_user(dbsession, "coordinator-voice-default")
+
+    assistant = _make_assistant(dbsession, owner, is_coordinator=True)
+
+    assert assistant.voice_id == COORDINATOR_VOICE_ID
+    assert assistant.voice_provider == COORDINATOR_VOICE_PROVIDER
+    voice = (
+        dbsession.query(Voice)
+        .filter_by(
+            user_id=owner.id,
+            voice_id=COORDINATOR_VOICE_ID,
+            provider=COORDINATOR_VOICE_PROVIDER,
+        )
+        .one()
+    )
+    assert voice.is_preset is True
+
+
+def test_coordinator_voice_can_be_updated_after_insert(dbsession: Session) -> None:
+    """Coordinator rows can use any registered voice."""
+    owner = _make_user(dbsession, "coordinator-voice-update")
+    assistant = _make_assistant(dbsession, owner, is_coordinator=True)
+    custom_voice = Voice(
+        user_id=owner.id,
+        voice_id="coordinator-custom-voice",
+        provider="elevenlabs",
+        name="Coordinator Custom Voice",
+        description="A configurable Coordinator voice.",
+        language="en",
+        is_preset=True,
+    )
+    dbsession.add(custom_voice)
+    dbsession.flush()
+
+    assistant.voice_id = custom_voice.voice_id
+    assistant.voice_provider = custom_voice.provider
+    dbsession.flush()
+    dbsession.refresh(assistant)
+
+    assert assistant.voice_id == custom_voice.voice_id
+    assert assistant.voice_provider == custom_voice.provider
 
 
 def test_assistant_read_projects_coordinator_flag(dbsession: Session) -> None:

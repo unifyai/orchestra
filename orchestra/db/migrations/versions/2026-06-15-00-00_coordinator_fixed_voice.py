@@ -1,10 +1,8 @@
-"""Backfill the fixed Coordinator voice.
+"""Backfill the default Coordinator voice.
 
-Coordinators are pinned to one canonical voice, enforced at the ORM layer
-(``orchestra.db.models.coordinator_voice``). This migration heals existing
-rows: it registers the canonical voice for every Coordinator owner (the
-assistants table carries a composite FK into ``voices``) and points every
-Coordinator at it.
+Coordinators start with one canonical voice. This migration heals existing rows:
+it registers the canonical voice for every Coordinator owner (the assistants
+table carries a composite FK into ``voices``) and points every Coordinator at it.
 
 Revision ID: coordinator_fixed_voice
 Revises: universal_coordinator_phone

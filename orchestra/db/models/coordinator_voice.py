@@ -1,20 +1,14 @@
-"""Fixed-voice invariant for Coordinator assistants.
+"""Default voice handling for Coordinator assistants.
 
-Every Coordinator ("Twin") speaks with one canonical voice. The invariant
-is enforced at the ORM flush boundary so that no API endpoint, service, or
-future code path can persist a Coordinator row with any other voice:
-
-* ``before_insert`` ensures the canonical per-user row exists in ``voices``
-  (the assistants table carries a composite FK to it) and stamps the fixed
-  voice onto the new Coordinator row.
-* ``before_update`` re-stamps the fixed voice, silently overriding any
-  attempt to change it.
+Every Coordinator ("Twin") starts with the canonical voice. ``before_insert``
+ensures the per-user voice row exists in ``voices`` (the assistants table
+carries a composite FK to it) and stamps that default voice onto the new
+Coordinator row.
 
 Existing rows are backfilled by the ``coordinator_fixed_voice`` migration.
-The Console mirrors these values in
+The Console mirrors the default value in
 ``src/constants/assistants/approved_character_voices.ts``
-(``coordinatorFixedVoiceId``) for display purposes only — this module is
-the source of truth.
+(``coordinatorFixedVoiceId``).
 """
 
 from sqlalchemy import event
@@ -55,13 +49,5 @@ def _stamp_coordinator_voice_on_insert(mapper, connection, target) -> None:
     if not target.is_coordinator:
         return
     ensure_coordinator_voice_row(connection, target.user_id)
-    target.voice_id = COORDINATOR_VOICE_ID
-    target.voice_provider = COORDINATOR_VOICE_PROVIDER
-
-
-@event.listens_for(Assistant, "before_update")
-def _stamp_coordinator_voice_on_update(mapper, connection, target) -> None:
-    if not target.is_coordinator:
-        return
     target.voice_id = COORDINATOR_VOICE_ID
     target.voice_provider = COORDINATOR_VOICE_PROVIDER
