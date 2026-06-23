@@ -114,7 +114,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
     assert steps["email-reply"]["dependencies"] == [
         {
             "id": "email-reference",
-            "title": "Receive email from Twin",
+            "title": "Trigger email from Twin",
             "status": "available",
             "resolution": "completed",
             "satisfied": False,

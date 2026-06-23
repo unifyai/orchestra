@@ -316,12 +316,12 @@ def _coming_soon(step_id: str, phase: str) -> OnboardingStep:
 ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "email-reference",
-        "Receive email from Twin",
+        "Trigger email from Twin",
         depends_on={},
         channel="email",
         paired_reply="email-reply",
-        nudge_chat="Invite them to click \u201cReceive email from Twin\u201d to get their first clue by email.",
-        nudge_voice="clicking Receive email from Twin",
+        nudge_chat="Invite them to click \u201cTrigger email from Twin\u201d to get their first clue by email.",
+        nudge_voice="clicking Trigger email from Twin",
     ),
     OnboardingStep(
         id="email-reply",
@@ -349,12 +349,12 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "whatsapp-message-reference",
-        "Receive WhatsApp message from Twin",
+        "Trigger WhatsApp message from Twin",
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-message",
-        nudge_chat="Invite them to click \u201cReceive WhatsApp message from Twin\u201d to get a clue over WhatsApp.",
-        nudge_voice="clicking Receive WhatsApp message from Twin",
+        nudge_chat="Invite them to click \u201cTrigger WhatsApp message from Twin\u201d to get a clue over WhatsApp.",
+        nudge_voice="clicking Trigger WhatsApp message from Twin",
     ),
     OnboardingStep(
         id="whatsapp-message",
@@ -370,12 +370,12 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "whatsapp-call-reference",
-        "Receive WhatsApp call from Twin",
+        "Trigger WhatsApp call from Twin",
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-call",
-        nudge_chat="Invite them to click \u201cReceive WhatsApp call from Twin\u201d to get a clue over a WhatsApp call.",
-        nudge_voice="clicking Receive WhatsApp call from Twin",
+        nudge_chat="Invite them to click \u201cTrigger WhatsApp call from Twin\u201d to get a clue over a WhatsApp call.",
+        nudge_voice="clicking Trigger WhatsApp call from Twin",
     ),
     OnboardingStep(
         id="whatsapp-call",
@@ -403,12 +403,12 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "sms-reference",
-        "Receive SMS message from Twin",
+        "Trigger SMS message from Twin",
         depends_on={"phone-number": COMPLETED},
         channel="sms",
         paired_reply="sms-message",
-        nudge_chat="Invite them to click \u201cReceive SMS message from Twin\u201d to get a clue over SMS.",
-        nudge_voice="clicking Receive SMS message from Twin",
+        nudge_chat="Invite them to click \u201cTrigger SMS message from Twin\u201d to get a clue over SMS.",
+        nudge_voice="clicking Trigger SMS message from Twin",
     ),
     OnboardingStep(
         id="sms-message",
@@ -424,12 +424,12 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "phone-call-reference",
-        "Receive phone call from Twin",
+        "Trigger phone call from Twin",
         depends_on={"phone-number": COMPLETED},
         channel="phone",
         paired_reply="phone-call",
-        nudge_chat="Invite them to click \u201cReceive phone call from Twin\u201d to get a clue over a phone call.",
-        nudge_voice="clicking Receive phone call from Twin",
+        nudge_chat="Invite them to click \u201cTrigger phone call from Twin\u201d to get a clue over a phone call.",
+        nudge_voice="clicking Trigger phone call from Twin",
     ),
     OnboardingStep(
         id="phone-call",
