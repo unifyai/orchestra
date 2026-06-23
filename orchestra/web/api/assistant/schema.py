@@ -610,6 +610,22 @@ class OnboardingSessionStartedResponse(BaseModel):
     emitted: bool
 
 
+class OnboardingStepEventRequest(BaseModel):
+    """Request body for firing the graph-owned event attached to a step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(..., min_length=1)
+
+
+class OnboardingStepEventResponse(BaseModel):
+    """Acknowledgement returned after an onboarding step event is processed."""
+
+    coordinator_id: str
+    step_id: str
+    emitted: bool
+
+
 class CoordinatorDelegateRequest(BaseModel):
     """Request body for assigning asynchronous work to a colleague."""
 
@@ -760,12 +776,20 @@ class OnboardingStepStatus(BaseModel):
     title: str
     phase: str
     status: str
+    kind: str = ""
+    channel: Optional[str] = None
+    paired_reply: Optional[str] = None
+    nudge_chat: str = ""
+    nudge_voice: str = ""
+    phase_id: Optional[str] = None
     can_skip: bool = False
     dependencies: List[OnboardingStepDependency] = Field(default_factory=list)
     description: str = ""
     estimated_time: str = ""
+    flow_note: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)
     chips_call: List[OnboardingChip] = Field(default_factory=list)
+    interaction: Optional[Dict[str, Any]] = None
     event: Optional[OnboardingEventSpec] = None
 
 
@@ -782,6 +806,11 @@ class OnboardingNextTarget(BaseModel):
     nudge_chat: str
     nudge_voice: str
     channel: Optional[str] = None
+    kind: str = ""
+    paired_reply: Optional[str] = None
+    phase: str = ""
+    flow_note: str = ""
+    interaction: Optional[Dict[str, Any]] = None
 
 
 class OnboardingRender(BaseModel):
@@ -802,11 +831,17 @@ class OnboardingCatalogStep(BaseModel):
     phase: str
     kind: str
     channel: Optional[str] = None
+    paired_reply: Optional[str] = None
+    nudge_chat: str = ""
+    nudge_voice: str = ""
+    phase_id: Optional[str] = None
     can_skip: bool = False
     description: str = ""
     estimated_time: str = ""
+    flow_note: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)
     chips_call: List[OnboardingChip] = Field(default_factory=list)
+    interaction: Optional[Dict[str, Any]] = None
     event: Optional[OnboardingEventSpec] = None
 
 

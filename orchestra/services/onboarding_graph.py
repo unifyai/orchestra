@@ -28,6 +28,7 @@ Dependency levels mirror the original Console semantics:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 ADDRESSED = 0
 COMPLETED = 1
@@ -40,7 +41,7 @@ class OnboardingEventSpec:
     event_type: str
     message: str
     subtype: str
-    details: dict[str, str]
+    details: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,10 @@ class ReferenceQuizClue:
     @property
     def clue(self) -> str:
         return f'The clue is: "{self.quote}"'
+
+    @property
+    def accepted_answers(self) -> tuple[str, ...]:
+        return tuple(part.strip() for part in self.answer.split("/") if part.strip())
 
 
 REFERENCE_QUIZ_CLUES: dict[str, ReferenceQuizClue] = {
@@ -153,13 +158,12 @@ PHASE_TEAMS = "Teams"
 PHASE_HIRING = "Hiring"
 
 COMMUNICATION_FRAMING = (
-    "This section proves that Twin can communicate with the user across "
-    "channels. Reference-trigger steps start a light guess-the-reference "
-    "mini-game: send the supplied clue through the requested channel, "
-    "do not reveal the answer up front, wait for the user's guess on "
-    "that channel or call, support repeats and gentle hints, reveal "
-    "the answer if asked or if the user is stuck, and close naturally "
-    "before moving on."
+    "Start onboarding by proving that Twin can communicate with the user "
+    "across channels. Frame this as a light sci-fi and pop-culture reference "
+    "quiz before sending any clue: Twin sends one quote clue on each channel, "
+    "the user guesses the reference on that channel or call, Twin supports "
+    "repeats and gentle hints, reveals the answer if asked or if the user is "
+    "stuck, then closes naturally before moving on."
 )
 
 
@@ -261,6 +265,23 @@ def _trigger(
 ) -> OnboardingStep:
     clue = REFERENCE_QUIZ_CLUES.get(step_id)
     event_channel = REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP.get(paired_reply, channel)
+    tool_name = REFERENCE_QUIZ_TOOL_BY_CHANNEL.get(event_channel, "")
+    interaction = (
+        {
+            "type": "reference_quiz",
+            "trigger_step_id": step_id,
+            "reply_step_id": paired_reply,
+            "channel": event_channel,
+            "tool_name": tool_name,
+            "clue": clue.clue,
+            "quote": clue.quote,
+            "answer": clue.answer,
+            "accepted_answers": list(clue.accepted_answers),
+            "instructions": COMMUNICATION_FRAMING,
+        }
+        if clue is not None
+        else None
+    )
     event = (
         OnboardingEventSpec(
             event_type="coordinator_onboarding_event",
@@ -271,11 +292,15 @@ def _trigger(
                 "trigger_step_id": step_id,
                 "reply_step_id": paired_reply,
                 "channel": event_channel,
-                "tool_name": REFERENCE_QUIZ_TOOL_BY_CHANNEL.get(event_channel, ""),
+                "tool_name": tool_name,
                 "clue": clue.clue,
                 "quote": clue.quote,
                 "answer": clue.answer,
                 "framing": COMMUNICATION_FRAMING,
+                "phase": PHASE_COMMUNICATION,
+                "phase_id": "communication",
+                "phase_framing": COMMUNICATION_FRAMING,
+                "interaction": interaction,
             },
         )
         if clue is not None
@@ -320,8 +345,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={},
         channel="email",
         paired_reply="email-reply",
-        nudge_chat="Invite them to click \u201cTrigger email from Twin\u201d to get their first clue by email.",
-        nudge_voice="clicking Trigger email from Twin",
+        nudge_chat=(
+            "Explain the communication-channel reference quiz, then invite them "
+            "to click Trigger email from Twin for the first clue."
+        ),
+        nudge_voice=(
+            "starting the communication-channel reference quiz by clicking "
+            "Trigger email from Twin"
+        ),
     ),
     OnboardingStep(
         id="email-reply",
@@ -595,7 +626,7 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(
-        "Twin sends the first reference clue to your email.",
+        "Twin introduces the reference quiz and sends the first clue to your email.",
         "~10s",
     ),
     "email-reply": StepPresentation("Reply to Twin's email with your guess.", "~30s"),
@@ -678,10 +709,53 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
 
 _EMPTY_PRESENTATION = StepPresentation()
 
+STEP_FLOW_NOTES: dict[str, str] = {
+    "email-reference": (
+        "Clicking the row asks me to introduce the reference quiz and send "
+        "the first clue over email."
+    ),
+    "email-reply": "The user replies with their guess once they receive the email clue.",
+    "whatsapp-number": "Opens Account -> Contact info so the user can add/verify the WhatsApp number.",
+    "whatsapp-message-reference": "Clicking sends the next clue over WhatsApp.",
+    "whatsapp-message": "The user guesses the WhatsApp clue.",
+    "whatsapp-call-reference": "Clicking starts or requests a WhatsApp voice clue.",
+    "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
+    "phone-number": "Opens Account -> Contact info so the user can add/verify the phone number.",
+    "sms-reference": "Clicking texts the next clue.",
+    "sms-message": "The user guesses the SMS clue.",
+    "phone-call-reference": "Clicking starts or requests a phone-call clue.",
+    "phone-call": "The user guesses during the phone call.",
+    "slack-connect": "Opens the Slack setup path for the Unify Slack app.",
+    "slack-reference": "Clicking sends the next clue via Slack.",
+    "slack-message": "The user guesses the Slack clue.",
+    "discord-connect": "Guides the user to add their Discord ID and install the public Discord bot.",
+    "discord-reference": "Clicking sends the next clue via Discord.",
+    "discord-message": "The user guesses the Discord clue.",
+    "workspace": (
+        "Clicking the row opens the workspace OAuth dialog (Google Workspace or "
+        "Microsoft 365). Completing OAuth grants me access to their email, "
+        "calendar, files, and other workspace resources."
+    ),
+    "apps": (
+        "Clicking the row opens the Integrations tab; they connect at least one "
+        "app from the gallery and authorize it."
+    ),
+    "schedule": (
+        "Time- or event-bound work lands in the Tasks tab and recurs or fires "
+        "on a trigger. Scheduling is encouraged but optional. Read-only "
+        "suggestion chips render under the schedule row as inspiration only."
+    ),
+}
+
 
 def presentation_for(step_id: str) -> StepPresentation:
     """Presentation copy for a step (empty when none is registered)."""
     return STEP_PRESENTATION.get(step_id, _EMPTY_PRESENTATION)
+
+
+def flow_note_for(step_id: str) -> str:
+    """How the user advances one step, owned beside the canonical graph."""
+    return STEP_FLOW_NOTES.get(step_id, "")
 
 
 def phase_is_visible(phase_label: str, *, local_mode: bool) -> bool:
@@ -801,6 +875,12 @@ def _assert_graph_integrity() -> None:
         raise ValueError(
             f"Onboarding graph: STEP_PRESENTATION has unknown step ids "
             f"{sorted(unknown_presentation)}.",
+        )
+    unknown_flow_notes = set(STEP_FLOW_NOTES) - set(STEP_BY_ID)
+    if unknown_flow_notes:
+        raise ValueError(
+            f"Onboarding graph: STEP_FLOW_NOTES has unknown step ids "
+            f"{sorted(unknown_flow_notes)}.",
         )
 
     visiting, done = 1, 2

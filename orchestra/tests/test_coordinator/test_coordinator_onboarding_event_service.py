@@ -224,6 +224,34 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
 
 
 @pytest.mark.anyio
+async def test_graph_owned_step_event_embeds_interaction_and_render() -> None:
+    """Reference quiz triggers travel through the same gated event path."""
+    coordinator = _fake_coordinator(agent_id=18)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "set_coordinator_state") as set_state,
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "_post_droid_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_step_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            step_id="email-reference",
+        )
+
+    assert result is True
+    set_state.assert_called_once()
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields["subtype"] == svc.SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED
+    details = fields["details"]
+    assert details["trigger_step_id"] == "email-reference"
+    assert details["reply_step_id"] == "email-reply"
+    assert details["phase_id"] == "communication"
+    assert details["interaction"]["type"] == "reference_quiz"
+    assert details["onboarding"] == _RENDER
+
+
+@pytest.mark.anyio
 async def test_step_skipped_event_embeds_step_snapshots() -> None:
     """Skip events tell Droid which step was skipped and what is resolved so far."""
     coordinator = _fake_coordinator(agent_id=15)

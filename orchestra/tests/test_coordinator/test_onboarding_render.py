@@ -249,15 +249,40 @@ def test_render_carries_phase_headers_and_step_presentation() -> None:
     comms = next(p for p in render["phases"] if p["id"] == "communication")
     assert comms["title"] == "Communication"
     assert comms["phase"] == graph.PHASE_COMMUNICATION
+    assert "reference quiz" in comms["framing"]
     steps = {s["id"]: s for s in render["steps"]}
     assert steps["email-reference"]["description"]
     assert steps["email-reference"]["estimated_time"]
+    assert steps["email-reference"]["kind"] == "trigger"
+    assert steps["email-reference"]["paired_reply"] == "email-reply"
+    assert steps["email-reference"]["nudge_chat"]
+    assert "reference quiz" in steps["email-reference"]["flow_note"]
+    interaction = steps["email-reference"]["interaction"]
+    assert interaction["type"] == "reference_quiz"
+    assert interaction["quote"] == "Ground Control to Major Tom."
+    assert interaction["accepted_answers"] == ["Space Oddity"]
     schedule = steps["schedule"]
     assert [c["id"] for c in schedule["chips_chat"]]
     # Non-chip steps carry empty chip lists rather than omitting the field.
     assert steps["workspace"]["chips_chat"] == []
     assert steps["learning-coming-soon"]["title"] == "[Coming soon]"
     assert steps["learning-coming-soon"]["status"] == "coming_soon"
+
+
+def test_catalog_carries_step_contract_and_interactions() -> None:
+    """The static catalog exposes the same graph-owned step contract as render."""
+    catalog = svc.build_onboarding_catalog(local_mode=True)
+    steps = {step["id"]: step for step in catalog["steps"]}
+    email_reference = steps["email-reference"]
+
+    assert email_reference["kind"] == "trigger"
+    assert email_reference["paired_reply"] == "email-reply"
+    assert email_reference["nudge_voice"]
+    assert email_reference["phase_id"] == "communication"
+    assert email_reference["interaction"]["type"] == "reference_quiz"
+    assert (
+        email_reference["event"]["details"]["interaction"]["type"] == "reference_quiz"
+    )
 
 
 # ---------------------------------------------------------------------------

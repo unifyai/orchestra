@@ -1463,6 +1463,7 @@ SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
 SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
 SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
+SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Droid uses it to open the session with the right kind of message:
@@ -1494,6 +1495,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_INTEGRATION_CONNECTED,
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
+        SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1931,9 +1933,24 @@ def _step_presentation_fields(step_id: str) -> dict[str, Any]:
         "estimated_time": presentation.estimated_time,
         "chips_chat": [_serialize_chip(c) for c in presentation.chips_chat],
         "chips_call": [_serialize_chip(c) for c in presentation.chips_call],
+        "flow_note": onboarding_graph.flow_note_for(step_id),
         "event": _serialize_onboarding_event(
             onboarding_graph.STEP_BY_ID[step_id].event,
         ),
+    }
+
+
+def _step_contract_fields(step: onboarding_graph.OnboardingStep) -> dict[str, Any]:
+    phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
+    event_details = step.event.details if step.event else {}
+    return {
+        "kind": step.kind,
+        "channel": step.channel,
+        "paired_reply": step.paired_reply,
+        "nudge_chat": step.nudge_chat,
+        "nudge_voice": step.nudge_voice,
+        "phase_id": phase.id if phase else None,
+        "interaction": event_details.get("interaction"),
     }
 
 
@@ -1972,7 +1989,14 @@ def build_onboarding_catalog(local_mode: bool | None = None) -> dict[str, Any]:
                 "kind": step.kind,
                 "channel": step.channel,
                 "can_skip": step.can_skip,
+                "paired_reply": step.paired_reply,
+                "nudge_chat": step.nudge_chat,
+                "nudge_voice": step.nudge_voice,
+                "phase_id": onboarding_graph.PHASE_BY_LABEL[step.phase].id,
                 **_step_presentation_fields(step.id),
+                "interaction": (
+                    step.event.details.get("interaction") if step.event else None
+                ),
             },
         )
     return {
@@ -2090,6 +2114,7 @@ def compute_onboarding_render(
                 "status": status,
                 "can_skip": step.can_skip,
                 "dependencies": dependencies,
+                **_step_contract_fields(step),
                 **_step_presentation_fields(step.id),
             },
         )
@@ -2101,6 +2126,13 @@ def compute_onboarding_render(
                     "nudge_chat": step.nudge_chat,
                     "nudge_voice": step.nudge_voice,
                     "channel": step.channel,
+                    "kind": step.kind,
+                    "paired_reply": step.paired_reply,
+                    "phase": step.phase,
+                    "flow_note": onboarding_graph.flow_note_for(step.id),
+                    "interaction": (
+                        step.event.details.get("interaction") if step.event else None
+                    ),
                 },
             )
 
@@ -2545,6 +2577,50 @@ async def emit_onboarding_step_skipped_event(
             "completed_step_ids": completed,
             "skipped_step_ids": skipped,
         },
+    )
+
+
+async def emit_onboarding_step_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+) -> bool:
+    """Emit the graph-owned event for a user-triggered onboarding row.
+
+    Trigger rows such as reference-quiz clues are authored in the canonical
+    graph, not in Console. When a trigger has a paired reply row, mark that
+    reply as the active onboarding step before publishing so the attached
+    render reflects the user's current state.
+    """
+    step = onboarding_graph.STEP_BY_ID.get(step_id)
+    if step is None or step.event is None:
+        logger.warning("Ignoring onboarding step event for non-event step: %s", step_id)
+        return False
+    phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
+    if step.paired_reply:
+        set_coordinator_state(
+            session,
+            coordinator=coordinator,
+            onboarding_step=step.paired_reply,
+        )
+    details = {
+        **dict(step.event.details),
+        "step_id": step.id,
+        "step_title": step.title,
+        "kind": step.kind,
+        "phase": step.phase,
+        "phase_id": phase.id if phase else None,
+        "nudge_chat": step.nudge_chat,
+        "nudge_voice": step.nudge_voice,
+        "flow_note": onboarding_graph.flow_note_for(step.id),
+    }
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=step.event.subtype,
+        message=step.event.message,
+        details=details,
     )
 
 
