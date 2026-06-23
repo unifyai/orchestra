@@ -347,11 +347,12 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         paired_reply="email-reply",
         nudge_chat=(
             "Explain the communication-channel reference quiz, then invite them "
-            "to click Trigger email from Twin for the first clue."
+            "to click the 'Trigger email from Twin' row in the Onboarding "
+            "checklist for the first clue."
         ),
         nudge_voice=(
-            "starting the communication-channel reference quiz by clicking "
-            "Trigger email from Twin"
+            "starting the communication-channel reference quiz by clicking the "
+            "'Trigger email from Twin' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -375,8 +376,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         can_skip=True,
         derivable=True,
         channel="whatsapp",
-        nudge_chat="Guide them to add their WhatsApp number in Account \u2192 Contact info.",
-        nudge_voice="adding their WhatsApp number",
+        nudge_chat=(
+            "Have them click the 'Add your WhatsApp number' row in the "
+            "Onboarding checklist; it opens Account → Contact info so they "
+            "can add or verify the number."
+        ),
+        nudge_voice=(
+            "clicking the 'Add your WhatsApp number' row in the Onboarding checklist"
+        ),
     ),
     _trigger(
         "whatsapp-message-reference",
@@ -384,8 +391,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-message",
-        nudge_chat="Invite them to click \u201cTrigger WhatsApp message from Twin\u201d to get a clue over WhatsApp.",
-        nudge_voice="clicking Trigger WhatsApp message from Twin",
+        nudge_chat=(
+            "Invite them to click the 'Trigger WhatsApp message from Twin' row "
+            "in the Onboarding checklist to get a clue over WhatsApp."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger WhatsApp message from Twin' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="whatsapp-message",
@@ -405,8 +417,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-call",
-        nudge_chat="Invite them to click \u201cTrigger WhatsApp call from Twin\u201d to get a clue over a WhatsApp call.",
-        nudge_voice="clicking Trigger WhatsApp call from Twin",
+        nudge_chat=(
+            "Invite them to click the 'Trigger WhatsApp call from Twin' row in "
+            "the Onboarding checklist to get a clue over a WhatsApp call."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger WhatsApp call from Twin' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="whatsapp-call",
@@ -429,8 +446,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         can_skip=True,
         derivable=True,
         channel="phone",
-        nudge_chat="Guide them to add their phone number in Account \u2192 Contact info.",
-        nudge_voice="adding their phone number",
+        nudge_chat=(
+            "Have them click the 'Add your phone number' row in the "
+            "Onboarding checklist; it opens Account → Contact info so they "
+            "can add or verify the number."
+        ),
+        nudge_voice=(
+            "clicking the 'Add your phone number' row in the Onboarding checklist"
+        ),
     ),
     _trigger(
         "sms-reference",
@@ -438,8 +461,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"phone-number": COMPLETED},
         channel="sms",
         paired_reply="sms-message",
-        nudge_chat="Invite them to click \u201cTrigger SMS message from Twin\u201d to get a clue over SMS.",
-        nudge_voice="clicking Trigger SMS message from Twin",
+        nudge_chat=(
+            "Invite them to click the 'Trigger SMS message from Twin' row in "
+            "the Onboarding checklist to get a clue over SMS."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger SMS message from Twin' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="sms-message",
@@ -459,8 +487,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"phone-number": COMPLETED},
         channel="phone",
         paired_reply="phone-call",
-        nudge_chat="Invite them to click \u201cTrigger phone call from Twin\u201d to get a clue over a phone call.",
-        nudge_voice="clicking Trigger phone call from Twin",
+        nudge_chat=(
+            "Invite them to click the 'Trigger phone call from Twin' row in the "
+            "Onboarding checklist to get a clue over a phone call."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger phone call from Twin' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="phone-call",
@@ -483,8 +516,11 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         can_skip=True,
         derivable=True,
         channel="slack",
-        nudge_chat="Guide them to connect Slack through the Unify Slack app.",
-        nudge_voice="connecting Slack through the Unify Slack app",
+        nudge_chat=(
+            "Have them click the 'Connect Slack' row in the Onboarding checklist; "
+            "it opens the Slack setup path for the Unify Slack app."
+        ),
+        nudge_voice="clicking the 'Connect Slack' row in the Onboarding checklist",
     ),
     _trigger(
         "slack-reference",
@@ -492,8 +528,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"slack-connect": COMPLETED},
         channel="slack",
         paired_reply="slack-message",
-        nudge_chat="Invite them to click \u201cTrigger Slack message from Twin\u201d to get a clue in Slack.",
-        nudge_voice="clicking Trigger Slack message from Twin",
+        nudge_chat=(
+            "Invite them to click the 'Trigger Slack message from Twin' row in "
+            "the Onboarding checklist to get a clue in Slack."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger Slack message from Twin' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="slack-message",
@@ -516,8 +557,12 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         can_skip=True,
         derivable=True,
         channel="discord",
-        nudge_chat="Guide them to add their Discord ID and install the public Discord bot.",
-        nudge_voice="connecting Discord through the public bot",
+        nudge_chat=(
+            "Have them click the 'Connect Discord' row in the Onboarding checklist; "
+            "it opens the Discord setup path for adding their Discord ID and "
+            "installing the public bot."
+        ),
+        nudge_voice="clicking the 'Connect Discord' row in the Onboarding checklist",
     ),
     _trigger(
         "discord-reference",
@@ -525,8 +570,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"discord-connect": COMPLETED},
         channel="discord",
         paired_reply="discord-message",
-        nudge_chat="Invite them to click \u201cTrigger Discord message from Twin\u201d to get a clue in Discord.",
-        nudge_voice="clicking Trigger Discord message from Twin",
+        nudge_chat=(
+            "Invite them to click the 'Trigger Discord message from Twin' row in "
+            "the Onboarding checklist to get a clue in Discord."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger Discord message from Twin' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="discord-message",
@@ -548,8 +598,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={},
         can_skip=True,
         derivable=True,
-        nudge_chat="Point them at \u201cGive me access to your workspace\u201d and have them connect Google or Microsoft.",
-        nudge_voice="connecting their workspace (Google or Microsoft)",
+        nudge_chat=(
+            "Have them click the 'Give me access to your workspace' row in the "
+            "Onboarding checklist; it opens the Google or Microsoft workspace "
+            "connection flow."
+        ),
+        nudge_voice=(
+            "clicking the 'Give me access to your workspace' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="apps",
@@ -559,8 +615,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={"workspace": COMPLETED},
         can_skip=True,
         derivable=True,
-        nudge_chat="Have them open Integrations and connect at least one app (Slack, Gmail, Notion, \u2026).",
-        nudge_voice="connecting one of their apps (Slack, Gmail, Notion, \u2026) from the Integrations panel",
+        nudge_chat=(
+            "Have them click the 'Connect me with your apps' row in the "
+            "Onboarding checklist; it opens Integrations so they can connect "
+            "at least one app (Slack, Gmail, Notion, ...)."
+        ),
+        nudge_voice=(
+            "clicking the 'Connect me with your apps' row in the Onboarding checklist"
+        ),
     ),
     OnboardingStep(
         id="schedule",
@@ -570,8 +632,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         depends_on={},
         can_skip=True,
         derivable=True,
-        nudge_chat="Invite them to set up a recurring or event-triggered task for later.",
-        nudge_voice="scheduling a recurring or event-triggered task for later",
+        nudge_chat=(
+            "Have them click the 'Schedule a task for later' row in the "
+            "Onboarding checklist; it opens Tasks so they can set up recurring "
+            "or event-triggered work."
+        ),
+        nudge_voice=(
+            "clicking the 'Schedule a task for later' row in the Onboarding checklist"
+        ),
     ),
     _coming_soon("learning-coming-soon", PHASE_LEARNING),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
@@ -732,39 +800,61 @@ _EMPTY_PRESENTATION = StepPresentation()
 
 STEP_FLOW_NOTES: dict[str, str] = {
     "email-reference": (
-        "Clicking the row asks me to introduce the reference quiz and send "
-        "the first clue over email."
+        "Clicking the 'Trigger email from Twin' row asks me to introduce the "
+        "reference quiz and send the first clue over email."
     ),
     "email-reply": "The user replies with their guess once they receive the email clue.",
-    "whatsapp-number": "Opens Account -> Contact info so the user can add/verify the WhatsApp number.",
-    "whatsapp-message-reference": "Clicking sends the next clue over WhatsApp.",
+    "whatsapp-number": (
+        "Clicking the 'Add your WhatsApp number' row opens Account -> Contact "
+        "info so the user can add or verify the WhatsApp number."
+    ),
+    "whatsapp-message-reference": (
+        "Clicking the 'Trigger WhatsApp message from Twin' row sends the next "
+        "clue over WhatsApp."
+    ),
     "whatsapp-message": "The user guesses the WhatsApp clue.",
-    "whatsapp-call-reference": "Clicking starts or requests a WhatsApp voice clue.",
+    "whatsapp-call-reference": (
+        "Clicking the 'Trigger WhatsApp call from Twin' row starts or requests "
+        "a WhatsApp voice clue."
+    ),
     "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
-    "phone-number": "Opens Account -> Contact info so the user can add/verify the phone number.",
-    "sms-reference": "Clicking texts the next clue.",
+    "phone-number": (
+        "Clicking the 'Add your phone number' row opens Account -> Contact info "
+        "so the user can add or verify the phone number."
+    ),
+    "sms-reference": "Clicking the 'Trigger SMS message from Twin' row texts the next clue.",
     "sms-message": "The user guesses the SMS clue.",
-    "phone-call-reference": "Clicking starts or requests a phone-call clue.",
+    "phone-call-reference": (
+        "Clicking the 'Trigger phone call from Twin' row starts or requests a "
+        "phone-call clue."
+    ),
     "phone-call": "The user guesses during the phone call.",
-    "slack-connect": "Opens the Slack setup path for the Unify Slack app.",
-    "slack-reference": "Clicking sends the next clue via Slack.",
+    "slack-connect": (
+        "Clicking the 'Connect Slack' row opens the Slack setup path for the "
+        "Unify Slack app."
+    ),
+    "slack-reference": "Clicking the 'Trigger Slack message from Twin' row sends the next clue via Slack.",
     "slack-message": "The user guesses the Slack clue.",
-    "discord-connect": "Guides the user to add their Discord ID and install the public Discord bot.",
-    "discord-reference": "Clicking sends the next clue via Discord.",
+    "discord-connect": (
+        "Clicking the 'Connect Discord' row opens the Discord setup path for "
+        "adding their Discord ID and installing the public Discord bot."
+    ),
+    "discord-reference": "Clicking the 'Trigger Discord message from Twin' row sends the next clue via Discord.",
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the row opens the workspace OAuth dialog (Google Workspace or "
-        "Microsoft 365). Completing OAuth grants me access to their email, "
-        "calendar, files, and other workspace resources."
+        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "OAuth dialog (Google Workspace or Microsoft 365). Completing OAuth "
+        "grants me access to their email, calendar, files, and other workspace "
+        "resources."
     ),
     "apps": (
-        "Clicking the row opens the Integrations tab; they connect at least one "
-        "app from the gallery and authorize it."
+        "Clicking the 'Connect me with your apps' row opens the Integrations "
+        "tab; they connect at least one app from the gallery and authorize it."
     ),
     "schedule": (
-        "Time- or event-bound work lands in the Tasks tab and recurs or fires "
-        "on a trigger. Scheduling is encouraged but optional. Read-only "
-        "suggestion chips render under the schedule row as inspiration only."
+        "Clicking the 'Schedule a task for later' row opens the Tasks tab. "
+        "Time- or event-bound work lands there and recurs or fires on a trigger. "
+        "Read-only suggestion chips render under the schedule row as inspiration only."
     ),
 }
 

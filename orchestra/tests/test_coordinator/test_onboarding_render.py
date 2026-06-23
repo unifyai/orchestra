@@ -151,6 +151,47 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         assert target["nudge_chat"]
 
 
+def test_next_target_nudges_are_checklist_row_first() -> None:
+    """Startable non-reply steps point users at the checklist row first."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    targets = {target["id"]: target for target in render["next_targets"]}
+    for step_id in (
+        "email-reference",
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "workspace",
+        "schedule",
+    ):
+        target = targets[step_id]
+        assert "row" in target["nudge_chat"]
+        assert "Onboarding checklist" in target["nudge_chat"]
+
+    apps_render = _render_with(completed=["workspace"], skipped=[], active=None)
+    apps_target = {target["id"]: target for target in apps_render["next_targets"]}[
+        "apps"
+    ]
+    assert "row" in apps_target["nudge_chat"]
+    assert "Onboarding checklist" in apps_target["nudge_chat"]
+
+
+def test_setup_flow_notes_start_with_row_clicks() -> None:
+    """Flow notes explain what clicking the row opens or triggers."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    steps = {step["id"]: step for step in render["steps"]}
+    for step_id in (
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "workspace",
+        "apps",
+        "schedule",
+    ):
+        assert steps[step_id]["flow_note"].startswith("Clicking the '")
+
+
 def test_render_reply_done_does_not_complete_trigger() -> None:
     """Inbound reply completion does not prove Twin sent the trigger outbound."""
     render = _render_with(completed=["email-reply"], skipped=[], active=None)
