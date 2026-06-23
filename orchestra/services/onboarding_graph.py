@@ -604,7 +604,8 @@ _CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
 
 # Trigger row id -> transcript medium(s) that prove Twin sent the outbound.
 # Completion is derived from durable assistant-authored transcript rows rather
-# than from the user's click or the active paired reply pointer.
+# than from the user's click or the active paired reply pointer. The row must
+# also carry matching onboarding metadata for the trigger id.
 TRIGGER_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     trigger_id: _CHANNEL_TO_OUTBOUND_MEDIUMS[
         REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP[reply_id]

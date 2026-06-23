@@ -1735,6 +1735,7 @@ def _has_assistant_transcript_message(
     *,
     coordinator: Assistant,
     mediums: Sequence[str],
+    onboarding_trigger_step_id: str | None = None,
     reset_after: datetime | None = None,
 ) -> bool:
     project = _project_for_coordinator(session, coordinator)
@@ -1759,6 +1760,13 @@ def _has_assistant_transcript_message(
         )
         .limit(1)
     )
+    if onboarding_trigger_step_id is not None:
+        query = query.where(
+            LogEvent.data.has_key("metadata"),
+            LogEvent.data["metadata"].has_key("onboarding_trigger_step_id"),
+            LogEvent.data["metadata"]["onboarding_trigger_step_id"].astext
+            == onboarding_trigger_step_id,
+        )
     if reset_after is not None:
         query = query.where(LogEvent.created_at > reset_after)
     row = session.scalar(query)
@@ -1779,6 +1787,7 @@ def _has_trigger_outbound(
         session,
         coordinator=coordinator,
         mediums=mediums,
+        onboarding_trigger_step_id=step_id,
         reset_after=reset_after,
     )
 

@@ -1051,10 +1051,42 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     completed = response.json()["info"]["completed_step_ids"]
-    assert "email-reference" in completed
+    assert "email-reference" not in completed
     assert "email-reply" not in completed
 
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=transcripts_context,
+        data={
+            "medium": "email",
+            "sender_id": 0,
+            "receiver_ids": [1],
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "content": "wrongly tagged outbound clue",
+            "metadata": {"onboarding_trigger_step_id": "sms-reference"},
+        },
+    )
+    dbsession.commit()
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert "email-reference" not in response.json()["info"]["completed_step_ids"]
+
+    outbound_trigger_by_medium = {
+        "email": "email-reference",
+        "whatsapp_message": "whatsapp-message-reference",
+        "whatsapp_call": "whatsapp-call-reference",
+        "sms_message": "sms-reference",
+        "phone_call": "phone-call-reference",
+        "slack_message": "slack-reference",
+        "discord_message": "discord-reference",
+    }
+
     for medium in (
+        "email",
         "whatsapp_message",
         "whatsapp_call",
         "sms_message",
@@ -1072,6 +1104,9 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
                 "receiver_ids": [1],
                 "timestamp": datetime.now().astimezone().isoformat(),
                 "content": f"{medium} outbound proof",
+                "metadata": {
+                    "onboarding_trigger_step_id": outbound_trigger_by_medium[medium],
+                },
             },
         )
     for medium in (
@@ -1175,6 +1210,7 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
             "receiver_ids": [1],
             "timestamp": datetime.now().astimezone().isoformat(),
             "content": "outbound clue after trigger reset",
+            "metadata": {"onboarding_trigger_step_id": "email-reference"},
         },
     )
     dbsession.commit()
