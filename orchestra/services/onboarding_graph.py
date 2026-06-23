@@ -48,10 +48,10 @@ class OnboardingEventSpec:
 class OnboardingStep:
     """One node in the onboarding graph.
 
-    ``derivable`` marks steps whose completion Orchestra reads from
-    durable domain state (``derive_onboarding_progress``). Non-derivable
-    steps are the reference-quiz *trigger* rows, whose completion is
-    inferred from their paired reply step (see ``paired_reply``).
+    ``derivable`` marks non-trigger steps whose completion Orchestra reads
+    from durable domain state (``derive_onboarding_progress``). Trigger
+    rows use ``paired_reply`` for dependency modelling, while completion is
+    derived from assistant-authored outbound transcript evidence.
     """
 
     id: str
@@ -590,6 +590,26 @@ TRIGGER_TO_REPLY: dict[str, str] = {
     step.id: step.paired_reply
     for step in ONBOARDING_GRAPH
     if step.kind == "trigger" and step.paired_reply
+}
+
+_CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
+    "email": ("email",),
+    "whatsapp_message": ("whatsapp_message",),
+    "whatsapp_call": ("whatsapp_call",),
+    "sms_message": ("sms_message",),
+    "phone_call": ("phone_call",),
+    "slack_message": ("slack_message", "slack_channel_message"),
+    "discord_message": ("discord_message", "discord_channel_message"),
+}
+
+# Trigger row id -> transcript medium(s) that prove Twin sent the outbound.
+# Completion is derived from durable assistant-authored transcript rows rather
+# than from the user's click or the active paired reply pointer.
+TRIGGER_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
+    trigger_id: _CHANNEL_TO_OUTBOUND_MEDIUMS[
+        REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP[reply_id]
+    ]
+    for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
 }
 
 # Steps whose completion Orchestra derives from durable domain state.

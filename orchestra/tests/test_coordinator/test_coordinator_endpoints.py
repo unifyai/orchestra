@@ -1050,8 +1050,30 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
         headers=owner["headers"],
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
-    assert "email-reply" not in response.json()["info"]["completed_step_ids"]
+    completed = response.json()["info"]["completed_step_ids"]
+    assert "email-reference" in completed
+    assert "email-reply" not in completed
 
+    for medium in (
+        "whatsapp_message",
+        "whatsapp_call",
+        "sms_message",
+        "phone_call",
+        "slack_message",
+        "discord_message",
+    ):
+        _insert_log(
+            dbsession,
+            project=project,
+            context_name=transcripts_context,
+            data={
+                "medium": medium,
+                "sender_id": 0,
+                "receiver_ids": [1],
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "content": f"{medium} outbound proof",
+            },
+        )
     for medium in (
         "email",
         "whatsapp_message",
@@ -1081,17 +1103,24 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     completed = response.json()["info"]["completed_step_ids"]
-    assert completed[:11] == [
+    assert completed[:18] == [
+        "email-reference",
         "email-reply",
         "whatsapp-number",
+        "whatsapp-message-reference",
         "whatsapp-message",
+        "whatsapp-call-reference",
         "whatsapp-call",
         "phone-number",
+        "sms-reference",
         "sms-message",
+        "phone-call-reference",
         "phone-call",
         "slack-connect",
+        "slack-reference",
         "slack-message",
         "discord-connect",
+        "discord-reference",
         "discord-message",
     ]
 
@@ -1103,6 +1132,7 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
     assert reset_email.status_code == status.HTTP_200_OK, reset_email.json()
     completed = reset_email.json()["info"]["completed_step_ids"]
     assert "email-reply" not in completed
+    assert "email-reference" in completed
 
     _insert_log(
         dbsession,
@@ -1123,6 +1153,37 @@ async def test_coordinator_state_derives_comms_steps_from_profile_and_transcript
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     assert "email-reply" in response.json()["info"]["completed_step_ids"]
+
+    reset_email_trigger = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "email-reference"},
+        headers=owner["headers"],
+    )
+    assert (
+        reset_email_trigger.status_code == status.HTTP_200_OK
+    ), reset_email_trigger.json()
+    completed = reset_email_trigger.json()["info"]["completed_step_ids"]
+    assert "email-reference" not in completed
+
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=transcripts_context,
+        data={
+            "medium": "email",
+            "sender_id": 0,
+            "receiver_ids": [1],
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "content": "outbound clue after trigger reset",
+        },
+    )
+    dbsession.commit()
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert "email-reference" in response.json()["info"]["completed_step_ids"]
 
     reset_whatsapp = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",

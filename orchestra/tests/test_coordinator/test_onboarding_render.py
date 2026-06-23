@@ -4,8 +4,8 @@ These exercise the pure ``depends_on`` semantics and the
 ``compute_onboarding_render`` status/next-target logic against mocks,
 without the FastAPI stack or a live DB. They pin the contract both Droid
 brains and the Console checklist now rely on: statuses are server-
-computed, trigger rows are inferred from their paired reply, and the
-valid next targets carry ready-to-use nudge copy.
+computed, communication trigger rows complete from assistant outbound
+evidence, and the valid next targets carry ready-to-use nudge copy.
 """
 
 from __future__ import annotations
@@ -39,12 +39,14 @@ def test_graph_integrity_and_pairing() -> None:
     # Import already ran ``_assert_graph_integrity`` without raising.
     assert len(graph.ONBOARDING_GRAPH) == 27
     assert len(graph.TRIGGER_TO_REPLY) == 7
+    assert len(graph.TRIGGER_TO_OUTBOUND_MEDIUMS) == 7
     # Every trigger points at a real reply step.
     for trigger_id, reply_id in graph.TRIGGER_TO_REPLY.items():
         trigger = graph.STEP_BY_ID[trigger_id]
         assert trigger.kind == "trigger"
         assert trigger.can_skip is True
         assert reply_id in graph.STEP_BY_ID
+        assert graph.TRIGGER_TO_OUTBOUND_MEDIUMS[trigger_id]
 
 
 def test_dependencies_satisfied_levels() -> None:
@@ -149,14 +151,15 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         assert target["nudge_chat"]
 
 
-def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
-    """A completed reply marks its trigger done without gating other media."""
+def test_render_reply_done_does_not_complete_trigger() -> None:
+    """Inbound reply completion does not prove Twin sent the trigger outbound."""
     render = _render_with(completed=["email-reply"], skipped=[], active=None)
     statuses = _statuses(render)
-    assert statuses["email-reference"] == "done"  # inferred from the reply
+    assert statuses["email-reference"] == "available"
     assert statuses["email-reply"] == "done"
     assert statuses["whatsapp-number"] == "available"
     assert _next_ids(render) == [
+        "email-reference",
         "whatsapp-number",
         "phone-number",
         "slack-connect",
@@ -166,9 +169,17 @@ def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
     ]
 
 
-def test_render_active_reply_infers_trigger_done() -> None:
-    """The active reply step counts its trigger as already sent."""
+def test_render_active_reply_does_not_complete_trigger() -> None:
+    """The active reply step is a resume pointer, not outbound evidence."""
     render = _render_with(completed=[], skipped=[], active="email-reply")
+    statuses = _statuses(render)
+    assert statuses["email-reference"] == "available"
+    assert statuses["email-reply"] == "locked"
+
+
+def test_render_outbound_trigger_done_unlocks_reply() -> None:
+    """A trigger completes once outbound transcript evidence is derived."""
+    render = _render_with(completed=["email-reference"], skipped=[], active=None)
     statuses = _statuses(render)
     assert statuses["email-reference"] == "done"
     assert statuses["email-reply"] == "available"

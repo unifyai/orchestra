@@ -1730,6 +1730,59 @@ def _has_user_transcript_message(
     return row is not None
 
 
+def _has_assistant_transcript_message(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    mediums: Sequence[str],
+    reset_after: datetime | None = None,
+) -> bool:
+    project = _project_for_coordinator(session, coordinator)
+    context = _get_context(
+        session,
+        project_id=project.id,
+        context_name=_coordinator_context_name(
+            coordinator,
+            COORDINATOR_TRANSCRIPTS_CONTEXT,
+        ),
+    )
+    if context is None:
+        return False
+    query = (
+        select(LogEvent.id)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data["medium"].astext.in_(tuple(mediums)),
+            LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
+            LogEvent.data["receiver_ids"].contains([PERSONAL_BOSS_CONTACT_ID]),
+        )
+        .limit(1)
+    )
+    if reset_after is not None:
+        query = query.where(LogEvent.created_at > reset_after)
+    row = session.scalar(query)
+    return row is not None
+
+
+def _has_trigger_outbound(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    reset_after: datetime | None = None,
+) -> bool:
+    mediums = onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS.get(step_id)
+    if not mediums:
+        return False
+    return _has_assistant_transcript_message(
+        session,
+        coordinator=coordinator,
+        mediums=mediums,
+        reset_after=reset_after,
+    )
+
+
 def _has_email_reply(
     session: Session,
     *,
@@ -1848,7 +1901,7 @@ def derive_onboarding_progress(
     """
     state = state or get_coordinator_state(session, coordinator=coordinator)
     reset_at = normalize_onboarding_reset_at(state.get("onboarding_reset_at"))
-    transcript_checks: dict[str, Any] = {
+    reply_transcript_checks: dict[str, Any] = {
         ONBOARDING_STEP_EMAIL_REPLY: _has_email_reply,
         ONBOARDING_STEP_WHATSAPP_MESSAGE: _has_whatsapp_message,
         ONBOARDING_STEP_WHATSAPP_CALL: _has_whatsapp_call,
@@ -1857,35 +1910,41 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_SLACK_MESSAGE: _has_slack_message,
         ONBOARDING_STEP_DISCORD_MESSAGE: _has_discord_message,
     }
-    checks: tuple[tuple[str, Any], ...] = (
-        (ONBOARDING_STEP_EMAIL_REPLY, _has_email_reply),
-        (ONBOARDING_STEP_WHATSAPP_NUMBER, _has_user_whatsapp_number),
-        (ONBOARDING_STEP_WHATSAPP_MESSAGE, _has_whatsapp_message),
-        (ONBOARDING_STEP_WHATSAPP_CALL, _has_whatsapp_call),
-        (ONBOARDING_STEP_PHONE_NUMBER, _has_user_phone_number),
-        (ONBOARDING_STEP_SMS_MESSAGE, _has_sms_message),
-        (ONBOARDING_STEP_PHONE_CALL, _has_phone_call),
-        (ONBOARDING_STEP_SLACK_CONNECT, _has_slack_install),
-        (ONBOARDING_STEP_SLACK_MESSAGE, _has_slack_message),
-        (ONBOARDING_STEP_DISCORD_CONNECT, _has_discord_connection),
-        (ONBOARDING_STEP_DISCORD_MESSAGE, _has_discord_message),
-        (ONBOARDING_STEP_WORKSPACE, _has_workspace_email),
-        (ONBOARDING_STEP_APPS, _has_app_secret),
-        (ONBOARDING_STEP_SCHEDULE, _has_scheduled_task),
-    )
-    return [
-        step_id
-        for step_id, check in checks
-        if (
-            check(
+    durable_checks: dict[str, Any] = {
+        ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
+        ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
+        ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
+        ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
+        ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
+        ONBOARDING_STEP_APPS: _has_app_secret,
+        ONBOARDING_STEP_SCHEDULE: _has_scheduled_task,
+    }
+    completed: list[str] = []
+    for step in onboarding_graph.ONBOARDING_GRAPH:
+        step_id = step.id
+        reset_after = _parse_onboarding_reset_at(reset_at.get(step_id))
+        if step_id in onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS:
+            if _has_trigger_outbound(
                 session,
                 coordinator=coordinator,
-                reset_after=_parse_onboarding_reset_at(reset_at.get(step_id)),
-            )
-            if step_id in transcript_checks
-            else check(session, coordinator=coordinator)
-        )
-    ]
+                step_id=step_id,
+                reset_after=reset_after,
+            ):
+                completed.append(step_id)
+            continue
+        check = reply_transcript_checks.get(step_id)
+        if check is not None:
+            if check(
+                session,
+                coordinator=coordinator,
+                reset_after=reset_after,
+            ):
+                completed.append(step_id)
+            continue
+        check = durable_checks.get(step_id)
+        if check is not None and check(session, coordinator=coordinator):
+            completed.append(step_id)
+    return completed
 
 
 _HOSTED_ENVIRONMENTS = ("staging", "production")
@@ -2030,11 +2089,10 @@ def compute_onboarding_render(
       - ``active_step_id``: the step the user is currently mid-flow on.
 
     Steps in a ``local_only`` phase are omitted entirely on hosted
-    deployments (see ``onboarding_local_mode``). Completion of the
-    reference-quiz *trigger* rows isn't derivable from durable state, so we
-    infer it from the paired reply step exactly as the Console checklist
-    did: a trigger is done once its reply is done or is the active step,
-    and skipped once its reply is skipped.
+    deployments (see ``onboarding_local_mode``). Communication trigger
+    rows are completed only by durable assistant-authored outbound
+    transcript evidence; the paired reply pointer records intent/progress
+    but does not complete the trigger.
     """
     if local_mode is None:
         local_mode = onboarding_local_mode()
@@ -2054,9 +2112,7 @@ def compute_onboarding_render(
         active_id = None
 
     for trigger_id, reply_id in onboarding_graph.TRIGGER_TO_REPLY.items():
-        if reply_id in completed or reply_id == active_id:
-            completed.add(trigger_id)
-        elif reply_id in skipped:
+        if reply_id in skipped:
             skipped.add(trigger_id)
 
     for skipped_id in list(skipped):
