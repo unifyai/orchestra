@@ -681,6 +681,143 @@ def test_builtins_sync_prunes_stale_builtins_app_and_tool_rows(
     assert remaining == 0
 
 
+def test_builtins_catalog_queries_are_scoped_to_the_builtins_partition(
+    dbsession: Session,
+) -> None:
+    """Catalog reads and prunes must never touch another project's partition.
+
+    ``log_event.id`` is unique only within a partition (the PK is
+    ``(project_id, id, owner_key)``), so two projects can hold rows with the same
+    ``id``. The catalog lookup/prune filter by ``context_id`` and JSONB fields;
+    without a ``project_id`` predicate Postgres scans every partition and the
+    ``lec.log_event_id = le.id`` join can cross-match a different project's row
+    that happens to share the id. This seeds such a decoy and asserts the
+    Builtins-scoped queries neither read nor delete it.
+    """
+
+    _ensure_builtins_project(dbsession, user_id="builtins-scope-test")
+    contexts = ensure_builtins_catalog_contexts(dbsession)
+    project = contexts["project"]
+    tools_context = contexts["tools"]
+
+    upsert_context_rows(
+        dbsession,
+        project_id=project.id,
+        context_id=tools_context.id,
+        key_columns=["function_id"],
+        rows=[
+            {
+                "function_id": 994001,
+                "backend_id": "composio",
+                "name": "primitives.integrations.gmail.real",
+                "metadata": {"integration": {"app_slug": "gmail"}},
+            },
+        ],
+    )
+    dbsession.commit()
+
+    builtins_log_id = dbsession.execute(
+        text(
+            """
+            SELECT le.id
+            FROM log_event le
+            JOIN log_event_context lec ON lec.log_event_id = le.id
+            WHERE lec.context_id = :context_id
+              AND le.data ->> 'function_id' = '994001'
+            """,
+        ),
+        {"context_id": tools_context.id},
+    ).scalar_one()
+
+    # Decoy: a different project reusing the same log_event id, with a context
+    # row pointing at the Builtins context. An unscoped join would reach it.
+    decoy = Project(user_id="decoy-scope-test", name="Decoy Scope")
+    dbsession.add(decoy)
+    dbsession.flush()
+    dbsession.execute(
+        text(
+            """
+            INSERT INTO log_event (id, project_id, data, owner_key)
+            VALUES (:id, :project_id, CAST(:data AS jsonb), 'sys')
+            """,
+        ),
+        {
+            "id": builtins_log_id,
+            "project_id": decoy.id,
+            "data": json.dumps(
+                {
+                    "function_id": 994999,
+                    "backend_id": "composio",
+                    "metadata": {"integration": {"app_slug": "decoyapp"}},
+                },
+            ),
+        },
+    )
+    dbsession.execute(
+        text(
+            """
+            INSERT INTO log_event_context (project_id, log_event_id, context_id, owner_key)
+            VALUES (:project_id, :log_event_id, :context_id, 'sys')
+            """,
+        ),
+        {
+            "project_id": decoy.id,
+            "log_event_id": builtins_log_id,
+            "context_id": tools_context.id,
+        },
+    )
+    dbsession.commit()
+
+    # Read path: the decoy's function_id only exists in the decoy project, so a
+    # Builtins-scoped lookup must miss it (an unscoped join would return the id).
+    assert (
+        builtins_integration_sync._find_existing_log_id(
+            dbsession,
+            project_id=project.id,
+            context_id=tools_context.id,
+            key_columns=["function_id"],
+            key_values={"function_id": "994999"},
+            key_hash="unused-no-constraint-row",
+        )
+        is None
+    )
+    # The genuine Builtins row is still resolved within its own partition.
+    assert (
+        builtins_integration_sync._find_existing_log_id(
+            dbsession,
+            project_id=project.id,
+            context_id=tools_context.id,
+            key_columns=["function_id"],
+            key_values={"function_id": "994001"},
+            key_hash="unused-no-constraint-row",
+        )
+        == builtins_log_id
+    )
+
+    # Delete path: pruning the Builtins catalog (decoy slug is "unlisted") must
+    # not delete the decoy's log_event in the other project.
+    builtins_integration_sync.prune_tool_rows_for_unlisted_apps(
+        dbsession,
+        project_id=project.id,
+        context_id=tools_context.id,
+        backend_id="composio",
+        keep_app_slugs=["gmail"],
+    )
+    dbsession.commit()
+
+    decoy_survives = dbsession.execute(
+        text(
+            """
+            SELECT COUNT(*)
+            FROM log_event
+            WHERE project_id = :project_id AND id = :id
+            """,
+        ),
+        {"project_id": decoy.id, "id": builtins_log_id},
+    ).scalar_one()
+    assert decoy_survives == 1
+
+
 def _seed_orphan_tool_row(dbsession: Session, contexts, *, function_id: int) -> None:
     upsert_context_rows(
         dbsession,
