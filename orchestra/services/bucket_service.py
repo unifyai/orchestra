@@ -54,7 +54,7 @@ class BucketService:
         # -----------------------------------------------------------------
         self.assistant_media_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME",
-            f"assistant-media-{"staging" if settings.is_staging else "production"}",
+            f"assistant-media-{'staging' if settings.is_staging else 'production'}",
         )
         if not self.assistant_media_bucket_name:
             raise ValueError(
@@ -70,7 +70,7 @@ class BucketService:
         # -----------------------------------------------------------------
         self.message_attachments_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
-            f"assistant-message-attachments-{"staging" if settings.is_staging else "production"}",
+            f"assistant-message-attachments-{'staging' if settings.is_staging else 'production'}",
         )
         self.message_attachments_bucket = self.storage_client.bucket(
             self.message_attachments_bucket_name,
@@ -81,7 +81,7 @@ class BucketService:
         # -----------------------------------------------------------------
         self.call_recordings_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
-            f"assistant-call-recordings-{"staging" if settings.is_staging else "production"}",
+            f"assistant-call-recordings-{'staging' if settings.is_staging else 'production'}",
         )
         self.call_recordings_bucket = self.storage_client.bucket(
             self.call_recordings_bucket_name,
@@ -94,7 +94,7 @@ class BucketService:
         # -----------------------------------------------------------------
         self.account_photo_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ACCOUNT_PHOTO_BUCKET_NAME",
-            f"account-photo-{"staging" if settings.is_staging else "production"}",
+            f"account-photo-{'staging' if settings.is_staging else 'production'}",
         )
         self.account_photo_bucket = self.storage_client.bucket(
             self.account_photo_bucket_name,
@@ -846,9 +846,18 @@ class BucketService:
 
 
 def create_bucket_service():
-    """Return GCS storage in cloud deployments and local disk storage for self-host."""
+    """Return GCS storage in cloud deployments and local disk storage otherwise.
+
+    Self-host always persists to local disk. Cloud deployments (production and
+    staging) carry GCP credentials and use GCS. A deployment with no
+    ``GOOGLE_APPLICATION_CREDENTIALS`` is necessarily a local/CI stack, so fall
+    back to local-disk storage rather than hard-failing on the missing
+    credentials — the same credential-absence stubbing the rest of the local
+    stack already relies on. Production/staging are unaffected because they
+    always provide credentials.
+    """
     from orchestra.services.local_bucket_service import LocalBucketService
 
-    if settings.is_self_host:
+    if settings.is_self_host or not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         return LocalBucketService()
     return BucketService()
