@@ -160,6 +160,61 @@ def get_billing_entity(
 
 
 # =========================================================================
+# No-charge credit grants
+# =========================================================================
+
+
+def grant_promo_credits(
+    session: Session,
+    billing_account: BillingAccount,
+    amount: float,
+    *,
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    description: str = "Promo credit",
+    detail: Optional[Dict[str, Any]] = None,
+    invoice_group: Optional[Any] = None,
+) -> Optional[Decimal]:
+    """Grant free (promotional) credits with no Stripe charge.
+
+    Credits the CREDITS wallet via :meth:`BillingAccountDAO.add_credits`
+    (which also appends the ledger row) and records a ``PAID`` ``promo``
+    recharge so the top-up shows in history and a later depletion is treated
+    as a paid depletion by the out-of-credits banner. Returns the new wallet
+    balance (``None`` for METERED accounts, where the wallet is frozen).
+
+    Shared by the admin recharge endpoint (``type="promo"``) and the
+    self-serve manual top-up endpoint (staging) — neither involves Stripe.
+    """
+    from datetime import datetime, timezone
+
+    from orchestra.db.dao.recharge_dao import RechargeDAO
+    from orchestra.db.models.orchestra_models import RechargeStatus
+    from orchestra.lib.time import month_end_utc
+
+    ba_dao = BillingAccountDAO(session)
+    new_balance = ba_dao.add_credits(
+        billing_account.id,
+        float(amount),
+        category="promo",
+        user_id=user_id,
+        organization_id=organization_id,
+        description=description,
+        detail=detail or {"event": "promo_recharge"},
+    )
+
+    RechargeDAO(session).create_recharge(
+        billing_account_id=billing_account.id,
+        quantity=int(amount),
+        amount_usd=Decimal(str(amount)),
+        invoice_group=invoice_group or month_end_utc(datetime.now(timezone.utc)),
+        type_="promo",
+        status=RechargeStatus.PAID,
+    )
+    return new_balance
+
+
+# =========================================================================
 # Stripe helpers
 # =========================================================================
 

@@ -610,6 +610,22 @@ class OnboardingSessionStartedResponse(BaseModel):
     emitted: bool
 
 
+class OnboardingStepEventRequest(BaseModel):
+    """Request body for firing the graph-owned event attached to a step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(..., min_length=1)
+
+
+class OnboardingStepEventResponse(BaseModel):
+    """Acknowledgement returned after an onboarding step event is processed."""
+
+    coordinator_id: str
+    step_id: str
+    emitted: bool
+
+
 class CoordinatorDelegateRequest(BaseModel):
     """Request body for assigning asynchronous work to a colleague."""
 
@@ -697,6 +713,7 @@ class CoordinatorStateUpdate(BaseModel):
     clear_onboarding_step: bool = Field(False)
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_step: Optional[str] = Field(None, min_length=1)
+    reset_onboarding_step: Optional[str] = Field(None, min_length=1)
     skip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
@@ -723,6 +740,16 @@ class OnboardingPhaseInfo(BaseModel):
     phase: str
     title: str
     description: str = ""
+    framing: str = ""
+
+
+class OnboardingEventSpec(BaseModel):
+    """Structured onboarding event Console can dispatch without owning semantics."""
+
+    event_type: str
+    message: str
+    subtype: str
+    details: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OnboardingStepDependency(BaseModel):
@@ -749,12 +776,21 @@ class OnboardingStepStatus(BaseModel):
     title: str
     phase: str
     status: str
+    kind: str = ""
+    channel: Optional[str] = None
+    paired_reply: Optional[str] = None
+    nudge_chat: str = ""
+    nudge_voice: str = ""
+    phase_id: Optional[str] = None
     can_skip: bool = False
     dependencies: List[OnboardingStepDependency] = Field(default_factory=list)
     description: str = ""
     estimated_time: str = ""
+    flow_note: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)
     chips_call: List[OnboardingChip] = Field(default_factory=list)
+    interaction: Optional[Dict[str, Any]] = None
+    event: Optional[OnboardingEventSpec] = None
 
 
 class OnboardingNextTarget(BaseModel):
@@ -770,6 +806,11 @@ class OnboardingNextTarget(BaseModel):
     nudge_chat: str
     nudge_voice: str
     channel: Optional[str] = None
+    kind: str = ""
+    paired_reply: Optional[str] = None
+    phase: str = ""
+    flow_note: str = ""
+    interaction: Optional[Dict[str, Any]] = None
 
 
 class OnboardingRender(BaseModel):
@@ -790,11 +831,18 @@ class OnboardingCatalogStep(BaseModel):
     phase: str
     kind: str
     channel: Optional[str] = None
+    paired_reply: Optional[str] = None
+    nudge_chat: str = ""
+    nudge_voice: str = ""
+    phase_id: Optional[str] = None
     can_skip: bool = False
     description: str = ""
     estimated_time: str = ""
+    flow_note: str = ""
     chips_chat: List[OnboardingChip] = Field(default_factory=list)
     chips_call: List[OnboardingChip] = Field(default_factory=list)
+    interaction: Optional[Dict[str, Any]] = None
+    event: Optional[OnboardingEventSpec] = None
 
 
 class OnboardingCatalog(BaseModel):
@@ -835,6 +883,10 @@ class CoordinatorStateResponse(BaseModel):
     # next targets with nudge copy). Present only while actively
     # onboarding; ``None`` once complete, working, or deferred.
     onboarding: Optional[OnboardingRender] = None
+    # Self-contained orientation briefing for a fresh onboarding voice call,
+    # derived from the graph so the call initiator can pass it straight to the
+    # voice agent as a ``briefed`` opening. Empty outside active onboarding.
+    voice_intro_briefing: str = ""
 
 
 class DemoAssistantCreate(BaseModel):

@@ -1538,3 +1538,107 @@ async def test_live_composio_oauth_connect_route_uses_backend_config(
     assert start.status_code == status.HTTP_200_OK, start.json()
     assert start.json()["connect_url"] == "https://backend.composio.dev/connect/discord"
     assert start.json()["connection"]["provider_connection_id"] == "ca_discord"
+
+
+@pytest.mark.anyio
+async def test_builtins_sync_start_launches_job_and_returns_running(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestra.services import builtins_seed_launcher
+
+    monkeypatch.setattr(
+        builtins_seed_launcher,
+        "builtins_seed_job_configured",
+        lambda: True,
+    )
+
+    uploaded: dict[str, Any] = {}
+
+    def fake_upload(payload: dict[str, Any]) -> str:
+        uploaded["payload"] = payload
+        return f"gs://bucket/builtins-seed-requests/{payload['run_id']}.json"
+
+    executed: list[str] = []
+    monkeypatch.setattr(builtins_seed_launcher, "upload_seed_request", fake_upload)
+    monkeypatch.setattr(
+        builtins_seed_launcher,
+        "execute_seed_job",
+        lambda request_uri: executed.append(request_uri),
+    )
+
+    response = await client.post(
+        "/v0/admin/integrations/builtins-sync/start",
+        headers=ADMIN_HEADERS,
+        json={
+            "backend_id": "composio",
+            "environment": "test-async",
+            "desired_hash": "hash-async-1",
+            "cache_version": "cache-async-1",
+            "mode": "all",
+            "sync_payload": {"backend_id": "composio", "sync_mode": "full"},
+        },
+    )
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    body = response.json()
+    assert body["status"] == "running"
+    run_id = body["run_id"]
+    assert run_id
+    request_uri = body["request_uri"]
+    assert request_uri.endswith(f"{run_id}.json")
+    assert executed == [request_uri]
+    assert uploaded["payload"]["run_id"] == run_id
+
+    state = await client.get(
+        "/v0/admin/integrations/bootstrap-state",
+        headers=ADMIN_HEADERS,
+        params={"environment": "test-async", "backend_id": "composio"},
+    )
+    assert state.status_code == status.HTTP_200_OK, state.json()
+    state_body = state.json()
+    assert state_body["run_id"] == run_id
+    assert state_body["last_status"] == "running"
+
+
+@pytest.mark.anyio
+async def test_builtins_sync_start_runs_inline_when_no_job(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestra.services import builtins_seed_launcher
+
+    monkeypatch.setattr(
+        builtins_seed_launcher,
+        "builtins_seed_job_configured",
+        lambda: False,
+    )
+    monkeypatch.delenv("ORCHESTRA_BUILTINS_SYNC_INLINE_ENABLED", raising=False)
+
+    def fake_run(session_factory, request):  # noqa: ARG001
+        return builtins_integration_sync.BuiltinsSyncResult(
+            status="success",
+            apps_upserted=3,
+            tools_upserted=7,
+            run_id=request.run_id,
+            desired_hash=request.desired_hash,
+        )
+
+    monkeypatch.setattr(builtins_integration_sync, "run_builtins_sync", fake_run)
+
+    response = await client.post(
+        "/v0/admin/integrations/builtins-sync/start",
+        headers=ADMIN_HEADERS,
+        json={
+            "backend_id": "composio",
+            "environment": "test-inline",
+            "desired_hash": "hash-inline-1",
+            "cache_version": "cache-inline-1",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    body = response.json()
+    assert body["status"] == "success"
+    assert body["apps_upserted"] == 3
+    assert body["tools_upserted"] == 7

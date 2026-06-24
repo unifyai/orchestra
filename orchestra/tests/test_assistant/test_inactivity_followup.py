@@ -36,11 +36,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.models.orchestra_models import (
-    Assistant,
-    DemoAssistantMeta,
-    User,
-)
+from orchestra.db.models.orchestra_models import Assistant, DemoAssistantMeta, User
 from orchestra.routines.inactivity_followup import (
     InactivityFollowupResult,
     run_inactivity_followup,
@@ -116,7 +112,7 @@ def _make_coordinator(
     return _make_assistant(
         dbsession,
         user_id,
-        first_name="Twin",
+        first_name="T-W1N",
         last_correspondence_at=last_correspondence_at,
         last_followup_sent_at=last_followup_sent_at,
         inactivity_followup_opted_out=inactivity_followup_opted_out,
@@ -312,7 +308,9 @@ class TestDAOFindFollowupCandidates:
         baseline ages past the window."""
         user = _make_user(dbsession, "fup_u5")
         coord = _make_coordinator(
-            dbsession, user.id, last_correspondence_at=_cutoff(10)
+            dbsession,
+            user.id,
+            last_correspondence_at=_cutoff(10),
         )
 
         dao = AssistantDAO(dbsession)
@@ -666,10 +664,10 @@ class TestEmailTemplates:
         normalized = re.sub(r"\s+", " ", body.lower())
 
         assert "unify" in WELCOME_SUBJECT.lower()
-        assert "i'm twin" in normalized
+        assert "i'm t-w1n" in normalized
         assert "hi olivia," in normalized
         assert "https://console.unify.ai/" in body
-        assert "— twin" in normalized
+        assert "— t-w1n" in normalized
 
     def test_welcome_email_handles_missing_first_name(self):
         from orchestra.routines.inactivity_notifications import (

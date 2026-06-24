@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BillingAccount
-from orchestra.lib.billing import get_billing_entity
+from orchestra.lib.billing import get_billing_entity, grant_promo_credits
 from orchestra.web.api.credits.schema import (
     AggregatedTransactionHistoryResponse,
     AggregatedTransactionItem,
@@ -17,6 +17,8 @@ from orchestra.web.api.credits.schema import (
     DeductCreditsRequest,
     DeductCreditsResponse,
     SpendingBreakdownResponse,
+    TopUpRequest,
+    TopUpResponse,
     TransactionHistoryResponse,
     TransactionItem,
 )
@@ -258,6 +260,93 @@ def deduct_credits(
         previous_credits=current_credits,
         deducted=request.amount,
         current_credits=float(new_balance),
+    )
+
+
+@router.post(
+    "/credits/topup",
+    response_model=TopUpResponse,
+    responses={
+        200: {"description": "Credits topped up successfully"},
+        403: {"description": "Manual top-up is not enabled on this deployment"},
+    },
+)
+def topup_credits(
+    request_fastapi: Request,
+    request: TopUpRequest,
+    session=Depends(get_db_session),
+) -> TopUpResponse:
+    """Self-serve, no-charge credit top-up for manual-top-up deployments.
+
+    Only available when ``settings.manual_topup`` is on (staging): credits are
+    metered and gate further work, but developers replenish them for free with
+    no Stripe charge and no card on file — making runaway spend impossible
+    while still forcing a deliberate "how much do I need" decision. The granted
+    amount is capped at ``settings.max_promo_amount`` so a single fat-fingered
+    request can't mint an unbounded balance. Hard-gated off in production so it
+    can never grant free credits there.
+    \f
+    :param request_fastapi: FastAPI request object.
+    :param request: Request body containing the amount to top up.
+    :param session: Database session.
+    :return: Response with previous, added, and current credit amounts.
+    """
+    from orchestra.settings import settings
+
+    if not settings.manual_topup:
+        raise HTTPException(
+            status_code=403,
+            detail="Manual top-up is not enabled on this deployment",
+        )
+
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
+
+    if request.amount > settings.max_promo_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Top-ups are capped at {settings.max_promo_amount:g} credits. "
+                f"Requested: {request.amount:g}"
+            ),
+        )
+
+    try:
+        billing_entity = get_billing_entity(session, user_id, organization_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    current_credits = float(billing_entity.credits)
+
+    ba = (
+        session.query(BillingAccount)
+        .filter(BillingAccount.id == billing_entity.billing_account_id)
+        .first()
+    )
+
+    new_balance = grant_promo_credits(
+        session,
+        ba,
+        float(request.amount),
+        user_id=user_id,
+        organization_id=organization_id,
+        description="Manual top-up",
+        detail={"event": "manual_topup"},
+    )
+
+    session.commit()
+
+    # METERED accounts leave the wallet frozen (``add_credits`` returns None);
+    # surface the unchanged balance in that case.
+    resolved_balance = (
+        float(new_balance) if new_balance is not None else current_credits
+    )
+    return TopUpResponse(
+        previous_credits=current_credits,
+        added=request.amount,
+        current_credits=resolved_balance,
     )
 
 

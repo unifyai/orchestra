@@ -130,7 +130,7 @@ def slack_world(dbsession: Session):
     coordinator = _make_assistant(
         dbsession,
         owner,
-        first_name="Twin",
+        first_name="T-W1N",
         organization=org,
         is_coordinator=True,
     )
@@ -171,7 +171,7 @@ def personal_slack_world(dbsession: Session):
     coordinator = _make_assistant(
         dbsession,
         user,
-        first_name="Twin",
+        first_name="T-W1N",
         organization=None,
         is_coordinator=True,
     )

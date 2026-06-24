@@ -89,9 +89,11 @@ from orchestra.services.contact_membership_service import (
 from orchestra.services.coordinator_service import (
     COORDINATOR_MODE_ONBOARDING,
     build_onboarding_catalog,
+    compose_voice_intro_briefing,
     compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
+    emit_onboarding_step_event,
     emit_onboarding_step_skipped_event,
     emit_onboarding_step_started_event,
     emit_secret_landed_event,
@@ -169,6 +171,8 @@ from orchestra.web.api.assistant.schema import (
     OnboardingCatalog,
     OnboardingSessionStarted,
     OnboardingSessionStartedResponse,
+    OnboardingStepEventRequest,
+    OnboardingStepEventResponse,
     PhotoGenerateRequest,
     ReplicatePredictionResponse,
     SecretCreate,
@@ -1496,7 +1500,7 @@ def _coordinator_state_response(
         "onboarding_deferred",
     )
     completed_step_ids = (
-        derive_onboarding_progress(session, coordinator=coordinator)
+        derive_onboarding_progress(session, coordinator=coordinator, state=state)
         if actively_onboarding
         else []
     )
@@ -1509,6 +1513,9 @@ def _coordinator_state_response(
         coordinator_id=coordinator.agent_id,
         completed_step_ids=completed_step_ids,
         onboarding=onboarding,
+        voice_intro_briefing=(
+            compose_voice_intro_briefing(onboarding) if onboarding else ""
+        ),
         **state,
     )
 
@@ -1589,6 +1596,7 @@ async def update_coordinator_state_endpoint(
         clear_onboarding_step=update.clear_onboarding_step,
         skip_onboarding_step=update.skip_onboarding_step,
         unskip_onboarding_step=update.unskip_onboarding_step,
+        reset_onboarding_step=update.reset_onboarding_step,
         skip_onboarding_phase=update.skip_onboarding_phase,
         unskip_onboarding_phase=update.unskip_onboarding_phase,
         intro_watched=update.intro_watched,
@@ -1626,6 +1634,40 @@ async def update_coordinator_state_endpoint(
     session.commit()
     return InfoResponse(
         info=_coordinator_state_response(session, coordinator=coordinator),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/onboarding-step-event",
+    response_model=InfoResponse[OnboardingStepEventResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Emit the graph-owned event attached to one onboarding step",
+    tags=["Assistant Management"],
+)
+async def emit_onboarding_step_event_endpoint(
+    coordinator_id: int,
+    body: OnboardingStepEventRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[OnboardingStepEventResponse]:
+    """Fire the canonical event for a user-triggered onboarding row."""
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    emitted = await emit_onboarding_step_event(
+        session,
+        coordinator=coordinator,
+        step_id=body.step_id,
+    )
+    session.commit()
+    return InfoResponse(
+        info=OnboardingStepEventResponse(
+            coordinator_id=str(coordinator.agent_id),
+            step_id=body.step_id,
+            emitted=emitted,
+        ),
     )
 
 

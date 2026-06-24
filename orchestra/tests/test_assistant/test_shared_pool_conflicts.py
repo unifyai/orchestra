@@ -51,11 +51,11 @@ from orchestra.db.models.orchestra_models import (
     SharedPoolNumber,
     User,
 )
-from orchestra.settings import settings
 from orchestra.services.universal_droid_email import (
     ensure_coordinator_universal_email_contact,
     get_universal_droid_email_address,
 )
+from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 # ============================================================================
@@ -1037,7 +1037,9 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
+            settings,
+            "droid_coordinator_whatsapp_number",
+            pool_numbers[0].number,
         )
         user = _make_user(dbsession, "droid-owner@test.com", "+15550610001")
         coordinator = _make_assistant(
@@ -1051,15 +1053,20 @@ class TestUniversalUnityWhatsApp:
         result = dao.resolve_inbound(pool_numbers[0].number, user.whatsapp_number)
 
         assert result == {"assistant_id": coordinator.agent_id, "role": "owner"}
-        assert (
+        # The inbound touch persists a route so the outbound free-form window
+        # can track ``last_inbound_at`` (mirrors the Tier-1 touch); owner routing
+        # records the same evidence as any other inbound.
+        route = (
             dbsession.query(SharedPlatformRoute)
             .filter(
                 SharedPlatformRoute.pool_number_id == pool_numbers[0].id,
                 SharedPlatformRoute.contact_number == user.whatsapp_number,
             )
             .first()
-            is None
         )
+        assert route is not None
+        assert route.assistant_id == coordinator.agent_id
+        assert route.last_inbound_at is not None
 
     def test_unknown_universal_sender_fails_closed(
         self,
@@ -1069,7 +1076,9 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
+            settings,
+            "droid_coordinator_whatsapp_number",
+            pool_numbers[0].number,
         )
         user = _make_user(dbsession, "droid-known@test.com", "+15550620001")
         coordinator = _make_assistant(
@@ -1092,7 +1101,9 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
+            settings,
+            "droid_coordinator_whatsapp_number",
+            pool_numbers[0].number,
         )
         user = _make_user(dbsession, "droid-ambiguous@test.com", "+15550630001")
         org = _make_org(dbsession, user, "UnityAmbiguous")
@@ -1124,7 +1135,9 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
+            settings,
+            "droid_coordinator_whatsapp_number",
+            pool_numbers[0].number,
         )
         user = _make_user(dbsession, "regular-assignment@test.com", "+15550640001")
         assistant = _make_assistant(dbsession, user, "Regular")
@@ -1141,7 +1154,9 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
+            settings,
+            "droid_coordinator_whatsapp_number",
+            pool_numbers[0].number,
         )
         user = _make_user(dbsession, "droid-owner-route@test.com", "+15550650001")
         coordinator = _make_assistant(
@@ -1178,7 +1193,9 @@ class TestUniversalUnityWhatsApp:
         monkeypatch: pytest.MonkeyPatch,
     ):
         monkeypatch.setattr(
-            settings, "droid_coordinator_whatsapp_number", pool_numbers[0].number
+            settings,
+            "droid_coordinator_whatsapp_number",
+            pool_numbers[0].number,
         )
         user = _make_user(dbsession, "droid-external-route@test.com", "+15550660001")
         coordinator = _make_assistant(

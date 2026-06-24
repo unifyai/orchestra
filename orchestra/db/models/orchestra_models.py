@@ -1789,6 +1789,11 @@ class UserDesktop(Base):
     name = Column(String, nullable=False)
     url = Column(String, nullable=False)
     os = Column(String, nullable=False)
+    # Relay id of this device's raw-TCP SFTP tunnel. The SFTP server is
+    # per-device (one rclone serve + one rathole client), so the id lives here
+    # rather than on the per-assistant link rows. Server-side teardown
+    # (desktop deletion) needs it to deregister the tunnel from the relay.
+    sftp_tunnel_id = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 

@@ -65,6 +65,26 @@ class DesktopDAO:
         self.session.flush()
         return True
 
+    def set_desktop_sftp_tunnel(
+        self,
+        desktop_id: int,
+        user_id: str,
+        *,
+        tunnel_id: str,
+    ) -> Optional[UserDesktop]:
+        """Record the relay id of this device's raw-TCP SFTP tunnel.
+
+        Per-device (not per-link): one SFTP server, one tunnel. Stored so the
+        Console can deregister the tunnel from the relay when the desktop is
+        deleted, instead of leaking its allocated port.
+        """
+        desktop = self.get_by_id(desktop_id, user_id)
+        if not desktop:
+            return None
+        desktop.sftp_tunnel_id = tunnel_id
+        self.session.flush()
+        return desktop
+
     # ── Per-user assistant <-> desktop links ─────────────────────────────
 
     def list_assigned_assistant_ids(self, desktop_id: int) -> List[int]:

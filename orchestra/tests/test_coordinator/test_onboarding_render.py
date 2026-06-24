@@ -4,8 +4,8 @@ These exercise the pure ``depends_on`` semantics and the
 ``compute_onboarding_render`` status/next-target logic against mocks,
 without the FastAPI stack or a live DB. They pin the contract both Droid
 brains and the Console checklist now rely on: statuses are server-
-computed, trigger rows are inferred from their paired reply, and the
-valid next targets carry ready-to-use nudge copy.
+computed, communication trigger rows complete from assistant outbound
+evidence, and the valid next targets carry ready-to-use nudge copy.
 """
 
 from __future__ import annotations
@@ -39,12 +39,14 @@ def test_graph_integrity_and_pairing() -> None:
     # Import already ran ``_assert_graph_integrity`` without raising.
     assert len(graph.ONBOARDING_GRAPH) == 27
     assert len(graph.TRIGGER_TO_REPLY) == 7
+    assert len(graph.TRIGGER_TO_OUTBOUND_MEDIUMS) == 7
     # Every trigger points at a real reply step.
     for trigger_id, reply_id in graph.TRIGGER_TO_REPLY.items():
         trigger = graph.STEP_BY_ID[trigger_id]
         assert trigger.kind == "trigger"
         assert trigger.can_skip is True
         assert reply_id in graph.STEP_BY_ID
+        assert graph.TRIGGER_TO_OUTBOUND_MEDIUMS[trigger_id]
 
 
 def test_dependencies_satisfied_levels() -> None:
@@ -114,7 +116,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
     assert steps["email-reply"]["dependencies"] == [
         {
             "id": "email-reference",
-            "title": "Email the first reference",
+            "title": "Trigger email from T-W1N",
             "status": "available",
             "resolution": "completed",
             "satisfied": False,
@@ -130,6 +132,10 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         },
     ]
     assert steps["schedule"]["dependencies"] == []
+    assert steps["slack-reference"]["title"] == "Trigger Slack message from T-W1N"
+    assert steps["slack-message"]["title"] == "Reply to Slack message"
+    assert steps["discord-reference"]["title"] == "Trigger Discord message from T-W1N"
+    assert steps["discord-message"]["title"] == "Reply to Discord message"
     assert _next_ids(render) == [
         "email-reference",
         "whatsapp-number",
@@ -145,14 +151,56 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         assert target["nudge_chat"]
 
 
-def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
-    """A completed reply marks its trigger done without gating other media."""
+def test_next_target_nudges_are_checklist_row_first() -> None:
+    """Startable non-reply steps point users at the checklist row first."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    targets = {target["id"]: target for target in render["next_targets"]}
+    for step_id in (
+        "email-reference",
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "workspace",
+        "schedule",
+    ):
+        target = targets[step_id]
+        assert "row" in target["nudge_chat"]
+        assert "Onboarding checklist" in target["nudge_chat"]
+
+    apps_render = _render_with(completed=["workspace"], skipped=[], active=None)
+    apps_target = {target["id"]: target for target in apps_render["next_targets"]}[
+        "apps"
+    ]
+    assert "row" in apps_target["nudge_chat"]
+    assert "Onboarding checklist" in apps_target["nudge_chat"]
+
+
+def test_setup_flow_notes_start_with_row_clicks() -> None:
+    """Flow notes explain what clicking the row opens or triggers."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    steps = {step["id"]: step for step in render["steps"]}
+    for step_id in (
+        "whatsapp-number",
+        "phone-number",
+        "slack-connect",
+        "discord-connect",
+        "workspace",
+        "apps",
+        "schedule",
+    ):
+        assert steps[step_id]["flow_note"].startswith("Clicking the '")
+
+
+def test_render_reply_done_does_not_complete_trigger() -> None:
+    """Inbound reply completion does not prove Twin sent the trigger outbound."""
     render = _render_with(completed=["email-reply"], skipped=[], active=None)
     statuses = _statuses(render)
-    assert statuses["email-reference"] == "done"  # inferred from the reply
+    assert statuses["email-reference"] == "available"
     assert statuses["email-reply"] == "done"
     assert statuses["whatsapp-number"] == "available"
     assert _next_ids(render) == [
+        "email-reference",
         "whatsapp-number",
         "phone-number",
         "slack-connect",
@@ -162,9 +210,17 @@ def test_render_reply_done_infers_trigger_and_unlocks_next() -> None:
     ]
 
 
-def test_render_active_reply_infers_trigger_done() -> None:
-    """The active reply step counts its trigger as already sent."""
+def test_render_active_reply_does_not_complete_trigger() -> None:
+    """The active reply step is a resume pointer, not outbound evidence."""
     render = _render_with(completed=[], skipped=[], active="email-reply")
+    statuses = _statuses(render)
+    assert statuses["email-reference"] == "available"
+    assert statuses["email-reply"] == "locked"
+
+
+def test_render_outbound_trigger_done_unlocks_reply() -> None:
+    """A trigger completes once outbound transcript evidence is derived."""
+    render = _render_with(completed=["email-reference"], skipped=[], active=None)
     statuses = _statuses(render)
     assert statuses["email-reference"] == "done"
     assert statuses["email-reply"] == "available"
@@ -245,15 +301,44 @@ def test_render_carries_phase_headers_and_step_presentation() -> None:
     comms = next(p for p in render["phases"] if p["id"] == "communication")
     assert comms["title"] == "Communication"
     assert comms["phase"] == graph.PHASE_COMMUNICATION
+    assert "reference quiz" in comms["framing"]
     steps = {s["id"]: s for s in render["steps"]}
     assert steps["email-reference"]["description"]
     assert steps["email-reference"]["estimated_time"]
+    assert steps["email-reference"]["kind"] == "trigger"
+    assert steps["email-reference"]["paired_reply"] == "email-reply"
+    assert steps["email-reference"]["nudge_chat"]
+    assert "reference quiz" in steps["email-reference"]["flow_note"]
+    interaction = steps["email-reference"]["interaction"]
+    assert interaction["type"] == "reference_quiz"
+    assert interaction["channel"] == "email"
+    assert interaction["tool_name"] == "send_email"
+    # Clues are invented by the model at runtime, never hard-coded in the graph.
+    assert "quote" not in interaction
+    assert "answer" not in interaction
+    assert "accepted_answers" not in interaction
     schedule = steps["schedule"]
     assert [c["id"] for c in schedule["chips_chat"]]
     # Non-chip steps carry empty chip lists rather than omitting the field.
     assert steps["workspace"]["chips_chat"] == []
     assert steps["learning-coming-soon"]["title"] == "[Coming soon]"
     assert steps["learning-coming-soon"]["status"] == "coming_soon"
+
+
+def test_catalog_carries_step_contract_and_interactions() -> None:
+    """The static catalog exposes the same graph-owned step contract as render."""
+    catalog = svc.build_onboarding_catalog(local_mode=True)
+    steps = {step["id"]: step for step in catalog["steps"]}
+    email_reference = steps["email-reference"]
+
+    assert email_reference["kind"] == "trigger"
+    assert email_reference["paired_reply"] == "email-reply"
+    assert email_reference["nudge_voice"]
+    assert email_reference["phase_id"] == "communication"
+    assert email_reference["interaction"]["type"] == "reference_quiz"
+    assert (
+        email_reference["event"]["details"]["interaction"]["type"] == "reference_quiz"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -326,3 +411,45 @@ def test_onboarding_local_mode_signal() -> None:
     for fake_settings, expected in cases:
         with patch.object(svc, "settings", fake_settings):
             assert svc.onboarding_local_mode() is expected
+
+
+# ---------------------------------------------------------------------------
+# Voice intro briefing
+# ---------------------------------------------------------------------------
+
+
+def test_voice_intro_briefing_fresh_start() -> None:
+    """A fresh-start render yields the deadpan first-call intro, the first
+    valid next target's voice nudge, and the pause escape hatch."""
+    render = _render_with(completed=[], skipped=[], active=None)
+    briefing = svc.compose_voice_intro_briefing(render)
+
+    assert "Hi, I'm T dash W 1 N." in briefing
+    assert "deadpan corporate-training satire" in briefing
+    assert "tongue-in-cheek meta joke" in briefing
+    assert "opening bit only" in briefing
+    assert "normal helpful onboarding" in briefing
+    assert 'I\'m not a "tool". I\'m not an "agent".' in briefing
+    assert "Don't think about prompting me, or configuring me" in briefing
+    assert "Krispy Kreme" not in briefing
+    assert "voice static" not in briefing
+    assert "really annoying music" not in briefing
+    # First valid next target is the email reference quiz; its voice nudge is
+    # surfaced verbatim after the intro as the concrete next step.
+    primary = render["next_targets"][0]
+    assert primary["id"] == "email-reference"
+    assert primary["nudge_voice"] in briefing
+    assert graph.COMMUNICATION_FRAMING not in briefing
+    # Pause escape hatch + interruption guidance.
+    assert "pause onboarding" in briefing.lower()
+    assert "interrupt" in briefing.lower()
+
+
+def test_voice_intro_briefing_tolerates_empty_render() -> None:
+    """With no phases/targets the briefing still returns the orientation frame
+    without a next-step or framing line, and never raises."""
+    briefing = svc.compose_voice_intro_briefing({})
+
+    assert "Hi, I'm T dash W 1 N." in briefing
+    assert "concrete next step" not in briefing
+    assert graph.COMMUNICATION_FRAMING not in briefing

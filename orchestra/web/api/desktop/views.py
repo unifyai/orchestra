@@ -12,6 +12,7 @@ from orchestra.web.api.desktop.schema import (
     DesktopLinkRead,
     DesktopPubkeyRead,
     DesktopRead,
+    DesktopSftpTunnelUpdate,
     DesktopUpdate,
     SftpTunnelUpdate,
 )
@@ -50,6 +51,7 @@ def register_desktop(
             url=desktop.url,
             os=desktop.os,
             assigned_to_assistant_ids=[],
+            sftp_tunnel_id=desktop.sftp_tunnel_id,
             created_at=desktop.created_at,
             updated_at=desktop.updated_at,
         ),
@@ -80,6 +82,7 @@ def list_desktops(
                 url=d.url,
                 os=d.os,
                 assigned_to_assistant_ids=dao.list_assigned_assistant_ids(d.id),
+                sftp_tunnel_id=d.sftp_tunnel_id,
                 created_at=d.created_at,
                 updated_at=d.updated_at,
             )
@@ -127,6 +130,7 @@ def update_desktop(
             url=updated.url,
             os=updated.os,
             assigned_to_assistant_ids=dao.list_assigned_assistant_ids(updated.id),
+            sftp_tunnel_id=updated.sftp_tunnel_id,
             created_at=updated.created_at,
             updated_at=updated.updated_at,
         ),
@@ -158,6 +162,41 @@ def delete_desktop(
     session.commit()
 
     return InfoResponse(info="Desktop deleted successfully.")
+
+
+@router.post(
+    "/desktop/{desktop_id}/sftp-tunnel",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Report this device's SFTP tunnel id",
+    description=(
+        "The desktop app reports the relay id of the raw-TCP tunnel fronting "
+        "its local SFTP server. Stored per-device so the tunnel can be "
+        "deregistered from the relay when the desktop is deleted."
+    ),
+)
+def set_desktop_sftp_tunnel(
+    desktop_id: int,
+    tunnel_in: DesktopSftpTunnelUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    dao = DesktopDAO(session)
+
+    desktop = dao.set_desktop_sftp_tunnel(
+        desktop_id,
+        user_id,
+        tunnel_id=tunnel_in.tunnel_id,
+    )
+    if desktop is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Desktop not found.",
+        )
+    session.commit()
+
+    return InfoResponse(info="SFTP tunnel id updated.")
 
 
 @router.post(

@@ -8,9 +8,10 @@ discovery, provider tool search, schema lookup, and governed invocation.
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -132,6 +133,7 @@ def _bootstrap_state_response(state) -> IntegrationBootstrapStateResponse:
         desired_config=desired_config,
         last_status=state.last_status,
         last_error=state.last_error,
+        run_id=diagnostics.get("run_id"),
         apps_upserted=state.apps_upserted,
         tools_upserted=state.tools_upserted,
         sync_mode=str(sync_mode) if sync_mode else None,
@@ -327,17 +329,60 @@ def sync_integrations(
 @admin_router.post("/builtins-sync/start")
 def start_builtins_integration_sync(
     request: Request,
+    response: Response,
     body: BuiltinsIntegrationSyncRequest,
 ) -> BuiltinsIntegrationSyncResponse:
-    """Run the Builtins-context catalog materializer.
+    """Start the Builtins-context catalog materializer.
 
-    This inline API path is for local/admin fallback only. Hosted production
-    deployments should execute the standalone worker in a Cloud Run Job. Set
-    ``ORCHESTRA_BUILTINS_SYNC_INLINE_ENABLED=false`` to fail this endpoint
+    Hosted deployments launch the standalone worker in a dedicated Cloud Run
+    Job (configured via ``ORCHESTRA_BUILTINS_SEED_JOB_NAME``): the request
+    payload is persisted to GCS, ``bootstrap_state`` is seeded to ``running``
+    with the new ``run_id``, the job is triggered, and ``202`` is returned so
+    the caller polls ``bootstrap-state`` rather than holding a long connection.
+
+    When no job is configured (self-host/local), the sync runs inline in this
+    process and returns its terminal result. Set
+    ``ORCHESTRA_BUILTINS_SYNC_INLINE_ENABLED=false`` to fail the inline path
     loudly instead of routing heavy sync work into the API process.
     """
 
     try:
+        from orchestra.services.builtins_integration_sync import (
+            BuiltinsSyncRequest,
+            run_builtins_sync,
+            write_bootstrap_state,
+        )
+
+        payload = body.model_dump()
+        payload["run_id"] = str(payload.get("run_id") or uuid.uuid4())
+
+        from orchestra.services.builtins_seed_launcher import (
+            builtins_seed_job_configured,
+            execute_seed_job,
+            upload_seed_request,
+        )
+
+        if builtins_seed_job_configured():
+            request_uri = upload_seed_request(payload)
+            payload["request_uri"] = request_uri
+            sync_request = BuiltinsSyncRequest.from_payload(payload)
+            factory = request.app.state.db_session_factory
+            with factory() as session:
+                write_bootstrap_state(
+                    session,
+                    request=sync_request,
+                    status="running",
+                )
+                session.commit()
+            execute_seed_job(request_uri)
+            response.status_code = status.HTTP_202_ACCEPTED
+            return BuiltinsIntegrationSyncResponse(
+                status="running",
+                run_id=sync_request.run_id,
+                desired_hash=sync_request.desired_hash,
+                request_uri=request_uri,
+            )
+
         if os.getenv("ORCHESTRA_BUILTINS_SYNC_INLINE_ENABLED", "true").lower() in {
             "0",
             "false",
@@ -350,12 +395,8 @@ def start_builtins_integration_sync(
                     "the configured deployment executor instead."
                 ),
             )
-        from orchestra.services.builtins_integration_sync import (
-            BuiltinsSyncRequest,
-            run_builtins_sync,
-        )
 
-        sync_request = BuiltinsSyncRequest.from_payload(body.model_dump())
+        sync_request = BuiltinsSyncRequest.from_payload(payload)
         result = run_builtins_sync(
             request.app.state.db_session_factory,
             sync_request,

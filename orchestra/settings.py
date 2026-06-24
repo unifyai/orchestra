@@ -72,9 +72,28 @@ class Settings(BaseSettings):
         return os.environ.get("SELF_HOST", "0") == "1"
 
     @property
+    def manual_topup(self) -> bool:
+        """Whether this deployment meters credits but tops up for free.
+
+        Staging exercises the full billing path (credits deplete with usage
+        and gate further work) without Stripe: developers replenish credits
+        with a free self-serve top-up so runaway spend is impossible. An
+        explicit ``MANUAL_TOPUP`` override makes the mode reproducible in
+        local/CI stacks where ``DEPLOY_ENV`` is not ``staging``.
+        """
+        override = os.environ.get("MANUAL_TOPUP")
+        if override is not None:
+            return override == "1"
+        return self.is_staging
+
+    @property
     def charges_billing(self) -> bool:
-        """Whether credit pre-checks and deductions run for billable actions."""
-        return not self.is_staging and not self.is_self_host
+        """Whether credit pre-checks and deductions run for billable actions.
+
+        Enabled in production and in manual-top-up mode (staging); disabled on
+        self-host, which has no payment processor at all.
+        """
+        return self.manual_topup or (not self.is_staging and not self.is_self_host)
 
     @property
     def billing_enabled(self) -> bool:

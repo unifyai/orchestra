@@ -127,7 +127,7 @@ async def test_send_message_no_auth(client: AsyncClient, assistant_id: int):
         "/v0/messages",
         json={"assistant_id": assistant_id, "message": "Hello"},
     )
-    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 # ─── GET /v0/messages/{message_id} ───
@@ -176,7 +176,7 @@ async def test_poll_message_no_auth(client: AsyncClient, assistant_id: int):
     message_id = send_resp.json()["info"]["message_id"]
 
     resp = await client.get(f"/v0/messages/{message_id}")
-    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.anyio
