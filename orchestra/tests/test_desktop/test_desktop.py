@@ -162,6 +162,102 @@ async def test_register_desktop_invalid_os(client: AsyncClient):
 
 
 # =============================================================================
+# Per-device SFTP tunnel id (for server-side tunnel teardown)
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_register_desktop_sftp_tunnel_id_null_by_default(client: AsyncClient):
+    resp = await client.post(
+        "/v0/desktop",
+        json={"name": "Fresh", "url": "https://fresh.tunnel.unify.ai", "os": "macos"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["info"]["sftp_tunnel_id"] is None
+
+
+@pytest.mark.anyio
+async def test_set_desktop_sftp_tunnel(client: AsyncClient):
+    create_resp = await client.post(
+        "/v0/desktop",
+        json={"name": "Tunnelled", "url": "https://t.tunnel.unify.ai", "os": "ubuntu"},
+        headers=HEADERS,
+    )
+    desktop_id = create_resp.json()["info"]["id"]
+
+    resp = await client.post(
+        f"/v0/desktop/{desktop_id}/sftp-tunnel",
+        json={"tunnel_id": "sftp1234"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+
+    list_resp = await client.get("/v0/desktop", headers=HEADERS)
+    matched = [d for d in list_resp.json()["info"] if d["id"] == desktop_id]
+    assert len(matched) == 1
+    assert matched[0]["sftp_tunnel_id"] == "sftp1234"
+
+
+@pytest.mark.anyio
+async def test_set_desktop_sftp_tunnel_ignores_extra_fields(client: AsyncClient):
+    # The desktop app posts host/port alongside tunnel_id; only tunnel_id is
+    # stored at the desktop level (host/port live on the per-link rows).
+    create_resp = await client.post(
+        "/v0/desktop",
+        json={"name": "Extra", "url": "https://extra.tunnel.unify.ai", "os": "macos"},
+        headers=HEADERS,
+    )
+    desktop_id = create_resp.json()["info"]["id"]
+
+    resp = await client.post(
+        f"/v0/desktop/{desktop_id}/sftp-tunnel",
+        json={"tunnel_id": "sftp5678", "host": "tunnel.unify.ai", "port": 61000},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+
+    list_resp = await client.get("/v0/desktop", headers=HEADERS)
+    matched = [d for d in list_resp.json()["info"] if d["id"] == desktop_id]
+    assert matched[0]["sftp_tunnel_id"] == "sftp5678"
+
+
+@pytest.mark.anyio
+async def test_set_desktop_sftp_tunnel_overwrites(client: AsyncClient):
+    create_resp = await client.post(
+        "/v0/desktop",
+        json={"name": "Rotate", "url": "https://rot.tunnel.unify.ai", "os": "windows"},
+        headers=HEADERS,
+    )
+    desktop_id = create_resp.json()["info"]["id"]
+
+    await client.post(
+        f"/v0/desktop/{desktop_id}/sftp-tunnel",
+        json={"tunnel_id": "old00000"},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/desktop/{desktop_id}/sftp-tunnel",
+        json={"tunnel_id": "new11111"},
+        headers=HEADERS,
+    )
+
+    list_resp = await client.get("/v0/desktop", headers=HEADERS)
+    matched = [d for d in list_resp.json()["info"] if d["id"] == desktop_id]
+    assert matched[0]["sftp_tunnel_id"] == "new11111"
+
+
+@pytest.mark.anyio
+async def test_set_desktop_sftp_tunnel_not_found(client: AsyncClient):
+    resp = await client.post(
+        "/v0/desktop/999999/sftp-tunnel",
+        json={"tunnel_id": "ghost000"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 404
+
+
+# =============================================================================
 # Desktop assignment and listing
 # =============================================================================
 
