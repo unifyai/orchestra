@@ -377,10 +377,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         paired_reply="whatsapp-call",
         nudge_chat=(
             "Invite them to click the 'Trigger WhatsApp call from T-W1N' row in "
-            "the Onboarding checklist to get a clue over a WhatsApp call."
+            "the Onboarding checklist. Explain that WhatsApp may ask them to "
+            "allow calls from the business first; after they approve, I will "
+            "place the actual WhatsApp call with the clue."
         ),
         nudge_voice=(
-            "clicking the 'Trigger WhatsApp call from T-W1N' row in the Onboarding checklist"
+            "clicking the 'Trigger WhatsApp call from T-W1N' row in the Onboarding checklist, "
+            "then approving the WhatsApp call permission prompt if it appears"
         ),
     ),
     OnboardingStep(
@@ -690,11 +693,11 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "whatsapp-call-reference": StepPresentation(
-        "T-W1N calls with the next reference clue over WhatsApp.",
-        "~10s",
+        "T-W1N requests WhatsApp call permission, then calls with the next clue.",
+        "~30s",
     ),
     "whatsapp-call": StepPresentation(
-        "Answer T-W1N's WhatsApp call and guess the clue.",
+        "Allow the WhatsApp call if prompted, then answer and guess the clue.",
         "~1 min",
     ),
     "phone-number": StepPresentation(
@@ -776,10 +779,15 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "whatsapp-message": "The user guesses the WhatsApp clue.",
     "whatsapp-call-reference": (
         "Clicking the 'Trigger WhatsApp call from T-W1N' row tells me the user "
-        "is ready for a WhatsApp voice clue; I start or request the call unless "
-        "I have already done so."
+        "is ready for a WhatsApp voice clue. WhatsApp Business Calling may first "
+        "require them to approve calls from the business; I should say this up "
+        "front, send/request the call, then wait for approval before the actual "
+        "call is placed."
     ),
-    "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
+    "whatsapp-call": (
+        "The user approves the WhatsApp call prompt if needed, answers the "
+        "WhatsApp voice call, and guesses during the exchange."
+    ),
     "phone-number": (
         "Clicking the 'Add your phone number' row opens Account -> Contact info "
         "so the user can add or verify the phone number."
