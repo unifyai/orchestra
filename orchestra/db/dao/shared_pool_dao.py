@@ -29,18 +29,14 @@ from orchestra.db.models.orchestra_models import (
     SharedPoolNumber,
     User,
 )
-from orchestra.services.universal_droid_whatsapp import (
-    is_universal_droid_whatsapp_number,
-)
-from orchestra.services.universal_droid_phone import (
-    is_universal_droid_phone_number,
-)
-from orchestra.services.universal_droid_discord import (
-    is_universal_droid_discord_bot,
-)
 from orchestra.services.shared_coordinator_routing import (
     find_user_by_shared_identity,
     resolve_shared_coordinator_owner,
+)
+from orchestra.services.universal_droid_discord import is_universal_droid_discord_bot
+from orchestra.services.universal_droid_phone import is_universal_droid_phone_number
+from orchestra.services.universal_droid_whatsapp import (
+    is_universal_droid_whatsapp_number,
 )
 
 logger = logging.getLogger(__name__)
@@ -329,13 +325,24 @@ class SharedPoolDAO:
         pool_number: str,
         sender: str,
     ) -> dict:
-        return resolve_shared_coordinator_owner(
+        result = resolve_shared_coordinator_owner(
             self.session,
             platform=self.platform,
             contact_type=self.platform,
             contact_value=pool_number,
             sender=sender,
         )
+        # Record the inbound so the outbound free-form window opens (mirrors the
+        # Tier-1 touch). Without this the universal owner route always reports a
+        # closed window and every reply is forced to a template.
+        if isinstance(result, dict) and result.get("assistant_id") is not None:
+            self._touch_inbound(
+                pool_number,
+                sender,
+                result["assistant_id"],
+                datetime.now(timezone.utc),
+            )
+        return result
 
     def _find_owned_universal_droid_assistants(
         self,
@@ -1012,6 +1019,21 @@ class SharedPoolDAO:
             raise ValueError(
                 "Universal Droid routes require an unambiguous contact.",
             )
+
+        # Reuse the persisted route (created by inbound touch) so its
+        # last_inbound_at drives the free-form window. When the contact has never
+        # messaged this coordinator, fall back to a transient route, which leaves
+        # the window closed (correct for coordinator-initiated first contact).
+        existing = (
+            self.session.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == pool.id,
+                SharedPlatformRoute.contact_number == contact_number,
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing
 
         return SharedPlatformRoute(
             pool_number_id=pool.id,
