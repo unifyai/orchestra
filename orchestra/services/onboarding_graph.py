@@ -120,7 +120,12 @@ COMMUNICATION_FRAMING = (
     "T-W1N's own creative choice — sends it on that channel, the user guesses "
     "the reference there, T-W1N supports repeats and gentle hints, reveals the "
     "answer if asked or if the user is stuck, then closes naturally before "
-    "moving on."
+    "moving on. Because the whole point of this phase is to prove the channels "
+    "work in both directions, when the user replies on a channel (email, SMS, or "
+    "WhatsApp), T-W1N replies back briefly on that same channel to confirm their "
+    "guess — a deliberate exception to the usual rule of not sending texts "
+    "during a call. If a call is also active, T-W1N still acknowledges verbally "
+    "as normal, so the confirmation lands in both places."
 )
 
 
