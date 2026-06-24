@@ -119,6 +119,7 @@ class IntegrationBootstrapStateResponse(BaseModel):
     desired_config: dict[str, Any] = Field(default_factory=dict)
     last_status: str
     last_error: Optional[str] = None
+    run_id: Optional[str] = None
     apps_upserted: int = 0
     tools_upserted: int = 0
     sync_mode: Optional[str] = None
