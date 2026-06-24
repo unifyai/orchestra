@@ -3,12 +3,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
   gcc \
   g++ \
   git \
-  curl \
   && rm -rf /var/lib/apt/lists/*
-
-# Download and install Google Cloud SDK
-RUN curl https://sdk.cloud.google.com > install.sh
-RUN bash install.sh --disable-prompts
 
 RUN pip install poetry>=2.1.0 'wheel>=0.46.2'
 
