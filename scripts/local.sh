@@ -338,7 +338,8 @@ is_compatible_db_running() {
   container=$(docker ps --filter "publish=${ORCHESTRA_DB_PORT}" --format "{{.Names}}" 2>/dev/null | head -1)
 
   if [[ -n "$container" ]]; then
-    if docker exec "$container" pg_isready -U orchestra -d orchestra &>/dev/null; then
+    if docker exec "$container" pg_isready -U orchestra &>/dev/null \
+      && db_container_has_orchestra_database "$container"; then
       log_success "Found compatible PostgreSQL container: $container"
       ORCHESTRA_DB_CONTAINER="$container"
       return 0
@@ -373,6 +374,25 @@ _db_container_host_port() {
   docker port "$container" 5432/tcp 2>/dev/null | head -1 | sed 's/.*://'
 }
 
+db_container_has_orchestra_database() {
+  local container="${1:-$ORCHESTRA_DB_CONTAINER}"
+  local result=""
+  result="$(docker exec "$container" \
+    psql -U orchestra -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'orchestra'" \
+    2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$result" == "1" ]]
+}
+
+ensure_orchestra_database_present() {
+  if db_container_has_orchestra_database "$ORCHESTRA_DB_CONTAINER"; then
+    return 0
+  fi
+
+  log_error "PostgreSQL is running, but database 'orchestra' is missing"
+  log_info "Run a destructive local reset: $0 purge && $0 start"
+  return 1
+}
+
 start_db_container() {
   log_info "Starting PostgreSQL container with pgvector..."
 
@@ -380,6 +400,9 @@ start_db_container() {
     local mapped_port
     mapped_port="$(_db_container_host_port "$ORCHESTRA_DB_CONTAINER")"
     if [[ -n "$mapped_port" && "$mapped_port" == "$ORCHESTRA_DB_PORT" ]]; then
+      if ! ensure_orchestra_database_present; then
+        return 1
+      fi
       log_success "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' already running on port $ORCHESTRA_DB_PORT"
       return 0
     fi
@@ -463,8 +486,11 @@ start_db_container() {
   local attempt=0
   while (( attempt < max_attempts )); do
     if docker exec "$ORCHESTRA_DB_CONTAINER" pg_isready -U orchestra &>/dev/null; then
-      log_success "PostgreSQL is ready"
-      return 0
+      if ensure_orchestra_database_present; then
+        log_success "PostgreSQL is ready"
+        return 0
+      fi
+      return 1
     fi
     sleep 1
     ((attempt++)) || true
