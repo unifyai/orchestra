@@ -819,7 +819,11 @@ def _self_heal_coordinator_contacts(
 
     healed_ids: list[int] = []
     for coordinator in coordinators:
-        present_contacts = contacts_by_assistant.get(coordinator.agent_id, [])
+        # Capture the id up front: a failed heal flush expires the ORM instance,
+        # so reading ``coordinator.agent_id`` afterwards would itself emit a
+        # query against the now-poisoned session and re-raise.
+        coordinator_id = coordinator.agent_id
+        present_contacts = contacts_by_assistant.get(coordinator_id, [])
         present_types = [c.contact_type for c in present_contacts]
         missing = missing_universal_coordinator_contact_types(present_types)
         drifted = drifted_universal_coordinator_contact_types(present_contacts)
@@ -837,13 +841,16 @@ def _self_heal_coordinator_contacts(
                 contact_types=to_heal,
             )
         except Exception:
+            # Best-effort: roll back so the failed flush doesn't poison the
+            # session for the rest of the response build (the next read retries).
+            session.rollback()
             logging.warning(
                 "Coordinator contact self-heal failed for %s",
-                coordinator.agent_id,
+                coordinator_id,
                 exc_info=True,
             )
             continue
-        healed_ids.append(coordinator.agent_id)
+        healed_ids.append(coordinator_id)
 
     if not healed_ids and not discord_pool_changed:
         return False
