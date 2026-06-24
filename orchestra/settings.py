@@ -423,12 +423,12 @@ class Settings(BaseSettings):
     # Assistant creation
     assistant_creation_cost: float = 0.0
     droid_coordinator_whatsapp_number: Optional[str] = (
-        os.environ.get("DROID_COORDINATOR_WHATSAPP_NUMBER")
+        os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
         or os.environ.get("DROID_WHATSAPP_POOL_NUMBER")
         or os.environ.get("ORCHESTRA_DROID_WHATSAPP_POOL_NUMBER")
     )
     droid_coordinator_email_address: Optional[str] = (
-        os.environ.get("DROID_COORDINATOR_EMAIL_ADDRESS")
+        os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
         or os.environ.get("ORCHESTRA_DROID_COORDINATOR_EMAIL_ADDRESS")
         or "twin@unify.ai"
     )
@@ -436,13 +436,13 @@ class Settings(BaseSettings):
     # under ISO country code "GB". The correct prod/staging value is mounted
     # from Secret Manager per service.
     droid_coordinator_phone_uk: Optional[str] = os.environ.get(
-        "DROID_COORDINATOR_PHONE_UK",
+        "UNITY_COORDINATOR_PHONE_UK",
     ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_PHONE_UK")
     droid_coordinator_phone_us: Optional[str] = os.environ.get(
-        "DROID_COORDINATOR_PHONE_US",
+        "UNITY_COORDINATOR_PHONE_US",
     ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_PHONE_US")
     droid_coordinator_default_phone_country: str = (
-        os.environ.get("DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or os.environ.get("ORCHESTRA_DROID_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or "US"
     )
@@ -450,10 +450,10 @@ class Settings(BaseSettings):
     # the token authenticates the Gateway connection. Droid pulls both from
     # Orchestra's shared pool, so the secrets only live in this project.
     droid_coordinator_discord_id: Optional[str] = os.environ.get(
-        "DROID_COORDINATOR_DISCORD_ID",
+        "UNITY_COORDINATOR_DISCORD_ID",
     ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_DISCORD_ID")
     droid_coordinator_discord_token: Optional[str] = os.environ.get(
-        "DROID_COORDINATOR_DISCORD_TOKEN",
+        "UNITY_COORDINATOR_DISCORD_TOKEN",
     ) or os.environ.get("ORCHESTRA_DROID_COORDINATOR_DISCORD_TOKEN")
 
     # Assistant photo generation
