@@ -777,3 +777,97 @@ async def test_create_user_accepts_normal_identity_fields(client: AsyncClient):
     data = profile_resp.json()
     assert data["last_name"] == "O'Brien-Smith"
     assert data["job_title"] == "VP, R&D (EMEA)"
+
+
+# ============================================================================
+# Reawaken-on-number-change Tests
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_update_user_number_change_reawakens_assistants(
+    client: AsyncClient,
+    dbsession,
+    monkeypatch,
+):
+    """Changing a verified contact number reawakens the user's personal
+    assistants so their boss contact refreshes without a coordinator restart."""
+    import datetime
+    import hashlib
+    from unittest.mock import AsyncMock
+
+    import orchestra.web.api.utils.assistant_infra as assistant_infra
+    from orchestra.db.models.orchestra_models import PhoneVerification
+    from orchestra.services.coordinator_service import create_workspace_coordinator
+
+    resp = await client.post(
+        "/v0/admin/user",
+        json={"email": "profile_reawaken@example.com"},
+        headers=HEADERS,
+    )
+    user_id = resp.json()["id"]
+
+    coordinator, _ = create_workspace_coordinator(
+        dbsession,
+        user_id=user_id,
+        organization_id=None,
+    )
+
+    phone = "+442079460000"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    dbsession.add(
+        PhoneVerification(
+            user_id=user_id,
+            phone_number=phone,
+            phone_type="whatsapp",
+            code_hash=hashlib.sha256(b"123456").hexdigest(),
+            expires_at=now + datetime.timedelta(minutes=10),
+            verified_at=now,
+        ),
+    )
+    dbsession.commit()
+
+    reawaken = AsyncMock()
+    monkeypatch.setattr(assistant_infra, "reawaken_assistant", reawaken)
+
+    resp = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "whatsapp_number": phone},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+    reawaken.assert_awaited_with(str(coordinator.agent_id))
+
+
+@pytest.mark.anyio
+async def test_update_user_non_identity_field_does_not_reawaken(
+    client: AsyncClient,
+    dbsession,
+    monkeypatch,
+):
+    """A non-identity profile update (timezone) must not reawaken assistants."""
+    from unittest.mock import AsyncMock
+
+    import orchestra.web.api.utils.assistant_infra as assistant_infra
+    from orchestra.services.coordinator_service import create_workspace_coordinator
+
+    resp = await client.post(
+        "/v0/admin/user",
+        json={"email": "profile_no_reawaken@example.com", "timezone": "UTC"},
+        headers=HEADERS,
+    )
+    user_id = resp.json()["id"]
+
+    create_workspace_coordinator(dbsession, user_id=user_id, organization_id=None)
+    dbsession.commit()
+
+    reawaken = AsyncMock()
+    monkeypatch.setattr(assistant_infra, "reawaken_assistant", reawaken)
+
+    resp = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "timezone": "Asia/Tokyo"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+    reawaken.assert_not_awaited()

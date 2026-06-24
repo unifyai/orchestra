@@ -397,8 +397,40 @@ def get_user_by_account(
     }
 
 
+async def _reawaken_user_assistants(session: Session, user_id: str) -> None:
+    """Refresh the live runtime of a user's personal assistants after a contact
+    identity (phone / WhatsApp / Discord) change.
+
+    The reawaken webhook re-fetches the user's current numbers and pushes an
+    assistant update into the runtime, so the boss contact and session details
+    pick up the new value without a coordinator restart. Best-effort: failures
+    are logged and never block the profile update.
+    """
+    from orchestra.db.models.orchestra_models import Assistant
+    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+
+    agent_ids = [
+        row[0]
+        for row in session.query(Assistant.agent_id)
+        .filter(
+            Assistant.user_id == user_id,
+            Assistant.organization_id.is_(None),
+        )
+        .all()
+    ]
+    for agent_id in agent_ids:
+        try:
+            await reawaken_assistant(str(agent_id))
+        except Exception as exc:
+            logging.warning(
+                "Failed to reawaken assistant %s after user profile update: %s",
+                agent_id,
+                exc,
+            )
+
+
 @admin_router.put("/user")
-def update_user(
+async def update_user(
     updated_user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -407,6 +439,12 @@ def update_user(
     if not user_rows:
         raise not_found("User")
     user = user_rows[0][0]
+
+    # Snapshot routable identities before the update so we can detect a real
+    # change and refresh the running assistants' boss contact accordingly.
+    old_phone_number = user.phone_number
+    old_whatsapp_number = user.whatsapp_number
+    old_discord_id = user.discord_id
 
     # Require server-side verification when phone or whatsapp changes
     try:
@@ -452,9 +490,29 @@ def update_user(
     if "discord_id" in provided:
         update_kwargs["discord_id"] = updated_user.discord_id
 
+    # A routable contact identity change must reach the running runtime so the
+    # boss contact resolves inbound from the new number/handle without a restart.
+    contact_identity_changed = (
+        (
+            "phone_number" in update_kwargs
+            and update_kwargs["phone_number"] != old_phone_number
+        )
+        or (
+            "whatsapp_number" in update_kwargs
+            and update_kwargs["whatsapp_number"] != old_whatsapp_number
+        )
+        or (
+            "discord_id" in update_kwargs
+            and update_kwargs["discord_id"] != old_discord_id
+        )
+    )
+
     user_dao.update(**update_kwargs)
 
     user_dao.cleanup_phone_verifications(updated_user.user_id)
+
+    if contact_identity_changed:
+        await _reawaken_user_assistants(session, updated_user.user_id)
 
     return "User information updated successfully!"
 
