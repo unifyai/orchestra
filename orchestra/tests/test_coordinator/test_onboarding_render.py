@@ -116,7 +116,7 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
     assert steps["email-reply"]["dependencies"] == [
         {
             "id": "email-reference",
-            "title": "Trigger email from Twin",
+            "title": "Trigger email from T-W1N",
             "status": "available",
             "resolution": "completed",
             "satisfied": False,
@@ -132,9 +132,9 @@ def test_render_fresh_start_exposes_each_section_head() -> None:
         },
     ]
     assert steps["schedule"]["dependencies"] == []
-    assert steps["slack-reference"]["title"] == "Trigger Slack message from Twin"
+    assert steps["slack-reference"]["title"] == "Trigger Slack message from T-W1N"
     assert steps["slack-message"]["title"] == "Reply to Slack message"
-    assert steps["discord-reference"]["title"] == "Trigger Discord message from Twin"
+    assert steps["discord-reference"]["title"] == "Trigger Discord message from T-W1N"
     assert steps["discord-message"]["title"] == "Reply to Discord message"
     assert _next_ids(render) == [
         "email-reference",
@@ -419,24 +419,27 @@ def test_onboarding_local_mode_signal() -> None:
 
 
 def test_voice_intro_briefing_fresh_start() -> None:
-    """A fresh-start render yields a self-contained first-call orientation
-    briefing: introduces Twin, lists the phases, carries the Communication
-    framing and the first valid next target's voice nudge, and offers the
-    pause escape hatch."""
+    """A fresh-start render yields the deadpan first-call intro, the first
+    valid next target's voice nudge, and the pause escape hatch."""
     render = _render_with(completed=[], skipped=[], active=None)
     briefing = svc.compose_voice_intro_briefing(render)
 
-    assert "Twin" in briefing
-    # Phase titles enumerated from the graph.
-    assert "Communication" in briefing
+    assert "Hi, I'm T dash W 1 N." in briefing
+    assert "deadpan corporate-training satire" in briefing
+    assert "tongue-in-cheek meta joke" in briefing
+    assert "opening bit only" in briefing
+    assert "normal helpful onboarding" in briefing
+    assert 'I\'m not a "tool". I\'m not an "agent".' in briefing
+    assert "Don't think about prompting me, or configuring me" in briefing
+    assert "Krispy Kreme" not in briefing
+    assert "voice static" not in briefing
+    assert "really annoying music" not in briefing
     # First valid next target is the email reference quiz; its voice nudge is
-    # surfaced verbatim as the concrete next step.
+    # surfaced verbatim after the intro as the concrete next step.
     primary = render["next_targets"][0]
     assert primary["id"] == "email-reference"
     assert primary["nudge_voice"] in briefing
-    # Communication-phase framing is included because the primary target is in
-    # the Communication phase.
-    assert graph.COMMUNICATION_FRAMING in briefing
+    assert graph.COMMUNICATION_FRAMING not in briefing
     # Pause escape hatch + interruption guidance.
     assert "pause onboarding" in briefing.lower()
     assert "interrupt" in briefing.lower()
@@ -447,6 +450,6 @@ def test_voice_intro_briefing_tolerates_empty_render() -> None:
     without a next-step or framing line, and never raises."""
     briefing = svc.compose_voice_intro_briefing({})
 
-    assert "Twin" in briefing
+    assert "Hi, I'm T dash W 1 N." in briefing
     assert "concrete next step" not in briefing
     assert graph.COMMUNICATION_FRAMING not in briefing

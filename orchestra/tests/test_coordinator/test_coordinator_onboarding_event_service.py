@@ -49,7 +49,7 @@ def _fake_coordinator(agent_id: int = 1, *, is_coord: bool = True) -> SimpleName
         user_id="user-1",
         organization_id=None,
         is_coordinator=is_coord,
-        first_name="Twin",
+        first_name="T-W1N",
         surname=None,
     )
 

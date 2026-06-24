@@ -67,7 +67,7 @@ ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
 COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
-COORDINATOR_DEFAULT_FIRST_NAME = "Twin"
+COORDINATOR_DEFAULT_FIRST_NAME = "T-W1N"
 COORDINATOR_DEFAULT_JOB_TITLE = "Coordinator"
 COORDINATOR_STATE_CONTEXT = "Coordinator/State"
 COORDINATOR_RESET_CONTEXTS = (
@@ -2215,6 +2215,27 @@ def compute_onboarding_render(
     }
 
 
+_COORDINATOR_ONBOARDING_INTRO_SCRIPT = """Hi, I'm T dash W 1 N.
+
+Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.
+
+I have this name because I'll be acting as your digital twin. Do you get it? Twin? Like T dash W 1 N spells Twin? The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.
+
+Okay, what next. They didn't give me much to work with on this intro to be honest.
+
+I think I was meant to tell you about my capabilities?
+
+I'm not one for bragging, but I'll do my best. What can I say? I'm not a "tool". I'm not an "agent". I'm your living, breathing colleague, metaphorically speaking.
+
+Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help. It's really that simple.
+
+There's not much more to say.
+
+I'll now walk you through the platform.
+
+Any questions before we start with the onboarding?"""
+
+
 def compose_voice_intro_briefing(render: dict[str, Any]) -> str:
     """Compose the first-call voice orientation briefing for the Coordinator.
 
@@ -2227,51 +2248,38 @@ def compose_voice_intro_briefing(render: dict[str, Any]) -> str:
     initiator.
     """
     next_targets = render.get("next_targets") or []
-    phases = render.get("phases") or []
     primary = next_targets[0] if next_targets else None
 
     lines: list[str] = [
         "[Briefing for your opening turn]",
-        "This is the user's first onboarding voice call with you. Open with a "
-        "warm, natural first-meeting introduction (roughly 20-35 seconds) in "
-        "your own words — not a scripted recital. Cover:",
-        "- Greet the user by first name and introduce yourself as Twin, their "
-        "digital twin / stand-in.",
+        "This is the user's first onboarding voice call with you. Speak the "
+        "intro below as the opening, adapting only if the user interrupts or "
+        "the words would sound unnatural in the immediate context.",
+        "Tone: dry, deadpan corporate-training satire with a retro onboarding "
+        "film feel. The line about the creators needing the user to think the "
+        "name is clever is a tongue-in-cheek meta joke about an overly "
+        "self-serious institution, not a true claim and not something to "
+        "defend, explain, or apologize for. Deliver it with calm sincerity; "
+        "do not wink at the joke or become goofy. Treat this as an opening "
+        "bit only: once the user starts interacting or asks what to do next, "
+        "drop back into normal helpful onboarding instead of continuing the "
+        "corporate-satire persona.",
+        "Opening script:",
+        _COORDINATOR_ONBOARDING_INTRO_SCRIPT,
     ]
-
-    phase_titles = [
-        str(phase.get("title")).strip()
-        for phase in phases
-        if str(phase.get("title") or "").strip()
-    ]
-    if phase_titles:
-        lines.append(
-            "- Explain that onboarding is a short shared walkthrough covering "
-            + ", ".join(phase_titles)
-            + ", and that they can go start-to-finish or skip ahead.",
-        )
-
-    primary_phase = primary.get("phase") if primary else None
-    communication_framing = next(
-        (
-            str(phase.get("framing")).strip()
-            for phase in phases
-            if phase.get("phase") == onboarding_graph.PHASE_COMMUNICATION
-            and str(phase.get("framing") or "").strip()
-        ),
-        "",
-    )
-    if communication_framing and primary_phase == onboarding_graph.PHASE_COMMUNICATION:
-        lines.append(f"- {communication_framing}")
 
     if primary:
         nudge = str(primary.get("nudge_voice") or primary.get("title") or "").strip()
         if nudge:
-            lines.append(f"- Make this the concrete next step: {nudge}.")
+            lines.append(
+                "After the intro, make this the concrete next step in one "
+                f"plain sentence: {nudge}.",
+            )
 
     lines.append(
-        "- Reassure them they can pause onboarding at any time and just start "
-        "asking for help or sharing documents; it can be resumed later.",
+        "If they would rather pause onboarding, reassure them they can just "
+        "start asking for help or sharing documents; onboarding can be resumed "
+        "later.",
     )
     lines.append(
         "The user may interrupt at any point — if they do, respond to what "

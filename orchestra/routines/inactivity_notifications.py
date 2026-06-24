@@ -25,7 +25,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
-WELCOME_SUBJECT = "Welcome to Unify — I'm Twin, your coordinator"
+WELCOME_SUBJECT = "Welcome to Unify — I'm T-W1N, your coordinator"
 
 _CONSOLE_URL = "https://console.unify.ai/"
 _FOOTER = (
@@ -61,7 +61,7 @@ def build_coordinator_welcome_email(*, owner_first_name: Optional[str]) -> str:
         <p>{salutation}</p>
 
         <p>
-            I'm Twin, your personal coordinator on Unify. Welcome aboard!
+            I'm T-W1N, your personal coordinator on Unify. Welcome aboard!
             I'm here to help you get things done — I can take on tasks
             directly, or bring in specialist assistants and coordinate
             their work for you.
@@ -76,7 +76,7 @@ def build_coordinator_welcome_email(*, owner_first_name: Optional[str]) -> str:
         <p><a href="{_CONSOLE_URL}">{_CONSOLE_URL}</a></p>
 
         <p>
-            Looking forward to working together,<br/>— Twin
+            Looking forward to working together,<br/>— T-W1N
         </p>
 
         {_FOOTER}

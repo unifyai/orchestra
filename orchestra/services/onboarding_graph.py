@@ -113,12 +113,12 @@ PHASE_TEAMS = "Teams"
 PHASE_HIRING = "Hiring"
 
 COMMUNICATION_FRAMING = (
-    "Start onboarding by proving that Twin can communicate with the user "
+    "Start onboarding by proving that T-W1N can communicate with the user "
     "across channels. Frame this as a light sci-fi and pop-culture reference "
-    "quiz. There is no fixed list of clues: on each channel Twin invents its "
+    "quiz. There is no fixed list of clues: on each channel T-W1N invents its "
     "own short quote clue on the spot — a fresh, different reference each time, "
-    "Twin's own creative choice — sends it on that channel, the user guesses "
-    "the reference there, Twin supports repeats and gentle hints, reveals the "
+    "T-W1N's own creative choice — sends it on that channel, the user guesses "
+    "the reference there, T-W1N supports repeats and gentle hints, reveals the "
     "answer if asked or if the user is stuck, then closes naturally before "
     "moving on."
 )
@@ -294,18 +294,18 @@ def _coming_soon(step_id: str, phase: str) -> OnboardingStep:
 ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     _trigger(
         "email-reference",
-        "Trigger email from Twin",
+        "Trigger email from T-W1N",
         depends_on={},
         channel="email",
         paired_reply="email-reply",
         nudge_chat=(
             "Explain the communication-channel reference quiz, then invite them "
-            "to click the 'Trigger email from Twin' row in the Onboarding "
+            "to click the 'Trigger email from T-W1N' row in the Onboarding "
             "checklist for the first clue."
         ),
         nudge_voice=(
             "starting the communication-channel reference quiz by clicking the "
-            "'Trigger email from Twin' row in the Onboarding checklist"
+            "'Trigger email from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -340,16 +340,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "whatsapp-message-reference",
-        "Trigger WhatsApp message from Twin",
+        "Trigger WhatsApp message from T-W1N",
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-message",
         nudge_chat=(
-            "Invite them to click the 'Trigger WhatsApp message from Twin' row "
+            "Invite them to click the 'Trigger WhatsApp message from T-W1N' row "
             "in the Onboarding checklist to get a clue over WhatsApp."
         ),
         nudge_voice=(
-            "clicking the 'Trigger WhatsApp message from Twin' row in the Onboarding checklist"
+            "clicking the 'Trigger WhatsApp message from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -366,16 +366,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "whatsapp-call-reference",
-        "Trigger WhatsApp call from Twin",
+        "Trigger WhatsApp call from T-W1N",
         depends_on={"whatsapp-number": COMPLETED},
         channel="whatsapp",
         paired_reply="whatsapp-call",
         nudge_chat=(
-            "Invite them to click the 'Trigger WhatsApp call from Twin' row in "
+            "Invite them to click the 'Trigger WhatsApp call from T-W1N' row in "
             "the Onboarding checklist to get a clue over a WhatsApp call."
         ),
         nudge_voice=(
-            "clicking the 'Trigger WhatsApp call from Twin' row in the Onboarding checklist"
+            "clicking the 'Trigger WhatsApp call from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -410,16 +410,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "sms-reference",
-        "Trigger SMS message from Twin",
+        "Trigger SMS message from T-W1N",
         depends_on={"phone-number": COMPLETED},
         channel="sms",
         paired_reply="sms-message",
         nudge_chat=(
-            "Invite them to click the 'Trigger SMS message from Twin' row in "
+            "Invite them to click the 'Trigger SMS message from T-W1N' row in "
             "the Onboarding checklist to get a clue over SMS."
         ),
         nudge_voice=(
-            "clicking the 'Trigger SMS message from Twin' row in the Onboarding checklist"
+            "clicking the 'Trigger SMS message from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -436,16 +436,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "phone-call-reference",
-        "Trigger phone call from Twin",
+        "Trigger phone call from T-W1N",
         depends_on={"phone-number": COMPLETED},
         channel="phone",
         paired_reply="phone-call",
         nudge_chat=(
-            "Invite them to click the 'Trigger phone call from Twin' row in the "
+            "Invite them to click the 'Trigger phone call from T-W1N' row in the "
             "Onboarding checklist to get a clue over a phone call."
         ),
         nudge_voice=(
-            "clicking the 'Trigger phone call from Twin' row in the Onboarding checklist"
+            "clicking the 'Trigger phone call from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -477,16 +477,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "slack-reference",
-        "Trigger Slack message from Twin",
+        "Trigger Slack message from T-W1N",
         depends_on={"slack-connect": COMPLETED},
         channel="slack",
         paired_reply="slack-message",
         nudge_chat=(
-            "Invite them to click the 'Trigger Slack message from Twin' row in "
+            "Invite them to click the 'Trigger Slack message from T-W1N' row in "
             "the Onboarding checklist to get a clue in Slack."
         ),
         nudge_voice=(
-            "clicking the 'Trigger Slack message from Twin' row in the Onboarding checklist"
+            "clicking the 'Trigger Slack message from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -519,16 +519,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _trigger(
         "discord-reference",
-        "Trigger Discord message from Twin",
+        "Trigger Discord message from T-W1N",
         depends_on={"discord-connect": COMPLETED},
         channel="discord",
         paired_reply="discord-message",
         nudge_chat=(
-            "Invite them to click the 'Trigger Discord message from Twin' row in "
+            "Invite them to click the 'Trigger Discord message from T-W1N' row in "
             "the Onboarding checklist to get a clue in Discord."
         ),
         nudge_voice=(
-            "clicking the 'Trigger Discord message from Twin' row in the Onboarding checklist"
+            "clicking the 'Trigger Discord message from T-W1N' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -668,72 +668,72 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(
-        "Twin introduces the reference quiz and sends the first clue to your email.",
+        "T-W1N introduces the reference quiz and sends the first clue to your email.",
         "~10s",
     ),
-    "email-reply": StepPresentation("Reply to Twin's email with your guess.", "~30s"),
+    "email-reply": StepPresentation("Reply to T-W1N's email with your guess.", "~30s"),
     "whatsapp-number": StepPresentation(
-        "Add the WhatsApp number Twin should use.",
+        "Add the WhatsApp number T-W1N should use.",
         "~30s",
     ),
     "whatsapp-message-reference": StepPresentation(
-        "Twin sends the next reference clue over WhatsApp.",
+        "T-W1N sends the next reference clue over WhatsApp.",
         "~10s",
     ),
     "whatsapp-message": StepPresentation(
-        "Reply to Twin's WhatsApp message with your guess.",
+        "Reply to T-W1N's WhatsApp message with your guess.",
         "~1 min",
     ),
     "whatsapp-call-reference": StepPresentation(
-        "Twin calls with the next reference clue over WhatsApp.",
+        "T-W1N calls with the next reference clue over WhatsApp.",
         "~10s",
     ),
     "whatsapp-call": StepPresentation(
-        "Answer Twin's WhatsApp call and guess the clue.",
+        "Answer T-W1N's WhatsApp call and guess the clue.",
         "~1 min",
     ),
     "phone-number": StepPresentation(
-        "Add the phone number Twin should use for calls and SMS.",
+        "Add the phone number T-W1N should use for calls and SMS.",
         "~30s",
     ),
     "sms-reference": StepPresentation(
-        "Twin sends the next reference clue over SMS.",
+        "T-W1N sends the next reference clue over SMS.",
         "~10s",
     ),
     "sms-message": StepPresentation(
-        "Reply to Twin's SMS message with your guess.",
+        "Reply to T-W1N's SMS message with your guess.",
         "~1 min",
     ),
     "phone-call-reference": StepPresentation(
-        "Twin calls with the next reference clue.",
+        "T-W1N calls with the next reference clue.",
         "~10s",
     ),
     "phone-call": StepPresentation(
-        "Answer Twin's phone call and guess the clue.",
+        "Answer T-W1N's phone call and guess the clue.",
         "~1 min",
     ),
     "slack-connect": StepPresentation(
-        "Connect Twin through the Unify Slack app.",
+        "Connect T-W1N through the Unify Slack app.",
         "~1 min",
     ),
     "slack-reference": StepPresentation(
-        "Twin sends the next reference clue in Slack.",
+        "T-W1N sends the next reference clue in Slack.",
         "~10s",
     ),
     "slack-message": StepPresentation(
-        "Reply to Twin's Slack message with your guess.",
+        "Reply to T-W1N's Slack message with your guess.",
         "~1 min",
     ),
     "discord-connect": StepPresentation(
-        "Connect Twin through the public Discord bot.",
+        "Connect T-W1N through the public Discord bot.",
         "~1 min",
     ),
     "discord-reference": StepPresentation(
-        "Twin sends the next reference clue in Discord.",
+        "T-W1N sends the next reference clue in Discord.",
         "~10s",
     ),
     "discord-message": StepPresentation(
-        "Reply to Twin's Discord message with your guess.",
+        "Reply to T-W1N's Discord message with your guess.",
         "~1 min",
     ),
     "workspace": StepPresentation(
@@ -753,7 +753,7 @@ _EMPTY_PRESENTATION = StepPresentation()
 
 STEP_FLOW_NOTES: dict[str, str] = {
     "email-reference": (
-        "Clicking the 'Trigger email from Twin' row tells me the user is ready "
+        "Clicking the 'Trigger email from T-W1N' row tells me the user is ready "
         "for the reference-quiz clue over email; if I haven't sent it yet I "
         "introduce the quiz and send my own clue, and if I already have I just "
         "confirm it's on the way rather than sending another."
@@ -764,13 +764,13 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "info so the user can add or verify the WhatsApp number."
     ),
     "whatsapp-message-reference": (
-        "Clicking the 'Trigger WhatsApp message from Twin' row tells me the "
+        "Clicking the 'Trigger WhatsApp message from T-W1N' row tells me the "
         "user is ready for the clue over WhatsApp; I send my own clue if I "
         "haven't already, otherwise I just confirm it."
     ),
     "whatsapp-message": "The user guesses the WhatsApp clue.",
     "whatsapp-call-reference": (
-        "Clicking the 'Trigger WhatsApp call from Twin' row tells me the user "
+        "Clicking the 'Trigger WhatsApp call from T-W1N' row tells me the user "
         "is ready for a WhatsApp voice clue; I start or request the call unless "
         "I have already done so."
     ),
@@ -780,13 +780,13 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "so the user can add or verify the phone number."
     ),
     "sms-reference": (
-        "Clicking the 'Trigger SMS message from Twin' row tells me the user is "
+        "Clicking the 'Trigger SMS message from T-W1N' row tells me the user is "
         "ready for the clue by text; I send my own clue if I haven't already, "
         "otherwise I just confirm it."
     ),
     "sms-message": "The user guesses the SMS clue.",
     "phone-call-reference": (
-        "Clicking the 'Trigger phone call from Twin' row tells me the user is "
+        "Clicking the 'Trigger phone call from T-W1N' row tells me the user is "
         "ready for a phone-call clue; I start or request the call unless I have "
         "already done so."
     ),
@@ -796,7 +796,7 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "Unify Slack app."
     ),
     "slack-reference": (
-        "Clicking the 'Trigger Slack message from Twin' row tells me the user "
+        "Clicking the 'Trigger Slack message from T-W1N' row tells me the user "
         "is ready for the clue in Slack; I send my own clue if I haven't "
         "already, otherwise I just confirm it."
     ),
@@ -806,7 +806,7 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "adding their Discord ID and installing the public Discord bot."
     ),
     "discord-reference": (
-        "Clicking the 'Trigger Discord message from Twin' row tells me the "
+        "Clicking the 'Trigger Discord message from T-W1N' row tells me the "
         "user is ready for the clue in Discord; I send my own clue if I haven't "
         "already, otherwise I just confirm it."
     ),
