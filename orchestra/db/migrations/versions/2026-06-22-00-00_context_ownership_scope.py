@@ -2,7 +2,7 @@
 
 First schema step of the scope-based refactor: give every ``context`` a
 first-class owner (``owner_scope`` + ``owner_id``) instead of leaving ownership
-implicit in the Droid context-name convention. Later increments denormalize
+implicit in the Unity context-name convention. Later increments denormalize
 this owner onto the heavy tables and sub-partition the shared ``Assistants``
 project by it so an assistant or team can be deleted as an O(1) partition drop.
 

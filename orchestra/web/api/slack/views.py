@@ -1,6 +1,6 @@
 """Admin endpoints for Slack per-workspace OAuth installs.
 
-Called by the Droid gateway (``droid/gateway/channels/slack``) for:
+Called by the Unity gateway (``unity/gateway/channels/slack``) for:
 
 * Persisting an install after the OAuth callback completes.
 * Resolving each inbound event to an assistant.

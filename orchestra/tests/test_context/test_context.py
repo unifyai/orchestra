@@ -3250,7 +3250,7 @@ async def test_delete_context_no_sibling_deletion_for_non_assistants(
 @pytest.mark.anyio
 async def test_delete_context_protected_context_in_children(client: AsyncClient):
     """Test that deleting children fails if a protected context is in the set."""
-    project_name = "Droid"
+    project_name = "Unity"
 
     # Create project
     await _create_project(client, project_name)
@@ -3605,8 +3605,8 @@ async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
     """
     project_name = "UnityTests"
     tier1 = "All/TestResults"
-    tier2 = "droid-user/All/TestResults"
-    tier3 = "droid-user/droid-asst/TestResults"
+    tier2 = "unity-user/All/TestResults"
+    tier3 = "unity-user/unity-asst/TestResults"
 
     # Create project and contexts
     await _create_project(client, project_name)
@@ -3624,8 +3624,8 @@ async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
         project_name,
         entries={
             "result": "pass",
-            "_user": "droid-user",
-            "_assistant": "droid-asst",
+            "_user": "unity-user",
+            "_assistant": "unity-asst",
         },
         context=tier3,
     )

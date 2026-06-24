@@ -201,7 +201,7 @@ def check_account_not_frozen(request: Request):
 
     Only SUSPENDED and CLOSED accounts are hard-blocked.  Balance-based
     enforcement for billable actions is handled per-handler (credits
-    checks) and by Droid's spending-limit hook — not here.
+    checks) and by Unity's spending-limit hook — not here.
 
     Read-only billing endpoints (account-info, portal-session) are
     exempted so the frontend can display account-status banners and

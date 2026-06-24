@@ -19,8 +19,8 @@ from orchestra.settings import settings
 
 def _make_user(dbsession: Session, suffix: str) -> User:
     user = User(
-        id=f"droid-whatsapp-{suffix}",
-        email=f"droid-whatsapp-{suffix}@test.com",
+        id=f"unity-whatsapp-{suffix}",
+        email=f"unity-whatsapp-{suffix}@test.com",
     )
     dbsession.add(user)
     dbsession.flush()
@@ -46,7 +46,7 @@ def test_create_workspace_coordinator_attaches_universal_whatsapp(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "droid_coordinator_whatsapp_number", "+15550700001")
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", "+15550700001")
     user = _make_user(dbsession, "create")
 
     coordinator, created = create_workspace_coordinator(
@@ -70,14 +70,14 @@ def test_create_workspace_coordinator_attaches_universal_whatsapp(
     assert contact.contact_value == pool.number
     assert contact.provider == "twilio"
     assert contact.provisioned_by == "platform"
-    assert contact.metadata_ == {"universal_droid": True}
+    assert contact.metadata_ == {"universal_unity": True}
 
 
 def test_existing_workspace_coordinator_repair_attaches_universal_whatsapp(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "droid_coordinator_whatsapp_number", None)
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", None)
     user = _make_user(dbsession, "repair")
     coordinator, created = create_workspace_coordinator(
         dbsession,
@@ -87,7 +87,7 @@ def test_existing_workspace_coordinator_repair_attaches_universal_whatsapp(
     assert created is True
     assert _active_whatsapp_contact(dbsession, coordinator) is None
 
-    monkeypatch.setattr(settings, "droid_coordinator_whatsapp_number", "+15550700002")
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", "+15550700002")
     repaired, repaired_created = create_workspace_coordinator(
         dbsession,
         user_id=user.id,
@@ -109,7 +109,7 @@ def _setup_universal_coordinator(
     pool_number: str,
     sender: str,
 ) -> Assistant:
-    monkeypatch.setattr(settings, "droid_coordinator_whatsapp_number", pool_number)
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", pool_number)
     user = _make_user(dbsession, suffix)
     user.whatsapp_number = sender
     dbsession.flush()

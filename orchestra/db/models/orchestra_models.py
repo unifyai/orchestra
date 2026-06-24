@@ -1756,7 +1756,7 @@ class DemoAssistantMeta(Base):
     label = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
-    # Optional prospect details (for pre-populating boss contact in Droid)
+    # Optional prospect details (for pre-populating boss contact in Unity)
     prospect_first_name = Column(String, nullable=True)
     prospect_surname = Column(String, nullable=True)
     prospect_email = Column(String, nullable=True)
@@ -2170,7 +2170,7 @@ class AssistantContact(Base):
                 "status != 'deleted' "
                 "AND contact_type NOT IN ('whatsapp', 'discord') "
                 "AND NOT (contact_type IN ('email', 'phone') "
-                "AND COALESCE(metadata ->> 'universal_droid', 'false') = 'true')",
+                "AND COALESCE(metadata ->> 'universal_unity', 'false') = 'true')",
             ),
         ),
         sa.CheckConstraint(

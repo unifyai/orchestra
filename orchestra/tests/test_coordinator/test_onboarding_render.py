@@ -2,7 +2,7 @@
 
 These exercise the pure ``depends_on`` semantics and the
 ``compute_onboarding_render`` status/next-target logic against mocks,
-without the FastAPI stack or a live DB. They pin the contract both Droid
+without the FastAPI stack or a live DB. They pin the contract both Unity
 brains and the Console checklist now rely on: statuses are server-
 computed, communication trigger rows complete from assistant outbound
 evidence, and the valid next targets carry ready-to-use nudge copy.

@@ -14,7 +14,7 @@ Single-stage routine, run twice a day:
 
 Orchestra only decides *who* and *when*; the message wording and
 delivery live in the Coordinator brain (see
-``droid.conversation_manager.domains.inactivity``). The adapter decides
+``unity.conversation_manager.domains.inactivity``). The adapter decides
 whether to cold-start a pod or publish a live system event.
 
 If the boss tells the Coordinator to stop following up, the brain opts
@@ -90,7 +90,7 @@ async def _dispatch_inactivity_followup_event(agent_id: int) -> None:
 
     POSTs to the communication-adapter webhook
     ``/assistant/inactivity-followup``, which decides whether to wake a
-    cold pod via ``dispatch_droid_start_intent`` or publish a system
+    cold pod via ``dispatch_unity_start_intent`` or publish a system
     event directly to a hot pod's Pub/Sub topic. The brain then composes
     and sends the re-engagement message through its own comms primitives.
 

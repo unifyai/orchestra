@@ -180,7 +180,7 @@ class LocalBucketService:
     def __init__(self) -> None:
         root = os.environ.get(
             "SELF_HOST_LOCAL_BUCKET_DIR",
-            str(Path.home() / ".droid" / "local-bucket"),
+            str(Path.home() / ".unity" / "local-bucket"),
         )
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)

@@ -41,7 +41,7 @@ class IntegrationProviderDAO:
         """Create missing backend rows without gating or seeding apps/tools.
 
         Backends are deployment configuration: operators can enable Composio,
-        Pipedream, Droid Native, or any future provider by updating
+        Pipedream, Unity Native, or any future provider by updating
         ``integration_backends.status`` through the admin API. Provider
         credentials/endpoints live in deployment environment variables;
         ``config_json`` is only for non-secret operational knobs. Apps and tools

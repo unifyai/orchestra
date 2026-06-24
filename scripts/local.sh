@@ -10,8 +10,8 @@
 # This eliminates network latency and staging server bottlenecks during testing.
 #
 # Scope: this is an INTERNAL dev/test harness for Orchestra alone. To run the
-# whole product locally (Orchestra + Droid gateway + Console + Coordinator), use
-# `droid stack up` from the droid repo — it invokes this script for you.
+# whole product locally (Orchestra + Unity gateway + Console + Coordinator), use
+# `unity stack up` from the unity repo — it invokes this script for you.
 #
 # Usage:
 #   ./local_orchestra.sh start    # Start and wait for ready (preserves data)
@@ -87,7 +87,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 full_stack_state_file() {
-  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${DROID_HOME:-$HOME/.droid}}"
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
 }
 
 port_is_listening() {
@@ -113,12 +113,12 @@ PY
 
 refuse_isolated_when_full_stack_active() {
   local action="$1"
-  if [[ "${ORCHESTRA_ALLOW_ISOLATED:-0}" == "1" || -n "${DROID_STACK_ORCHESTRATOR:-}" ]]; then
+  if [[ "${ORCHESTRA_ALLOW_ISOLATED:-0}" == "1" || -n "${UNITY_STACK_ORCHESTRATOR:-}" ]]; then
     return 0
   fi
   if full_stack_source_is_active; then
-    log_error "Refusing isolated Orchestra $action while the full local Droid stack is active."
-    log_info "Use droid-deploy/selfhost/stack.sh status or repair-console instead."
+    log_error "Refusing isolated Orchestra $action while the full local Unity stack is active."
+    log_info "Use unity-deploy/selfhost/stack.sh status or repair-console instead."
     log_info "Override only for intentionally isolated Orchestra work:"
     log_info "  ORCHESTRA_ALLOW_ISOLATED=1 $0 $action"
     return 1
@@ -230,7 +230,7 @@ check_poetry() {
 
 # Get an executable from the in-project .venv, with fallback to poetry run.
 # This avoids issues where poetry picks up the wrong virtualenv when called
-# from a different repo's context (e.g., droid calling orchestra's local.sh).
+# from a different repo's context (e.g., unity calling orchestra's local.sh).
 #
 # Usage: get_venv_executable <repo_path> <executable_name>
 # Example: get_venv_executable "/path/to/orchestra" "python"
@@ -428,7 +428,7 @@ start_db_container() {
     fi
   else
     # Fresh start: create the container with a named volume + restart policy
-    # so it survives reboots and `droid stop` / `droid restart` cycles.
+    # so it survives reboots and `unity stop` / `unity restart` cycles.
 
     # Check if port is already in use by something else
     if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
@@ -815,11 +815,11 @@ start_orchestra_server() {
 
   # Comms gateway URL so /v0/features can probe channel availability (phone,
   # whatsapp, discord) and Console can surface those channels. In self-host the
-  # bundled droid.gateway serves comms locally; default to it when unset.
-  if [[ -z "${DROID_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
-    DROID_COMMS_URL="http://127.0.0.1:${DROID_GATEWAY_PORT:-8001}"
+  # bundled unity.gateway serves comms locally; default to it when unset.
+  if [[ -z "${UNITY_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
+    UNITY_COMMS_URL="http://127.0.0.1:${UNITY_GATEWAY_PORT:-8001}"
   fi
-  [[ -n "${DROID_COMMS_URL:-}" ]] && export DROID_COMMS_URL
+  [[ -n "${UNITY_COMMS_URL:-}" ]] && export UNITY_COMMS_URL
   [[ -n "${COMMUNICATION_URL:-}" ]] && export COMMUNICATION_URL
   [[ -n "${COMMS_URL:-}" ]] && export COMMS_URL
 

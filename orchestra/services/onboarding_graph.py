@@ -8,13 +8,13 @@ Coordinator should say to nudge the user toward each one.
 It deliberately consolidates what used to be scattered across three
 places:
   - Console's ``ONBOARDING_CHECKLIST`` (titles, phases, ``depends_on``).
-  - Droid's ``_VOICE_ONBOARDING_STEP_SUGGESTIONS`` /
+  - Unity's ``_VOICE_ONBOARDING_STEP_SUGGESTIONS`` /
     ``_VOICE_ONBOARDING_TRIGGER_REPLY_STEPS`` (spoken nudge copy + the
     trigger→reply pairing).
   - The linear ``DERIVABLE_ONBOARDING_STEPS`` tuple in
     ``coordinator_service`` (which steps are server-derivable).
 
-Both Droid brains and the Console checklist consume a rendering computed
+Both Unity brains and the Console checklist consume a rendering computed
 from this graph (see ``coordinator_service.compute_onboarding_render``)
 so nothing downstream has to re-derive "what's done / what's next".
 
@@ -135,7 +135,7 @@ class OnboardingPhase:
 
     ``label`` is the value stamped on each step's ``phase`` field (and the
     short legend label in the progress bar); ``id`` is the stable header-row
-    id consumers key off (Console test ids, Droid prose grouping).
+    id consumers key off (Console test ids, Unity prose grouping).
     ``local_only`` hides the whole phase — header and every step in it — on
     hosted deployments, leaving it visible only on a local self-host install.
     """
@@ -672,7 +672,7 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 )
 
 # Presentation copy keyed by step id. Lives beside the graph so every
-# consumer (Console checklist, Droid prose) reads the same descriptions,
+# consumer (Console checklist, Unity prose) reads the same descriptions,
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(

@@ -679,7 +679,7 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert payload["ended_at"] is None
     assert payload["intro_watched"] is False
     # A fresh Coordinator has completed nothing — notably the
-    # platform-provisioned universal Droid email contact must NOT
+    # platform-provisioned universal Unity email contact must NOT
     # count as a connected workspace.
     assert payload["completed_step_ids"] == []
 

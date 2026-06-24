@@ -683,7 +683,7 @@ async def test_concurrent_notifications_only_one_succeeds(
     mock_email_sending: AsyncMock,
 ):
     """
-    Scenario: Two Droid instances simultaneously call notification endpoint
+    Scenario: Two Unity instances simultaneously call notification endpoint
               for the same limit breach.
     Expected: Only one notification is sent (unique constraint handles race).
     """

@@ -9,9 +9,9 @@ recombines content that already exists in the canonical catalog fields so the
 pooled embedding vector is dominated by signal rather than scaffolding noise
 (dotted identifiers, argspecs, raw JSON, scope URLs, constant ``Field:`` labels).
 
-This module is duplicated byte-for-byte in the droid integration layer
-(``droid/droid/integrations/embedding_text.py``) so that the manifest (Orchestra)
-and self-host (droid) paths emit identical vectors for the same input row.
+This module is duplicated byte-for-byte in the unity integration layer
+(``unity/unity/integrations/embedding_text.py``) so that the manifest (Orchestra)
+and self-host (unity) paths emit identical vectors for the same input row.
 """
 
 from __future__ import annotations

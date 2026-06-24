@@ -729,7 +729,7 @@ _OUTBOUND_OPERATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "source_task_log_id": {
         "field_type": "int",
         "mutable": True,
-        "description": "Owning Droid/Tasks row for the outbound attempt when known.",
+        "description": "Owning Unity/Tasks row for the outbound attempt when known.",
     },
     "operation_index": {
         "field_type": "int",
@@ -1678,22 +1678,22 @@ def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None
     """Send one activation sync request to Communication when configured.
 
     Self-host deployments skip this sync: scheduled activations are projected
-    into Orchestra and fired in-process by Droid's LocalActivationScheduler
+    into Orchestra and fired in-process by Unity's LocalActivationScheduler
     instead of Communication's Cloud Tasks queues.
     """
 
     if settings.is_self_host:
         logger.info(
             "Skipping task activation sync in self-host mode; "
-            "Droid LocalActivationScheduler owns scheduled delivery.",
+            "Unity LocalActivationScheduler owns scheduled delivery.",
         )
         return
 
-    comms_url = os.environ.get("DROID_COMMS_URL", "").rstrip("/")
+    comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     if not comms_url or not admin_key:
         logger.info(
-            "Skipping task activation sync because DROID_COMMS_URL or ORCHESTRA_ADMIN_KEY is missing.",
+            "Skipping task activation sync because UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY is missing.",
         )
         return
     with httpx.Client() as client:

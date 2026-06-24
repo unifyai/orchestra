@@ -33,7 +33,7 @@ def _mock_response(status_code: int, json_data: dict) -> MagicMock:
     return resp
 
 
-def test_comms_url_prefers_configured_droid_gateway_urls():
+def test_comms_url_prefers_configured_unity_gateway_urls():
     with patch.object(assistant_infra, "COMMS_URL", None), patch.object(
         assistant_infra,
         "COMMUNICATION_URL",
@@ -44,7 +44,7 @@ def test_comms_url_prefers_configured_droid_gateway_urls():
         "http://127.0.0.1:8001/",
     ), patch.object(
         assistant_infra,
-        "DROID_GATEWAY_URL",
+        "UNITY_GATEWAY_URL",
         "http://127.0.0.1:9001",
     ):
         assert assistant_infra._comms_url() == "http://127.0.0.1:8001"
@@ -65,7 +65,7 @@ def test_adapters_url_falls_back_to_local_comms_url():
         None,
     ), patch.object(
         assistant_infra,
-        "DROID_GATEWAY_URL",
+        "UNITY_GATEWAY_URL",
         None,
     ), patch.dict(
         "os.environ",
@@ -82,7 +82,7 @@ async def test_get_running_jobs_returns_running_job_names():
             "success": True,
             "jobs": [
                 {
-                    "job_name": "droid-abc-2026-03-19",
+                    "job_name": "unity-abc-2026-03-19",
                     "status": "Running",
                     "assistant_id": "abc",
                 },
@@ -101,11 +101,11 @@ async def test_get_running_jobs_returns_running_job_names():
     ):
         result = await get_running_jobs("abc")
 
-    assert result == ["droid-abc-2026-03-19"]
+    assert result == ["unity-abc-2026-03-19"]
     mock_client.get.assert_called_once()
     call_kwargs = mock_client.get.call_args
     assert (
-        "app=droid,assistant-id=abc" in call_kwargs.kwargs["params"]["label_selector"]
+        "app=unity,assistant-id=abc" in call_kwargs.kwargs["params"]["label_selector"]
     )
     assert call_kwargs.kwargs["params"]["hours"] == RUNTIME_JOB_LOOKBACK_HOURS
 
@@ -118,12 +118,12 @@ async def test_get_running_jobs_filters_out_completed_jobs():
             "success": True,
             "jobs": [
                 {
-                    "job_name": "droid-old-job",
+                    "job_name": "unity-old-job",
                     "status": "Completed",
                     "assistant_id": "abc",
                 },
                 {
-                    "job_name": "droid-failed-job",
+                    "job_name": "unity-failed-job",
                     "status": "Failed",
                     "assistant_id": "abc",
                 },
@@ -248,7 +248,7 @@ async def test_get_runtime_status_returns_payload():
             "assistant_id": "abc",
             "assistant_session_exists": True,
             "assistant_session_phase": "Active",
-            "active_job_names": ["droid-abc-2026-03-19"],
+            "active_job_names": ["unity-abc-2026-03-19"],
         },
     )
     mock_client = AsyncMock()
@@ -264,7 +264,7 @@ async def test_get_runtime_status_returns_payload():
         result = await get_runtime_status("abc")
 
     assert result is not None
-    assert result["active_job_names"] == ["droid-abc-2026-03-19"]
+    assert result["active_job_names"] == ["unity-abc-2026-03-19"]
     mock_client.get.assert_called_once_with(
         "http://comms:8000/infra/runtime/abc",
         headers={"Authorization": "Bearer test-key"},
@@ -318,7 +318,7 @@ async def test_status_endpoint_running(client: AsyncClient):
         return_value={
             "assistant_session_exists": True,
             "assistant_session_phase": "Active",
-            "active_job_names": ["droid-job-123"],
+            "active_job_names": ["unity-job-123"],
         },
     ):
         resp = await client.get(
@@ -329,7 +329,7 @@ async def test_status_endpoint_running(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["info"]["running"] is True
-    assert data["info"]["job_name"] == "droid-job-123"
+    assert data["info"]["job_name"] == "unity-job-123"
 
 
 @pytest.mark.anyio

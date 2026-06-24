@@ -64,7 +64,7 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
     task_id: int = Field(description="Logical task identifier.")
     source_task_log_id: Optional[int] = Field(
         default=None,
-        description="Owning Droid/Tasks row for the activation instance.",
+        description="Owning Unity/Tasks row for the activation instance.",
     )
     source_type: str = Field(
         description="Why the run exists: scheduled, triggered, etc.",
@@ -192,7 +192,7 @@ class TaskOutboundOperationCreateOrAdoptRequest(BaseModel):
     )
     source_task_log_id: Optional[int] = Field(
         default=None,
-        description="Owning Droid/Tasks row for the outbound attempt.",
+        description="Owning Unity/Tasks row for the outbound attempt.",
     )
     operation_index: int = Field(
         description="Stable ordinal for this outbound attempt within the task run.",

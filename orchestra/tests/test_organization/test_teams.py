@@ -325,7 +325,8 @@ async def test_delete_team(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_org_wide_sharing_toggle_and_auto_enrollment(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     owner = await create_test_user(client, "org_share_owner@test.com")
     member = await create_test_user(client, "org_share_member@test.com")
@@ -354,7 +355,7 @@ async def test_org_wide_sharing_toggle_and_auto_enrollment(
         "/v0/assistant",
         json={
             "first_name": "PreToggle",
-            "surname": "Droid",
+            "surname": "Unity",
             "create_infra": False,
             "is_local": True,
         },
@@ -402,7 +403,7 @@ async def test_org_wide_sharing_toggle_and_auto_enrollment(
         "/v0/assistant",
         json={
             "first_name": "Future",
-            "surname": "Droid",
+            "surname": "Unity",
             "create_infra": False,
             "is_local": True,
         },

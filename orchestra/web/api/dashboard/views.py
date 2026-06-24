@@ -1,7 +1,7 @@
 """Dashboard token registration and resolution endpoints.
 
 Provides endpoints for:
-- Token registration (Droid registers tokens after inserting into Unify contexts)
+- Token registration (Unity registers tokens after inserting into Unify contexts)
 - Token resolution (console resolves tokens to context paths + creator identity)
 - Tile bridges (console proxies live-data requests on behalf of tile creators)
   - Filter bridge (row-level queries on a single context)
@@ -93,8 +93,8 @@ def register_token(
 ) -> RegisterTokenResponse:
     """Register a token-to-context mapping for a dashboard tile or layout.
 
-    Called by Droid after inserting content into a Unify context.
-    The token is generated client-side (Droid) using secrets.token_urlsafe.
+    Called by Unity after inserting content into a Unify context.
+    The token is generated client-side (Unity) using secrets.token_urlsafe.
     """
     user_id = request_fastapi.state.user_id
     organization_id = request_fastapi.state.organization_id

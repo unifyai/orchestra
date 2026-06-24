@@ -39,16 +39,16 @@ from orchestra.services.contact_membership_service import (
     PERSONAL_SELF_CONTACT_ID,
     ensure_personal_contact_memberships,
 )
-from orchestra.services.universal_droid_discord import (
+from orchestra.services.universal_unity_discord import (
     ensure_coordinator_universal_discord_contact,
 )
-from orchestra.services.universal_droid_email import (
+from orchestra.services.universal_unity_email import (
     ensure_coordinator_universal_email_contact,
 )
-from orchestra.services.universal_droid_phone import (
+from orchestra.services.universal_unity_phone import (
     ensure_coordinator_universal_phone_contact,
 )
-from orchestra.services.universal_droid_whatsapp import (
+from orchestra.services.universal_unity_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
 from orchestra.settings import settings
@@ -57,7 +57,7 @@ from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 from orchestra.web.api.utils.assistant_infra import (
     ADMIN_KEY,
     _adapters_url,
-    _post_droid_system_event,
+    _post_unity_system_event,
     create_pubsub_topic,
 )
 
@@ -1418,11 +1418,11 @@ def list_coordinators_missing_intro_watched(
 # Reactive narration for the Coordinator onboarding flow
 # =========================================================================
 #
-# Helpers that fire a ``droid_system_event`` to a Coordinator's Droid
+# Helpers that fire a ``unity_system_event`` to a Coordinator's Unity
 # session whenever the user takes a real, observable action during
 # onboarding — a workspace OAuth lands, an integration secret is
 # saved, a task is created, an action starts running, or a specialist
-# is hired. Droid uses the event to drop a one-line narration into
+# is hired. Unity uses the event to drop a one-line narration into
 # the ongoing chat / voice call ("nice, Slack is connected — next
 # up: assign a task") so the Coordinator feels reactive instead of
 # mute.
@@ -1437,20 +1437,20 @@ def list_coordinators_missing_intro_watched(
 #   bottleneck.
 # * **Event-direct, not UI-mirrored**: we don't persist a
 #   separate "step N is done" log row just to power the
-#   narration — Droid reacts to the live event payload and the
+#   narration — Unity reacts to the live event payload and the
 #   console Onboarding tab remains the source of truth for
-#   the UI. The trade-off is that a missed event (e.g. Droid wasn't
+#   the UI. The trade-off is that a missed event (e.g. Unity wasn't
 #   awake) is lost; resume-recap flows would need their own state.
 
 # Single ``event_type`` for every onboarding narration trigger. The
-# subtype lives on ``extra_event_fields.subtype`` so Droid-side
+# subtype lives on ``extra_event_fields.subtype`` so Unity-side
 # dispatch only has to register one handler and can branch on the
 # subtype if it ever wants per-event behaviour.
 COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
 
 # Subtype vocabulary — the "real action just landed" signals the
 # Onboarding tab tracks. Keep these strings stable: they are
-# referenced by Droid's prompt copy + handler dispatch, and by the
+# referenced by Unity's prompt copy + handler dispatch, and by the
 # orchestra unit tests.
 #
 # Deliberately narrow: we only narrate events that have *no other*
@@ -1473,7 +1473,7 @@ SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
 SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
-# Droid uses it to open the session with the right kind of message:
+# Unity uses it to open the session with the right kind of message:
 # an introduction when no prior Coordinator messages exist in the
 # transcript, or a brief recap of progress otherwise. Unlike the
 # other subtypes this one is *session-bound*, not action-bound — it
@@ -1482,7 +1482,7 @@ SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
 
 # Mediums recognised on the ``onboarding_session_started`` event.
-# ``call`` is currently routed through Droid's voice-prompt
+# ``call`` is currently routed through Unity's voice-prompt
 # augmentation (the call's own opening greeting handles the
 # generation) rather than the chat narration handler, so the event
 # is informational on that branch — Console still fires it so we
@@ -1512,7 +1512,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
 # ``store_*_tokens``). The narration helper uses these to split the
 # secret-create signal into ``workspace_connected`` vs. the generic
 # ``integration_connected`` subtype — same emission path, two
-# different narration cues on the Droid side. Mirrored by Console's
+# different narration cues on the Unity side. Mirrored by Console's
 # ``WORKSPACE_MANAGED_SECRET_PREFIXES``
 # (src/hooks/Assistants/useAssistantIntegrations.ts) — keep in sync.
 _WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_", "AZURE_")
@@ -1617,7 +1617,7 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
 
     ``provisioned_by == 'user'`` is what distinguishes the workspace
     OAuth handshake's contact row from the platform-provisioned
-    universal Droid mailbox every Coordinator gets at creation — the
+    universal Unity mailbox every Coordinator gets at creation — the
     latter must not count as "the user connected their workspace".
     """
     contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
@@ -1908,9 +1908,9 @@ def derive_onboarding_progress(
     Single source of truth for "which checklist steps are already
     done" — consumed by the ``Coordinator/State`` read (so the
     console checklist seeds correctly on load), by
-    :func:`emit_onboarding_session_started_event` (so Droid's
+    :func:`emit_onboarding_session_started_event` (so Unity's
     session-opening turn names the actual next pending step), and by
-    Droid's voice opener via the state endpoint. Nothing is
+    Unity's voice opener via the state endpoint. Nothing is
     persisted: each call re-derives from the data, so a workspace
     connected last week reads as done without any transition event
     having fired this session.
@@ -1974,7 +1974,7 @@ def onboarding_local_mode() -> bool:
     ``environment`` is not ``staging``/``production``). Only the hosted
     staging and production deployments are *not* local mode, and they alone
     omit the ``local_only`` onboarding phases (Quiz / Delegate). This is the
-    single gate; both Console and Droid consume the already-filtered
+    single gate; both Console and Unity consume the already-filtered
     render/catalog instead of re-deriving deployment topology themselves.
     """
     if settings.is_self_host:
@@ -2046,7 +2046,7 @@ def build_onboarding_catalog(local_mode: bool | None = None) -> dict[str, Any]:
     onboarding independent of any user's progress: the ordered phase
     headers and steps with their titles, descriptions, time estimates, and
     suggestion chips. ``local_only`` phases (and their steps) are dropped
-    on hosted deployments so neither Console nor Droid has to re-implement
+    on hosted deployments so neither Console nor Unity has to re-implement
     the gate. Defaults to this deployment's resolved local mode.
     """
     if local_mode is None:
@@ -2370,7 +2370,7 @@ def _with_onboarding_render(
 
     Every onboarding event carries the same ``onboarding`` rendering the
     state endpoint returns (steps + statuses + valid next targets with
-    nudge copy), so Droid's ConversationManager can refresh its standing
+    nudge copy), so Unity's ConversationManager can refresh its standing
     progress model the moment an event lands — without an extra fetch and
     without re-deriving anything. Best-effort: a derivation failure
     leaves the original details untouched rather than dropping the event.
@@ -2397,7 +2397,7 @@ def _build_onboarding_event_payload(
     message: str,
     details: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Assemble the ``droid_system_event`` payload for one emission.
+    """Assemble the ``unity_system_event`` payload for one emission.
 
     Kept as a pure function so unit tests can pin down the wire
     shape without spinning up the adapters HTTP client. The dict
@@ -2433,7 +2433,7 @@ def _fire_and_forget_onboarding_event(
     are caught + logged on the worker thread so a transient adapters
     outage never reaches the user.
     """
-    url = f"{_adapters_url()}/droid/system-event"
+    url = f"{_adapters_url()}/unity/system-event"
     headers = {
         "Authorization": f"Bearer {ADMIN_KEY}",
         "Content-Type": "application/json",
@@ -2493,7 +2493,7 @@ async def notify_coordinator_onboarding_event(
         ),
     )
     try:
-        await _post_droid_system_event(
+        await _post_unity_system_event(
             assistant_id=payload["assistant_id"],
             event_type=payload["event_type"],
             message=payload["message"],
@@ -2618,7 +2618,7 @@ def _classify_secret_for_onboarding(secret_name: str) -> tuple[str, str]:
 
     Splits the workspace OAuth case out of the generic integration
     case using the name prefix; the narration message embeds the
-    secret name (or provider, for workspace) so Droid can refer to
+    secret name (or provider, for workspace) so Unity can refer to
     it by hand in the acknowledgement turn without needing a second
     lookup.
     """
@@ -2669,7 +2669,7 @@ async def emit_onboarding_step_started_event(
     completed_step_ids: Sequence[str] | None = None,
     skipped_step_ids: Sequence[str] | None = None,
 ) -> bool:
-    """Notify Droid that the user selected one onboarding checklist step."""
+    """Notify Unity that the user selected one onboarding checklist step."""
     completed = list(
         completed_step_ids
         or derive_onboarding_progress(session, coordinator=coordinator),
@@ -2701,7 +2701,7 @@ async def emit_onboarding_step_skipped_event(
     completed_step_ids: Sequence[str] | None = None,
     skipped_step_ids: Sequence[str] | None = None,
 ) -> bool:
-    """Notify Droid that the user intentionally skipped one onboarding step."""
+    """Notify Unity that the user intentionally skipped one onboarding step."""
     completed = list(
         completed_step_ids
         or derive_onboarding_progress(session, coordinator=coordinator),
@@ -2775,12 +2775,12 @@ async def emit_onboarding_session_started_event(
     coordinator: Assistant,
     medium: str,
 ) -> bool:
-    """Notify Droid that the user just resolved the onboarding picker.
+    """Notify Unity that the user just resolved the onboarding picker.
 
     Console fires this exactly once per picker resolution (chat or
-    call). On the chat branch the event drives Droid's reactive
+    call). On the chat branch the event drives Unity's reactive
     handler, which pushes a notification and triggers an LLM run —
-    Droid then either introduces itself (when the transcript is
+    Unity then either introduces itself (when the transcript is
     empty) or opens with a brief recap of progress (when prior
     Coordinator messages exist). On the call branch the event is
     informational: the actual call greeting is produced by the
@@ -2793,7 +2793,7 @@ async def emit_onboarding_session_started_event(
     ``completed_step_ids`` on the event details is the authoritative
     server-side derivation (:func:`derive_onboarding_progress`), so
     steps completed in earlier sessions — which never produce
-    transition events — are still visible to Droid's opening turn.
+    transition events — are still visible to Unity's opening turn.
 
     Gated on ``Coordinator/State.mode == 'onboarding'`` like the
     other onboarding events; emissions outside onboarding are
