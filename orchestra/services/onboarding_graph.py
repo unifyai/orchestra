@@ -759,7 +759,7 @@ _EMPTY_PRESENTATION = StepPresentation()
 STEP_FLOW_NOTES: dict[str, str] = {
     "email-reference": (
         "Clicking the 'Trigger email from T-W1N' row tells me the user is ready "
-        "for the reference-quiz clue over email; if I haven't sent it yet I "
+        "for the reference quiz clue over email; if I haven't sent it yet I "
         "introduce the quiz and send my own clue, and if I already have I just "
         "confirm it's on the way rather than sending another."
     ),

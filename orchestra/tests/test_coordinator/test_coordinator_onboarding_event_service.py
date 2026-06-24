@@ -325,6 +325,7 @@ def test_derive_onboarding_progress_orders_steps_canonically() -> None:
     """Derivation composes the per-step checks in checklist order."""
     coordinator = _fake_coordinator()
     with (
+        patch.object(svc, "_has_trigger_outbound", return_value=False),
         patch.object(svc, "_has_email_reply", return_value=True),
         patch.object(svc, "_has_user_whatsapp_number", return_value=False),
         patch.object(svc, "_has_whatsapp_message", return_value=True),

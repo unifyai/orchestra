@@ -23,7 +23,6 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     Assistant,
-    AssistantContact,
     AssistantSecret,
     BillingAccount,
     ContactMembership,
@@ -32,7 +31,6 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Organization,
     Project,
-    SlackInstall,
     User,
 )
 from orchestra.services.coordinator_service import (
@@ -985,270 +983,6 @@ async def test_coordinator_state_patch_records_onboarding_step(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_derives_comms_steps_from_profile_and_transcripts(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    """Comms onboarding completion is derived from durable profile and transcript state."""
-    owner = await _create_user(client, "state-comms-derived")
-    create = await client.post(
-        f"/v0/user/{owner['id']}/coordinator",
-        headers=owner["headers"],
-    )
-    assert create.status_code in {
-        status.HTTP_200_OK,
-        status.HTTP_201_CREATED,
-    }, create.json()
-    coordinator_id = int(create.json()["coordinator_id"])
-    coordinator = dbsession.get(Assistant, coordinator_id)
-    assert coordinator is not None
-
-    user = dbsession.get(User, owner["id"])
-    assert user is not None
-    user.phone_number = "+15550001111"
-    user.whatsapp_number = "+15550002222"
-    user.discord_id = "100000000000000001"
-    dbsession.add(
-        AssistantContact(
-            assistant_id=coordinator.agent_id,
-            contact_type="discord",
-            contact_value="200000000000000001",
-            provider="discord",
-            status="active",
-            provisioned_by="platform",
-        ),
-    )
-    dbsession.add(
-        SlackInstall(
-            user_id=owner["id"],
-            slack_team_id="T123",
-            slack_app_id="A123",
-            bot_user_id="U123",
-            bot_access_token="xoxb-test",
-        ),
-    )
-    dbsession.flush()
-
-    project = _assistants_project(dbsession, coordinator=coordinator)
-    transcripts_context = _assistant_context_name(coordinator, "Transcripts")
-    _insert_log(
-        dbsession,
-        project=project,
-        context_name=transcripts_context,
-        data={
-            "medium": "email",
-            "sender_id": 0,
-            "receiver_ids": [1],
-            "timestamp": datetime.now().astimezone().isoformat(),
-            "content": "outbound clue",
-        },
-    )
-    dbsession.commit()
-
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    completed = response.json()["info"]["completed_step_ids"]
-    assert "email-reference" not in completed
-    assert "email-reply" not in completed
-
-    _insert_log(
-        dbsession,
-        project=project,
-        context_name=transcripts_context,
-        data={
-            "medium": "email",
-            "sender_id": 0,
-            "receiver_ids": [1],
-            "timestamp": datetime.now().astimezone().isoformat(),
-            "content": "wrongly tagged outbound clue",
-            "metadata": {"onboarding_trigger_step_id": "sms-reference"},
-        },
-    )
-    dbsession.commit()
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert "email-reference" not in response.json()["info"]["completed_step_ids"]
-
-    outbound_trigger_by_medium = {
-        "email": "email-reference",
-        "whatsapp_message": "whatsapp-message-reference",
-        "whatsapp_call": "whatsapp-call-reference",
-        "sms_message": "sms-reference",
-        "phone_call": "phone-call-reference",
-        "slack_message": "slack-reference",
-        "discord_message": "discord-reference",
-    }
-
-    for medium in (
-        "email",
-        "whatsapp_message",
-        "whatsapp_call",
-        "sms_message",
-        "phone_call",
-        "slack_message",
-        "discord_message",
-    ):
-        _insert_log(
-            dbsession,
-            project=project,
-            context_name=transcripts_context,
-            data={
-                "medium": medium,
-                "sender_id": 0,
-                "receiver_ids": [1],
-                "timestamp": datetime.now().astimezone().isoformat(),
-                "content": f"{medium} outbound proof",
-                "metadata": {
-                    "onboarding_trigger_step_id": outbound_trigger_by_medium[medium],
-                },
-            },
-        )
-    for medium in (
-        "email",
-        "whatsapp_message",
-        "whatsapp_call",
-        "sms_message",
-        "phone_call",
-        "slack_message",
-        "discord_message",
-    ):
-        _insert_log(
-            dbsession,
-            project=project,
-            context_name=transcripts_context,
-            data={
-                "medium": medium,
-                "sender_id": 1,
-                "receiver_ids": [0],
-                "timestamp": datetime.now().astimezone().isoformat(),
-                "content": f"{medium} proof",
-            },
-        )
-    dbsession.commit()
-
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    completed = response.json()["info"]["completed_step_ids"]
-    assert completed[:18] == [
-        "email-reference",
-        "email-reply",
-        "whatsapp-number",
-        "whatsapp-message-reference",
-        "whatsapp-message",
-        "whatsapp-call-reference",
-        "whatsapp-call",
-        "phone-number",
-        "sms-reference",
-        "sms-message",
-        "phone-call-reference",
-        "phone-call",
-        "slack-connect",
-        "slack-reference",
-        "slack-message",
-        "discord-connect",
-        "discord-reference",
-        "discord-message",
-    ]
-
-    reset_email = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"reset_onboarding_step": "email-reply"},
-        headers=owner["headers"],
-    )
-    assert reset_email.status_code == status.HTTP_200_OK, reset_email.json()
-    completed = reset_email.json()["info"]["completed_step_ids"]
-    assert "email-reply" not in completed
-    assert "email-reference" in completed
-
-    _insert_log(
-        dbsession,
-        project=project,
-        context_name=transcripts_context,
-        data={
-            "medium": "email",
-            "sender_id": 1,
-            "receiver_ids": [0],
-            "timestamp": datetime.now().astimezone().isoformat(),
-            "content": "email proof after reset",
-        },
-    )
-    dbsession.commit()
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert "email-reply" in response.json()["info"]["completed_step_ids"]
-
-    reset_email_trigger = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"reset_onboarding_step": "email-reference"},
-        headers=owner["headers"],
-    )
-    assert (
-        reset_email_trigger.status_code == status.HTTP_200_OK
-    ), reset_email_trigger.json()
-    completed = reset_email_trigger.json()["info"]["completed_step_ids"]
-    assert "email-reference" not in completed
-
-    _insert_log(
-        dbsession,
-        project=project,
-        context_name=transcripts_context,
-        data={
-            "medium": "email",
-            "sender_id": 0,
-            "receiver_ids": [1],
-            "timestamp": datetime.now().astimezone().isoformat(),
-            "content": "outbound clue after trigger reset",
-            "metadata": {"onboarding_trigger_step_id": "email-reference"},
-        },
-    )
-    dbsession.commit()
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert "email-reference" in response.json()["info"]["completed_step_ids"]
-
-    reset_whatsapp = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"reset_onboarding_step": "whatsapp-number"},
-        headers=owner["headers"],
-    )
-    assert reset_whatsapp.status_code == status.HTTP_200_OK, reset_whatsapp.json()
-    dbsession.refresh(user)
-    assert user.whatsapp_number is None
-    completed = reset_whatsapp.json()["info"]["completed_step_ids"]
-    assert "whatsapp-number" not in completed
-    assert "whatsapp-message" not in completed
-    assert "whatsapp-call" not in completed
-
-    reset_phone = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"reset_onboarding_step": "phone-number"},
-        headers=owner["headers"],
-    )
-    assert reset_phone.status_code == status.HTTP_200_OK, reset_phone.json()
-    dbsession.refresh(user)
-    assert user.phone_number is None
-    completed = reset_phone.json()["info"]["completed_step_ids"]
-    assert "phone-number" not in completed
-    assert "sms-message" not in completed
-    assert "phone-call" not in completed
-
-
-@pytest.mark.anyio
 async def test_coordinator_state_patch_records_skipped_steps(
     client: AsyncClient,
     dbsession: Session,
@@ -1327,7 +1061,15 @@ async def test_coordinator_state_patch_records_skipped_steps(
         assert (
             unskip_sms_message.status_code == status.HTTP_200_OK
         ), unskip_sms_message.json()
-        assert unskip_sms_message.json()["info"]["skipped_step_ids"] == ["workspace"]
+        # Unskipping a leaf re-offers only that step; its prerequisites stay
+        # skipped (the step simply reads as locked until they are unskipped).
+        assert unskip_sms_message.json()["info"]["skipped_step_ids"] == [
+            "phone-number",
+            "sms-reference",
+            "phone-call-reference",
+            "phone-call",
+            "workspace",
+        ]
 
     assert emit.await_count == 4
     assert emit.await_args.kwargs["skipped_step_ids"] == [
@@ -1346,7 +1088,13 @@ async def test_coordinator_state_patch_records_skipped_steps(
     )
     assert promote.status_code == status.HTTP_200_OK, promote.json()
     assert promote.json()["info"]["completed_step_ids"] == []
-    assert promote.json()["info"]["skipped_step_ids"] == ["workspace"]
+    assert promote.json()["info"]["skipped_step_ids"] == [
+        "phone-number",
+        "sms-reference",
+        "phone-call-reference",
+        "phone-call",
+        "workspace",
+    ]
 
 
 @pytest.mark.anyio

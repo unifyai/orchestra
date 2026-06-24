@@ -1303,8 +1303,12 @@ def set_coordinator_state(
         (previous or {}).get("skipped_step_ids"),
     )
     if skip_onboarding_step is not None:
+        # Skips cascade only downward: skipping a step also skips the steps that
+        # become unreachable without it (its completion-blocked descendants), but
+        # never its prerequisites. Skipping "apps" must not skip "workspace".
         skipped_step_set = {
-            *onboarding_graph.completion_coupled_steps(skip_onboarding_step),
+            skip_onboarding_step,
+            *onboarding_graph.completion_blocked_descendants(skip_onboarding_step),
             *next_skipped_step_ids,
         }
         next_skipped_step_ids = [
@@ -1313,8 +1317,11 @@ def set_coordinator_state(
             if step_id in skipped_step_set
         ]
     if unskip_onboarding_step is not None:
+        # Unskip mirrors skip: it re-offers the step and the descendants that were
+        # only skipped because they depended on it, leaving prerequisites untouched.
         unskipped_step_set = {
-            *onboarding_graph.completion_coupled_steps(unskip_onboarding_step),
+            unskip_onboarding_step,
+            *onboarding_graph.completion_blocked_descendants(unskip_onboarding_step),
         }
         next_skipped_step_ids = [
             step_id

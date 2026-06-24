@@ -664,10 +664,10 @@ class TestEmailTemplates:
         normalized = re.sub(r"\s+", " ", body.lower())
 
         assert "unify" in WELCOME_SUBJECT.lower()
-        assert "i'm twin" in normalized
+        assert "i'm t-w1n" in normalized
         assert "hi olivia," in normalized
         assert "https://console.unify.ai/" in body
-        assert "— twin" in normalized
+        assert "— t-w1n" in normalized
 
     def test_welcome_email_handles_missing_first_name(self):
         from orchestra.routines.inactivity_notifications import (

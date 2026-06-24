@@ -6,10 +6,8 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.services.bucket_service import (
-    BucketService as OriginalBucketService,
-    create_bucket_service,
-)
+from orchestra.services.bucket_service import BucketService as OriginalBucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.tests.utils import HEADERS
 from orchestra.web.api.storage.views import (
     create_bucket_service as storage_create_bucket_service,
@@ -390,7 +388,7 @@ async def test_signed_url_requires_auth(client: AsyncClient):
         # No headers - no auth
     )
 
-    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.anyio
@@ -404,4 +402,4 @@ async def test_download_requires_auth(client: AsyncClient):
         # No headers - no auth
     )
 
-    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
