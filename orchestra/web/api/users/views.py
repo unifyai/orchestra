@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -42,6 +43,9 @@ from orchestra.services.coordinator_service import (
     get_workspace_coordinator,
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
+)
+from orchestra.services.universal_droid_whatsapp import (
+    ensure_coordinator_universal_whatsapp_contact,
 )
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
@@ -511,6 +515,28 @@ VERIFICATION_MAX_ATTEMPTS = 5
 VERIFICATION_COOLDOWN_SECONDS = 60
 
 
+def _verification_whatsapp_sender_for_user(
+    session: Session,
+    user_id: str,
+) -> str | None:
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=None,
+    )
+    if coordinator is None:
+        return None
+
+    ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
+    contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        coordinator.agent_id,
+        "whatsapp",
+    )
+    if contact is None or not contact.contact_value:
+        return None
+    return contact.contact_value.replace("whatsapp:", "").strip() or None
+
+
 @admin_router.post("/user/phone/send-verification")
 async def send_phone_verification(
     body: PhoneVerificationRequest,
@@ -560,6 +586,15 @@ async def send_phone_verification(
             detail="Verification service is not configured.",
         )
 
+    payload = {
+        "platform": body.phone_type,
+        "account_identifier": body.phone_number,
+    }
+    if body.phone_type == "whatsapp":
+        from_number = _verification_whatsapp_sender_for_user(session, body.user_id)
+        if from_number:
+            payload["from_number"] = from_number
+
     try:
         client = get_async_client()
         response = await client.post(
@@ -568,10 +603,7 @@ async def send_phone_verification(
                 "Authorization": f"Bearer {admin_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "platform": body.phone_type,
-                "account_identifier": body.phone_number,
-            },
+            json=payload,
             timeout=30.0,
         )
         if response.status_code != 200:

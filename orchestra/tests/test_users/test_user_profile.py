@@ -8,6 +8,7 @@ Covers:
 """
 
 import os
+from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
@@ -16,6 +17,29 @@ HEADERS = {
     "accept": "application/json",
     "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
 }
+
+
+class _FakeCommsClient:
+    def __init__(self) -> None:
+        self.posts: list[dict] = []
+
+    async def post(self, url: str, **kwargs):
+        self.posts.append({"url": url, **kwargs})
+        return SimpleNamespace(
+            status_code=200,
+            text='{"verification_code":"123456"}',
+            json=lambda: {"verification_code": "123456"},
+        )
+
+
+def _patch_comms_verify(monkeypatch: pytest.MonkeyPatch) -> _FakeCommsClient:
+    fake = _FakeCommsClient()
+    monkeypatch.setenv("DROID_COMMS_URL", "https://comms.example.test")
+    monkeypatch.setattr(
+        "orchestra.web.api.utils.http_client.get_async_client",
+        lambda: fake,
+    )
+    return fake
 
 
 # ============================================================================
@@ -231,6 +255,124 @@ async def test_phone_number_in_get_endpoints(client: AsyncClient):
     )
     assert response.status_code == 200
     assert "phone_number" in response.json()
+
+
+# ============================================================================
+# Phone / WhatsApp Verification Delivery Tests
+# ============================================================================
+
+
+@pytest.mark.anyio
+async def test_send_whatsapp_verification_uses_coordinator_sender(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from orchestra.settings import settings
+
+    monkeypatch.setattr(
+        settings,
+        "droid_coordinator_whatsapp_number",
+        "+447700900001",
+    )
+    response = await client.post(
+        "/v0/admin/user",
+        json={"email": "profile_wa_verify_sender@example.com"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    user_id = response.json()["id"]
+
+    fake_comms = _patch_comms_verify(monkeypatch)
+    response = await client.post(
+        "/v0/admin/user/phone/send-verification",
+        json={
+            "user_id": user_id,
+            "phone_number": "+4915550100009",
+            "phone_type": "whatsapp",
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert len(fake_comms.posts) == 1
+    assert fake_comms.posts[0]["url"] == "https://comms.example.test/social/verify"
+    assert fake_comms.posts[0]["json"] == {
+        "platform": "whatsapp",
+        "account_identifier": "+4915550100009",
+        "from_number": "+447700900001",
+    }
+
+
+@pytest.mark.anyio
+async def test_send_phone_verification_does_not_send_whatsapp_sender(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from orchestra.settings import settings
+
+    monkeypatch.setattr(
+        settings,
+        "droid_coordinator_whatsapp_number",
+        "+447700900001",
+    )
+    response = await client.post(
+        "/v0/admin/user",
+        json={"email": "profile_phone_verify_sender@example.com"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    user_id = response.json()["id"]
+
+    fake_comms = _patch_comms_verify(monkeypatch)
+    response = await client.post(
+        "/v0/admin/user/phone/send-verification",
+        json={
+            "user_id": user_id,
+            "phone_number": "+442079460958",
+            "phone_type": "phone",
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert fake_comms.posts[0]["json"] == {
+        "platform": "phone",
+        "account_identifier": "+442079460958",
+    }
+
+
+@pytest.mark.anyio
+async def test_send_whatsapp_verification_omits_missing_coordinator_sender(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from orchestra.settings import settings
+
+    monkeypatch.setattr(settings, "droid_coordinator_whatsapp_number", None)
+    response = await client.post(
+        "/v0/admin/user",
+        json={"email": "profile_wa_verify_no_sender@example.com"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    user_id = response.json()["id"]
+
+    fake_comms = _patch_comms_verify(monkeypatch)
+    response = await client.post(
+        "/v0/admin/user/phone/send-verification",
+        json={
+            "user_id": user_id,
+            "phone_number": "+33612345678",
+            "phone_type": "whatsapp",
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    assert fake_comms.posts[0]["json"] == {
+        "platform": "whatsapp",
+        "account_identifier": "+33612345678",
+    }
 
 
 # ============================================================================
