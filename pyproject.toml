@@ -62,6 +62,7 @@ stripe = "^8.10.0"
 python-multipart = ">=0.0.27"
 scipy = "^1.13.0"
 google-cloud-storage = "^3.0.0"
+google-cloud-run = "^0.10.0"
 google-cloud-pubsub = "^2.21.5"
 google-cloud-secret-manager = "^2.20.1"
 pytest-xdist = {extras = ["psutils"], version = "^3.6.1"}
