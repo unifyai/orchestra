@@ -25,6 +25,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     User,
 )
+from orchestra.lib.billing import grant_promo_credits
 from orchestra.lib.time import month_end_utc
 from orchestra.services.assistant_cleanup_service import (
     DEFAULT_CLEANUP_TASK_BATCH_SIZE,
@@ -349,22 +350,6 @@ def create_recharge_model(
 
     at = datetime.now(timezone.utc)
 
-    # Credit the billing account
-    ba_dao = BillingAccountDAO(session)
-    ba_dao.add_credits(
-        ba.id,
-        float(new_recharge_object.quantity),
-        category="recharge" if new_recharge_object.type != "promo" else "promo",
-        user_id=new_recharge_object.user_id,
-        organization_id=(
-            new_recharge_object.organization_id
-            if hasattr(new_recharge_object, "organization_id")
-            else None
-        ),
-        description=f"Admin recharge ({new_recharge_object.type})",
-        detail={"event": "admin_recharge", "type": new_recharge_object.type},
-    )
-
     # Calculate amount_usd and invoice_group
     amount_usd = new_recharge_object.quantity
 
@@ -390,8 +375,36 @@ def create_recharge_model(
         # this endpoint (Recharge 20934 / Nassim, reconciled 2026-05-13).
         invoice_group = month_end_utc(at)
 
+    # Promo recharges are a pure no-charge credit grant: delegate to the
+    # shared helper (also used by the self-serve manual top-up endpoint).
+    if new_recharge_object.type == "promo":
+        grant_promo_credits(
+            session,
+            ba,
+            float(new_recharge_object.quantity),
+            user_id=new_recharge_object.user_id,
+            organization_id=new_recharge_object.organization_id,
+            description="Admin recharge (promo)",
+            detail={"event": "admin_recharge", "type": "promo"},
+            invoice_group=invoice_group,
+        )
+        logger.info(f"Recharge record created for billing_account {ba.id}")
+        return
+
+    # Credit the billing account (payment / auto types).
+    ba_dao = BillingAccountDAO(session)
+    ba_dao.add_credits(
+        ba.id,
+        float(new_recharge_object.quantity),
+        category="recharge",
+        user_id=new_recharge_object.user_id,
+        organization_id=new_recharge_object.organization_id,
+        description=f"Admin recharge ({new_recharge_object.type})",
+        detail={"event": "admin_recharge", "type": new_recharge_object.type},
+    )
+
     # Set status based on recharge type
-    if new_recharge_object.type in ["payment", "promo"]:
+    if new_recharge_object.type == "payment":
         status = RechargeStatus.PAID
     else:
         status = RechargeStatus.PENDING_INVOICE
@@ -903,9 +916,7 @@ def trigger_credit_grant_expiry_sweep(
 ) -> dict:
     """Trigger the credit-grant expiry sweep."""
     try:
-        from orchestra.routines.credit_grant_expiry_sweep import (
-            sweep_expired_grants,
-        )
+        from orchestra.routines.credit_grant_expiry_sweep import sweep_expired_grants
 
         result = sweep_expired_grants(session=session)
         return {
@@ -1936,7 +1947,6 @@ def admin_update_billing_profile(
         is_billing_address_complete,
         sync_billing_profile_to_stripe,
     )
-    from orchestra.lib.subscription_billing import resolve_is_business
 
     log = logging.getLogger(__name__)
 
@@ -2748,7 +2758,8 @@ def admin_list_invoices(
 
         metered_rows = list(session.execute(metered_q).all())
         upcoming_owner_emails = _org_owner_email_map(
-            session, [r[1] for r in metered_rows]
+            session,
+            [r[1] for r in metered_rows],
         )
         for ba, org, user, assignment, template in metered_rows:
             try:

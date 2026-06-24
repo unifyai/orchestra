@@ -102,6 +102,38 @@ class DeductCreditsResponse(BaseModel):
     current_credits: float
 
 
+class TopUpRequest(BaseModel):
+    """Request model for the self-serve manual top-up (manual-top-up mode only).
+
+    Attributes:
+        amount (float): Credits to grant (must be positive). Capped server-side
+            at ``settings.max_promo_amount``.
+    """
+
+    amount: float
+
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("amount must be greater than 0")
+        return v
+
+
+class TopUpResponse(BaseModel):
+    """Response model for the manual top-up endpoint.
+
+    Attributes:
+        previous_credits (float): Wallet balance before the top-up.
+        added (float): Amount granted.
+        current_credits (float): Wallet balance after the top-up.
+    """
+
+    previous_credits: float
+    added: float
+    current_credits: float
+
+
 class RechargeCreateSchema(BaseModel):
     user_id: str
     quantity: int
