@@ -440,12 +440,6 @@ async def update_user(
         raise not_found("User")
     user = user_rows[0][0]
 
-    # Snapshot routable identities before the update so we can detect a real
-    # change and refresh the running assistants' boss contact accordingly.
-    old_phone_number = user.phone_number
-    old_whatsapp_number = user.whatsapp_number
-    old_discord_id = user.discord_id
-
     # Require server-side verification when phone or whatsapp changes
     try:
         user_dao.require_verified_phone(user, updated_user.phone_number, "phone")
@@ -490,28 +484,19 @@ async def update_user(
     if "discord_id" in provided:
         update_kwargs["discord_id"] = updated_user.discord_id
 
-    # A routable contact identity change must reach the running runtime so the
-    # boss contact resolves inbound from the new number/handle without a restart.
-    contact_identity_changed = (
-        (
-            "phone_number" in update_kwargs
-            and update_kwargs["phone_number"] != old_phone_number
-        )
-        or (
-            "whatsapp_number" in update_kwargs
-            and update_kwargs["whatsapp_number"] != old_whatsapp_number
-        )
-        or (
-            "discord_id" in update_kwargs
-            and update_kwargs["discord_id"] != old_discord_id
-        )
+    # A submitted routable identity must reach the running runtime so the boss
+    # contact resolves from the profile even if the user row already held the
+    # same value and the live Contacts context was stale.
+    contact_identity_submitted = any(
+        field in update_kwargs
+        for field in ("phone_number", "whatsapp_number", "discord_id")
     )
 
     user_dao.update(**update_kwargs)
 
     user_dao.cleanup_phone_verifications(updated_user.user_id)
 
-    if contact_identity_changed:
+    if contact_identity_submitted:
         await _reawaken_user_assistants(session, updated_user.user_id)
 
     return "User information updated successfully!"

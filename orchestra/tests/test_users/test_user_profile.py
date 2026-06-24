@@ -838,6 +838,15 @@ async def test_update_user_number_change_reawakens_assistants(
     assert resp.status_code == 200, resp.json()
     reawaken.assert_awaited_with(str(coordinator.agent_id))
 
+    reawaken.reset_mock()
+    resp = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "whatsapp_number": phone},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+    reawaken.assert_awaited_with(str(coordinator.agent_id))
+
 
 @pytest.mark.anyio
 async def test_update_user_non_identity_field_does_not_reawaken(
