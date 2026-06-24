@@ -891,6 +891,7 @@ def _lock_unique_key(
 def _find_existing_log_id(
     session: Session,
     *,
+    project_id: int,
     context_id: int,
     key_columns: list[str],
     key_values: dict[str, Any],
@@ -903,6 +904,7 @@ def _find_existing_log_id(
             FROM log_unique_constraint luc
             JOIN log_event_context lec ON lec.log_event_id = luc.log_event_id
             WHERE luc.context_id = :context_id
+              AND lec.project_id = :project_id
               AND lec.context_id = :context_id
               AND luc.field_name = :field_name
               AND luc.value_hash = :value_hash
@@ -910,6 +912,7 @@ def _find_existing_log_id(
             """,
         ),
         {
+            "project_id": project_id,
             "context_id": context_id,
             "field_name": COMPOSITE_KEY_FIELD,
             "value_hash": key_hash,
@@ -918,7 +921,7 @@ def _find_existing_log_id(
     if lookup is not None:
         return int(lookup)
 
-    params: dict[str, Any] = {"context_id": context_id}
+    params: dict[str, Any] = {"project_id": project_id, "context_id": context_id}
     conditions = []
     for index, column in enumerate(key_columns):
         param = f"value_{index}"
@@ -928,8 +931,12 @@ def _find_existing_log_id(
     sql = f"""
         SELECT le.id
         FROM log_event le
-        JOIN log_event_context lec ON lec.log_event_id = le.id
-        WHERE lec.context_id = :context_id
+        JOIN log_event_context lec
+          ON lec.log_event_id = le.id
+          AND lec.project_id = le.project_id
+        WHERE le.project_id = :project_id
+          AND lec.project_id = :project_id
+          AND lec.context_id = :context_id
           AND {' AND '.join(conditions)}
         LIMIT 1
     """
@@ -1043,6 +1050,7 @@ def upsert_context_rows(
         _lock_unique_key(session, context_id=context_id, key_hash=key_hash)
         log_event_id = _find_existing_log_id(
             session,
+            project_id=project_id,
             context_id=context_id,
             key_columns=key_columns,
             key_values=key_values,
@@ -1181,6 +1189,7 @@ def upsert_context_rows(
 def _delete_stale_context_rows(
     session: Session,
     *,
+    project_id: int,
     context_id: int,
     backend_id: str,
     key_column: str,
@@ -1195,6 +1204,7 @@ def _delete_stale_context_rows(
     ]
     app_slug_filter = ""
     params: dict[str, Any] = {
+        "project_id": project_id,
         "context_id": context_id,
         "backend_id": backend_id,
         "keep_values": keep_value_strings,
@@ -1212,8 +1222,12 @@ def _delete_stale_context_rows(
             WITH stale AS (
                 SELECT le.id
                 FROM log_event le
-                JOIN log_event_context lec ON lec.log_event_id = le.id
-                WHERE lec.context_id = :context_id
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                  AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.project_id = :project_id
+                  AND lec.context_id = :context_id
                   AND le.data ->> 'backend_id' = :backend_id
                   AND (le.data ->> '{key_column}') <> ALL(CAST(:keep_values AS text[]))
                   {app_slug_filter}
@@ -1228,18 +1242,21 @@ def _delete_stale_context_rows(
             deleted_context AS (
                 DELETE FROM log_event_context lec
                 USING stale
-                WHERE lec.context_id = :context_id
+                WHERE lec.project_id = :project_id
+                  AND lec.context_id = :context_id
                   AND lec.log_event_id = stale.id
                 RETURNING lec.log_event_id
             ),
             deleted_orphans AS (
                 DELETE FROM log_event le
                 USING stale
-                WHERE le.id = stale.id
+                WHERE le.project_id = :project_id
+                  AND le.id = stale.id
                   AND NOT EXISTS (
                       SELECT 1
                       FROM log_event_context remaining
-                      WHERE remaining.log_event_id = le.id
+                      WHERE remaining.project_id = :project_id
+                        AND remaining.log_event_id = le.id
                   )
                 RETURNING le.id
             )
@@ -1254,12 +1271,14 @@ def _delete_stale_context_rows(
 def prune_stale_app_rows(
     session: Session,
     *,
+    project_id: int,
     context_id: int,
     backend_id: str,
     keep_app_ids: Iterable[Any],
 ) -> int:
     return _delete_stale_context_rows(
         session,
+        project_id=project_id,
         context_id=context_id,
         backend_id=backend_id,
         key_column="app_id",
@@ -1270,6 +1289,7 @@ def prune_stale_app_rows(
 def prune_stale_tool_rows(
     session: Session,
     *,
+    project_id: int,
     context_id: int,
     backend_id: str,
     app_slugs: Iterable[str],
@@ -1277,6 +1297,7 @@ def prune_stale_tool_rows(
 ) -> int:
     return _delete_stale_context_rows(
         session,
+        project_id=project_id,
         context_id=context_id,
         backend_id=backend_id,
         key_column="function_id",
@@ -1288,6 +1309,7 @@ def prune_stale_tool_rows(
 def prune_tool_rows_for_unlisted_apps(
     session: Session,
     *,
+    project_id: int,
     context_id: int,
     backend_id: str,
     keep_app_slugs: Iterable[str],
@@ -1313,8 +1335,12 @@ def prune_tool_rows_for_unlisted_apps(
             WITH stale AS (
                 SELECT le.id
                 FROM log_event le
-                JOIN log_event_context lec ON lec.log_event_id = le.id
-                WHERE lec.context_id = :context_id
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                  AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.project_id = :project_id
+                  AND lec.context_id = :context_id
                   AND le.data ->> 'backend_id' = :backend_id
                   AND (le.data #>> '{metadata,integration,app_slug}')
                       <> ALL(CAST(:keep_app_slugs AS text[]))
@@ -1329,18 +1355,21 @@ def prune_tool_rows_for_unlisted_apps(
             deleted_context AS (
                 DELETE FROM log_event_context lec
                 USING stale
-                WHERE lec.context_id = :context_id
+                WHERE lec.project_id = :project_id
+                  AND lec.context_id = :context_id
                   AND lec.log_event_id = stale.id
                 RETURNING lec.log_event_id
             ),
             deleted_orphans AS (
                 DELETE FROM log_event le
                 USING stale
-                WHERE le.id = stale.id
+                WHERE le.project_id = :project_id
+                  AND le.id = stale.id
                   AND NOT EXISTS (
                       SELECT 1
                       FROM log_event_context remaining
-                      WHERE remaining.log_event_id = le.id
+                      WHERE remaining.project_id = :project_id
+                        AND remaining.log_event_id = le.id
                   )
                 RETURNING le.id
             )
@@ -1348,6 +1377,7 @@ def prune_tool_rows_for_unlisted_apps(
             """,
         ),
         {
+            "project_id": project_id,
             "context_id": context_id,
             "backend_id": backend_id,
             "keep_app_slugs": normalized_keep,
@@ -1446,6 +1476,7 @@ def write_bootstrap_state(
 def _get_meta_row_by_id(
     session: Session,
     *,
+    project_id: int,
     context_id: int,
     meta_id: int,
 ) -> dict[str, Any] | None:
@@ -1454,13 +1485,17 @@ def _get_meta_row_by_id(
             """
             SELECT le.data
             FROM log_event le
-            JOIN log_event_context lec ON lec.log_event_id = le.id
-            WHERE lec.context_id = :context_id
+            JOIN log_event_context lec
+              ON lec.log_event_id = le.id
+              AND lec.project_id = le.project_id
+            WHERE le.project_id = :project_id
+              AND lec.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.data ->> 'meta_id' = :meta_id
             LIMIT 1
             """,
         ),
-        {"context_id": context_id, "meta_id": str(meta_id)},
+        {"project_id": project_id, "context_id": context_id, "meta_id": str(meta_id)},
     ).scalar_one_or_none()
     return dict(row) if isinstance(row, dict) else None
 
@@ -1485,6 +1520,7 @@ def _checkpoint_key(
 def _checkpoint_complete(
     session: Session,
     *,
+    project_id: int,
     meta_context_id: int,
     request: BuiltinsSyncRequest,
     batch_index: int,
@@ -1500,6 +1536,7 @@ def _checkpoint_complete(
         return False
     existing = _get_meta_row_by_id(
         session,
+        project_id=project_id,
         context_id=meta_context_id,
         meta_id=int(row["meta_id"]),
     )
@@ -1552,6 +1589,7 @@ def _write_unit_hash(
 def _unit_hash_matches(
     session: Session,
     *,
+    project_id: int,
     meta_context_id: int,
     request: BuiltinsSyncRequest,
     unit_key: str,
@@ -1566,6 +1604,7 @@ def _unit_hash_matches(
     )
     existing = _get_meta_row_by_id(
         session,
+        project_id=project_id,
         context_id=meta_context_id,
         meta_id=int(row["meta_id"]),
     )
@@ -1622,6 +1661,7 @@ def _materialize_apps(
         unit_hash = _stable_hash_for_rows([row], fields=tuple(sorted(row.keys())))
         if _unit_hash_matches(
             session,
+            project_id=project_id,
             meta_context_id=meta_context_id,
             request=request,
             unit_key=unit_key,
@@ -1648,6 +1688,7 @@ def _materialize_apps(
     counts["pruned"] = (
         prune_stale_app_rows(
             session,
+            project_id=project_id,
             context_id=apps_context_id,
             backend_id=request.backend_id,
             keep_app_ids=[row["app_id"] for row in rows_by_slug.values()],
@@ -1697,6 +1738,7 @@ def _materialize_tools(
         )
         if _unit_hash_matches(
             session,
+            project_id=project_id,
             meta_context_id=meta_context_id,
             request=request,
             unit_key=unit_key,
@@ -1723,6 +1765,7 @@ def _materialize_tools(
     counts["pruned"] = (
         prune_stale_tool_rows(
             session,
+            project_id=project_id,
             context_id=tools_context_id,
             backend_id=request.backend_id,
             app_slugs=prune_app_slugs or sorted(rows_by_slug),
@@ -1792,6 +1835,7 @@ def run_builtins_sync(
         if request.prune_unlisted_apps and not request.app_slugs:
             result.tools_pruned += prune_tool_rows_for_unlisted_apps(
                 session,
+                project_id=project.id,
                 context_id=contexts["tools"].id,
                 backend_id=request.backend_id,
                 keep_app_slugs=app_fetch.matched_app_slugs,
@@ -1876,6 +1920,7 @@ def run_builtins_sync(
                 project = contexts["project"]
                 if _checkpoint_complete(
                     session,
+                    project_id=project.id,
                     meta_context_id=contexts["meta"].id,
                     request=request,
                     batch_index=batch_index,
