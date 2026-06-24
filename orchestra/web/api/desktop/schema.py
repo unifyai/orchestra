@@ -52,6 +52,10 @@ class DesktopRead(BaseModel):
         default_factory=list,
         description="Agent IDs of every assistant this desktop is linked to",
     )
+    sftp_tunnel_id: Optional[str] = Field(
+        None,
+        description="Relay id of this device's raw-TCP SFTP tunnel (for teardown)",
+    )
     created_at: datetime = Field(..., description="When the desktop was registered")
     updated_at: Optional[datetime] = Field(
         None,
@@ -99,3 +103,10 @@ class DesktopPubkeyRead(BaseModel):
 class SftpTunnelUpdate(BaseModel):
     host: str = Field(..., description="Public SFTP tunnel host (e.g. tunnel.unify.ai)")
     port: int = Field(..., description="Public SFTP tunnel port for this device")
+
+
+class DesktopSftpTunnelUpdate(BaseModel):
+    tunnel_id: str = Field(
+        ...,
+        description="Relay id of this device's raw-TCP SFTP tunnel",
+    )
