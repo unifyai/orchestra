@@ -321,6 +321,73 @@ END
 " 2>&1
 }
 
+# Seed the static RBAC system roles and permissions (Owner/Admin/Member/Viewer
+# and the project/org/billing/assistant permission set). These are platform
+# data, not test fixtures: organization creation (POST /organizations) and all
+# org-scoped authorization look up the "Owner" system role, so without these
+# rows any org/team flow fails with "Owner system role not found". Migrations
+# define the tables but do not populate them, so a fresh local DB needs this
+# seed. Mirrors the RBAC section of orchestra/tests/seeding.sql. Idempotent:
+# the whole block is skipped once the system roles exist.
+seed_system_roles() {
+  local db_container="$1"
+
+  docker exec "$db_container" psql -q -U orchestra -d orchestra -c "
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM role WHERE is_system_role = true) THEN
+    INSERT INTO permission (name, description, resource_type, action)
+    SELECT v.name, v.description, v.resource_type, v.action
+    FROM (VALUES
+      ('project:read', 'View project details', 'project', 'read'),
+      ('project:write', 'Edit project', 'project', 'write'),
+      ('project:delete', 'Delete project', 'project', 'delete'),
+      ('org:read', 'View organization details', 'organization', 'read'),
+      ('org:write', 'Edit organization settings, billing, and members', 'organization', 'write'),
+      ('org:delete', 'Delete organization', 'organization', 'delete'),
+      ('billing:read', 'View billing information, credits, and invoices', 'billing', 'read'),
+      ('billing:write', 'Update billing settings, autorecharge, and business profile', 'billing', 'write'),
+      ('assistant:read', 'View assistant details', 'assistant', 'read'),
+      ('assistant:write', 'Create and edit assistants', 'assistant', 'write'),
+      ('assistant:delete', 'Delete assistants', 'assistant', 'delete')
+    ) AS v(name, description, resource_type, action)
+    WHERE NOT EXISTS (SELECT 1 FROM permission p WHERE p.name = v.name);
+
+    INSERT INTO role (name, description, organization_id, is_system_role) VALUES
+      ('Owner', 'Full access to projects and organization', NULL, true),
+      ('Admin', 'Full access except deleting organization', NULL, true),
+      ('Member', 'Read and write projects, view organization details', NULL, true),
+      ('Viewer', 'Read-only access to projects and organization', NULL, true);
+
+    -- Owner: every permission.
+    INSERT INTO role_permission (role_id, permission_id)
+    SELECT (SELECT id FROM role WHERE name = 'Owner' AND is_system_role = true), id
+    FROM permission;
+
+    -- Admin: everything except deleting the organization.
+    INSERT INTO role_permission (role_id, permission_id)
+    SELECT (SELECT id FROM role WHERE name = 'Admin' AND is_system_role = true), id
+    FROM permission WHERE name != 'org:delete';
+
+    -- Member: project read/write, org read, assistant read/write, billing read.
+    INSERT INTO role_permission (role_id, permission_id)
+    SELECT (SELECT id FROM role WHERE name = 'Member' AND is_system_role = true), id
+    FROM permission
+    WHERE (resource_type = 'project' AND action IN ('read', 'write'))
+       OR (resource_type = 'organization' AND action = 'read')
+       OR (resource_type = 'assistant' AND action IN ('read', 'write'))
+       OR name = 'billing:read';
+
+    -- Viewer: read-only across resources.
+    INSERT INTO role_permission (role_id, permission_id)
+    SELECT (SELECT id FROM role WHERE name = 'Viewer' AND is_system_role = true), id
+    FROM permission WHERE action = 'read';
+  END IF;
+END
+\$\$;
+" 2>&1
+}
+
 # =============================================================================
 # PostgreSQL Container Management
 # =============================================================================
@@ -616,6 +683,11 @@ seed_test_user() {
 
   if ! seed_billing_defaults "$db_container"; then
     log_error "Failed to seed billing defaults"
+    return 1
+  fi
+
+  if ! seed_system_roles "$db_container"; then
+    log_error "Failed to seed system roles"
     return 1
   fi
 
