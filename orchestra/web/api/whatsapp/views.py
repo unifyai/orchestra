@@ -122,14 +122,39 @@ class CallPermissionUpdateRequest(BaseModel):
     contact_number: str = Field(..., description="External contact number (E.164).")
     status: str = Field(
         ...,
-        description="Permission status: 'accepted' or 'rejected'.",
-        pattern="^(accepted|rejected)$",
+        description=(
+            "Permission status: 'accepted', 'rejected', 'pending', "
+            "'unknown', or 'unknown_interaction'."
+        ),
+        pattern="^(accepted|rejected|pending|unknown|unknown_interaction)$",
+    )
+    source: Optional[str] = Field(
+        None,
+        description="Writer/provider that observed this state.",
     )
 
 
 class CallPermissionResponse(BaseModel):
     permitted: bool
+    status: str = "unknown"
     expires_at: Optional[str] = None
+    requested_at: Optional[str] = None
+    granted_at: Optional[str] = None
+    last_provider_event_at: Optional[str] = None
+    source: Optional[str] = None
+
+
+class PendingWhatsAppCallIntentRequest(BaseModel):
+    pool_number: str = Field(..., description="Pool number (E.164).")
+    contact_number: str = Field(..., description="External contact number (E.164).")
+    context: str = Field(..., description="Briefing for the eventual WhatsApp call.")
+
+
+class PendingWhatsAppCallIntentResponse(BaseModel):
+    pool_number: str
+    contact_number: str
+    context: str
+    created_at: Optional[str] = None
 
 
 class CallSessionUpsertRequest(BaseModel):
@@ -550,6 +575,7 @@ def update_call_permission(
         body.pool_number,
         body.contact_number,
         body.status,
+        source=body.source,
     )
     if route is None:
         raise HTTPException(
@@ -557,15 +583,17 @@ def update_call_permission(
             detail="No route found for this pool/contact pair.",
         )
     session.commit()
+    state = dao.get_call_permission_state(body.pool_number, body.contact_number)
     return {
         "pool_number": body.pool_number,
         "contact_number": body.contact_number,
-        "status": body.status,
-        "expires_at": (
-            route.call_permission_expires_at.isoformat()
-            if route.call_permission_expires_at
-            else None
-        ),
+        "status": state["status"],
+        "permitted": state["permitted"],
+        "expires_at": _dt(state["expires_at"]),
+        "requested_at": _dt(state["requested_at"]),
+        "granted_at": _dt(state["granted_at"]),
+        "last_provider_event_at": _dt(state["last_provider_event_at"]),
+        "source": state["source"],
     }
 
 
@@ -581,16 +609,88 @@ def check_call_permission(
     to decide between direct call vs. invite template.
     """
     dao = SharedPoolDAO(session)
-    permitted, expires_at = dao.check_call_permission(pool_number, contact_number)
+    state = dao.get_call_permission_state(pool_number, contact_number)
     return CallPermissionResponse(
-        permitted=permitted,
-        expires_at=expires_at.isoformat() if expires_at else None,
+        permitted=state["permitted"],
+        status=state["status"],
+        expires_at=_dt(state["expires_at"]),
+        requested_at=_dt(state["requested_at"]),
+        granted_at=_dt(state["granted_at"]),
+        last_provider_event_at=_dt(state["last_provider_event_at"]),
+        source=state["source"],
     )
+
+
+@admin_router.post("/whatsapp/pending-call-intent")
+def store_pending_call_intent(
+    body: PendingWhatsAppCallIntentRequest,
+    session: Session = Depends(get_db_session),
+) -> PendingWhatsAppCallIntentResponse:
+    dao = SharedPoolDAO(session)
+    route = dao.set_pending_whatsapp_call_context(
+        body.pool_number,
+        body.contact_number,
+        body.context,
+    )
+    if route is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No route found for this pool/contact pair.",
+        )
+    session.commit()
+    return PendingWhatsAppCallIntentResponse(
+        pool_number=body.pool_number,
+        contact_number=body.contact_number,
+        context=body.context,
+        created_at=_dt(route.pending_whatsapp_call_context_at),
+    )
+
+
+@admin_router.get("/whatsapp/pending-call-intent")
+def get_pending_call_intent(
+    pool_number: str = Query(..., description="Pool number (E.164)."),
+    contact_number: str = Query(..., description="Contact number (E.164)."),
+    session: Session = Depends(get_db_session),
+) -> PendingWhatsAppCallIntentResponse:
+    dao = SharedPoolDAO(session)
+    intent = dao.get_pending_whatsapp_call_context(pool_number, contact_number)
+    if intent is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No pending WhatsApp call intent for this pool/contact pair.",
+        )
+    return PendingWhatsAppCallIntentResponse(
+        pool_number=intent["pool_number"],
+        contact_number=intent["contact_number"],
+        context=intent["context"],
+        created_at=_dt(intent["created_at"]),
+    )
+
+
+@admin_router.delete("/whatsapp/pending-call-intent")
+def clear_pending_call_intent(
+    pool_number: str = Query(..., description="Pool number (E.164)."),
+    contact_number: str = Query(..., description="Contact number (E.164)."),
+    session: Session = Depends(get_db_session),
+):
+    dao = SharedPoolDAO(session)
+    cleared = dao.clear_pending_whatsapp_call_context(pool_number, contact_number)
+    if not cleared:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No route found for this pool/contact pair.",
+        )
+    session.commit()
+    return {"cleared": True}
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _dt(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
 
 
 def _get_call_session_or_404(

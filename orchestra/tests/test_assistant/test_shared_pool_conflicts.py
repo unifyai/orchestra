@@ -3151,6 +3151,49 @@ class TestCallPermissionDAO:
         assert route.call_permission_granted_at is None
         assert route.call_permission_expires_at is None
 
+    def test_update_pending_records_request_without_permission(self, dao, route_setup):
+        pool_num, contact, _ = route_setup
+        route = dao.update_call_permission(pool_num, contact, "pending")
+        assert route.call_permission_status == "pending"
+        assert route.call_permission_requested_at is not None
+        assert route.call_permission_granted_at is None
+        assert route.call_permission_expires_at is None
+
+        state = dao.get_call_permission_state(pool_num, contact)
+        assert state["permitted"] is False
+        assert state["status"] == "pending"
+        assert state["requested_at"] is not None
+
+    def test_unknown_interaction_preserves_accepted_permission(self, dao, route_setup):
+        pool_num, contact, _ = route_setup
+        dao.update_call_permission(pool_num, contact, "accepted")
+        route = dao.update_call_permission(
+            pool_num,
+            contact,
+            "unknown_interaction",
+            source="twilio_poll",
+        )
+        assert route.call_permission_status == "accepted"
+        assert route.call_permission_last_provider_event_at is not None
+        assert route.call_permission_source == "twilio_poll"
+
+        state = dao.get_call_permission_state(pool_num, contact)
+        assert state["permitted"] is True
+        assert state["status"] == "accepted"
+
+    def test_unknown_interaction_without_prior_state_is_not_permitted(
+        self,
+        dao,
+        route_setup,
+    ):
+        pool_num, contact, _ = route_setup
+        route = dao.update_call_permission(pool_num, contact, "unknown_interaction")
+        assert route.call_permission_status == "unknown_interaction"
+
+        state = dao.get_call_permission_state(pool_num, contact)
+        assert state["permitted"] is False
+        assert state["status"] == "unknown_interaction"
+
     def test_check_returns_true_when_accepted_and_valid(
         self,
         dao,
@@ -3177,6 +3220,8 @@ class TestCallPermissionDAO:
         permitted, expires_at = dao.check_call_permission(pool_num, contact)
         assert permitted is False
         assert expires_at is not None
+        state = dao.get_call_permission_state(pool_num, contact)
+        assert state["status"] == "expired"
 
     def test_check_returns_false_when_rejected(self, dao, route_setup):
         pool_num, contact, _ = route_setup
@@ -3184,12 +3229,16 @@ class TestCallPermissionDAO:
         permitted, expires_at = dao.check_call_permission(pool_num, contact)
         assert permitted is False
         assert expires_at is None
+        state = dao.get_call_permission_state(pool_num, contact)
+        assert state["status"] == "rejected"
 
     def test_check_returns_false_when_never_requested(self, dao, route_setup):
         pool_num, contact, _ = route_setup
         permitted, expires_at = dao.check_call_permission(pool_num, contact)
         assert permitted is False
         assert expires_at is None
+        state = dao.get_call_permission_state(pool_num, contact)
+        assert state["status"] == "unknown"
 
     def test_check_returns_false_when_no_route(self, dao):
         permitted, expires_at = dao.check_call_permission(
@@ -3198,6 +3247,8 @@ class TestCallPermissionDAO:
         )
         assert permitted is False
         assert expires_at is None
+        state = dao.get_call_permission_state("+10000000000", "+19999999999")
+        assert state["status"] == "unknown"
 
     def test_update_returns_none_when_no_route(self, dao):
         result = dao.update_call_permission("+10000000000", "+19999999999", "accepted")
@@ -3221,6 +3272,22 @@ class TestCallPermissionDAO:
         assert route.call_permission_granted_at >= first_granted
         delta = route.call_permission_expires_at - route.call_permission_granted_at
         assert timedelta(days=6, hours=23) < delta <= timedelta(days=7, seconds=5)
+
+    def test_pending_whatsapp_call_context_round_trip(self, dao, route_setup):
+        pool_num, contact, _ = route_setup
+        route = dao.set_pending_whatsapp_call_context(
+            pool_num,
+            contact,
+            "Share the onboarding clue.",
+        )
+        assert route.pending_whatsapp_call_context == "Share the onboarding clue."
+        assert route.pending_whatsapp_call_context_at is not None
+
+        intent = dao.get_pending_whatsapp_call_context(pool_num, contact)
+        assert intent["context"] == "Share the onboarding clue."
+
+        assert dao.clear_pending_whatsapp_call_context(pool_num, contact) is True
+        assert dao.get_pending_whatsapp_call_context(pool_num, contact) is None
 
 
 class TestCallPermissionEndpoints:
@@ -3254,7 +3321,9 @@ class TestCallPermissionEndpoints:
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()
         assert data["status"] == "accepted"
+        assert data["permitted"] is True
         assert data["expires_at"] is not None
+        assert data["granted_at"] is not None
 
     async def test_get_permitted_true(
         self,
@@ -3279,6 +3348,7 @@ class TestCallPermissionEndpoints:
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()
         assert data["permitted"] is True
+        assert data["status"] == "accepted"
         assert data["expires_at"] is not None
 
     async def test_get_permitted_false_no_permission(
@@ -3295,7 +3365,54 @@ class TestCallPermissionEndpoints:
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()
         assert data["permitted"] is False
+        assert data["status"] == "unknown"
         assert data["expires_at"] is None
+
+    async def test_post_pending_returns_requested_state(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "pending",
+                "source": "send_call",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["permitted"] is False
+        assert data["status"] == "pending"
+        assert data["requested_at"] is not None
+        assert data["source"] == "send_call"
+
+    async def test_post_unknown_interaction_does_not_grant_permission(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "unknown_interaction",
+                "source": "twilio_poll",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["permitted"] is False
+        assert data["status"] == "unknown_interaction"
+        assert data["last_provider_event_at"] is not None
+        assert data["source"] == "twilio_poll"
 
     async def test_post_rejected_clears_permission(
         self,
@@ -3327,7 +3444,9 @@ class TestCallPermissionEndpoints:
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.json()["permitted"] is False
+        data = resp.json()
+        assert data["permitted"] is False
+        assert data["status"] == "rejected"
 
     async def test_post_invalid_status_rejected(
         self,
@@ -3374,7 +3493,51 @@ class TestCallPermissionEndpoints:
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.json()["permitted"] is False
+        data = resp.json()
+        assert data["permitted"] is False
+        assert data["status"] == "unknown"
+
+    async def test_pending_call_intent_round_trip(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.post(
+            "/v0/admin/whatsapp/pending-call-intent",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "context": "Call with the next onboarding clue.",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["context"] == "Call with the next onboarding clue."
+        assert data["created_at"] is not None
+
+        resp = await client.get(
+            "/v0/admin/whatsapp/pending-call-intent",
+            params={"pool_number": pool_num, "contact_number": contact},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()["context"] == "Call with the next onboarding clue."
+
+        resp = await client.delete(
+            "/v0/admin/whatsapp/pending-call-intent",
+            params={"pool_number": pool_num, "contact_number": contact},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+
+        resp = await client.get(
+            "/v0/admin/whatsapp/pending-call-intent",
+            params={"pool_number": pool_num, "contact_number": contact},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
 class TestCallSessionEndpoints:
