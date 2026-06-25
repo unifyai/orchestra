@@ -1020,7 +1020,7 @@ def mock_all_infra(dbsession):
         "create_phone_number": AsyncMock(
             return_value={"phoneNumber": "+15551234567"},
         ),
-        "create_pubsub_topic": AsyncMock(return_value={"name": "droid-1"}),
+        "create_pubsub_topic": AsyncMock(return_value={"name": "unity-1"}),
         "delete_phone_number": AsyncMock(return_value={"success": True}),
         "delete_pubsub_topic": AsyncMock(return_value={"success": True}),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
@@ -1930,8 +1930,8 @@ class TestListContactsEndpoint:
         # Discord not configured when the Coordinator is first provisioned, so it
         # starts without a Discord contact — the pre-rollout / newly-added-channel
         # situation the read-path heal exists to fix.
-        monkeypatch.setattr(settings, "droid_coordinator_discord_id", None)
-        monkeypatch.setattr(settings, "droid_coordinator_discord_token", None)
+        monkeypatch.setattr(settings, "unity_coordinator_discord_id", None)
+        monkeypatch.setattr(settings, "unity_coordinator_discord_token", None)
 
         credits_resp = await client.get("/v0/credits", headers=HEADERS)
         user_id = credits_resp.json()["id"]
@@ -1959,15 +1959,15 @@ class TestListContactsEndpoint:
         assert all(c["contact_type"] != "discord" for c in before.json()["info"])
 
         # Configure the shared Discord bot, then re-read: the contact self-heals
-        # and Droid is pinged because the pool row is seeded for the first time.
+        # and Unity is pinged because the pool row is seeded for the first time.
         monkeypatch.setattr(
             settings,
-            "droid_coordinator_discord_id",
+            "unity_coordinator_discord_id",
             "1514612855071178964",
         )
         monkeypatch.setattr(
             settings,
-            "droid_coordinator_discord_token",
+            "unity_coordinator_discord_token",
             "fake.discord.token",
         )
 
@@ -2006,7 +2006,9 @@ class TestListContactsEndpoint:
         from orchestra.settings import settings
 
         monkeypatch.setattr(
-            settings, "droid_coordinator_email_address", "twin@unify.ai"
+            settings,
+            "unity_coordinator_email_address",
+            "twin@unify.ai",
         )
 
         credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -2041,7 +2043,9 @@ class TestListContactsEndpoint:
         # Repoint the shared Coordinator mailbox, then re-read: the stored email
         # reconciles to the new configured address.
         monkeypatch.setattr(
-            settings, "droid_coordinator_email_address", "staging-twin@unify.ai"
+            settings,
+            "unity_coordinator_email_address",
+            "staging-twin@unify.ai",
         )
 
         healed = await client.get(
@@ -2065,7 +2069,7 @@ class TestListContactsEndpoint:
         monkeypatch: pytest.MonkeyPatch,
     ):
         """Reading a Coordinator's contacts reconciles a rotated Discord bot
-        token and re-pings Droid, even though the bot id (the stored contact
+        token and re-pings Unity, even though the bot id (the stored contact
         value) is unchanged.
 
         The token lives on the shared ``shared_pool_numbers`` row rather than on
@@ -2076,9 +2080,11 @@ class TestListContactsEndpoint:
         from orchestra.settings import settings
 
         bot_id = "1514612855071178964"
-        monkeypatch.setattr(settings, "droid_coordinator_discord_id", bot_id)
+        monkeypatch.setattr(settings, "unity_coordinator_discord_id", bot_id)
         monkeypatch.setattr(
-            settings, "droid_coordinator_discord_token", "token.original"
+            settings,
+            "unity_coordinator_discord_token",
+            "token.original",
         )
 
         credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -2099,7 +2105,7 @@ class TestListContactsEndpoint:
         ), provision_resp.json()
         coordinator_id = int(provision_resp.json()["coordinator_id"])
 
-        # A read with the token unchanged must NOT re-ping Droid (no pool change).
+        # A read with the token unchanged must NOT re-ping Unity (no pool change).
         with patch(
             "orchestra.web.api.assistant.views.notify_comms_discord_sync",
             new_callable=AsyncMock,
@@ -2111,10 +2117,12 @@ class TestListContactsEndpoint:
         assert steady.status_code == status.HTTP_200_OK, steady.json()
         mock_notify_noop.assert_not_awaited()
 
-        # Rotate the bot token, then re-read: the pool token reconciles and Droid
+        # Rotate the bot token, then re-read: the pool token reconciles and Unity
         # is pinged so it re-pulls the new credentials.
         monkeypatch.setattr(
-            settings, "droid_coordinator_discord_token", "token.rotated"
+            settings,
+            "unity_coordinator_discord_token",
+            "token.rotated",
         )
 
         with patch(
@@ -4610,7 +4618,7 @@ class TestConnectScopeReduction:
             ) as mock_settings,
             patch.dict(
                 _os.environ,
-                {"DROID_ADAPTERS_URL": "http://adapters.test"},
+                {"UNITY_ADAPTERS_URL": "http://adapters.test"},
             ),
             patch(
                 "httpx.AsyncClient",
@@ -4690,7 +4698,7 @@ class TestConnectScopeReduction:
             ) as mock_settings,
             patch.dict(
                 _os.environ,
-                {"DROID_ADAPTERS_URL": "http://adapters.test"},
+                {"UNITY_ADAPTERS_URL": "http://adapters.test"},
             ),
             patch(
                 "httpx.AsyncClient",
@@ -5031,8 +5039,8 @@ class TestDisconnectEndpoint:
             patch.dict(
                 _os.environ,
                 {
-                    "DROID_COMMS_URL": "http://comms.test",
-                    "DROID_ADAPTERS_URL": "http://adapters.test",
+                    "UNITY_COMMS_URL": "http://comms.test",
+                    "UNITY_ADAPTERS_URL": "http://adapters.test",
                 },
             ),
             patch(
@@ -5115,8 +5123,8 @@ class TestDisconnectEndpoint:
             patch.dict(
                 _os.environ,
                 {
-                    "DROID_COMMS_URL": "http://comms.test",
-                    "DROID_ADAPTERS_URL": "http://adapters.test",
+                    "UNITY_COMMS_URL": "http://comms.test",
+                    "UNITY_ADAPTERS_URL": "http://adapters.test",
                 },
             ),
             patch(
@@ -5231,7 +5239,7 @@ class TestDisconnectEndpoint:
 
         with (
             patch("orchestra.web.api.assistant.views.settings") as mock_settings,
-            patch.dict(os.environ, {"DROID_COMMS_URL": "", "DROID_ADAPTERS_URL": ""}),
+            patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
         ):
             mock_settings.is_staging = True
             mock_settings.charges_billing = False
@@ -5924,8 +5932,8 @@ class TestDisconnectEndpointOrg:
             patch.dict(
                 _os.environ,
                 {
-                    "DROID_COMMS_URL": "http://comms.test",
-                    "DROID_ADAPTERS_URL": "http://adapters.test",
+                    "UNITY_COMMS_URL": "http://comms.test",
+                    "UNITY_ADAPTERS_URL": "http://adapters.test",
                 },
             ),
             patch(
@@ -6124,7 +6132,7 @@ class TestDisconnectEndpointOrg:
 
         with (
             patch("orchestra.web.api.assistant.views.settings") as mock_settings,
-            patch.dict(os.environ, {"DROID_COMMS_URL": "", "DROID_ADAPTERS_URL": ""}),
+            patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
         ):
             mock_settings.is_staging = True
             mock_settings.charges_billing = False

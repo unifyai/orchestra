@@ -8,13 +8,13 @@ Coordinator should say to nudge the user toward each one.
 It deliberately consolidates what used to be scattered across three
 places:
   - Console's ``ONBOARDING_CHECKLIST`` (titles, phases, ``depends_on``).
-  - Droid's ``_VOICE_ONBOARDING_STEP_SUGGESTIONS`` /
+  - Unity's ``_VOICE_ONBOARDING_STEP_SUGGESTIONS`` /
     ``_VOICE_ONBOARDING_TRIGGER_REPLY_STEPS`` (spoken nudge copy + the
     trigger→reply pairing).
   - The linear ``DERIVABLE_ONBOARDING_STEPS`` tuple in
     ``coordinator_service`` (which steps are server-derivable).
 
-Both Droid brains and the Console checklist consume a rendering computed
+Both Unity brains and the Console checklist consume a rendering computed
 from this graph (see ``coordinator_service.compute_onboarding_render``)
 so nothing downstream has to re-derive "what's done / what's next".
 
@@ -135,7 +135,7 @@ class OnboardingPhase:
 
     ``label`` is the value stamped on each step's ``phase`` field (and the
     short legend label in the progress bar); ``id`` is the stable header-row
-    id consumers key off (Console test ids, Droid prose grouping).
+    id consumers key off (Console test ids, Unity prose grouping).
     ``local_only`` hides the whole phase — header and every step in it — on
     hosted deployments, leaving it visible only on a local self-host install.
     """
@@ -377,10 +377,13 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         paired_reply="whatsapp-call",
         nudge_chat=(
             "Invite them to click the 'Trigger WhatsApp call from T-W1N' row in "
-            "the Onboarding checklist to get a clue over a WhatsApp call."
+            "the Onboarding checklist. Explain that WhatsApp may ask them to "
+            "allow calls from the business first; after they approve, I will "
+            "place the actual WhatsApp call with the clue."
         ),
         nudge_voice=(
-            "clicking the 'Trigger WhatsApp call from T-W1N' row in the Onboarding checklist"
+            "clicking the 'Trigger WhatsApp call from T-W1N' row in the Onboarding checklist, "
+            "then approving the WhatsApp call permission prompt if it appears"
         ),
     ),
     OnboardingStep(
@@ -618,6 +621,10 @@ TRIGGER_TO_REPLY: dict[str, str] = {
     if step.kind == "trigger" and step.paired_reply
 }
 
+REPLY_TO_TRIGGER: dict[str, str] = {
+    reply_id: trigger_id for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
+}
+
 _CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "email": ("email",),
     "whatsapp_message": ("whatsapp_message",),
@@ -669,7 +676,7 @@ _SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
 )
 
 # Presentation copy keyed by step id. Lives beside the graph so every
-# consumer (Console checklist, Droid prose) reads the same descriptions,
+# consumer (Console checklist, Unity prose) reads the same descriptions,
 # time estimates, and suggestion chips from one place.
 STEP_PRESENTATION: dict[str, StepPresentation] = {
     "email-reference": StepPresentation(
@@ -690,11 +697,11 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "whatsapp-call-reference": StepPresentation(
-        "T-W1N calls with the next reference clue over WhatsApp.",
-        "~10s",
+        "T-W1N requests WhatsApp call permission, then calls with the next clue.",
+        "~30s",
     ),
     "whatsapp-call": StepPresentation(
-        "Answer T-W1N's WhatsApp call and guess the clue.",
+        "Allow the WhatsApp call if prompted, then answer and guess the clue.",
         "~1 min",
     ),
     "phone-number": StepPresentation(
@@ -776,10 +783,15 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "whatsapp-message": "The user guesses the WhatsApp clue.",
     "whatsapp-call-reference": (
         "Clicking the 'Trigger WhatsApp call from T-W1N' row tells me the user "
-        "is ready for a WhatsApp voice clue; I start or request the call unless "
-        "I have already done so."
+        "is ready for a WhatsApp voice clue. WhatsApp Business Calling may first "
+        "require them to approve calls from the business; I should say this up "
+        "front, send/request the call, then wait for approval before the actual "
+        "call is placed."
     ),
-    "whatsapp-call": "The user guesses during the WhatsApp voice exchange.",
+    "whatsapp-call": (
+        "The user approves the WhatsApp call prompt if needed, answers the "
+        "WhatsApp voice call, and guesses during the exchange."
+    ),
     "phone-number": (
         "Clicking the 'Add your phone number' row opens Account -> Contact info "
         "so the user can add or verify the phone number."

@@ -24,7 +24,7 @@ class DashboardTokenDAO:
     ) -> DashboardToken:
         """Register a new token mapping.
 
-        The token is generated client-side (Droid) and assumed unique.
+        The token is generated client-side (Unity) and assumed unique.
         The PRIMARY KEY constraint enforces uniqueness at the DB level.
         """
         entry = DashboardToken(

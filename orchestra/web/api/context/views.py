@@ -655,7 +655,7 @@ def delete_context(
                 project_name == TASK_MACHINE_PROJECT_NAME
                 and is_internal_task_machine_context_name(ctx.name)
             ) or (
-                project_name == "Droid"
+                project_name == "Unity"
                 and is_protected_task_surface_context_name(ctx.name)
             ):
                 raise HTTPException(
@@ -964,7 +964,7 @@ def rename_context(
             or is_internal_task_machine_context_name(context_name)
         )
     ) or (
-        project_name == "Droid" and is_protected_task_surface_context_name(context_name)
+        project_name == "Unity" and is_protected_task_surface_context_name(context_name)
     ):
         raise HTTPException(
             status_code=403,

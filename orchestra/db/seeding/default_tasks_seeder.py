@@ -17,14 +17,14 @@ from orchestra.db.models.orchestra_models import Interface, Project, Tab, Tile
 
 class DefaultTasksSeeder:
     """
-    Seeder class for creating default Droid project, interface, tab, and table tile
+    Seeder class for creating default Unity project, interface, tab, and table tile
     for tasks management.
     """
 
     @staticmethod
     def seed(session: Session, user_id: str) -> Dict[str, str]:
         """
-        Seeds a default Droid project, interface, tab, and table tile for the given user.
+        Seeds a default Unity project, interface, tab, and table tile for the given user.
 
         Args:
             session: The database session
@@ -40,10 +40,10 @@ class DefaultTasksSeeder:
         tab_dao = TabDAO(session)
         tile_dao = TileDAO(session)
 
-        # Step 1: Fetch or create Droid project
+        # Step 1: Fetch or create Unity project
         project = DefaultTasksSeeder._get_or_create_project(project_dao, user_id)
 
-        # Step 2: Fetch or create Droid interface
+        # Step 2: Fetch or create Unity interface
         interface = DefaultTasksSeeder._get_or_create_interface(
             interface_dao,
             project.id,
@@ -69,7 +69,7 @@ class DefaultTasksSeeder:
     @staticmethod
     def _get_or_create_project(project_dao: ProjectDAO, user_id: str) -> Project:
         """
-        Gets or creates a Droid project for the given user.
+        Gets or creates a Unity project for the given user.
 
         Args:
             project_dao: The ProjectDAO instance
@@ -78,13 +78,13 @@ class DefaultTasksSeeder:
         Returns:
             The Project object
         """
-        # Try to fetch existing Droid project for this user
-        project = project_dao.get_by_user_and_name(user_id=user_id, name="Droid")
+        # Try to fetch existing Unity project for this user
+        project = project_dao.get_by_user_and_name(user_id=user_id, name="Unity")
 
         # If project doesn't exist, create it
         if not project:
-            project_dao.create(user_id=user_id, name="Droid")
-            project = project_dao.get_by_user_and_name(user_id=user_id, name="Droid")
+            project_dao.create(user_id=user_id, name="Unity")
+            project = project_dao.get_by_user_and_name(user_id=user_id, name="Unity")
 
         return project
 
@@ -94,7 +94,7 @@ class DefaultTasksSeeder:
         project_id: int,
     ) -> Interface:
         """
-        Gets or creates a Droid interface for the given project.
+        Gets or creates a Unity interface for the given project.
 
         Args:
             interface_dao: The InterfaceDAO instance
@@ -103,17 +103,17 @@ class DefaultTasksSeeder:
         Returns:
             The Interface object
         """
-        # Try to fetch existing Droid interface for this project
+        # Try to fetch existing Unity interface for this project
         interface = interface_dao.get_by_project_and_name(
             project_id=project_id,
-            name="Droid",
+            name="Unity",
         )
 
         # If interface doesn't exist, create it
         if not interface:
             interface = interface_dao.create_interface(
                 project_id=project_id,
-                name="Droid",
+                name="Unity",
             )
 
         return interface

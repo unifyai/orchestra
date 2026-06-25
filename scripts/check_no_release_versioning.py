@@ -12,7 +12,7 @@ FIRST_PARTY = {
     "orchestra",
     "unify",
     "unillm",
-    "droid",
+    "unity",
     "unity-deploy",
 }
 INERT_VERSION = "0.0.0"
@@ -34,17 +34,17 @@ def _check_pyproject(root: Path, failures: list[str]) -> None:
     version = project.get("version") or poetry.get("version")
     if _is_first_party(name) and version != INERT_VERSION:
         failures.append(
-            f"{path}: first-party package version must be {INERT_VERSION!r}"
+            f"{path}: first-party package version must be {INERT_VERSION!r}",
         )
 
     text = path.read_text()
     if re.search(r"\b(?:tag|rev)\s*=", text):
         failures.append(
-            f"{path}: first-party dependencies must use branch refs, not tags/revs"
+            f"{path}: first-party dependencies must use branch refs, not tags/revs",
         )
     if re.search(r"github\.com/unifyai/[^ \]\"'}]+\.git@v?\d", text):
         failures.append(
-            f"{path}: first-party Git dependencies must not use version-like refs"
+            f"{path}: first-party Git dependencies must not use version-like refs",
         )
 
 
@@ -56,7 +56,7 @@ def _check_package_json(root: Path, failures: list[str]) -> None:
     data = json.loads(path.read_text())
     if _is_first_party(data.get("name")) and "version" in data:
         failures.append(
-            f"{path}: private first-party packages must not declare a package version"
+            f"{path}: private first-party packages must not declare a package version",
         )
 
     lock_path = root / "package-lock.json"
@@ -65,7 +65,7 @@ def _check_package_json(root: Path, failures: list[str]) -> None:
         root_package = lock_data.get("packages", {}).get("", {})
         if _is_first_party(root_package.get("name")) and "version" in root_package:
             failures.append(
-                f"{lock_path}: root package must not declare a package version"
+                f"{lock_path}: root package must not declare a package version",
             )
 
 

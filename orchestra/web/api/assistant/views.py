@@ -116,14 +116,14 @@ from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.services.team_membership_refresh_service import (
     publish_membership_refreshes_best_effort,
 )
-from orchestra.services.universal_droid_contacts import (
+from orchestra.services.universal_unity_contacts import (
     UNIVERSAL_CONTACT_TYPES,
     drifted_universal_coordinator_contact_types,
     missing_universal_coordinator_contact_types,
 )
-from orchestra.services.universal_droid_discord import (
-    ensure_universal_droid_discord_pool,
-    get_universal_droid_discord_bot_id,
+from orchestra.services.universal_unity_discord import (
+    ensure_universal_unity_discord_pool,
+    get_universal_unity_discord_bot_id,
     notify_comms_discord_sync,
 )
 from orchestra.settings import settings
@@ -791,10 +791,10 @@ def _self_heal_coordinator_contacts(
     Best-effort: any failure is swallowed (the next read retries) and the
     session is left usable for the rest of the response build.
 
-    Returns ``True`` when Droid should be pinged to (re)sync the shared Discord
+    Returns ``True`` when Unity should be pinged to (re)sync the shared Discord
     bot pool — i.e. this read created the pool row, reactivated it, or rotated
     its bot token. Discord is the only channel that needs an out-of-band sync;
-    Droid resolves email/phone/WhatsApp routing per message.
+    Unity resolves email/phone/WhatsApp routing per message.
     """
     if not coordinators:
         return False
@@ -802,13 +802,13 @@ def _self_heal_coordinator_contacts(
     # Reconcile the shared Discord bot pool (id + token) once per pass. The pool
     # is platform-global (one row, not per-Coordinator), so it lives outside the
     # loop. ``changed`` captures creation, reactivation, and token rotation —
-    # every case where Droid must re-pull the bot credentials. Token rotations
+    # every case where Unity must re-pull the bot credentials. Token rotations
     # don't surface as a Coordinator contact drift (the contact stores the bot
     # *id*, which is unchanged), so this is the only place they get healed.
     discord_pool_changed = False
-    if get_universal_droid_discord_bot_id():
+    if get_universal_unity_discord_bot_id():
         try:
-            _discord_pool, discord_pool_changed = ensure_universal_droid_discord_pool(
+            _discord_pool, discord_pool_changed = ensure_universal_unity_discord_pool(
                 session,
             )
         except Exception:
@@ -819,7 +819,11 @@ def _self_heal_coordinator_contacts(
 
     healed_ids: list[int] = []
     for coordinator in coordinators:
-        present_contacts = contacts_by_assistant.get(coordinator.agent_id, [])
+        # Capture the id up front: a failed heal flush expires the ORM instance,
+        # so reading ``coordinator.agent_id`` afterwards would itself emit a
+        # query against the now-poisoned session and re-raise.
+        coordinator_id = coordinator.agent_id
+        present_contacts = contacts_by_assistant.get(coordinator_id, [])
         present_types = [c.contact_type for c in present_contacts]
         missing = missing_universal_coordinator_contact_types(present_types)
         drifted = drifted_universal_coordinator_contact_types(present_contacts)
@@ -837,13 +841,16 @@ def _self_heal_coordinator_contacts(
                 contact_types=to_heal,
             )
         except Exception:
+            # Best-effort: roll back so the failed flush doesn't poison the
+            # session for the rest of the response build (the next read retries).
+            session.rollback()
             logging.warning(
                 "Coordinator contact self-heal failed for %s",
-                coordinator.agent_id,
+                coordinator_id,
                 exc_info=True,
             )
             continue
-        healed_ids.append(coordinator.agent_id)
+        healed_ids.append(coordinator_id)
 
     if not healed_ids and not discord_pool_changed:
         return False
@@ -1379,7 +1386,7 @@ async def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Wake up assistant (skip for local assistants -- droid runs locally)
+    # Phase 3: Wake up assistant (skip for local assistants -- unity runs locally)
     if not assistant_in.is_local:
         response = await wake_up_assistant(
             assistant.agent_id,
@@ -1488,7 +1495,7 @@ def _coordinator_state_response(
 
     ``completed_step_ids`` is re-derived from durable domain state on
     every read (see ``derive_onboarding_progress``) so the console
-    checklist and Droid's openers agree on what is already done even
+    checklist and Unity's openers agree on what is already done even
     when the completing action happened in an earlier session. The
     derivation queries are skipped outside onboarding mode, where the
     checklist no longer renders.
@@ -1531,7 +1538,7 @@ async def get_onboarding_catalog_endpoint() -> InfoResponse[OnboardingCatalog]:
     """Return the canonical onboarding structure + copy for this deployment.
 
     Static (no per-user state) and the single source of truth both Console
-    and Droid read for phase/step titles, descriptions, time estimates, and
+    and Unity read for phase/step titles, descriptions, time estimates, and
     suggestion chips. ``local_only`` phases are already filtered out on
     hosted deployments, so consumers never re-implement the gate.
     """
@@ -1684,7 +1691,7 @@ async def notify_onboarding_session_started_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[OnboardingSessionStartedResponse]:
-    """Fire the picker-resolution event so Droid opens the session.
+    """Fire the picker-resolution event so Unity opens the session.
 
     Best-effort: the emission is gated server-side on
     ``Coordinator/State.mode == 'onboarding'``, so a stale picker
@@ -2205,7 +2212,7 @@ async def create_assistant_contact(
     6. Creates an AssistantContact row and updates the backward-compat columns
        on the Assistant model.
     7. Deducts the one-time cost from credits.
-    8. Triggers a reawaken so Droid picks up the new contact detail.
+    8. Triggers a reawaken so Unity picks up the new contact detail.
 
     If the database commit fails after provisioning, the external resource is
     rolled back (deprovisioned) to prevent resource leaks.
@@ -2569,7 +2576,7 @@ async def create_assistant_contact(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save {contact_type} contact: {str(db_error)}",
         )
-    # 8. Trigger reawaken so Droid picks up the new contact
+    # 8. Trigger reawaken so Unity picks up the new contact
     try:
         await reawaken_assistant(
             str(assistant_id),
@@ -2760,7 +2767,7 @@ async def connect_assistant_account(
     provider = body.provider
     features = body.features
     redirect_after = body.redirect_after
-    adapters_url = os.environ.get("DROID_ADAPTERS_URL", "")
+    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
 
     # Detect scope reduction at the scope-set level (not feature-set), so that
     # shrinking a bundle's contents also triggers revoke. Without this, Google's
@@ -2936,8 +2943,8 @@ async def disconnect_assistant_account(
             detail="No connected account found for this assistant.",
         )
 
-    adapters_url = os.environ.get("DROID_ADAPTERS_URL", "")
-    comms_url = os.environ.get("DROID_COMMS_URL", "")
+    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     auth_headers = {"Authorization": f"Bearer {admin_key}"}
 
@@ -3170,10 +3177,10 @@ def _validate_workspace_id(value: str, field: str) -> str:
 
 
 async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
-    """Proxy an unfiltered browse call to the Droid gateway channel."""
+    """Proxy an unfiltered browse call to the Unity gateway channel."""
     import httpx
 
-    comms_url = os.environ.get("DROID_COMMS_URL", "")
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
     if not comms_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3698,7 +3705,7 @@ async def update_assistant_contact(
     session.commit()
     session.refresh(assistant)
 
-    # Trigger reawaken so Droid picks up the metadata change
+    # Trigger reawaken so Unity picks up the metadata change
     try:
         await reawaken_assistant(
             str(assistant_id),
@@ -8007,7 +8014,7 @@ async def list_demo_assistant_meta(
     description=(
         "Stamps ``last_correspondence_at = now()`` and clears "
         "``last_followup_sent_at`` so a future silence can re-trigger "
-        "the inactivity follow-up. Called by the Droid transcript hook "
+        "the inactivity follow-up. Called by the Unity transcript hook "
         "on every inbound or outbound message across any contact."
     ),
     tags=["Assistants", "Admin"],
@@ -8036,7 +8043,7 @@ def admin_touch_assistant_activity(
     description=(
         "Sets ``inactivity_followup_opted_out = true`` so the inactivity "
         "re-engagement routine never follows up via this Coordinator "
-        "again. The Droid brain calls this when the boss explicitly asks "
+        "again. The Unity brain calls this when the boss explicitly asks "
         "not to be contacted further. Nothing is deleted — this only "
         "silences future follow-ups until the boss opts back in."
     ),
@@ -8064,7 +8071,7 @@ def admin_opt_out_assistant_followups(
     description=(
         "Clears ``inactivity_followup_opted_out`` so the inactivity "
         "re-engagement routine can follow up via this Coordinator again. "
-        "The Droid brain calls this when the boss re-engages after having "
+        "The Unity brain calls this when the boss re-engages after having "
         "previously opted out."
     ),
     tags=["Assistants", "Admin"],

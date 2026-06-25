@@ -70,8 +70,8 @@ cover/
 # Migration data files (e.g. _platform_initial_schema.sql shipped with
 # the squashed initial migration) are required for `alembic upgrade head`
 # to succeed on a fresh clone. They were silently dropped by the blanket
-# `*.sql` rule above and only re-caught when downstream consumers (droid
-# install, droid CI's local.sh path) hit FileNotFoundError. Allow-list
+# `*.sql` rule above and only re-caught when downstream consumers (unity
+# install, unity CI's local.sh path) hit FileNotFoundError. Allow-list
 # the migrations/versions directory so future SQL companions ship too.
 !orchestra/db/migrations/versions/*.sql
 *.txt

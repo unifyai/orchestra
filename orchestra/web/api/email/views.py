@@ -10,9 +10,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.services.shared_coordinator_routing import (
     resolve_shared_coordinator_owner,
 )
-from orchestra.services.universal_droid_email import (
-    is_universal_droid_email_address,
-)
+from orchestra.services.universal_unity_email import is_universal_unity_email_address
 
 admin_router = APIRouter()
 
@@ -32,7 +30,7 @@ def resolve_inbound(
     """Resolve an inbound message on the shared coordinator mailbox."""
     mailbox_normalized = mailbox.strip().lower()
     sender_normalized = sender.strip().lower()
-    if not is_universal_droid_email_address(mailbox_normalized):
+    if not is_universal_unity_email_address(mailbox_normalized):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No shared email routing configured for this mailbox.",

@@ -67,7 +67,7 @@ def test_comms_url_falls_back_to_communication_url(
     assert assistant_infra._comms_url() == "https://comms.staging.test"
 
 
-def test_comms_url_prefers_droid_comms_url(
+def test_comms_url_prefers_unity_comms_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(assistant_infra, "COMMS_URL", "https://comms.primary.test")
@@ -101,7 +101,7 @@ async def test_create_pubsub_topic_skips_comms_in_self_host(
         "success": True,
         "skipped": True,
         "reason": "self_host_local_provisioning",
-        "topic_name": "droid-2101-staging",
+        "topic_name": "unity-2101-staging",
     }
     post.assert_not_called()
 
@@ -127,7 +127,7 @@ async def test_create_pubsub_topic_uses_staging_topic_name(
     post.assert_awaited_once_with(
         "https://comms.test/infra/pubsub/topic",
         headers={"Authorization": "Bearer admin-key"},
-        data={"topic_name": "droid-2101-staging"},
+        data={"topic_name": "unity-2101-staging"},
         timeout=30,
     )
 
@@ -148,7 +148,7 @@ async def test_delete_pubsub_topic_uses_staging_topic_name(
         name="delete_pubsub_topic",
         method="DELETE",
         path="/infra/pubsub/topic",
-        data={"topic_name": "droid-2101-staging"},
+        data={"topic_name": "unity-2101-staging"},
     )
 
 
@@ -169,7 +169,7 @@ async def test_create_pubsub_topic_unsuffixed_in_production(
 
     await assistant_infra.create_pubsub_topic("2101")
 
-    assert post.await_args.kwargs["data"] == {"topic_name": "droid-2101"}
+    assert post.await_args.kwargs["data"] == {"topic_name": "unity-2101"}
 
 
 def test_settings_is_staging_follows_resolver(

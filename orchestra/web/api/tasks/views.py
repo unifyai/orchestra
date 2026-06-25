@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ADAPTERS_URL = os.environ.get("DROID_ADAPTERS_URL")
+ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
@@ -42,11 +42,11 @@ async def _dispatch_task_trigger_to_adapters(
         return request_id
     adapters_url = ADAPTERS_URL
     if not adapters_url:
-        logger.warning("DROID_ADAPTERS_URL not set, skipping task-trigger dispatch")
+        logger.warning("UNITY_ADAPTERS_URL not set, skipping task-trigger dispatch")
         return request_id
     client = get_async_client()
     response = await client.post(
-        f"{adapters_url}/droid/system-event",
+        f"{adapters_url}/unity/system-event",
         headers={
             "Authorization": f"Bearer {ADMIN_KEY}",
             "Content-Type": "application/json",

@@ -92,7 +92,7 @@ Same as the Orchestra service:
 
 - ``ORCHESTRA_DB_HOST``, ``ORCHESTRA_DB_PORT``, ``ORCHESTRA_DB_USER``,
   ``ORCHESTRA_DB_PASS``, ``ORCHESTRA_DB_BASE``
-- ``DROID_COMMS_URL`` — base URL of the Communication service
+- ``UNITY_COMMS_URL`` — base URL of the Communication service
 - ``ORCHESTRA_ADMIN_KEY`` — bearer token for the Communication API
 
 Exit codes
@@ -392,8 +392,8 @@ async def amain(args: argparse.Namespace) -> int:
     )
 
     if args.apply:
-        if not os.environ.get("DROID_COMMS_URL"):
-            logger.error("DROID_COMMS_URL is not set; aborting.")
+        if not os.environ.get("UNITY_COMMS_URL"):
+            logger.error("UNITY_COMMS_URL is not set; aborting.")
             return 2
         if not os.environ.get("ORCHESTRA_ADMIN_KEY"):
             logger.error("ORCHESTRA_ADMIN_KEY is not set; aborting.")

@@ -13,7 +13,7 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.services.coordinator_service import create_workspace_coordinator
-from orchestra.services.universal_droid_discord import is_universal_droid_discord_bot
+from orchestra.services.universal_unity_discord import is_universal_unity_discord_bot
 from orchestra.settings import settings
 
 BOT_ID = "1514612855071178964"
@@ -22,8 +22,8 @@ BOT_TOKEN = "fake.discord.bot.token"
 
 def _make_user(dbsession: Session, suffix: str) -> User:
     user = User(
-        id=f"droid-discord-{suffix}",
-        email=f"droid-discord-{suffix}@test.com",
+        id=f"unity-discord-{suffix}",
+        email=f"unity-discord-{suffix}@test.com",
     )
     dbsession.add(user)
     dbsession.flush()
@@ -46,8 +46,8 @@ def _active_discord_contact(
 
 
 def _configure_bot(monkeypatch: pytest.MonkeyPatch, bot_id, token) -> None:
-    monkeypatch.setattr(settings, "droid_coordinator_discord_id", bot_id)
-    monkeypatch.setattr(settings, "droid_coordinator_discord_token", token)
+    monkeypatch.setattr(settings, "unity_coordinator_discord_id", bot_id)
+    monkeypatch.setattr(settings, "unity_coordinator_discord_token", token)
 
 
 def test_create_workspace_coordinator_attaches_universal_discord(
@@ -79,7 +79,7 @@ def test_create_workspace_coordinator_attaches_universal_discord(
     assert contact.contact_value == BOT_ID
     assert contact.provider == "discord"
     assert contact.provisioned_by == "platform"
-    assert contact.metadata_ == {"universal_droid": True}
+    assert contact.metadata_ == {"universal_unity": True}
 
 
 def test_universal_discord_bot_excluded_from_pool_assignment(
@@ -90,7 +90,7 @@ def test_universal_discord_bot_excluded_from_pool_assignment(
     user = _make_user(dbsession, "exclude")
     create_workspace_coordinator(dbsession, user_id=user.id, organization_id=None)
 
-    assert is_universal_droid_discord_bot(BOT_ID) is True
+    assert is_universal_unity_discord_bot(BOT_ID) is True
 
     dao = SharedPoolDAO(dbsession, "discord")
     eligible = dao.find_eligible_pool_numbers(999999, [user.id])

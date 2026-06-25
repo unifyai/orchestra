@@ -19,13 +19,13 @@ _PREVIOUS_CONTACT_PREDICATE = (
     "status != 'deleted' "
     "AND contact_type NOT IN ('whatsapp', 'discord') "
     "AND NOT (contact_type IN ('email', 'phone') "
-    "AND (metadata ->> 'universal_droid') = 'true')"
+    "AND (metadata ->> 'universal_unity') = 'true')"
 )
 _CONTACT_PREDICATE = (
     "status != 'deleted' "
     "AND contact_type NOT IN ('whatsapp', 'discord') "
     "AND NOT (contact_type IN ('email', 'phone') "
-    "AND COALESCE(metadata ->> 'universal_droid', 'false') = 'true')"
+    "AND COALESCE(metadata ->> 'universal_unity', 'false') = 'true')"
 )
 
 

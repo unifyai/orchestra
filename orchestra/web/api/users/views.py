@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -42,6 +43,9 @@ from orchestra.services.coordinator_service import (
     get_workspace_coordinator,
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
+)
+from orchestra.services.universal_unity_whatsapp import (
+    ensure_coordinator_universal_whatsapp_contact,
 )
 from orchestra.services.user_account_cleanup_service import (
     UserAccountCleanupService,
@@ -125,7 +129,7 @@ async def create_user(
         new_api_key = generate_key()
         api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
 
-        # Seed default Droid project, interface, tab, and table tile for tasks
+        # Seed default Unity project, interface, tab, and table tile for tasks
         try:
             DefaultTasksSeeder.seed(session, user_id=new_user.id)
         except Exception as e:
@@ -440,12 +444,6 @@ async def update_user(
         raise not_found("User")
     user = user_rows[0][0]
 
-    # Snapshot routable identities before the update so we can detect a real
-    # change and refresh the running assistants' boss contact accordingly.
-    old_phone_number = user.phone_number
-    old_whatsapp_number = user.whatsapp_number
-    old_discord_id = user.discord_id
-
     # Require server-side verification when phone or whatsapp changes
     try:
         user_dao.require_verified_phone(user, updated_user.phone_number, "phone")
@@ -490,28 +488,19 @@ async def update_user(
     if "discord_id" in provided:
         update_kwargs["discord_id"] = updated_user.discord_id
 
-    # A routable contact identity change must reach the running runtime so the
-    # boss contact resolves inbound from the new number/handle without a restart.
-    contact_identity_changed = (
-        (
-            "phone_number" in update_kwargs
-            and update_kwargs["phone_number"] != old_phone_number
-        )
-        or (
-            "whatsapp_number" in update_kwargs
-            and update_kwargs["whatsapp_number"] != old_whatsapp_number
-        )
-        or (
-            "discord_id" in update_kwargs
-            and update_kwargs["discord_id"] != old_discord_id
-        )
+    # A submitted routable identity must reach the running runtime so the boss
+    # contact resolves from the profile even if the user row already held the
+    # same value and the live Contacts context was stale.
+    contact_identity_submitted = any(
+        field in update_kwargs
+        for field in ("phone_number", "whatsapp_number", "discord_id")
     )
 
     user_dao.update(**update_kwargs)
 
     user_dao.cleanup_phone_verifications(updated_user.user_id)
 
-    if contact_identity_changed:
+    if contact_identity_submitted:
         await _reawaken_user_assistants(session, updated_user.user_id)
 
     return "User information updated successfully!"
@@ -524,6 +513,28 @@ async def update_user(
 VERIFICATION_EXPIRY_MINUTES = 10
 VERIFICATION_MAX_ATTEMPTS = 5
 VERIFICATION_COOLDOWN_SECONDS = 60
+
+
+def _verification_whatsapp_sender_for_user(
+    session: Session,
+    user_id: str,
+) -> str | None:
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=None,
+    )
+    if coordinator is None:
+        return None
+
+    ensure_coordinator_universal_whatsapp_contact(session, coordinator=coordinator)
+    contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        coordinator.agent_id,
+        "whatsapp",
+    )
+    if contact is None or not contact.contact_value:
+        return None
+    return contact.contact_value.replace("whatsapp:", "").strip() or None
 
 
 @admin_router.post("/user/phone/send-verification")
@@ -565,15 +576,24 @@ async def send_phone_verification(
 
     # Call communication service — it generates the code, sends SMS,
     # and returns the code so we can hash and store it server-side.
-    comms_url = os.environ.get("DROID_COMMS_URL", "")
+    comms_url = os.environ.get("UNITY_COMMS_URL", "")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
 
     if not comms_url or not admin_key:
-        logger.error("DROID_COMMS_URL or ORCHESTRA_ADMIN_KEY not configured")
+        logger.error("UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY not configured")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Verification service is not configured.",
         )
+
+    payload = {
+        "platform": body.phone_type,
+        "account_identifier": body.phone_number,
+    }
+    if body.phone_type == "whatsapp":
+        from_number = _verification_whatsapp_sender_for_user(session, body.user_id)
+        if from_number:
+            payload["from_number"] = from_number
 
     try:
         client = get_async_client()
@@ -583,10 +603,7 @@ async def send_phone_verification(
                 "Authorization": f"Bearer {admin_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "platform": body.phone_type,
-                "account_identifier": body.phone_number,
-            },
+            json=payload,
             timeout=30.0,
         )
         if response.status_code != 200:
@@ -1331,12 +1348,12 @@ async def create_personal_coordinator_endpoint(
             )
 
     from orchestra.db.models.orchestra_models import SharedPoolNumber
-    from orchestra.services.universal_droid_discord import (
-        get_universal_droid_discord_bot_id,
+    from orchestra.services.universal_unity_discord import (
+        get_universal_unity_discord_bot_id,
         notify_comms_discord_sync,
     )
 
-    universal_discord_bot_id = get_universal_droid_discord_bot_id()
+    universal_discord_bot_id = get_universal_unity_discord_bot_id()
     discord_pool_existed_before = bool(universal_discord_bot_id) and (
         session.query(SharedPoolNumber)
         .filter(
@@ -1418,9 +1435,9 @@ async def create_personal_coordinator_endpoint(
             await delete_pubsub_topic(str(coordinator_id))
         raise
 
-    # Ask Droid to (re)connect the shared Coordinator Discord bot when this
+    # Ask Unity to (re)connect the shared Coordinator Discord bot when this
     # request either created a new Coordinator or seeded the universal pool
-    # row for the first time. Droid reads committed pool state over the admin
+    # row for the first time. Unity reads committed pool state over the admin
     # API, so this must run after the commits above. Best-effort.
     if universal_discord_bot_id and (
         created_coordinator or not discord_pool_existed_before
@@ -2383,7 +2400,7 @@ async def spending_limit_reached(
     """
     Notify users when a spending limit is reached.
 
-    Called by Droid when a spending limit blocks an LLM call. Verifies the
+    Called by Unity when a spending limit blocks an LLM call. Verifies the
     caller has access to the entity, then sends email notifications and
     records the notification for deduplication.
     """

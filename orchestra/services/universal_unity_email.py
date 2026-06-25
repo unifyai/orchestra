@@ -8,18 +8,18 @@ from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact
 from orchestra.settings import settings
 
-UNIVERSAL_DROID_EMAIL_METADATA = {"universal_droid": True}
+UNIVERSAL_UNITY_EMAIL_METADATA = {"universal_unity": True}
 
 
-def get_universal_droid_email_address() -> str | None:
-    address = settings.droid_coordinator_email_address
+def get_universal_unity_email_address() -> str | None:
+    address = settings.unity_coordinator_email_address
     if not address:
         return None
     return address.strip().lower() or None
 
 
-def is_universal_droid_email_address(address: str | None) -> bool:
-    universal_address = get_universal_droid_email_address()
+def is_universal_unity_email_address(address: str | None) -> bool:
+    universal_address = get_universal_unity_email_address()
     if not universal_address or not address:
         return False
     return address.strip().lower() == universal_address
@@ -33,7 +33,7 @@ def ensure_coordinator_universal_email_contact(
     if not coordinator.is_coordinator:
         return None
 
-    address = get_universal_droid_email_address()
+    address = get_universal_unity_email_address()
     if address is None:
         return None
 
@@ -43,7 +43,7 @@ def ensure_coordinator_universal_email_contact(
         contact_value=address,
         provider="google_workspace",
         provisioned_by="platform",
-        metadata=UNIVERSAL_DROID_EMAIL_METADATA,
+        metadata=UNIVERSAL_UNITY_EMAIL_METADATA,
     )
     session.flush()
     return contact

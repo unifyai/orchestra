@@ -11,12 +11,12 @@ from orchestra.lib.deploy_env import env_suffix
 from orchestra.settings import settings
 from orchestra.web.api.utils.http_client import get_async_client
 
-COMMS_URL = os.environ.get("DROID_COMMS_URL")
+COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 COMMUNICATION_URL = os.environ.get("COMMUNICATION_URL")
 COMMS_URL_LEGACY = os.environ.get("COMMS_URL")
-ADAPTERS_URL = os.environ.get("DROID_ADAPTERS_URL")
+ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 LOCAL_ADAPTERS_URL = os.environ.get("LOCAL_ADAPTERS_URL")
-DROID_GATEWAY_URL = os.environ.get("DROID_GATEWAY_URL")
+UNITY_GATEWAY_URL = os.environ.get("UNITY_GATEWAY_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -139,8 +139,8 @@ def _comms_url() -> str:
             return url.rstrip("/")
     if LOCAL_ADAPTERS_URL:
         return LOCAL_ADAPTERS_URL.rstrip("/")
-    if DROID_GATEWAY_URL:
-        return DROID_GATEWAY_URL.rstrip("/")
+    if UNITY_GATEWAY_URL:
+        return UNITY_GATEWAY_URL.rstrip("/")
     orchestra_url = os.environ.get("ORCHESTRA_URL", "")
     if "localhost" in orchestra_url or "127.0.0.1" in orchestra_url:
         return "http://127.0.0.1:8001"
@@ -497,7 +497,7 @@ async def create_pubsub_topic(assistant_id: str):
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
-    topic_name = f"droid-{assistant_id}{env_suffix()}"
+    topic_name = f"unity-{assistant_id}{env_suffix()}"
     if settings.is_self_host:
         return {
             "success": True,
@@ -651,7 +651,7 @@ async def delete_pubsub_topic(assistant_id: str):
             reason="self_host_local_provisioning",
         )
 
-    topic_name = f"droid-{assistant_id}{env_suffix()}"
+    topic_name = f"unity-{assistant_id}{env_suffix()}"
     return await _request_cleanup_step(
         name="delete_pubsub_topic",
         method="DELETE",
@@ -751,7 +751,7 @@ async def delete_assistant_pool_archive(
 ):
     """Delete an assistant's GCS workspace archive (permanent unhire cleanup).
 
-    Pool VMs persist ``/Droid/Local`` to
+    Pool VMs persist ``/Unity/Local`` to
     ``gs://bucket/{assistant_id}.tar.gz`` between
     sessions so a fresh PD can be rehydrated on the next assignment.
     On permanent delete this archive is orphan state and must be
@@ -804,7 +804,7 @@ async def get_running_jobs(
         response = await client.get(
             f"{comms_url}/infra/jobs",
             params={
-                "label_selector": f"app=droid,assistant-id={label}",
+                "label_selector": f"app=unity,assistant-id={label}",
                 "hours": RUNTIME_JOB_LOOKBACK_HOURS,
             },
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
@@ -863,7 +863,7 @@ async def stop_jobs(
     assistant_id: str,
 ):
     """
-    Stop any running Droid job for the assistant.
+    Stop any running Unity job for the assistant.
 
     Returns structured step results so permanent-delete callers can distinguish
     "nothing was running" from "cleanup timed out".
@@ -895,7 +895,7 @@ async def stop_jobs(
         response = await client.get(
             f"{comms_url}/infra/jobs",
             params={
-                "label_selector": f"app=droid,assistant-id={label}",
+                "label_selector": f"app=unity,assistant-id={label}",
                 "hours": RUNTIME_JOB_LOOKBACK_HOURS,
             },
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
@@ -1120,7 +1120,7 @@ def _stop_jobs_sync(
             response = client.get(
                 f"{comms_url}/infra/jobs",
                 params={
-                    "label_selector": f"app=droid,assistant-id={label}",
+                    "label_selector": f"app=unity,assistant-id={label}",
                     "hours": RUNTIME_JOB_LOOKBACK_HOURS,
                 },
                 headers={"Authorization": f"Bearer {ADMIN_KEY}"},
@@ -1607,7 +1607,7 @@ def teardown_assistant_runtime_sync(
             name="delete_pubsub_topic",
             method="DELETE",
             path="/infra/pubsub/topic",
-            data={"topic_name": f"droid-{assistant_id}{env_suffix()}"},
+            data={"topic_name": f"unity-{assistant_id}{env_suffix()}"},
         )
         if _requires_assistant_disk_cleanup(desktop_mode):
             steps["delete_assistant_disk"] = _request_cleanup_step_sync(
@@ -1758,7 +1758,7 @@ async def log_pre_hire_chat(
     Returns:
         The JSON response from the webhook.
     """
-    log_pre_hire_chat_url = _adapters_url() + "/droid/pre-hire"
+    log_pre_hire_chat_url = _adapters_url() + "/unity/pre-hire"
     payload = {"assistant_id": assistant_id, "body": messages}
     client = get_async_client()
     response = await client.post(
@@ -1784,7 +1784,7 @@ async def _trigger_contact_sync(
     user-facing responses must always go through the safe wrappers so a
     transient Adapters failure does not surface as a 500.
     """
-    url = f"{_adapters_url()}/droid/system-event"
+    url = f"{_adapters_url()}/unity/system-event"
     client = get_async_client()
     response = await client.post(
         url,
@@ -1803,29 +1803,29 @@ async def _trigger_contact_sync(
     return response.json()
 
 
-async def _post_droid_system_event(
+async def _post_unity_system_event(
     *,
     assistant_id: int | str,
     event_type: str,
     message: str,
     extra_event_fields: dict | None = None,
 ) -> None:
-    """Post a generic ``droid_system_event`` to the Adapters webhook.
+    """Post a generic ``unity_system_event`` to the Adapters webhook.
 
     Thin generalisation of :func:`_trigger_contact_sync` so other
     services (e.g. coordinator onboarding narration) can wake the
-    target assistant's Droid session with their own ``event_type`` +
+    target assistant's Unity session with their own ``event_type`` +
     structured payload. ``extra_event_fields`` lands on the Pub/Sub
     event under the same top-level dict the adapter publishes (see
-    ``_publish_droid_system_event`` in
-    ``communication/adapters/main.py``) so Droid-side handlers can
+    ``_publish_unity_system_event`` in
+    ``communication/adapters/main.py``) so Unity-side handlers can
     pluck out subtype / details without re-parsing the message body.
 
     Internal helper. User-facing endpoints should wrap callers in a
     try/except (or use a ``_safe`` wrapper) so a transient Adapters
     outage cannot break the surrounding request.
     """
-    url = f"{_adapters_url()}/droid/system-event"
+    url = f"{_adapters_url()}/unity/system-event"
     client = get_async_client()
     payload: dict[str, Any] = {
         "assistant_id": assistant_id,
@@ -1853,7 +1853,7 @@ async def trigger_contact_sync_safe(
 
     Membership-mutating endpoints (invite accept, member add/remove,
     assistant transfer) call this so a temporary Adapters outage cannot
-    fail the user-facing request. Droid's next session bootstrap
+    fail the user-facing request. Unity's next session bootstrap
     re-derives Contacts on its own, so a missed kick is a soft regression
     at worst.
     """
@@ -1880,7 +1880,7 @@ async def fan_out_contact_sync_for_org(
     runtime to re-derive each one's Contacts table via the
     ``sync_contacts`` system event, in parallel. Per-assistant failures
     are logged by :func:`trigger_contact_sync_safe` but do not interrupt
-    the rest — Droid's next session bootstrap will reconcile.
+    the rest — Unity's next session bootstrap will reconcile.
     """
     from orchestra.db.dao.assistant_dao import AssistantDAO
 

@@ -2,7 +2,7 @@
 Tests for JsonlSpanExporter.
 
 Verifies that Orchestra's JSONL span exporter produces output compatible
-with Droid's FileSpanExporter format, enabling unified traces when both
+with Unity's FileSpanExporter format, enabling unified traces when both
 write to the same directory.
 """
 
@@ -184,10 +184,10 @@ class TestJsonlSpanExporter:
 
 
 class TestJsonlSpanExporterUnityCompatibility:
-    """Tests verifying compatibility with Droid's FileSpanExporter format."""
+    """Tests verifying compatibility with Unity's FileSpanExporter format."""
 
-    def test_format_matches_droid(self, reset_otel, tmp_path):
-        """Output format matches Droid's FileSpanExporter JSONL format."""
+    def test_format_matches_unity(self, reset_otel, tmp_path):
+        """Output format matches Unity's FileSpanExporter JSONL format."""
         jsonl_exporter = JsonlSpanExporter(str(tmp_path), service_name="orchestra")
 
         provider = reset_otel["provider"]
@@ -203,7 +203,7 @@ class TestJsonlSpanExporterUnityCompatibility:
         with open(files[0], "r") as f:
             span_data = json.loads(f.readline())
 
-        # Verify all required fields present (matching Droid's format)
+        # Verify all required fields present (matching Unity's format)
         required_fields = [
             "trace_id",
             "span_id",
@@ -224,26 +224,26 @@ class TestJsonlSpanExporterUnityCompatibility:
         assert len(span_data["span_id"]) == 16
 
     def test_can_append_to_existing_file(self, reset_otel, tmp_path):
-        """JsonlSpanExporter can append to an existing file (simulating Droid)."""
-        # Simulate Droid already wrote a span to this trace file
+        """JsonlSpanExporter can append to an existing file (simulating Unity)."""
+        # Simulate Unity already wrote a span to this trace file
         trace_id = "0" * 32  # Dummy trace_id
         trace_file = tmp_path / f"{trace_id}.jsonl"
 
-        # Pre-create file with Droid-style span
-        droid_span = {
+        # Pre-create file with Unity-style span
+        unity_span = {
             "trace_id": trace_id,
             "span_id": "a" * 16,
             "parent_span_id": None,
             "name": "ContactManager.ask",
-            "service": "droid",
+            "service": "unity",
             "start_time": "2025-01-01T00:00:00+00:00",
             "end_time": "2025-01-01T00:00:01+00:00",
             "duration_ms": 1000,
             "status": "OK",
-            "attributes": {"droid.query": "find john"},
+            "attributes": {"unity.query": "find john"},
         }
         with open(trace_file, "w") as f:
-            f.write(json.dumps(droid_span) + "\n")
+            f.write(json.dumps(unity_span) + "\n")
 
         # Now have Orchestra append to the same file
         jsonl_exporter = JsonlSpanExporter(str(tmp_path), service_name="orchestra")
@@ -252,7 +252,7 @@ class TestJsonlSpanExporterUnityCompatibility:
         orchestra_span = {
             "trace_id": trace_id,
             "span_id": "b" * 16,
-            "parent_span_id": "a" * 16,  # Child of Droid span
+            "parent_span_id": "a" * 16,  # Child of Unity span
             "name": "POST /v0/contacts",
             "service": "orchestra",
             "start_time": "2025-01-01T00:00:00.100+00:00",
@@ -273,11 +273,11 @@ class TestJsonlSpanExporterUnityCompatibility:
         assert len(lines) == 2
 
         spans = [json.loads(line) for line in lines]
-        assert spans[0]["service"] == "droid"
+        assert spans[0]["service"] == "unity"
         assert spans[1]["service"] == "orchestra"
 
         # Same trace_id
         assert spans[0]["trace_id"] == spans[1]["trace_id"]
 
-        # Orchestra span is child of Droid span
+        # Orchestra span is child of Unity span
         assert spans[1]["parent_span_id"] == spans[0]["span_id"]
