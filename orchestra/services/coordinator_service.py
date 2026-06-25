@@ -1707,6 +1707,7 @@ def _has_user_transcript_message(
     *,
     coordinator: Assistant,
     mediums: Sequence[str],
+    after: datetime | None = None,
     reset_after: datetime | None = None,
 ) -> bool:
     project = _project_for_coordinator(session, coordinator)
@@ -1731,20 +1732,23 @@ def _has_user_transcript_message(
         )
         .limit(1)
     )
-    if reset_after is not None:
-        query = query.where(LogEvent.created_at > reset_after)
+    threshold = after
+    if reset_after is not None and (threshold is None or reset_after > threshold):
+        threshold = reset_after
+    if threshold is not None:
+        query = query.where(LogEvent.created_at > threshold)
     row = session.scalar(query)
     return row is not None
 
 
-def _has_assistant_transcript_message(
+def _assistant_transcript_created_at(
     session: Session,
     *,
     coordinator: Assistant,
     mediums: Sequence[str],
     onboarding_trigger_step_id: str | None = None,
     reset_after: datetime | None = None,
-) -> bool:
+) -> datetime | None:
     project = _project_for_coordinator(session, coordinator)
     context = _get_context(
         session,
@@ -1755,9 +1759,9 @@ def _has_assistant_transcript_message(
         ),
     )
     if context is None:
-        return False
+        return None
     query = (
-        select(LogEvent.id)
+        select(LogEvent.created_at)
         .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
         .where(
             LogEventContext.context_id == context.id,
@@ -1765,6 +1769,7 @@ def _has_assistant_transcript_message(
             LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
             LogEvent.data["receiver_ids"].contains([PERSONAL_BOSS_CONTACT_ID]),
         )
+        .order_by(LogEvent.created_at.asc())
         .limit(1)
     )
     if onboarding_trigger_step_id is not None:
@@ -1776,8 +1781,26 @@ def _has_assistant_transcript_message(
         )
     if reset_after is not None:
         query = query.where(LogEvent.created_at > reset_after)
-    row = session.scalar(query)
-    return row is not None
+    return session.scalar(query)
+
+
+def _trigger_outbound_created_at(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    reset_after: datetime | None = None,
+) -> datetime | None:
+    mediums = onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS.get(step_id)
+    if not mediums:
+        return None
+    return _assistant_transcript_created_at(
+        session,
+        coordinator=coordinator,
+        mediums=mediums,
+        onboarding_trigger_step_id=step_id,
+        reset_after=reset_after,
+    )
 
 
 def _has_trigger_outbound(
@@ -1787,112 +1810,44 @@ def _has_trigger_outbound(
     step_id: str,
     reset_after: datetime | None = None,
 ) -> bool:
-    mediums = onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS.get(step_id)
+    return (
+        _trigger_outbound_created_at(
+            session,
+            coordinator=coordinator,
+            step_id=step_id,
+            reset_after=reset_after,
+        )
+        is not None
+    )
+
+
+def _has_reply_to_trigger(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    trigger_reset_after: datetime | None = None,
+    reset_after: datetime | None = None,
+) -> bool:
+    trigger_id = onboarding_graph.REPLY_TO_TRIGGER.get(step_id)
+    if trigger_id is None:
+        return False
+    mediums = onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS.get(trigger_id)
     if not mediums:
         return False
-    return _has_assistant_transcript_message(
+    trigger_created_at = _trigger_outbound_created_at(
+        session,
+        coordinator=coordinator,
+        step_id=trigger_id,
+        reset_after=trigger_reset_after,
+    )
+    if trigger_created_at is None:
+        return False
+    return _has_user_transcript_message(
         session,
         coordinator=coordinator,
         mediums=mediums,
-        onboarding_trigger_step_id=step_id,
-        reset_after=reset_after,
-    )
-
-
-def _has_email_reply(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("email",),
-        reset_after=reset_after,
-    )
-
-
-def _has_whatsapp_message(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("whatsapp_message",),
-        reset_after=reset_after,
-    )
-
-
-def _has_whatsapp_call(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("whatsapp_call",),
-        reset_after=reset_after,
-    )
-
-
-def _has_sms_message(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("sms_message",),
-        reset_after=reset_after,
-    )
-
-
-def _has_phone_call(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("phone_call",),
-        reset_after=reset_after,
-    )
-
-
-def _has_slack_message(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("slack_message", "slack_channel_message"),
-        reset_after=reset_after,
-    )
-
-
-def _has_discord_message(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    reset_after: datetime | None = None,
-) -> bool:
-    return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
-        mediums=("discord_message", "discord_channel_message"),
+        after=trigger_created_at,
         reset_after=reset_after,
     )
 
@@ -1917,15 +1872,6 @@ def derive_onboarding_progress(
     """
     state = state or get_coordinator_state(session, coordinator=coordinator)
     reset_at = normalize_onboarding_reset_at(state.get("onboarding_reset_at"))
-    reply_transcript_checks: dict[str, Any] = {
-        ONBOARDING_STEP_EMAIL_REPLY: _has_email_reply,
-        ONBOARDING_STEP_WHATSAPP_MESSAGE: _has_whatsapp_message,
-        ONBOARDING_STEP_WHATSAPP_CALL: _has_whatsapp_call,
-        ONBOARDING_STEP_SMS_MESSAGE: _has_sms_message,
-        ONBOARDING_STEP_PHONE_CALL: _has_phone_call,
-        ONBOARDING_STEP_SLACK_MESSAGE: _has_slack_message,
-        ONBOARDING_STEP_DISCORD_MESSAGE: _has_discord_message,
-    }
     durable_checks: dict[str, Any] = {
         ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
@@ -1948,11 +1894,14 @@ def derive_onboarding_progress(
             ):
                 completed.append(step_id)
             continue
-        check = reply_transcript_checks.get(step_id)
-        if check is not None:
-            if check(
+        trigger_id = onboarding_graph.REPLY_TO_TRIGGER.get(step_id)
+        if trigger_id is not None:
+            trigger_reset_after = _parse_onboarding_reset_at(reset_at.get(trigger_id))
+            if _has_reply_to_trigger(
                 session,
                 coordinator=coordinator,
+                step_id=step_id,
+                trigger_reset_after=trigger_reset_after,
                 reset_after=reset_after,
             ):
                 completed.append(step_id)

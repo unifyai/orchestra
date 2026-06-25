@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,6 +33,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.services import coordinator_service as svc
 from orchestra.services.coordinator_service import (
     COORDINATOR_DEFAULT_FIRST_NAME,
     COORDINATOR_DEFAULT_JOB_TITLE,
@@ -178,6 +179,7 @@ def _insert_log(
     project: Project,
     context_name: str,
     data: dict,
+    created_at: datetime | None = None,
 ) -> None:
     context = _context(dbsession, project=project, name=context_name)
     if context is None:
@@ -185,6 +187,8 @@ def _insert_log(
         dbsession.add(context)
         dbsession.flush()
     log_event = LogEvent(owner_key="sys", project_id=project.id, data=data)
+    if created_at is not None:
+        log_event.created_at = created_at
     dbsession.add(log_event)
     dbsession.flush()
     dbsession.add(
@@ -255,6 +259,100 @@ def _assert_owner_contact_row(
     assert contact_data["should_respond"] is True
     assert contact_data["response_policy"]
     return contact_logs[0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("trigger_step_id", "reply_step_id", "medium"),
+    [
+        ("email-reference", "email-reply", "email"),
+        ("sms-reference", "sms-message", "sms_message"),
+        ("whatsapp-message-reference", "whatsapp-message", "whatsapp_message"),
+    ],
+)
+async def test_onboarding_reply_requires_stamped_outbound_before_user_reply(
+    client: AsyncClient,
+    dbsession: Session,
+    trigger_step_id: str,
+    reply_step_id: str,
+    medium: str,
+) -> None:
+    owner = await _create_user(client, f"reply-proof-{reply_step_id}")
+    coordinator = dbsession.scalars(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    ).one()
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    context_name = _assistant_context_name(coordinator, "Transcripts")
+    base = datetime(2026, 1, 1, 12, 0, 0)
+
+    def progress() -> list[str]:
+        return svc.derive_onboarding_progress(
+            dbsession,
+            coordinator=coordinator,
+            state={"mode": svc.COORDINATOR_MODE_ONBOARDING},
+        )
+
+    def insert_message(
+        *,
+        role: str,
+        content: str,
+        offset: int,
+        metadata: dict | None = None,
+    ) -> None:
+        is_assistant = role == "assistant"
+        created_at = base + timedelta(seconds=offset)
+        _insert_log(
+            dbsession,
+            project=project,
+            context_name=context_name,
+            created_at=created_at,
+            data={
+                "medium": medium,
+                "sender_id": (
+                    svc.PERSONAL_SELF_CONTACT_ID
+                    if is_assistant
+                    else svc.PERSONAL_BOSS_CONTACT_ID
+                ),
+                "receiver_ids": [
+                    (
+                        svc.PERSONAL_BOSS_CONTACT_ID
+                        if is_assistant
+                        else svc.PERSONAL_SELF_CONTACT_ID
+                    ),
+                ],
+                "timestamp": created_at.isoformat(),
+                "content": content,
+                **({"metadata": metadata} if metadata else {}),
+            },
+        )
+
+    insert_message(role="user", content="A stray earlier reply", offset=1)
+    assert reply_step_id not in progress()
+
+    insert_message(role="assistant", content="Template or untagged outbound", offset=2)
+    insert_message(role="user", content="Sure", offset=3)
+    derived = progress()
+    assert trigger_step_id not in derived
+    assert reply_step_id not in derived
+
+    insert_message(
+        role="assistant",
+        content="Tagged onboarding clue",
+        offset=4,
+        metadata={"onboarding_trigger_step_id": trigger_step_id},
+    )
+    derived = progress()
+    assert trigger_step_id in derived
+    assert reply_step_id not in derived
+
+    insert_message(role="user", content="My guess after the clue", offset=5)
+    derived = progress()
+    assert trigger_step_id in derived
+    assert reply_step_id in derived
 
 
 def _assert_coordinator_provisioned(

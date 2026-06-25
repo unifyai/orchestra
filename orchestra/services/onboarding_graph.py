@@ -621,6 +621,10 @@ TRIGGER_TO_REPLY: dict[str, str] = {
     if step.kind == "trigger" and step.paired_reply
 }
 
+REPLY_TO_TRIGGER: dict[str, str] = {
+    reply_id: trigger_id for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
+}
+
 _CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "email": ("email",),
     "whatsapp_message": ("whatsapp_message",),

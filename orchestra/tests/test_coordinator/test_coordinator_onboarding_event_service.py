@@ -324,19 +324,21 @@ def test_classify_secret_generic_name_yields_integration_subtype() -> None:
 def test_derive_onboarding_progress_orders_steps_canonically() -> None:
     """Derivation composes the per-step checks in checklist order."""
     coordinator = _fake_coordinator()
+
+    def has_reply_step(*args, step_id: str, **kwargs) -> bool:
+        return step_id in {
+            svc.ONBOARDING_STEP_EMAIL_REPLY,
+            svc.ONBOARDING_STEP_WHATSAPP_MESSAGE,
+            svc.ONBOARDING_STEP_PHONE_CALL,
+        }
+
     with (
         patch.object(svc, "_has_trigger_outbound", return_value=False),
-        patch.object(svc, "_has_email_reply", return_value=True),
+        patch.object(svc, "_has_reply_to_trigger", side_effect=has_reply_step),
         patch.object(svc, "_has_user_whatsapp_number", return_value=False),
-        patch.object(svc, "_has_whatsapp_message", return_value=True),
-        patch.object(svc, "_has_whatsapp_call", return_value=False),
         patch.object(svc, "_has_user_phone_number", return_value=True),
-        patch.object(svc, "_has_sms_message", return_value=False),
-        patch.object(svc, "_has_phone_call", return_value=True),
         patch.object(svc, "_has_slack_install", return_value=True),
-        patch.object(svc, "_has_slack_message", return_value=False),
         patch.object(svc, "_has_discord_connection", return_value=True),
-        patch.object(svc, "_has_discord_message", return_value=False),
         patch.object(svc, "_has_workspace_email", return_value=True),
         patch.object(svc, "_has_app_secret", return_value=False),
         patch.object(svc, "_has_scheduled_task", return_value=True),
