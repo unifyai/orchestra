@@ -147,6 +147,24 @@ def _comms_url() -> str:
     return ""
 
 
+def comms_explicitly_configured() -> bool:
+    """Whether a real comms/adapters service URL is configured.
+
+    `_comms_url` falls back to a guessed `127.0.0.1:8001` whenever Orchestra
+    itself runs on localhost, so its truthiness cannot distinguish "a comms
+    service is actually reachable" from "we are a local/stub stack with nothing
+    listening". Provisioning steps use this stricter signal so they can skip
+    gracefully instead of hard-failing when no comms backend exists.
+    """
+    return bool(
+        COMMS_URL
+        or COMMUNICATION_URL
+        or COMMS_URL_LEGACY
+        or LOCAL_ADAPTERS_URL
+        or DROID_GATEWAY_URL,
+    )
+
+
 def _adapters_url() -> str:
     if ADAPTERS_URL:
         return ADAPTERS_URL.rstrip("/")
@@ -498,11 +516,19 @@ async def create_pubsub_topic(assistant_id: str):
         JSON response from the pubsub topic creation endpoint
     """
     topic_name = f"unity-{assistant_id}{env_suffix()}"
-    if settings.is_self_host:
+    # Skip provisioning when there is no real comms backend to talk to.
+    # Self-host and local/CI stub stacks have no Pub/Sub service; Console
+    # creates topics lazily on first SSE connect, so assistant onboarding
+    # must not hard-fail just because provisioning has nowhere to go.
+    if settings.is_self_host or not comms_explicitly_configured():
         return {
             "success": True,
             "skipped": True,
-            "reason": "self_host_local_provisioning",
+            "reason": (
+                "self_host_local_provisioning"
+                if settings.is_self_host
+                else "comms_not_configured"
+            ),
             "topic_name": topic_name,
         }
 

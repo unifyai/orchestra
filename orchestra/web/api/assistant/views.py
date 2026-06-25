@@ -191,6 +191,7 @@ from orchestra.web.api.assistant.schema import (
     WorkspaceFilePolicyUpdate,
 )
 from orchestra.web.api.utils.assistant_infra import (
+    comms_explicitly_configured,
     create_phone_number,
     create_pubsub_topic,
     delegate_to_colleague_runtime,
@@ -1387,7 +1388,14 @@ async def create_assistant(
         )
 
     # Phase 3: Wake up assistant (skip for local assistants -- unity runs locally)
-    if not assistant_in.is_local:
+    if assistant_in.is_local:
+        print(f"SKIPPED WAKEUP (local assistant): {assistant.agent_id}")
+    elif settings.is_self_host or not comms_explicitly_configured():
+        # No adapters/comms backend to talk to (self-host or local/CI stub
+        # stack). Runtime convergence happens elsewhere; onboarding must not
+        # hard-fail just because there is nothing to wake up.
+        print(f"SKIPPED WAKEUP (no comms backend configured): {assistant.agent_id}")
+    else:
         response = await wake_up_assistant(
             assistant.agent_id,
         )
@@ -1399,8 +1407,6 @@ async def create_assistant(
             )
         else:
             print(f"ASSISTANT AWAKENED: {assistant.agent_id}")
-    else:
-        print(f"SKIPPED WAKEUP (local assistant): {assistant.agent_id}")
 
     # (Optional) Log pre-hire chat if provided
     if assistant_in.pre_hire_chat:
