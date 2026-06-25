@@ -17,7 +17,10 @@ from orchestra.db.models.orchestra_models import Assistant, Team
 from orchestra.services.contact_membership_service import (
     ensure_team_contact_memberships,
 )
-from orchestra.services.coordinator_service import get_workspace_coordinator
+from orchestra.services.coordinator_service import (
+    ensure_workspace_coordinator_provisioned,
+    get_workspace_coordinator,
+)
 from orchestra.services.org_wide_sharing_service import (
     WorkspaceCoordinatorProvisioningError,
     add_assistant_to_team,
