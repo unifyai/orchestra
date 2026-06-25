@@ -1212,6 +1212,44 @@ class TestUniversalUnityWhatsApp:
         dbsession.refresh(contact)
         assert contact.contact_value == pool_numbers[0].number
 
+    def test_universal_unity_permission_write_materializes_owner_route(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_whatsapp_number",
+            pool_numbers[0].number,
+        )
+        user = _make_user(
+            dbsession,
+            "unity-owner-call-permission@test.com",
+            "+15550670001",
+        )
+        coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, coordinator, pool_numbers[0])
+
+        route = dao.update_call_permission(
+            pool_numbers[0].number,
+            user.whatsapp_number,
+            "pending",
+            source="send_call",
+        )
+
+        assert route is not None
+        assert route.pool_number_id == pool_numbers[0].id
+        assert route.contact_number == user.whatsapp_number
+        assert route.assistant_id == coordinator.agent_id
+        assert route.call_permission_status == "pending"
+
 
 # ============================================================================
 # Group D: Notifications
@@ -3324,6 +3362,28 @@ class TestCallPermissionEndpoints:
         assert data["permitted"] is True
         assert data["expires_at"] is not None
         assert data["granted_at"] is not None
+
+    async def test_post_accepted_from_probe_returns_permitted_with_source(
+        self,
+        client: AsyncClient,
+        route_setup,
+    ):
+        pool_num, contact = route_setup
+        resp = await client.post(
+            "/v0/admin/whatsapp/call-permission",
+            json={
+                "pool_number": pool_num,
+                "contact_number": contact,
+                "status": "accepted",
+                "source": "local_permission_probe",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert data["permitted"] is True
+        assert data["source"] == "local_permission_probe"
 
     async def test_get_permitted_true(
         self,

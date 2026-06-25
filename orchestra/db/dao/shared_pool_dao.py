@@ -937,6 +937,23 @@ class SharedPoolDAO:
             .first()
         )
 
+    def _get_or_create_permission_route_by_numbers(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> SharedPlatformRoute | None:
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        if route is not None:
+            return route
+
+        if not self._is_universal_unity_pool(pool_number):
+            return None
+
+        result = self._resolve_universal_unity_inbound(pool_number, contact_number)
+        if not isinstance(result, dict) or result.get("assistant_id") is None:
+            return None
+        return self._get_route_by_numbers(pool_number, contact_number)
+
     def update_call_permission(
         self,
         pool_number: str,
@@ -948,7 +965,10 @@ class SharedPoolDAO:
         if permission_status not in CALL_PERMISSION_STATES:
             raise ValueError(f"Invalid call permission status: {permission_status}")
 
-        route = self._get_route_by_numbers(pool_number, contact_number)
+        route = self._get_or_create_permission_route_by_numbers(
+            pool_number,
+            contact_number,
+        )
         if route is None:
             return None
 
@@ -1050,7 +1070,10 @@ class SharedPoolDAO:
         contact_number: str,
         context: str,
     ) -> SharedPlatformRoute | None:
-        route = self._get_route_by_numbers(pool_number, contact_number)
+        route = self._get_or_create_permission_route_by_numbers(
+            pool_number,
+            contact_number,
+        )
         if route is None:
             return None
         route.pending_whatsapp_call_context = context
