@@ -34,7 +34,7 @@ class _FakeCommsClient:
 
 def _patch_comms_verify(monkeypatch: pytest.MonkeyPatch) -> _FakeCommsClient:
     fake = _FakeCommsClient()
-    monkeypatch.setenv("DROID_COMMS_URL", "https://comms.example.test")
+    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example.test")
     monkeypatch.setattr(
         "orchestra.web.api.utils.http_client.get_async_client",
         lambda: fake,
@@ -271,7 +271,7 @@ async def test_send_whatsapp_verification_uses_coordinator_sender(
 
     monkeypatch.setattr(
         settings,
-        "droid_coordinator_whatsapp_number",
+        "unity_coordinator_whatsapp_number",
         "+447700900001",
     )
     response = await client.post(
@@ -312,7 +312,7 @@ async def test_send_phone_verification_does_not_send_whatsapp_sender(
 
     monkeypatch.setattr(
         settings,
-        "droid_coordinator_whatsapp_number",
+        "unity_coordinator_whatsapp_number",
         "+447700900001",
     )
     response = await client.post(
@@ -348,7 +348,7 @@ async def test_send_whatsapp_verification_omits_missing_coordinator_sender(
 ):
     from orchestra.settings import settings
 
-    monkeypatch.setattr(settings, "droid_coordinator_whatsapp_number", None)
+    monkeypatch.setattr(settings, "unity_coordinator_whatsapp_number", None)
     response = await client.post(
         "/v0/admin/user",
         json={"email": "profile_wa_verify_no_sender@example.com"},

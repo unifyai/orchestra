@@ -44,7 +44,7 @@ from orchestra.services.coordinator_service import (
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
 )
-from orchestra.services.universal_droid_whatsapp import (
+from orchestra.services.universal_unity_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
 from orchestra.services.user_account_cleanup_service import (
