@@ -161,7 +161,7 @@ def comms_explicitly_configured() -> bool:
         or COMMUNICATION_URL
         or COMMS_URL_LEGACY
         or LOCAL_ADAPTERS_URL
-        or DROID_GATEWAY_URL,
+        or UNITY_GATEWAY_URL,
     )
 
 
