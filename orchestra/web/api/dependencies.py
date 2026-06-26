@@ -103,6 +103,22 @@ def auth_api_key(
     :raises HTTPException: when api key is invalid.
     """
     apikey = credentials.credentials
+    expected_admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    if expected_admin_key and secrets.compare_digest(apikey, expected_admin_key):
+        request_fastapi.state.user_id = "__system__"
+        request_fastapi.state.user_email = "system@builtins.local"
+        request_fastapi.state.first_name = "System"
+        request_fastapi.state.last_name = "Builtins"
+        request_fastapi.state.organization_id = None
+        request_fastapi.state.api_key = apikey
+        request_fastapi.state.is_system_api_key = True
+        set_user_context(
+            user_id=request_fastapi.state.user_id,
+            user_email=request_fastapi.state.user_email,
+            first_name=request_fastapi.state.first_name,
+            last_name=request_fastapi.state.last_name,
+        )
+        return
 
     with _ro_session() as session:  # <-- opens & closes inside
         api_key_dao = ApiKeyDAO(session)

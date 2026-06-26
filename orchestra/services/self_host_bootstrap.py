@@ -14,6 +14,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
+from orchestra.db.models.core_models import Project
+from orchestra.services.builtins_integration_sync import (
+    BUILTINS_PROJECT_NAME,
+    ensure_builtins_catalog_contexts,
+)
 from orchestra.web.api.integrations.operations import seed_default_provider_catalog
 
 logger = logging.getLogger(__name__)
@@ -82,10 +87,46 @@ def ensure_provider_integration_backends(session: Session) -> None:
     logger.info("Composio integration backend %s for self-host", status)
 
 
+def ensure_system_builtins_project(session: Session) -> Project:
+    """Ensure the canonical Builtins project exists as platform-owned data."""
+    project = (
+        session.query(Project)
+        .filter(Project.name == BUILTINS_PROJECT_NAME)
+        .order_by(
+            Project.is_system.desc(),
+            Project.is_public_read.desc(),
+            Project.id.asc(),
+        )
+        .first()
+    )
+    if project is None:
+        project = Project(
+            name=BUILTINS_PROJECT_NAME,
+            description="System Builtins catalogue",
+            is_versioned=True,
+            is_public_read=True,
+            is_system=True,
+        )
+        session.add(project)
+        session.flush()
+    else:
+        project.user_id = None
+        project.organization_id = None
+        project.is_versioned = True
+        project.is_public_read = True
+        project.is_system = True
+        if not project.description:
+            project.description = "System Builtins catalogue"
+        session.flush()
+    return project
+
+
 def bootstrap_self_host_platform(session: Session) -> SelfHostBootstrapResult:
     """Create or repair self-host platform defaults without creating users."""
     ensure_platform_billing_defaults(session)
     ensure_provider_integration_backends(session)
+    ensure_system_builtins_project(session)
+    ensure_builtins_catalog_contexts(session)
     session.commit()
     return SelfHostBootstrapResult()
 

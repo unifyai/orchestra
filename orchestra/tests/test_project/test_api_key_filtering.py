@@ -17,45 +17,37 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.services.self_host_bootstrap import ensure_system_builtins_project
 from orchestra.tests.utils import create_test_user
 
 # ==================== Project Listing Tests ====================
 
 
 @pytest.mark.anyio
-async def test_builtins_seed_surfaces_allow_personal_writer(
+async def test_builtins_system_project_allows_admin_seed_and_user_reads(
     client: AsyncClient,
     dbsession,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    """Builtins can be converged through the same APIs used by the seed script."""
-    owner = await create_test_user(client, "builtins_seed_writer@test.com")
-    outsider = await create_test_user(client, "builtins_seed_outsider@test.com")
+    """Builtins is system-owned: admin seeds, normal users read but cannot write."""
+    ensure_system_builtins_project(dbsession)
+    dbsession.commit()
 
-    org_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Builtins Seed Writer Org"},
-        headers=owner["headers"],
-    )
-    assert org_response.status_code == status.HTTP_201_CREATED, org_response.json()
-    org_headers = {
+    reader = await create_test_user(client, "builtins_seed_reader@test.com")
+    outsider = await create_test_user(client, "builtins_seed_outsider@test.com")
+    admin_key = "builtins-admin-key"
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", admin_key)
+    admin_headers = {
         "accept": "application/json",
-        "Authorization": f"Bearer {org_response.json()['api_key']}",
+        "Authorization": f"Bearer {admin_key}",
     }
 
     create_response = await client.post(
         "/v0/project",
         json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
-        headers=owner["headers"],
+        headers=reader["headers"],
     )
-    assert create_response.status_code == status.HTTP_200_OK, create_response.json()
-
-    owner_duplicate_create = await client.post(
-        "/v0/project",
-        json={"name": "Builtins", "is_public_read": True, "is_versioned": True},
-        headers=owner["headers"],
-    )
-    assert owner_duplicate_create.status_code == status.HTTP_400_BAD_REQUEST
-    assert "already exists" in owner_duplicate_create.json()["detail"]
+    assert create_response.status_code == status.HTTP_403_FORBIDDEN
 
     outsider_create = await client.post(
         "/v0/project",
@@ -64,28 +56,12 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
     )
     assert outsider_create.status_code == status.HTTP_403_FORBIDDEN
 
-    patch_response = await client.patch(
+    user_patch_response = await client.patch(
         "/v0/project/Builtins",
         json={"is_public_read": True},
-        headers=owner["headers"],
+        headers=reader["headers"],
     )
-    assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
-
-    owner_org_patch_response = await client.patch(
-        "/v0/project/Builtins",
-        json={"is_public_read": True},
-        headers=org_headers,
-    )
-    assert (
-        owner_org_patch_response.status_code == status.HTTP_200_OK
-    ), owner_org_patch_response.json()
-
-    outsider_patch_response = await client.patch(
-        "/v0/project/Builtins",
-        json={"is_public_read": True},
-        headers=outsider["headers"],
-    )
-    assert outsider_patch_response.status_code == status.HTTP_403_FORBIDDEN
+    assert user_patch_response.status_code == status.HTTP_403_FORBIDDEN
 
     context_response = await client.post(
         "/v0/project/Builtins/contexts",
@@ -96,24 +72,9 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
             "allow_duplicates": True,
             "unique_keys": None,
         },
-        headers=owner["headers"],
+        headers=admin_headers,
     )
     assert context_response.status_code == status.HTTP_200_OK, context_response.json()
-
-    org_context_response = await client.post(
-        "/v0/project/Builtins/contexts",
-        json={
-            "name": "Smoke/BuiltinsSeed/org-key",
-            "description": "Builtins seed smoke context from org key.",
-            "is_versioned": False,
-            "allow_duplicates": True,
-            "unique_keys": None,
-        },
-        headers=org_headers,
-    )
-    assert (
-        org_context_response.status_code == status.HTTP_200_OK
-    ), org_context_response.json()
 
     outsider_context_response = await client.post(
         "/v0/project/Builtins/contexts",
@@ -135,21 +96,10 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
             "context": "Smoke/BuiltinsSeed/test",
             "entries": {"smoke_id": "test", "value": "ok"},
         },
-        headers=owner["headers"],
+        headers=admin_headers,
     )
     assert log_response.status_code == status.HTTP_200_OK, log_response.json()
     log_id = log_response.json()["log_event_ids"][0]
-
-    org_log_response = await client.post(
-        "/v0/logs",
-        json={
-            "project_name": "Builtins",
-            "context": "Smoke/BuiltinsSeed/org-key",
-            "entries": {"smoke_id": "org-key", "value": "ok"},
-        },
-        headers=org_headers,
-    )
-    assert org_log_response.status_code == status.HTTP_200_OK, org_log_response.json()
 
     outsider_log_response = await client.post(
         "/v0/logs",
@@ -162,19 +112,6 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
     )
     assert outsider_log_response.status_code == status.HTTP_403_FORBIDDEN
 
-    update_log_response = await client.put(
-        "/v0/logs",
-        json={
-            "logs": [log_id],
-            "entries": {"value": "updated"},
-            "overwrite": True,
-        },
-        headers=owner["headers"],
-    )
-    assert (
-        update_log_response.status_code == status.HTTP_200_OK
-    ), update_log_response.json()
-
     get_response = await client.get(
         "/v0/logs",
         params={
@@ -183,9 +120,10 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
             "filter_expr": 'smoke_id == "test"',
             "limit": 1,
         },
-        headers=owner["headers"],
+        headers=reader["headers"],
     )
     assert get_response.status_code == status.HTTP_200_OK, get_response.json()
+    assert get_response.json()["logs"][0]["entries"]["value"] == "ok"
 
     delete_log_response = await client.request(
         "DELETE",
@@ -198,7 +136,7 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
             "delete_empty_logs": True,
             "delete_empty_fields": True,
         },
-        headers=owner["headers"],
+        headers=admin_headers,
     )
     assert (
         delete_log_response.status_code == status.HTTP_200_OK
@@ -206,13 +144,13 @@ async def test_builtins_seed_surfaces_allow_personal_writer(
 
     delete_project_response = await client.delete(
         "/v0/project/Builtins",
-        headers=owner["headers"],
+        headers=admin_headers,
     )
     assert delete_project_response.status_code == status.HTTP_403_FORBIDDEN
 
     delete_context_response = await client.delete(
         "/v0/project/Builtins/contexts/Smoke/BuiltinsSeed/test",
-        headers=owner["headers"],
+        headers=admin_headers,
     )
     assert delete_context_response.status_code == status.HTTP_403_FORBIDDEN
 

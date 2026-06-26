@@ -805,12 +805,16 @@ def ensure_builtins_catalog_contexts(session: Session) -> dict[str, Context]:
     project = (
         session.query(Project)
         .filter(Project.name == BUILTINS_PROJECT_NAME)
-        .order_by(Project.is_public_read.desc(), Project.id.asc())
+        .order_by(
+            Project.is_system.desc(),
+            Project.is_public_read.desc(),
+            Project.id.asc(),
+        )
         .first()
     )
     if project is None:
         raise RuntimeError(
-            "Builtins project does not exist; create it with the shared owner first",
+            "Builtins project does not exist; run the platform Builtins bootstrap first",
         )
 
     context_dao = ContextDAO(session)
