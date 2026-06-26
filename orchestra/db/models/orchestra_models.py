@@ -3317,8 +3317,16 @@ class SharedPlatformRoute(Base):
     last_inbound_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     call_permission_status = Column(String, nullable=True)
+    call_permission_requested_at = Column(TIMESTAMP(timezone=True), nullable=True)
     call_permission_granted_at = Column(TIMESTAMP(timezone=True), nullable=True)
     call_permission_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    call_permission_last_provider_event_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )
+    call_permission_source = Column(String, nullable=True)
+    pending_whatsapp_call_context = Column(Text, nullable=True)
+    pending_whatsapp_call_context_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     pool_number = relationship("SharedPoolNumber")
     assistant = relationship("Assistant")

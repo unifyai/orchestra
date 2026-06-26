@@ -41,6 +41,22 @@ from orchestra.services.universal_unity_whatsapp import (
 
 logger = logging.getLogger(__name__)
 
+CALL_PERMISSION_ACCEPTED = "accepted"
+CALL_PERMISSION_EXPIRED = "expired"
+CALL_PERMISSION_PENDING = "pending"
+CALL_PERMISSION_REJECTED = "rejected"
+CALL_PERMISSION_UNKNOWN = "unknown"
+CALL_PERMISSION_UNKNOWN_INTERACTION = "unknown_interaction"
+
+CALL_PERMISSION_STATES = {
+    CALL_PERMISSION_ACCEPTED,
+    CALL_PERMISSION_PENDING,
+    CALL_PERMISSION_REJECTED,
+    CALL_PERMISSION_UNKNOWN,
+    CALL_PERMISSION_UNKNOWN_INTERACTION,
+}
+CALL_PERMISSION_TTL = timedelta(days=7)
+
 
 @dataclass
 class ConflictResolution:
@@ -921,27 +937,123 @@ class SharedPoolDAO:
             .first()
         )
 
+    def _get_or_create_permission_route_by_numbers(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> SharedPlatformRoute | None:
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        if route is not None:
+            return route
+
+        if not self._is_universal_unity_pool(pool_number):
+            return None
+
+        result = self._resolve_universal_unity_inbound(pool_number, contact_number)
+        if not isinstance(result, dict) or result.get("assistant_id") is None:
+            return None
+        return self._get_route_by_numbers(pool_number, contact_number)
+
     def update_call_permission(
         self,
         pool_number: str,
         contact_number: str,
         permission_status: str,
+        *,
+        source: str | None = None,
     ) -> SharedPlatformRoute | None:
-        route = self._get_route_by_numbers(pool_number, contact_number)
+        if permission_status not in CALL_PERMISSION_STATES:
+            raise ValueError(f"Invalid call permission status: {permission_status}")
+
+        route = self._get_or_create_permission_route_by_numbers(
+            pool_number,
+            contact_number,
+        )
         if route is None:
             return None
 
         now = datetime.now(timezone.utc)
-        route.call_permission_status = permission_status
-        if permission_status == "accepted":
+        route.call_permission_source = source
+
+        if permission_status == CALL_PERMISSION_ACCEPTED:
+            route.call_permission_status = CALL_PERMISSION_ACCEPTED
             route.call_permission_granted_at = now
-            route.call_permission_expires_at = now + timedelta(days=7)
-        else:
+            route.call_permission_expires_at = now + CALL_PERMISSION_TTL
+            route.call_permission_last_provider_event_at = now
+        elif permission_status == CALL_PERMISSION_REJECTED:
+            route.call_permission_status = CALL_PERMISSION_REJECTED
             route.call_permission_granted_at = None
             route.call_permission_expires_at = None
+            route.call_permission_last_provider_event_at = now
+        elif permission_status == CALL_PERMISSION_PENDING:
+            route.call_permission_status = CALL_PERMISSION_PENDING
+            route.call_permission_requested_at = now
+            route.call_permission_granted_at = None
+            route.call_permission_expires_at = None
+        elif permission_status == CALL_PERMISSION_UNKNOWN_INTERACTION:
+            if route.call_permission_status not in {
+                CALL_PERMISSION_ACCEPTED,
+                CALL_PERMISSION_REJECTED,
+            }:
+                route.call_permission_status = CALL_PERMISSION_UNKNOWN_INTERACTION
+                route.call_permission_granted_at = None
+                route.call_permission_expires_at = None
+            route.call_permission_last_provider_event_at = now
+        else:
+            route.call_permission_status = CALL_PERMISSION_UNKNOWN
+            route.call_permission_granted_at = None
+            route.call_permission_expires_at = None
+            route.call_permission_requested_at = None
 
         self.session.flush()
         return route
+
+    def get_call_permission_state(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> dict:
+        """Return explicit WhatsApp call permission state for a pool/contact route."""
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        if route is None:
+            return {
+                "permitted": False,
+                "status": CALL_PERMISSION_UNKNOWN,
+                "expires_at": None,
+                "requested_at": None,
+                "granted_at": None,
+                "last_provider_event_at": None,
+                "source": None,
+            }
+
+        stored_status = route.call_permission_status or CALL_PERMISSION_UNKNOWN
+        expires_at = route.call_permission_expires_at
+        permitted = False
+        status = stored_status
+
+        if stored_status == CALL_PERMISSION_ACCEPTED:
+            now = datetime.now(timezone.utc)
+            if expires_at is not None and expires_at > now:
+                permitted = True
+            else:
+                status = CALL_PERMISSION_EXPIRED
+        elif stored_status not in {
+            CALL_PERMISSION_PENDING,
+            CALL_PERMISSION_REJECTED,
+            CALL_PERMISSION_UNKNOWN_INTERACTION,
+            CALL_PERMISSION_UNKNOWN,
+        }:
+            status = CALL_PERMISSION_UNKNOWN
+
+        return {
+            "permitted": permitted,
+            "status": status,
+            "expires_at": expires_at,
+            "requested_at": route.call_permission_requested_at,
+            "granted_at": route.call_permission_granted_at,
+            "last_provider_event_at": route.call_permission_last_provider_event_at,
+            "source": route.call_permission_source,
+        }
 
     def check_call_permission(
         self,
@@ -949,17 +1061,53 @@ class SharedPoolDAO:
         contact_number: str,
     ) -> tuple[bool, datetime | None]:
         """Returns (permitted, expires_at)."""
+        state = self.get_call_permission_state(pool_number, contact_number)
+        return state["permitted"], state["expires_at"]
+
+    def set_pending_whatsapp_call_context(
+        self,
+        pool_number: str,
+        contact_number: str,
+        context: str,
+    ) -> SharedPlatformRoute | None:
+        route = self._get_or_create_permission_route_by_numbers(
+            pool_number,
+            contact_number,
+        )
+        if route is None:
+            return None
+        route.pending_whatsapp_call_context = context
+        route.pending_whatsapp_call_context_at = datetime.now(timezone.utc)
+        self.session.flush()
+        return route
+
+    def get_pending_whatsapp_call_context(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> dict | None:
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        if route is None or not route.pending_whatsapp_call_context:
+            return None
+        return {
+            "pool_number": pool_number,
+            "contact_number": contact_number,
+            "context": route.pending_whatsapp_call_context,
+            "created_at": route.pending_whatsapp_call_context_at,
+        }
+
+    def clear_pending_whatsapp_call_context(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> bool:
         route = self._get_route_by_numbers(pool_number, contact_number)
         if route is None:
-            return False, None
-        if route.call_permission_status != "accepted":
-            return False, None
-        if route.call_permission_expires_at is None:
-            return False, None
-        now = datetime.now(timezone.utc)
-        if route.call_permission_expires_at <= now:
-            return False, route.call_permission_expires_at
-        return True, route.call_permission_expires_at
+            return False
+        route.pending_whatsapp_call_context = None
+        route.pending_whatsapp_call_context_at = None
+        self.session.flush()
+        return True
 
     # ------------------------------------------------------------------
     # Private helpers
