@@ -13,14 +13,15 @@ This one-time, idempotent backfill re-derives each child's ``project_id`` from
 its parent ``log_event`` and only touches rows that actually drifted (a no-op
 where data is already consistent).
 
-Revision ID: reproject_orphaned_child_partition_keys
+Revision ID: reproject_child_partition_key
 Revises: tune_kernel_partition_autovacuum
 Create Date: 2026-07-05 00:00:00.000000
 """
 
 from alembic import op
 
-revision = "reproject_orphaned_child_partition_keys"
+# Kept <= 32 chars: alembic_version.version_num is varchar(32).
+revision = "reproject_child_partition_key"
 down_revision = "tune_kernel_partition_autovacuum"
 branch_labels = None
 depends_on = None
