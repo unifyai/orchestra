@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bootstrap the self-host owner account and personal Coordinator."""
+"""Bootstrap self-host platform defaults."""
 
 from __future__ import annotations
 
@@ -20,21 +20,16 @@ def main() -> int:
     session_factory = sessionmaker(bind=engine)
     result = run_self_host_bootstrap(session_factory)
     payload = {
-        "user_id": result.user_id,
-        "email": result.email,
-        "password": result.password,
-        "api_key": result.api_key,
-        "coordinator_agent_id": result.coordinator_agent_id,
-        "created_user": result.created_user,
-        "created_coordinator": result.created_coordinator,
+        "ok": result.ok,
+        "created_user": False,
+        "created_coordinator": False,
     }
     output_path = Path(
         os.environ.get("SELF_HOST_BOOTSTRAP_OUTPUT", "/tmp/self-host-bootstrap.json"),
     )
     output_path.write_text(json.dumps(payload), encoding="utf-8")
     print(
-        f"Self-host bootstrap ready for {payload['email']} "
-        f"(Coordinator agent_id={payload['coordinator_agent_id']})",
+        "Self-host platform bootstrap ready. Register in Console to create the owner.",
         file=sys.stderr,
     )
     return 0

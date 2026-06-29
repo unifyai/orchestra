@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap the self-host owner via Orchestra's production coordinator provisioner.
+# Bootstrap self-host platform defaults. The owner is created only through Console signup.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

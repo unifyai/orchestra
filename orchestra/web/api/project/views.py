@@ -700,13 +700,18 @@ def create_project(
                 detail="A logging project with this name already exists.",
             )
         project_dao.create(
-            user_id=request_fastapi.state.user_id,
+            user_id=(
+                None
+                if getattr(request_fastapi.state, "is_system_api_key", False)
+                else request_fastapi.state.user_id
+            ),
             name=request.name,
             icon=request.icon or "folder",
             is_versioned=request.is_versioned,
             description=request.description,
             order=request.order,
             is_public_read=request.is_public_read,
+            is_system=getattr(request_fastapi.state, "is_system_api_key", False),
         )
         return {"info": "Project created successfully!"}
 

@@ -67,9 +67,10 @@ class ProjectDAO:
         icon: Optional[str] = "folder",
         order: Optional[int] = None,
         is_public_read: bool = False,
+        is_system: bool = False,
     ) -> None:
 
-        if user_id is None and organization_id is None:
+        if user_id is None and organization_id is None and not is_system:
             raise ValueError("One of user_id or organization_id must be provided.")
 
         self._validate_description(description)
@@ -98,6 +99,7 @@ class ProjectDAO:
                 icon=icon,
                 order=order_value,
                 is_public_read=is_public_read,
+                is_system=is_system,
             ),
         )
 
@@ -132,7 +134,11 @@ class ProjectDAO:
         query = (
             select(Project)
             .where(Project.name == name)
-            .order_by(Project.is_public_read.desc(), Project.id)
+            .order_by(
+                Project.is_system.desc(),
+                Project.is_public_read.desc(),
+                Project.id,
+            )
         )
         return self.session.execute(query).scalars().first()
 
@@ -613,7 +619,7 @@ class ProjectDAO:
         query = (
             select(Project)
             .where(Project.is_public_read.is_(True), Project.name == name)
-            .order_by(Project.id)
+            .order_by(Project.is_system.desc(), Project.id)
         )
         return self.session.execute(query).scalars().first()
 

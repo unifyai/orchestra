@@ -7,8 +7,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.coordinator_voice import (
-    COORDINATOR_VOICE_ID,
-    COORDINATOR_VOICE_PROVIDER,
+    COORDINATOR_DEFAULT_VOICE_ID,
+    COORDINATOR_DEFAULT_VOICE_PROVIDER,
 )
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
@@ -163,23 +163,56 @@ def test_is_coordinator_is_immutable_after_persistence(
 
 
 def test_coordinator_voice_defaults_on_insert(dbsession: Session) -> None:
-    """Coordinator rows start with the canonical voice."""
+    """Coordinator rows fall back to the default voice when none is chosen."""
     owner = _make_user(dbsession, "coordinator-voice-default")
 
     assistant = _make_assistant(dbsession, owner, is_coordinator=True)
 
-    assert assistant.voice_id == COORDINATOR_VOICE_ID
-    assert assistant.voice_provider == COORDINATOR_VOICE_PROVIDER
+    assert assistant.voice_id == COORDINATOR_DEFAULT_VOICE_ID
+    assert assistant.voice_provider == COORDINATOR_DEFAULT_VOICE_PROVIDER
     voice = (
         dbsession.query(Voice)
         .filter_by(
             user_id=owner.id,
-            voice_id=COORDINATOR_VOICE_ID,
-            provider=COORDINATOR_VOICE_PROVIDER,
+            voice_id=COORDINATOR_DEFAULT_VOICE_ID,
+            provider=COORDINATOR_DEFAULT_VOICE_PROVIDER,
         )
         .one()
     )
     assert voice.is_preset is True
+
+
+def test_coordinator_voice_explicit_choice_is_kept_on_insert(
+    dbsession: Session,
+) -> None:
+    """An explicitly chosen Coordinator voice is not overwritten by the default."""
+    owner = _make_user(dbsession, "coordinator-voice-explicit")
+    chosen = Voice(
+        user_id=owner.id,
+        voice_id="chosen-on-create",
+        provider="cartesia",
+        name="Chosen On Create",
+        description="A voice picked at coordinator creation.",
+        language="en",
+        is_preset=True,
+    )
+    dbsession.add(chosen)
+    dbsession.flush()
+
+    assistant = Assistant(
+        user_id=owner.id,
+        first_name="T-W1N",
+        surname="Assistant",
+        is_coordinator=True,
+        voice_id=chosen.voice_id,
+        voice_provider=chosen.provider,
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+    dbsession.refresh(assistant)
+
+    assert assistant.voice_id == "chosen-on-create"
+    assert assistant.voice_provider == "cartesia"
 
 
 def test_coordinator_voice_can_be_updated_after_insert(dbsession: Session) -> None:

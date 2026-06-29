@@ -16,7 +16,17 @@ def require_builtins_project_owner(
     user_id: str,
     action: str = "modify",
 ) -> None:
-    """Allow Builtins catalogue convergence only through its owning user."""
+    """Allow Builtins catalogue convergence only through a platform writer."""
+    if getattr(project, "is_system", False) and user_id == "__system__":
+        return
+    if getattr(project, "is_system", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"The '{BUILTINS_PROJECT_NAME}' project is reserved and cannot be "
+                f"{action} by user API keys."
+            ),
+        )
     if project.user_id == user_id:
         return
     raise HTTPException(

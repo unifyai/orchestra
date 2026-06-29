@@ -55,6 +55,10 @@ class Project(Base):
     # authenticated account. Used for platform-wide read-only datasets such as
     # the builtin function primitives catalogue.
     is_public_read = Column(Boolean, nullable=False, server_default="f")
+    # System projects are platform-owned catalogues. They are not tied to a
+    # human user or organization and are writable only through internal/admin
+    # seed paths.
+    is_system = Column(Boolean, nullable=False, server_default="f")
     current_commit_hash = Column(String, nullable=True)
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
 
