@@ -1385,31 +1385,26 @@ class ContextDAO:
         old_value_json: str,
     ) -> int:
         """JSONB mode: Delete all log events where FK column matches old value."""
-        # Find all log_event_ids that reference this value in LogEvent.data.
-        # The redundant project_id predicate (derived from the context) lets the
-        # LIST(project_id) pruner skip other projects' partitions; guarded so a
-        # missing project never silently narrows the matched set.
-        pid = self._project_id_for_context(context_id)
-        project_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        # Find all log_event_ids that reference this value in LogEvent.data
         query = text(
-            f"""
+            """
             SELECT DISTINCT le.id, le.project_id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
-              {project_filter}AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
+              AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
         """,
         )
 
-        params = {
-            "context_id": context_id,
-            "fk_column": fk_column,
-            "json_str": old_value_json,
-        }
-        if pid is not None:
-            params["project_id"] = pid
-        result = self.session.execute(query, params)
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
         rows = result.fetchall()
 
         if not rows:
@@ -1471,36 +1466,31 @@ class ContextDAO:
         """JSONB mode: Update FK column values from old to new in LogEvent.data."""
         new_value_json = json.dumps(new_value)
 
-        # The redundant project_id predicate (on both the outer UPDATE and the
-        # subquery) prunes the LIST(project_id) partitions; guarded so a missing
-        # project never narrows the affected set.
-        pid = self._project_id_for_context(context_id)
-        outer_filter = "project_id = :project_id AND " if pid is not None else ""
-        inner_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        # Update LogEvent.data using jsonb_set
         query = text(
-            f"""
+            """
             UPDATE log_event
             SET data = jsonb_set(data, ARRAY[:fk_column], CAST(:new_value AS jsonb))
-            WHERE {outer_filter}id IN (
+            WHERE id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 AND le.project_id = lec.project_id
                 WHERE lec.context_id = :context_id
-                  {inner_filter}AND le.data @> jsonb_build_object(:fk_column, CAST(:old_value AS jsonb))
+                  AND le.data @> jsonb_build_object(:fk_column, CAST(:old_value AS jsonb))
             )
         """,
         )
 
-        params = {
-            "context_id": context_id,
-            "fk_column": fk_column,
-            "old_value": old_value_json,
-            "new_value": new_value_json,
-        }
-        if pid is not None:
-            params["project_id"] = pid
-        result = self.session.execute(query, params)
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "old_value": old_value_json,
+                "new_value": new_value_json,
+            },
+        )
 
         return result.rowcount
 
@@ -1515,35 +1505,30 @@ class ContextDAO:
         old_value_json: str,
     ) -> int:
         """JSONB mode: Remove FK column from LogEvent.data (effectively setting to NULL)."""
-        # Remove the FK field from LogEvent.data using the - operator. The
-        # redundant project_id predicate prunes the LIST(project_id) partitions;
-        # guarded so a missing project never narrows the affected set.
-        pid = self._project_id_for_context(context_id)
-        outer_filter = "project_id = :project_id AND " if pid is not None else ""
-        inner_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        # Remove the FK field from LogEvent.data using the - operator
         query = text(
-            f"""
+            """
             UPDATE log_event
             SET data = data - :fk_column
-            WHERE {outer_filter}id IN (
+            WHERE id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 AND le.project_id = lec.project_id
                 WHERE lec.context_id = :context_id
-                  {inner_filter}AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
+                  AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
             )
         """,
         )
 
-        params = {
-            "context_id": context_id,
-            "fk_column": fk_column,
-            "json_str": old_value_json,
-        }
-        if pid is not None:
-            params["project_id"] = pid
-        result = self.session.execute(query, params)
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
 
         return result.rowcount
 
@@ -1599,23 +1584,18 @@ class ContextDAO:
         )
 
         # Use CTE with unnest to check JSONB containment for each old value
-        # This avoids large OR chains while maintaining JSONB type semantics.
-        # The redundant project_id predicate prunes the LIST(project_id)
-        # partitions; guarded so a missing project never narrows the set.
-        pid = self._project_id_for_context(context_id)
-        outer_filter = "project_id = :project_id AND " if pid is not None else ""
-        inner_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        # This avoids large OR chains while maintaining JSONB type semantics
         query_str = f"""
             UPDATE log_event
             SET data = jsonb_set(data, ARRAY[:fk_column], CAST(:new_value AS jsonb))
-            WHERE {outer_filter}id IN (
+            WHERE id IN (
                 SELECT DISTINCT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 AND le.project_id = lec.project_id
                 CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
                 WHERE lec.context_id = :context_id
-                  {inner_filter}AND le.data @> jsonb_build_object(:fk_column, old_val.v)
+                  AND le.data @> jsonb_build_object(:fk_column, old_val.v)
             )
         """
 
@@ -1627,8 +1607,6 @@ class ContextDAO:
             "fk_column": fk_column,
             "new_value": new_value_json,
         }
-        if pid is not None:
-            params["project_id"] = pid
         for i, old_val in enumerate(old_values_json):
             params[f"old_val_{i}"] = old_val
 
@@ -1674,23 +1652,18 @@ class ContextDAO:
         )
 
         # Use CTE with unnest to check JSONB containment for each old value
-        # This avoids large OR chains while maintaining JSONB type semantics.
-        # The redundant project_id predicate prunes the LIST(project_id)
-        # partitions; guarded so a missing project never narrows the set.
-        pid = self._project_id_for_context(context_id)
-        outer_filter = "project_id = :project_id AND " if pid is not None else ""
-        inner_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        # This avoids large OR chains while maintaining JSONB type semantics
         query_str = f"""
             UPDATE log_event
             SET data = data - :fk_column
-            WHERE {outer_filter}id IN (
+            WHERE id IN (
                 SELECT DISTINCT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 AND le.project_id = lec.project_id
                 CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
                 WHERE lec.context_id = :context_id
-                  {inner_filter}AND le.data @> jsonb_build_object(:fk_column, old_val.v)
+                  AND le.data @> jsonb_build_object(:fk_column, old_val.v)
             )
         """
 
@@ -1701,8 +1674,6 @@ class ContextDAO:
             "context_id": context_id,
             "fk_column": fk_column,
         }
-        if pid is not None:
-            params["project_id"] = pid
         for i, old_val in enumerate(old_values_json):
             params[f"old_val_{i}"] = old_val
 

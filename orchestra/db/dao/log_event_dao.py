@@ -2056,23 +2056,13 @@ class LogEventDAO:
             return
 
         try:
-            # Resolve the owning project(s) up front so every statement below can
-            # prune to the right LIST(project_id) partition(s) instead of scanning
-            # them all. Logs deleted together share a project in practice; handle
-            # multiple defensively via IN, and only pass a scalar project_id to the
-            # embedding cleanup (its pruning hint) when it is unambiguous.
-            project_ids = [
-                row[0]
-                for row in self.session.query(LogEvent.project_id)
-                .filter(LogEvent.id.in_(ids))
-                .distinct()
-                .all()
-            ]
-            scope_pid = project_ids[0] if len(project_ids) == 1 else None
-
-            # Delete associated GCS media BEFORE deleting DB records.
-            if project_ids:
-                self._bulk_delete_gcs_media(ids, project_ids[0])
+            # Delete associated GCS media BEFORE deleting DB records
+            # Get project_id from first log event for the new function signature
+            first_log_event = (
+                self.session.query(LogEvent).filter(LogEvent.id.in_(ids)).first()
+            )
+            if first_log_event:
+                self._bulk_delete_gcs_media(ids, first_log_event.project_id)
 
             # Embedding cleanup before hard delete: cancel pending queue items
             # (prevents worker race conditions), soft-delete embeddings (excludes
@@ -2083,39 +2073,26 @@ class LogEventDAO:
             from orchestra.db.dao.embedding_dao import EmbeddingDAO
 
             embedding_dao = EmbeddingDAO(self.session)
-            embedding_dao.cancel_queue(
-                log_event_ids=ids,
-                project_id=scope_pid,
-                reason="Log deleted",
-            )
-            embedding_dao.soft_delete(log_event_ids=ids, project_id=scope_pid)
-            embedding_dao.null_ref_ids(log_event_ids=ids, project_id=scope_pid)
+            embedding_dao.cancel_queue(log_event_ids=ids, reason="Log deleted")
+            embedding_dao.soft_delete(log_event_ids=ids)
+            embedding_dao.null_ref_ids(log_event_ids=ids)
 
             # First, delete the association rows referencing these log events
-            lec_query = self.session.query(LogEventContext).filter(
+            self.session.query(LogEventContext).filter(
                 LogEventContext.log_event_id.in_(ids),
-            )
-            if project_ids:
-                lec_query = lec_query.filter(
-                    LogEventContext.project_id.in_(project_ids),
-                )
-            lec_query.delete(synchronize_session=False)
+            ).delete(synchronize_session=False)
 
             # The log_unique_constraint -> log_event FK was removed for
             # partitioning, so its rows are no longer cascade-deleted; remove
-            # them explicitly to avoid orphaned uniqueness rows. (Not partitioned
-            # by project_id, so it is deleted by log_event_id alone.)
+            # them explicitly to avoid orphaned uniqueness rows.
             self.session.query(LogUniqueConstraint).filter(
                 LogUniqueConstraint.log_event_id.in_(ids),
             ).delete(synchronize_session=False)
 
             # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)
-            le_query = self.session.query(LogEvent).filter(
+            self.session.query(LogEvent).filter(
                 LogEvent.id.in_(ids),
-            )
-            if project_ids:
-                le_query = le_query.filter(LogEvent.project_id.in_(project_ids))
-            le_query.delete(synchronize_session=False)
+            ).delete(synchronize_session=False)
 
             self.session.commit()
         except Exception as e:
