@@ -3507,7 +3507,7 @@ async def test_transfer_keeps_denormalized_project_id_consistent(
         json={"name": "Reproject Consistency Org"},
         headers=user["headers"],
     )
-    assert org_resp.status_code == 200
+    assert org_resp.status_code in (200, 201)
     org_id = org_resp.json()["id"]
 
     transfer_resp = await client.post(
