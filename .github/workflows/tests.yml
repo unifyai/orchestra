@@ -353,3 +353,24 @@ jobs:
         path: logs/
         if-no-files-found: ignore
         retention-days: 90
+
+  # Single, stable required status check for the Staging->Main ruleset.
+  # The matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),
+  # which a fixed required-context named "pytest" can never match -- so this
+  # gate republishes one "pytest" check that is green iff every shard passed
+  # (aggregate `needs.pytest.result`), or was skipped on a non-test run. This
+  # keeps the required check meaningful and robust to changing the shard count.
+  pytest-required:
+    name: pytest
+    needs: [should-run-tests, pytest]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require all pytest shards to pass
+      run: |
+        result="${{ needs.pytest.result }}"
+        echo "pytest matrix aggregate result: $result"
+        if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+          exit 0
+        fi
+        exit 1
