@@ -5,9 +5,18 @@ This worker performs periodic maintenance on HNSW indexes to:
 1. Check for and clean up invalid indexes (left by failed CONCURRENTLY operations)
 2. Hard-delete soft-deleted embeddings in batches (to avoid long locks)
 3. Use REINDEX CONCURRENTLY to rebuild indexes (keeps old index usable during rebuild)
-4. Run VACUUM to reclaim disk space
+4. Run VACUUM (ANALYZE) to reclaim disk space and refresh embedding stats
+
+Every non-``check`` run also performs kernel stats maintenance: it re-asserts the
+per-partition autovacuum tuning (``partitioning.tune_partition_storage``) and
+ANALYZEs the ``log_event``/``log_event_context``/``embedding`` partition leaves.
+The cutover-attached partitions are too large for Postgres' default autovacuum
+scale-factor thresholds to ever fire, so this is the safety net (on top of the
+tuned thresholds) that keeps the planner from seq-scanning whole partitions.
 
 The worker is triggered by Cloud Scheduler (short ops) or Cloud Run Jobs (reindex).
+The existing twice-daily/4-hourly/nightly Cloud Scheduler jobs below already give
+the kernel ANALYZE pass a daily-or-better cadence; no new schedule is required.
 
 CRITICAL: REINDEX CONCURRENTLY must NOT run under HTTP timeout pressure.
 An interrupted REINDEX corrupts both old and new indexes, leaving them invalid.
@@ -64,16 +73,19 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.partitioning import (
+    PARTITIONED_TABLES,
     dedicated_partition_name,
     default_partition_name,
     find_owner_promotion_candidates,
     find_promotion_candidates,
     is_partitioned,
+    partition_leaves,
     promote_owner,
     promote_project_to_partition,
     sub_partition_project_by_owner,
     table_relkind,
     table_storage_units,
+    tune_partition_storage,
 )
 
 logging.basicConfig(
@@ -527,19 +539,46 @@ def reindex_hnsw_indexes(conn) -> dict:
 
 
 def run_vacuum(conn) -> float:
-    """VACUUM the embedding partitions individually. Returns total seconds.
+    """VACUUM (ANALYZE) the embedding partitions individually. Returns seconds.
 
     Per-partition VACUUM keeps a single giant partition from blocking the rest
     and lets dead tuples from per-partition cleanup be reclaimed independently.
+    ANALYZE is folded in so the cutover-attached partitions also get fresh
+    planner statistics (autovacuum's default thresholds are too high to fire on
+    tables this large).
     """
     leaves = embedding_leaf_tables(conn)
-    logger.info(f"Running VACUUM on {len(leaves)} embedding partition(s)...")
+    logger.info(f"Running VACUUM (ANALYZE) on {len(leaves)} embedding partition(s)...")
     start = time.time()
     for leaf in leaves:
-        conn.execute(text(f'VACUUM "{leaf}"'))
+        conn.execute(text(f'VACUUM (ANALYZE) "{leaf}"'))
     duration = time.time() - start
-    logger.info(f"VACUUM completed in {duration:.2f}s")
+    logger.info(f"VACUUM (ANALYZE) completed in {duration:.2f}s")
     return round(duration, 2)
+
+
+def run_kernel_stats_maintenance(conn) -> dict:
+    """Re-assert partition autovacuum tuning and ANALYZE the kernel leaves.
+
+    The converted ``log_event``/``log_event_context``/``embedding`` partitions
+    are far too large for Postgres' default autovacuum scale-factor thresholds
+    to ever trigger, so their planner statistics go stale and the hot
+    context-log queries fall back to whole-partition sequential scans. This
+    re-applies fixed per-partition thresholds (idempotent, so partitions created
+    later by promotion are picked up here) and refreshes statistics as a safety
+    net layered on top of autovacuum.
+    """
+    tuned = tune_partition_storage(conn)
+    analyzed: list[str] = []
+    for table in PARTITIONED_TABLES:
+        for leaf in partition_leaves(conn, table):
+            conn.execute(text(f"ANALYZE {leaf}"))
+            analyzed.append(leaf)
+    logger.info(
+        f"Kernel stats maintenance: tuned {len(tuned)} leaf/leaves, "
+        f"analyzed {len(analyzed)}",
+    )
+    return {"tuned": tuned, "analyzed": analyzed}
 
 
 def run_index_maintenance(
@@ -586,6 +625,7 @@ def run_index_maintenance(
         "total_embeddings": 0,
         "invalid_indexes_found": [],
         "invalid_indexes_cleaned": [],
+        "kernel_stats": {},
         "deletion_metrics": {},
         "reindex_results": {},
         "index_sizes_before": {},
@@ -625,6 +665,17 @@ def run_index_maintenance(
             metrics["success"] = True
             metrics["end_time"] = datetime.now(timezone.utc).isoformat()
             return metrics
+
+        # Keep the kernel partitions' planner stats fresh regardless of mode:
+        # re-assert per-partition autovacuum tuning and ANALYZE the leaves. The
+        # cutover-attached partitions are too large for the default autovacuum
+        # thresholds to fire, so this is the safety net that prevents the hot
+        # queries from degrading into whole-partition sequential scans.
+        logger.info("Kernel stats maintenance: tuning + ANALYZE on kernel leaves")
+        start = time.time()
+        metrics["kernel_stats"] = run_kernel_stats_maintenance(conn)
+        metrics["durations"]["kernel_stats_maintenance"] = round(time.time() - start, 2)
+        metrics["phases_executed"].append("kernel_stats_maintenance")
 
         # Determine what work to do based on mode
         should_cleanup = mode in ("full", "cleanup_only") or (
@@ -870,7 +921,7 @@ def run_owner_partition_provisioning(
                     continue
                 if dry_run:
                     metrics["sub_partitioned"].append(
-                        {"project_id": pid, "dry_run": True}
+                        {"project_id": pid, "dry_run": True},
                     )
                     continue
                 conn = session.get_bind().connect()

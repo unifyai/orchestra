@@ -458,6 +458,11 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
                     {"s": seq, "m": int(max_id)},
                 )
 
+    # The freshly attached partitions are huge; without size-independent
+    # autovacuum thresholds their planner stats go stale and the hot queries
+    # seq-scan the whole partition. Apply the tuning as part of the conversion.
+    tune_partition_storage(conn)
+
 
 # --------------------------------------------------------------------------- #
 # Owner sub-partitioning (phase 2): divide the shared Assistants project's
@@ -801,6 +806,84 @@ def table_storage_units(conn: Connection, table: str) -> list[str]:
     if is_partitioned(conn, table):
         return child_partitions(conn, table)
     return [table] if relation_exists(conn, table) else []
+
+
+# --------------------------------------------------------------------------- #
+# Per-partition autovacuum / statistics tuning.
+#
+# The kernel partitions are attached as multi-GB, tens-of-millions-of-rows
+# leaves. Under Postgres' default scale-factor thresholds (vacuum 0.2 / analyze
+# 0.1) their trigger points sit in the millions of row-changes, so autovacuum
+# and autoanalyze effectively never fire on them: planner statistics freeze at
+# the value captured when the partition was attached, dead tuples accumulate,
+# and the hot context-log queries degrade into whole-partition sequential scans
+# that saturate the database. Fixed (size-independent) thresholds keep
+# maintenance running at a predictable cadence however large the partition
+# grows, and cost_delay=0 stops these latency-critical tables being throttled by
+# the autovacuum cost limiter.
+# --------------------------------------------------------------------------- #
+PARTITION_AUTOVACUUM_RELOPTIONS: dict[str, str] = {
+    "autovacuum_vacuum_scale_factor": "0",
+    "autovacuum_vacuum_threshold": "50000",
+    "autovacuum_vacuum_insert_scale_factor": "0",
+    "autovacuum_vacuum_insert_threshold": "50000",
+    "autovacuum_analyze_scale_factor": "0",
+    "autovacuum_analyze_threshold": "50000",
+    "autovacuum_vacuum_cost_delay": "0",
+}
+
+# Postgres keeps no per-key statistics for a JSONB column, so the planner
+# estimates predicates over ``log_event.data`` (``data @> ...``, ``data ? ...``)
+# from the column's whole-document sample. A higher statistics target makes
+# those estimates markedly less likely to collapse into a sequential scan.
+LOG_EVENT_DATA_STATISTICS_TARGET = 1000
+
+
+def partition_leaves(conn: Connection, table: str) -> list[str]:
+    """Every physical leaf relation under ``table`` (recursing sub-partitions).
+
+    Unlike :func:`table_storage_units` (direct children only) this descends the
+    full partition tree, so it also returns the owner sub-partition leaves under
+    a project's ``PARTITION BY LIST (owner_key)`` partition. Names come back
+    already-quoted/schema-qualified via ``regclass``.
+    """
+    if not is_partitioned(conn, table):
+        return [table] if relation_exists(conn, table) else []
+    rows = conn.execute(
+        text(
+            "SELECT relid::regclass::text FROM pg_partition_tree(cast(:t AS regclass)) "
+            "WHERE isleaf",
+        ),
+        {"t": table},
+    ).scalars()
+    return list(rows)
+
+
+def tune_partition_storage(conn: Connection) -> list[str]:
+    """Apply autovacuum/statistics tuning to every heavy-kernel leaf partition.
+
+    Idempotent and self-healing: re-running re-asserts the settings, so leaves
+    created later by promotion pick up the tuning on the next maintenance pass
+    without threading a call through every partition-creation site. Returns the
+    leaf relations that were tuned.
+    """
+    reloptions = ", ".join(
+        f"{k} = {v}" for k, v in PARTITION_AUTOVACUUM_RELOPTIONS.items()
+    )
+    tuned: list[str] = []
+    for table in PARTITIONED_TABLES:
+        for leaf in partition_leaves(conn, table):
+            conn.execute(text(f"ALTER TABLE {leaf} SET ({reloptions})"))
+            tuned.append(leaf)
+    # Only the log_event family carries the queried JSONB ``data`` column.
+    for leaf in partition_leaves(conn, "log_event"):
+        conn.execute(
+            text(
+                f"ALTER TABLE {leaf} ALTER COLUMN data "
+                f"SET STATISTICS {LOG_EVENT_DATA_STATISTICS_TARGET}",
+            ),
+        )
+    return tuned
 
 
 def find_promotion_candidates(
