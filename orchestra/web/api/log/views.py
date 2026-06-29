@@ -1659,7 +1659,8 @@ def _atomic_field_update_impl(
             log_event.project_id,
         )
 
-        # Build the atomic SQL update
+        # Build the atomic SQL update. project_id is redundant (the row is
+        # already identified by id) but prunes the LIST(project_id) partition.
         sql = text(
             f"""
             UPDATE log_event
@@ -1669,7 +1670,7 @@ def _atomic_field_update_impl(
                 to_jsonb(COALESCE((data->>:field)::numeric, 0) {operator} :operand)
             ),
             updated_at = :now
-            WHERE id = :log_id
+            WHERE id = :log_id AND project_id = :project_id
             RETURNING (data->>:field)::numeric as new_value
             """,
         )
@@ -1678,6 +1679,7 @@ def _atomic_field_update_impl(
             sql,
             {
                 "log_id": log_id,
+                "project_id": log_event.project_id,
                 "field": field_name,
                 "path": "{" + field_name + "}",
                 "operand": operand,
@@ -1830,7 +1832,7 @@ def _atomic_upsert_mode(
                     to_jsonb(COALESCE((data->>'{field_name}')::numeric, 0) {operator} :operand)
                 ),
                 updated_at = :now
-            WHERE id = :log_id
+            WHERE id = :log_id AND project_id = :project_id
             RETURNING id, (data->>'{field_name}')::numeric as new_value
             """,
         )
@@ -1839,6 +1841,7 @@ def _atomic_upsert_mode(
             update_sql,
             {
                 "log_id": existing.id,
+                "project_id": project_id,
                 "path": "{" + field_name + "}",
                 "operand": operand,
                 "now": datetime.now(timezone.utc),

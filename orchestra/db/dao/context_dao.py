@@ -3107,14 +3107,16 @@ class ContextDAO:
             )
 
             # ── Phase 0: Collect log_event_ids once, reuse everywhere ──
+            # project_id is redundant here (context-scoped) but prunes the
+            # LIST(project_id) partition.
             log_event_ids = [
                 row[0]
                 for row in self.session.execute(
                     text(
                         "SELECT log_event_id FROM log_event_context "
-                        "WHERE context_id = :ctx_id",
+                        "WHERE context_id = :ctx_id AND project_id = :project_id",
                     ),
-                    {"ctx_id": id},
+                    {"ctx_id": id, "project_id": project_id},
                 ).fetchall()
             ]
 
@@ -4167,10 +4169,15 @@ class ContextDAO:
         Returns:
             Sorted list of log event IDs.
         """
+        stmt = select(LogEventContext.log_event_id).where(
+            LogEventContext.context_id == context_id,
+        )
+        # Redundant project_id predicate to prune the LIST(project_id) partitions.
+        pid = self._project_id_for_context(context_id)
+        if pid is not None:
+            stmt = stmt.where(LogEventContext.project_id == pid)
         rows = self.session.execute(
-            select(LogEventContext.log_event_id)
-            .where(LogEventContext.context_id == context_id)
-            .order_by(LogEventContext.log_event_id),
+            stmt.order_by(LogEventContext.log_event_id),
         ).fetchall()
         return [row[0] for row in rows]
 
