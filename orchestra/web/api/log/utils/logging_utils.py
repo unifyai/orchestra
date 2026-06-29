@@ -859,8 +859,12 @@ def _get_logs_query(
             )
         context_id = context_obj[0][0].id
         query = query.join(
-            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            LogEventContext,
+            LogEventContext.log_event_id == LogEvent.id,
         ).filter(
+            # project_id is redundant (context is project-scoped) but lets the
+            # LIST(project_id) partition pruner skip other projects' partitions.
+            LogEventContext.project_id == project_id,
             LogEventContext.context_id == context_id,
         )
     else:
@@ -871,8 +875,10 @@ def _get_logs_query(
             # Also filter by context membership for default context
             # This ensures logs removed from default context aren't returned
             query = query.join(
-                LogEventContext, LogEventContext.log_event_id == LogEvent.id
+                LogEventContext,
+                LogEventContext.log_event_id == LogEvent.id,
             ).filter(
+                LogEventContext.project_id == project_id,
                 LogEventContext.context_id == context_id,
             )
         else:
@@ -968,6 +974,7 @@ def _get_logs_query(
                         base_filters.append(
                             LogEvent.id.in_(
                                 select(LogEventContext.log_event_id).where(
+                                    LogEventContext.project_id == project_id,
                                     LogEventContext.context_id == context_id,
                                 ),
                             ),
