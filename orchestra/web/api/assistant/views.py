@@ -4391,19 +4391,22 @@ async def transfer_assistant_to_org(
                     )
                     .all()
                 )
+                from orchestra.db.dao.log_event_dao import LogEventDAO
+
+                le_dao = LogEventDAO(session)
                 for ctx in contexts_to_transfer:
-                    # Update LogEvent.project_id for all log events in this context
-                    # This is required because logs are queried by LogEvent.project_id
-                    session.query(LogEvent).filter(
-                        LogEvent.id.in_(
-                            session.query(LogEventContext.log_event_id).filter(
-                                LogEventContext.context_id == ctx.id,
-                            ),
-                        ),
-                    ).update(
-                        {LogEvent.project_id: org_project.id},
-                        synchronize_session=False,
-                    )
+                    # Move all of this context's logs to the org project, keeping
+                    # the denormalized partition key (project_id) consistent across
+                    # log_event AND its child tables (log_event_context / embedding
+                    # / embedding_queue). Updating only log_event would desync the
+                    # children from their parent's partition.
+                    ctx_log_ids = [
+                        row[0]
+                        for row in session.query(LogEventContext.log_event_id)
+                        .filter(LogEventContext.context_id == ctx.id)
+                        .all()
+                    ]
+                    le_dao.reproject_logs(ctx_log_ids, org_project.id)
                     # Update the context's project_id
                     ctx.project_id = org_project.id
 
@@ -4473,13 +4476,9 @@ async def transfer_assistant_to_org(
                         session.flush()
                         target_ctx_id = new_ctx.id
 
-                    # Move logs to org project
-                    session.query(LogEvent).filter(
-                        LogEvent.id.in_(assistant_log_ids),
-                    ).update(
-                        {LogEvent.project_id: org_project.id},
-                        synchronize_session=False,
-                    )
+                    # Move logs to org project, keeping the denormalized partition
+                    # key consistent across log_event and its child tables.
+                    le_dao.reproject_logs(assistant_log_ids, org_project.id)
 
                     # Update context links to point to org's context
                     session.query(LogEventContext).filter(

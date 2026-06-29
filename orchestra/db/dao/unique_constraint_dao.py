@@ -468,12 +468,24 @@ class UniqueConstraintDAO:
             params[f"combo_{i}"] = value_json
             or_conditions.append(f"le.data @> CAST(:combo_{i} AS jsonb)")
 
+        # Redundant project_id predicate (derived from the context) prunes the
+        # LIST(project_id) partitions; guarded so a missing project never hides a
+        # real duplicate.
+        pid = self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :cid"),
+            {"cid": context_id},
+        ).scalar()
+        project_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        if pid is not None:
+            params["project_id"] = pid
+
         query = f"""
             SELECT le.id
             FROM log_event le
             JOIN log_event_context lec ON lec.log_event_id = le.id
+            AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
-            AND ({' OR '.join(or_conditions)})
+            {project_filter}AND ({' OR '.join(or_conditions)})
             LIMIT 1
         """
 

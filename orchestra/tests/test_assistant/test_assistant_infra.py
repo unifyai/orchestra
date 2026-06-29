@@ -57,6 +57,12 @@ def mock_all_infra(dbsession):
         "_cleanup_after_assistant_delete": AsyncMock(return_value=None),
         "wake_up_assistant": AsyncMock(return_value=MagicMock(status_code=200)),
         "log_pre_hire_chat": AsyncMock(return_value={"status": "success"}),
+        # These tests model a hosted environment with a real comms backend, so
+        # the create endpoint's wake-up step runs. Without this the guard
+        # ``settings.is_self_host or not comms_explicitly_configured()`` (added in
+        # f97d1103) skips wake-up: a mocked ``settings`` has a truthy MagicMock
+        # ``is_self_host`` and CI has no COMMS_URL configured.
+        "comms_explicitly_configured": MagicMock(return_value=True),
     }
 
     release_pool_vm_mock = AsyncMock(return_value={"success": True})
@@ -96,6 +102,9 @@ def mock_all_infra(dbsession):
             ) as mock_settings:
                 mock_settings.is_staging = True
                 mock_settings.charges_billing = False
+                # Not self-host: a bare MagicMock attribute is truthy, which would
+                # otherwise trip the wake-up skip guard.
+                mock_settings.is_self_host = False
                 with patch(
                     "orchestra.web.api.assistant.views.get_db_session",
                     side_effect=_mock_get_db_session_generator(dbsession),
