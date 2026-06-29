@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -3445,3 +3446,102 @@ async def test_new_org_member_via_invite_gets_assistants_project_access(
         project_id,
         "project:delete",
     ), "Invited member should NOT have delete permission"
+
+
+@pytest.mark.anyio
+async def test_transfer_keeps_denormalized_project_id_consistent(
+    client: AsyncClient,
+    dbsession,
+):
+    """Transferring an assistant's logs to an org must keep the denormalized
+    partition key consistent.
+
+    ``log_event_context``/``embedding`` carry a denormalized ``project_id`` that
+    is the ``LIST (project_id)`` partition key. The move must update them in
+    lockstep with ``log_event`` (via ``LogEventDAO.reproject_logs``); otherwise
+    the children desync from their parent and, once projects are promoted to real
+    partitions, route to the wrong partition and orphan. This guards that path.
+    """
+    user = await create_test_user(client, "reproject_consistency@test.com")
+    await ensure_assistants_project(client, user["headers"])
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Reproject",
+            "surname": "Consistency",
+            "create_infra": False,
+        },
+        headers=user["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+    assistant_name = str(agent_id)
+
+    tier3_context = f"{user['id']}/{assistant_name}/Transcripts"
+    tier1_context = "All/Transcripts"
+
+    log_resp = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Assistants",
+            "context": tier3_context,
+            "entries": [{"message": "reproject log", "_assistant_id": agent_id}],
+        },
+        headers=user["headers"],
+    )
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Fan the log into a shared tier-1 context too, exercising the shared-context
+    # move path in addition to the per-context move.
+    add_resp = await client.post(
+        "/v0/project/Assistants/contexts/add_logs",
+        json={"context_name": tier1_context, "log_ids": [log_id]},
+        headers=user["headers"],
+    )
+    assert add_resp.status_code == 200
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Reproject Consistency Org"},
+        headers=user["headers"],
+    )
+    assert org_resp.status_code == 200
+    org_id = org_resp.json()["id"]
+
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-org",
+        json={"organization_id": org_id, "transfer_logs": True},
+        headers=user["headers"],
+    )
+    assert transfer_resp.status_code == 200
+    assert transfer_resp.json()["info"]["logs_transferred"] is True
+
+    # Invariant: no association row for this log has a project_id that differs
+    # from its parent log_event (the partition key moved in lockstep).
+    lec_drift = dbsession.execute(
+        text(
+            """
+            SELECT count(*) FROM log_event_context lec
+            JOIN log_event le ON le.id = lec.log_event_id
+            WHERE lec.log_event_id = :lid AND lec.project_id <> le.project_id
+            """,
+        ),
+        {"lid": log_id},
+    ).scalar()
+    assert (
+        lec_drift == 0
+    ), "log_event_context.project_id drifted from parent after transfer"
+
+    emb_drift = dbsession.execute(
+        text(
+            """
+            SELECT count(*) FROM embedding e
+            JOIN log_event le ON le.id = e.ref_id
+            WHERE e.ref_id = :lid AND e.project_id <> le.project_id
+            """,
+        ),
+        {"lid": log_id},
+    ).scalar()
+    assert emb_drift == 0, "embedding.project_id drifted from parent after transfer"

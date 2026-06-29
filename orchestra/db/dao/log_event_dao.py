@@ -2099,6 +2099,53 @@ class LogEventDAO:
             self.session.rollback()
             raise ValueError(f"Failed to delete log events: {e}")
 
+    def reproject_logs(
+        self,
+        log_event_ids: List[int],
+        new_project_id: int,
+    ) -> None:
+        """Move log events to ``new_project_id``, keeping the partition key consistent.
+
+        ``log_event`` is the source of truth for ``project_id``; the child tables
+        (``log_event_context``, ``embedding``, ``embedding_queue``) carry a
+        denormalized copy that IS the ``LIST (project_id)`` partition key. Whenever
+        a log's project changes (e.g. transferring an assistant to an organization)
+        the children MUST move in lockstep -- otherwise they desync from their
+        parent: ``project_id`` pruning and the ``le.project_id = lec.project_id``
+        equijoin stop matching, and once real partitions exist the children route
+        to the wrong partition and become orphaned.
+
+        Uses ``= ANY(:ids)`` (a single array bind) so an arbitrarily large id list
+        does not overflow the driver's bind-parameter limit.
+        """
+        if not log_event_ids:
+            return
+        ids = list(log_event_ids)
+        pid = int(new_project_id)
+        params = {"pid": pid, "ids": ids}
+        self.session.execute(
+            text("UPDATE log_event SET project_id = :pid WHERE id = ANY(:ids)"),
+            params,
+        )
+        self.session.execute(
+            text(
+                "UPDATE log_event_context SET project_id = :pid "
+                "WHERE log_event_id = ANY(:ids)",
+            ),
+            params,
+        )
+        self.session.execute(
+            text("UPDATE embedding SET project_id = :pid WHERE ref_id = ANY(:ids)"),
+            params,
+        )
+        self.session.execute(
+            text(
+                "UPDATE embedding_queue SET project_id = :pid "
+                "WHERE ref_id = ANY(:ids)",
+            ),
+            params,
+        )
+
     def get_ts(self, id: int) -> Optional[datetime]:
         query = (
             select(Project.created_at)
