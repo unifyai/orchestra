@@ -59,6 +59,11 @@ Environment Variables:
     MAINTENANCE_SOFT_DELETE_THRESHOLD: int (default: 100)
     MAINTENANCE_SKIP_VACUUM: true|false (default: false)
     MAINTENANCE_MAX_DURATION: int seconds, 0=unlimited (default: 0)
+    MAINTENANCE_PROMOTE_ONLINE: true|false (default: false) -- in MODE=promote,
+        use the non-locking online promotion path (backfill + offline index
+        build + brief locked cutover) instead of the single-transaction ATTACH.
+        Required for tenants large enough that an in-ATTACH GIN/HNSW build would
+        hold ACCESS EXCLUSIVE for too long.
 """
 
 import logging
@@ -81,8 +86,11 @@ from orchestra.db.partitioning import (
     is_partitioned,
     partition_leaves,
     promote_owner,
+    promote_owner_online,
+    promote_project_online,
     promote_project_to_partition,
     sub_partition_project_by_owner,
+    sub_partition_project_by_owner_online,
     table_relkind,
     table_storage_units,
     tune_partition_storage,
@@ -859,6 +867,7 @@ def run_owner_partition_provisioning(
     owner_threshold: int = DEFAULT_OWNER_PROMOTION_THRESHOLD,
     max_promotions: int = 5,
     dry_run: bool = False,
+    online: bool = False,
 ) -> dict:
     """Owner sub-partition the shared Assistants project and promote big owners.
 
@@ -924,13 +933,16 @@ def run_owner_partition_provisioning(
                         {"project_id": pid, "dry_run": True},
                     )
                     continue
-                conn = session.get_bind().connect()
-                try:
-                    with conn.begin():
-                        sub_partition_project_by_owner(conn, pid)
-                    metrics["sub_partitioned"].append({"project_id": pid})
-                finally:
-                    conn.close()
+                if online:
+                    sub_partition_project_by_owner_online(session.get_bind(), pid)
+                else:
+                    conn = session.get_bind().connect()
+                    try:
+                        with conn.begin():
+                            sub_partition_project_by_owner(conn, pid)
+                    finally:
+                        conn.close()
+                metrics["sub_partitioned"].append({"project_id": pid})
             elif relkind == "p":
                 # Already owner sub-partitioned: promote the heavy owners.
                 with session.get_bind().connect() as probe:
@@ -947,16 +959,23 @@ def run_owner_partition_provisioning(
                         promoted[owner_key] = {"row_count": row_count, "dry_run": True}
                         promotions_done += 1
                         continue
-                    conn = session.get_bind().connect()
-                    try:
-                        with conn.begin():
-                            created = promote_owner(conn, pid, owner_key)
-                        promoted[owner_key] = {
-                            "row_count": row_count,
-                            "partitions": created,
-                        }
-                    finally:
-                        conn.close()
+                    if online:
+                        created = promote_owner_online(
+                            session.get_bind(),
+                            pid,
+                            owner_key,
+                        )
+                    else:
+                        conn = session.get_bind().connect()
+                        try:
+                            with conn.begin():
+                                created = promote_owner(conn, pid, owner_key)
+                        finally:
+                            conn.close()
+                    promoted[owner_key] = {
+                        "row_count": row_count,
+                        "partitions": created,
+                    }
                     promotions_done += 1
                 if promoted:
                     metrics["owners_promoted"][pid] = promoted
@@ -984,6 +1003,7 @@ def run_partition_provisioning(
     threshold: int = DEFAULT_PROMOTION_THRESHOLD,
     max_promotions: int = 1,
     dry_run: bool = False,
+    online: bool = False,
 ) -> dict:
     """Promote large DEFAULT-partition projects into dedicated partitions.
 
@@ -993,6 +1013,11 @@ def run_partition_provisioning(
     is per-row, so promotion runs proactively at a threshold rather than once a
     project is already enormous. ``max_promotions`` bounds the work per run since
     each promotion (especially the HNSW build on ATTACH) is expensive.
+
+    When ``online`` is set the non-locking :func:`promote_project_online` path is
+    used (backfill + offline index build, then a brief locked cutover) instead of
+    the single-transaction ATTACH whose index build holds ACCESS EXCLUSIVE for
+    the duration -- required for tenants too large to lock for that long.
     """
     metrics: dict = {
         "start_time": datetime.now(timezone.utc).isoformat(),
@@ -1038,23 +1063,29 @@ def run_partition_provisioning(
                     "dry_run": True,
                 }
                 continue
-            logger.info(f"Promoting project {project_id} ({row_count} rows)...")
+            logger.info(
+                f"Promoting project {project_id} ({row_count} rows, "
+                f"online={online})...",
+            )
             start = time.time()
-            conn = session.get_bind().connect()
-            try:
-                with conn.begin():
-                    created = promote_project_to_partition(conn, project_id)
-                metrics["promoted"][project_id] = {
-                    "row_count": row_count,
-                    "partitions": created,
-                    "duration": round(time.time() - start, 2),
-                }
-                logger.info(
-                    f"Promoted project {project_id} in "
-                    f"{metrics['promoted'][project_id]['duration']:.1f}s: {created}",
-                )
-            finally:
-                conn.close()
+            if online:
+                created = promote_project_online(session.get_bind(), project_id)
+            else:
+                conn = session.get_bind().connect()
+                try:
+                    with conn.begin():
+                        created = promote_project_to_partition(conn, project_id)
+                finally:
+                    conn.close()
+            metrics["promoted"][project_id] = {
+                "row_count": row_count,
+                "partitions": created,
+                "duration": round(time.time() - start, 2),
+            }
+            logger.info(
+                f"Promoted project {project_id} in "
+                f"{metrics['promoted'][project_id]['duration']:.1f}s: {created}",
+            )
 
         metrics["success"] = True
     except Exception as e:
@@ -1082,6 +1113,8 @@ def main():
         MAINTENANCE_SOFT_DELETE_THRESHOLD: int (default: 100)
         MAINTENANCE_SKIP_VACUUM: true|false (default: false)
         MAINTENANCE_MAX_DURATION: int seconds, 0=unlimited (default: 0)
+        MAINTENANCE_PROMOTE_ONLINE: true|false (default: false) -- non-locking
+            promotion in MODE=promote (see module docstring)
 
     Example Cloud Run Job configuration:
         Container image: your-registry/orchestra:latest
@@ -1122,6 +1155,12 @@ def main():
             )
             max_promotions = int(os.environ.get("MAINTENANCE_MAX_PROMOTIONS", "1"))
             dry_run = os.environ.get("MAINTENANCE_DRY_RUN", "false").lower() == "true"
+            # Online (non-locking) promotion: backfill + offline index build, then
+            # a brief locked cutover. Required for tenants too large to hold an
+            # ACCESS EXCLUSIVE lock for the duration of an in-ATTACH index build.
+            online = (
+                os.environ.get("MAINTENANCE_PROMOTE_ONLINE", "false").lower() == "true"
+            )
             owner_threshold = int(
                 os.environ.get(
                     "MAINTENANCE_OWNER_PROMOTION_THRESHOLD",
@@ -1133,6 +1172,7 @@ def main():
                 threshold=threshold,
                 max_promotions=max_promotions,
                 dry_run=dry_run,
+                online=online,
             )
             # Owner sub-partitioning of the shared Assistants project is opt-in:
             # its payoff is an O(1) per-owner DROP PARTITION, which is not yet
@@ -1149,6 +1189,7 @@ def main():
                     owner_threshold=owner_threshold,
                     max_promotions=max_promotions,
                     dry_run=dry_run,
+                    online=online,
                 )
             metrics["owner_provisioning"] = owner_metrics
             if metrics["success"] and owner_metrics["success"]:
