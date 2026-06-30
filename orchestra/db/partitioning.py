@@ -23,10 +23,11 @@ injection surface.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Sequence
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
 # The heavy kernel family partitioned by LIST (project_id). ``log_event`` is the
 # parent of the conceptual family; the other three denormalize ``project_id``
@@ -989,4 +990,512 @@ def promote_project_to_partition(
             ),
         )
         created.append(partition)
+    return created
+
+
+# --------------------------------------------------------------------------- #
+# Online (non-locking) promotion.
+#
+# ``promote_project_to_partition`` / ``promote_owner`` move a tenant's rows and
+# ATTACH in a single transaction; the ATTACH then builds the parent's GIN/HNSW
+# indexes on the new partition while holding ACCESS EXCLUSIVE. For a tenant the
+# size of the shared Assistants project (millions of rows, >1M embeddings) that
+# index build runs for tens of minutes -- an unacceptable write outage.
+#
+# The online variants below split the work so the only app-facing lock is a
+# brief one at the very end:
+#   1. create   -- an empty, *unattached* standalone leaf (cloned columns +
+#                  CHECK + a composite PK so backfill/delta can dedup with
+#                  ON CONFLICT DO NOTHING); no heavy indexes.
+#   2. backfill -- batched copy of the tenant's rows out of the source DEFAULT
+#                  into the leaf. The rows stay live in the source, so reads and
+#                  writes are unaffected; resumable from the leaf's high-water
+#                  mark.
+#   3. index    -- build the parent's heavy (non-unique) secondary indexes on
+#                  the leaf. It is unattached/invisible, so a plain CREATE INDEX
+#                  locks only this private table; no app-facing lock.
+#   4. cutover  -- the only app-facing lock, and a short one: ACCESS EXCLUSIVE on
+#                  the source DEFAULT while we catch the delta, DELETE the
+#                  tenant's rows from the source and ATTACH the (pre-indexed)
+#                  leaf -- all atomic. Because the heavy indexes already match
+#                  the parent's partitioned indexes by definition, ATTACH
+#                  *attaches* them instead of rebuilding; only the cheap PK and
+#                  UNIQUE indexes are (re)built under the lock.
+#
+# These take an ``Engine`` (not a single ``Connection``) because each phase is
+# its own transaction.
+# --------------------------------------------------------------------------- #
+def _partition_is_attached(conn: Connection, parent: str, partition: str) -> bool:
+    """True if ``partition`` is currently an attached child of ``parent``."""
+    return bool(
+        conn.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM pg_inherits i "
+                "JOIN pg_class p ON p.oid = i.inhparent "
+                "JOIN pg_class c ON c.oid = i.inhrelid "
+                "WHERE p.relname = :p AND c.relname = :c)",
+            ),
+            {"p": parent, "c": partition},
+        ).scalar(),
+    )
+
+
+def _short_index_name(partition: str, ordinal: int) -> str:
+    """A schema-unique index name for ``partition``'s pre-built secondary index.
+
+    Index names are schema-global and capped at 63 chars; an owner sub-partition
+    name (``log_event_p189888_<owner>``) can be long, so fall back to a hashed
+    form when ``<partition>_si<n>`` would overflow.
+    """
+    name = f"{partition}_si{ordinal}"
+    if len(name) <= 63:
+        return name
+    digest = hashlib.md5(partition.encode()).hexdigest()[:12]
+    return f"idx_{digest}_si{ordinal}"
+
+
+def _heavy_secondary_index_defs(conn: Connection, table: str) -> list[str]:
+    """``pg_get_indexdef`` for ``table``'s non-PK, non-UNIQUE secondary indexes.
+
+    These are the only genuinely expensive builds (GIN on ``data``, the per-
+    provider HNSW vector indexes, plain btrees). The PK and UNIQUE indexes are
+    cheap btrees left for ATTACH to build under the brief cutover lock; the PK
+    is added separately so backfill/delta can dedup. Reading the *actual* index
+    definitions (rather than re-rendering the ORM model) means a migration-added
+    index absent from the model is still reproduced, and the reproduced index
+    matches the parent's partitioned index byte-for-byte so ATTACH attaches it
+    instead of rebuilding under lock.
+    """
+    return list(
+        conn.execute(
+            text(
+                "SELECT pg_get_indexdef(x.indexrelid) "
+                "FROM pg_index x "
+                "JOIN pg_class i ON i.oid = x.indexrelid "
+                "JOIN pg_class t ON t.oid = x.indrelid "
+                "WHERE t.relname = :p "
+                "AND NOT x.indisprimary AND NOT x.indisunique "
+                "ORDER BY i.relname",
+            ),
+            {"p": table},
+        ).scalars(),
+    )
+
+
+def _retarget_indexdef(
+    indexdef: str,
+    new_name: str,
+    target_table: str,
+    *,
+    only: bool = False,
+) -> str:
+    """Rewrite a ``pg_get_indexdef`` string to a new index name + target table.
+
+    ``pg_get_indexdef`` is ``CREATE [UNIQUE] INDEX <name> ON [ONLY] <ref> USING
+    <am> (<cols>) [WITH (...)] [WHERE ...]``. Everything from ``USING`` onwards
+    (columns, opclass, storage params, partial predicate) is preserved verbatim
+    so the rebuilt index is definitionally identical; only the leading name and
+    target relation are swapped. ``only=True`` emits ``ON ONLY`` to register an
+    (initially invalid) index on a partitioned parent without building it.
+    """
+    head, _, after_on = indexdef.partition(" ON ")
+    create_kw = head[: head.rindex(" INDEX ") + len(" INDEX ")]
+    tail = after_on[after_on.find(" USING ") :]
+    only_kw = "ONLY " if only else ""
+    # IF NOT EXISTS keeps the offline index build resumable: a re-run after an
+    # interrupted promotion skips indexes already created (names are derived
+    # deterministically from the partition name).
+    return f'{create_kw}IF NOT EXISTS "{new_name}" ON {only_kw}"{target_table}"{tail}'
+
+
+def _has_primary_key(conn: Connection, table: str) -> bool:
+    return bool(
+        conn.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM pg_constraint "
+                "WHERE conrelid = to_regclass(:t) AND contype = 'p')",
+            ),
+            {"t": table},
+        ).scalar(),
+    )
+
+
+def _primary_key_columns(conn: Connection, table: str) -> list[str]:
+    """The ordered PK column names of ``table`` (its live definition).
+
+    Read from the catalog rather than a hardcoded map so the standalone leaf's
+    PK matches the parent's *current* PK exactly (the kernel PK gained
+    ``owner_key`` when owner sub-partitioning landed); a mismatched PK would make
+    ATTACH reject or rebuild the index under lock.
+    """
+    return list(
+        conn.execute(
+            text(
+                "SELECT a.attname FROM pg_constraint c "
+                "JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE "
+                "JOIN pg_attribute a "
+                "ON a.attrelid = c.conrelid AND a.attnum = k.attnum "
+                "WHERE c.conrelid = to_regclass(:t) AND c.contype = 'p' "
+                "ORDER BY k.ord",
+            ),
+            {"t": table},
+        ).scalars(),
+    )
+
+
+def _online_promote_leaf(
+    engine: Engine,
+    *,
+    parent: str,
+    partition: str,
+    for_values_sql: str,
+    source_partition: str,
+    where_sql: str,
+    where_params: dict,
+    id_col: str,
+    batch_size: int,
+) -> bool:
+    """Online create+backfill+index+cutover of one leaf partition. See module note.
+
+    ``id_col`` is the monotonically-increasing column used to page the backfill.
+    Returns True if this call attached the partition (False if already attached).
+    """
+    with engine.connect() as conn:
+        if relation_exists(conn, partition) and _partition_is_attached(
+            conn,
+            parent,
+            partition,
+        ):
+            return False
+
+    # Phase 1: standalone leaf (+ PK for ON CONFLICT dedup), no heavy indexes.
+    with engine.begin() as conn:
+        if not relation_exists(conn, partition):
+            pk_cols = _primary_key_columns(conn, parent)
+            conn.execute(
+                text(
+                    f'CREATE TABLE "{partition}" '
+                    f'(LIKE "{parent}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)',
+                ),
+            )
+            conn.execute(
+                text(
+                    f'ALTER TABLE "{partition}" ADD PRIMARY KEY ({", ".join(pk_cols)})',
+                ),
+            )
+        cols = ", ".join(f'"{c}"' for c in _column_names(conn, partition))
+
+    # Phase 2: batched online backfill, resuming from the leaf's high-water mark.
+    with engine.connect() as conn:
+        start = (
+            conn.execute(
+                text(f'SELECT COALESCE(MAX("{id_col}"), 0) FROM "{partition}"'),
+            ).scalar()
+            or 0
+        )
+        src_max = (
+            conn.execute(
+                text(
+                    f'SELECT COALESCE(MAX("{id_col}"), 0) FROM "{source_partition}" '
+                    f"WHERE {where_sql}",
+                ),
+                where_params,
+            ).scalar()
+            or 0
+        )
+    lo = int(start)
+    while lo < int(src_max):
+        hi = lo + batch_size
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f'INSERT INTO "{partition}" ({cols}) '
+                    f'SELECT {cols} FROM "{source_partition}" '
+                    f'WHERE {where_sql} AND "{id_col}" > :lo AND "{id_col}" <= :hi '
+                    f"ON CONFLICT DO NOTHING",
+                ),
+                {**where_params, "lo": lo, "hi": hi},
+            )
+        lo = hi
+
+    # Phase 3: build the parent's heavy secondary indexes on the unattached leaf
+    # (locks only this private table).
+    with engine.connect() as conn:
+        index_defs = _heavy_secondary_index_defs(conn, parent)
+    for ordinal, indexdef in enumerate(index_defs):
+        ddl = _retarget_indexdef(
+            indexdef,
+            _short_index_name(partition, ordinal),
+            partition,
+        )
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+
+    # Phase 4: brief locked cutover -- delta catch-up, remove from source, attach.
+    with engine.begin() as conn:
+        conn.execute(
+            text(f'LOCK TABLE "{source_partition}" IN ACCESS EXCLUSIVE MODE'),
+        )
+        conn.execute(
+            text(
+                f'INSERT INTO "{partition}" ({cols}) '
+                f'SELECT {cols} FROM "{source_partition}" WHERE {where_sql} '
+                f"ON CONFLICT DO NOTHING",
+            ),
+            where_params,
+        )
+        conn.execute(
+            text(f'DELETE FROM "{source_partition}" WHERE {where_sql}'),
+            where_params,
+        )
+        conn.execute(
+            text(
+                f'ALTER TABLE "{parent}" ATTACH PARTITION "{partition}" '
+                f"{for_values_sql}",
+            ),
+        )
+    return True
+
+
+def _id_col_for(table: str) -> str:
+    """The monotonic column used to page the online backfill of ``table``."""
+    return "log_event_id" if table == "log_event_context" else "id"
+
+
+def promote_project_online(
+    engine: Engine,
+    project_id: int,
+    *,
+    batch_size: int = 50_000,
+) -> list[str]:
+    """Online (non-locking) equivalent of :func:`promote_project_to_partition`.
+
+    Promotes ``project_id`` out of each kernel table's top-level DEFAULT into a
+    dedicated partition without the long ATTACH-time index build holding a write
+    lock. Idempotent and resumable. Returns the partitions attached by this call.
+    """
+    pid = int(project_id)
+    created: list[str] = []
+    for table in PARTITIONED_TABLES:
+        partition = dedicated_partition_name(table, pid)
+        if _online_promote_leaf(
+            engine,
+            parent=table,
+            partition=partition,
+            for_values_sql=f"FOR VALUES IN ({pid})",
+            source_partition=default_partition_name(table),
+            where_sql="project_id = :pid",
+            where_params={"pid": pid},
+            id_col=_id_col_for(table),
+            batch_size=batch_size,
+        ):
+            created.append(partition)
+    if created:
+        with engine.begin() as conn:
+            tune_partition_storage(conn)
+            for partition in created:
+                conn.execute(text(f'ANALYZE "{partition}"'))
+    return created
+
+
+def _build_partitioned_secondary_indexes(
+    engine: Engine,
+    template_table: str,
+    sub_parent: str,
+    sub_default: str,
+) -> None:
+    """Pre-build ``template_table``'s heavy indexes as partitioned indexes on an
+    unattached ``sub_parent`` (with its single ``sub_default`` leaf).
+
+    For each heavy index: register it ``ON ONLY sub_parent`` (instant, invalid),
+    build the matching leaf index on ``sub_default`` (the expensive build, but on
+    a table not yet attached to the live tree -- only ``sub_default`` is locked),
+    then ATTACH the leaf index so the parent index flips valid. When ``sub_parent``
+    is later attached to ``template_table`` these partitioned indexes match its,
+    so the attach does not rebuild them under the live lock.
+    """
+    with engine.connect() as conn:
+        index_defs = _heavy_secondary_index_defs(conn, template_table)
+    for ordinal, indexdef in enumerate(index_defs):
+        parent_idx = _short_index_name(sub_parent, ordinal)
+        leaf_idx = _short_index_name(sub_default, ordinal)
+        with engine.begin() as conn:
+            conn.execute(
+                text(_retarget_indexdef(indexdef, parent_idx, sub_parent, only=True)),
+            )
+            conn.execute(
+                text(_retarget_indexdef(indexdef, leaf_idx, sub_default)),
+            )
+            # Guarded for resumability: a re-run after the leaf index was already
+            # attached would otherwise error.
+            if not index_attached_to_child(conn, parent_idx, sub_default):
+                conn.execute(
+                    text(f'ALTER INDEX "{parent_idx}" ATTACH PARTITION "{leaf_idx}"'),
+                )
+
+
+def sub_partition_project_by_owner_online(
+    engine: Engine,
+    project_id: int,
+    *,
+    batch_size: int = 50_000,
+) -> list[str]:
+    """Online (non-locking) equivalent of :func:`sub_partition_project_by_owner`.
+
+    Carves a project out of the top-level DEFAULT into a dedicated
+    ``PARTITION BY LIST (owner_key)`` partition without the ATTACH-time GIN/HNSW
+    build holding ACCESS EXCLUSIVE on the live table. The heavy index build runs
+    offline on the unattached sub-parent's sub-DEFAULT leaf; only the final
+    delta + delete-from-DEFAULT + attach is under a brief lock. Assumes
+    :func:`add_owner_key_to_keys` has run. Idempotent and resumable. Returns the
+    sub-parents attached by this call.
+    """
+    pid = int(project_id)
+    created: list[str] = []
+    for table in OWNER_SUB_TABLES:
+        top_default = default_partition_name(table)
+        sub_parent = dedicated_partition_name(table, pid)
+        sub_default = f"{sub_parent}_default"
+
+        with engine.connect() as conn:
+            if relation_exists(conn, sub_parent) and _partition_is_attached(
+                conn,
+                table,
+                sub_parent,
+            ):
+                continue
+
+        # Phase 1: unattached sub-parent (PARTITION BY LIST owner_key) + its
+        # sub-DEFAULT leaf + a composite PK (built instantly on the empty leaf)
+        # so backfill/delta can dedup with ON CONFLICT DO NOTHING.
+        with engine.begin() as conn:
+            if not relation_exists(conn, sub_parent):
+                conn.execute(
+                    text(
+                        f'CREATE TABLE "{sub_parent}" '
+                        f'(LIKE "{table}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS) '
+                        f"PARTITION BY LIST (owner_key)",
+                    ),
+                )
+            if not relation_exists(conn, sub_default):
+                conn.execute(
+                    text(
+                        f'CREATE TABLE "{sub_default}" '
+                        f'PARTITION OF "{sub_parent}" DEFAULT',
+                    ),
+                )
+            if not _has_primary_key(conn, sub_parent):
+                pk_cols = _primary_key_columns(conn, table)
+                conn.execute(
+                    text(
+                        f'ALTER TABLE "{sub_parent}" ADD PRIMARY KEY '
+                        f'({", ".join(pk_cols)})',
+                    ),
+                )
+            cols = ", ".join(f'"{c}"' for c in _column_names(conn, sub_parent))
+
+        id_col = _id_col_for(table)
+        # Phase 2: batched online backfill of the whole project into the sub-parent
+        # (routes to the sub-DEFAULT leaf). Rows stay live in top_default.
+        with engine.connect() as conn:
+            start = (
+                conn.execute(
+                    text(f'SELECT COALESCE(MAX("{id_col}"), 0) FROM "{sub_parent}"'),
+                ).scalar()
+                or 0
+            )
+            src_max = (
+                conn.execute(
+                    text(
+                        f'SELECT COALESCE(MAX("{id_col}"), 0) FROM "{top_default}" '
+                        f"WHERE project_id = :pid",
+                    ),
+                    {"pid": pid},
+                ).scalar()
+                or 0
+            )
+        lo = int(start)
+        while lo < int(src_max):
+            hi = lo + batch_size
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        f'INSERT INTO "{sub_parent}" ({cols}) '
+                        f'SELECT {cols} FROM "{top_default}" '
+                        f'WHERE project_id = :pid AND "{id_col}" > :lo '
+                        f'AND "{id_col}" <= :hi ON CONFLICT DO NOTHING',
+                    ),
+                    {"pid": pid, "lo": lo, "hi": hi},
+                )
+            lo = hi
+
+        # Phase 3: build the heavy partitioned indexes offline on the sub-parent.
+        _build_partitioned_secondary_indexes(engine, table, sub_parent, sub_default)
+
+        # Phase 4: brief locked cutover.
+        with engine.begin() as conn:
+            conn.execute(text(f'LOCK TABLE "{top_default}" IN ACCESS EXCLUSIVE MODE'))
+            conn.execute(
+                text(
+                    f'INSERT INTO "{sub_parent}" ({cols}) '
+                    f'SELECT {cols} FROM "{top_default}" WHERE project_id = :pid '
+                    f"ON CONFLICT DO NOTHING",
+                ),
+                {"pid": pid},
+            )
+            conn.execute(
+                text(f'DELETE FROM "{top_default}" WHERE project_id = :pid'),
+                {"pid": pid},
+            )
+            conn.execute(
+                text(
+                    f'ALTER TABLE "{table}" ATTACH PARTITION "{sub_parent}" '
+                    f"FOR VALUES IN ({pid})",
+                ),
+            )
+        created.append(sub_parent)
+
+    if created:
+        with engine.begin() as conn:
+            tune_partition_storage(conn)
+            for partition in created:
+                conn.execute(text(f'ANALYZE "{partition}"'))
+    return created
+
+
+def promote_owner_online(
+    engine: Engine,
+    project_id: int,
+    owner_key: str,
+    *,
+    batch_size: int = 50_000,
+) -> list[str]:
+    """Online (non-locking) equivalent of :func:`promote_owner`.
+
+    Carves one owner out of an owner-sub-partitioned project's sub-DEFAULT into
+    its own sub-partition without a long ATTACH-time index build under lock.
+    Idempotent and resumable. Returns the sub-partitions attached by this call.
+    """
+    pid = int(project_id)
+    created: list[str] = []
+    for table in OWNER_SUB_TABLES:
+        sub_parent = dedicated_partition_name(table, pid)
+        partition = owner_subpartition_name(table, pid, owner_key)
+        if _online_promote_leaf(
+            engine,
+            parent=sub_parent,
+            partition=partition,
+            for_values_sql=f"FOR VALUES IN ('{owner_key}')",
+            source_partition=f"{sub_parent}_default",
+            where_sql="owner_key = :ok",
+            where_params={"ok": owner_key},
+            id_col=_id_col_for(table),
+            batch_size=batch_size,
+        ):
+            created.append(partition)
+    if created:
+        with engine.begin() as conn:
+            tune_partition_storage(conn)
+            for partition in created:
+                conn.execute(text(f'ANALYZE "{partition}"'))
     return created

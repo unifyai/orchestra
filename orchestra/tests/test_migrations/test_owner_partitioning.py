@@ -14,16 +14,27 @@ leaks into the shared test database.
 
 from __future__ import annotations
 
-from sqlalchemy import text
+from typing import Generator
+
+import pytest
+from sqlalchemy import Engine, create_engine, text
 
 from orchestra.db.partitioning import (
     OWNER_SUB_TABLES,
+    PARTITIONED_TABLES,
     build_partitioned_index,
+    dedicated_partition_name,
     drop_owner,
     find_owner_promotion_candidates,
     index_attached_to_child,
+    is_partitioned,
+    owner_subpartition_name,
     promote_owner,
+    promote_owner_online,
+    promote_project_online,
+    relation_exists,
     sub_partition_project_by_owner,
+    sub_partition_project_by_owner_online,
 )
 
 PID = 9_900_001
@@ -183,3 +194,150 @@ def test_build_partitioned_index_attaches_every_leaf(dbsession) -> None:
     for leaf in (f"{parent}_default", f"{parent}_p7"):
         assert len(_public_index_names(conn, leaf)) == 2
         assert index_attached_to_child(conn, index_name, leaf)
+
+
+# --------------------------------------------------------------------------- #
+# Online (non-locking) promotion against the real partitioned kernel tables.
+#
+# The promote_*_online helpers run several autonomous transactions and take a
+# LOCK TABLE during cutover, so they need a normal (transactional) engine rather
+# than the AUTOCOMMIT ``_engine`` fixture. They commit, so they run on the
+# function-scoped test DB (dropped on teardown) instead of the rolled-back
+# dbsession. Only ``project`` + ``log_event`` are seeded (satisfying the kernel
+# FK to ``project``); the other kernel tables promote empty, which still
+# exercises the full create/backfill/index/cutover/attach path per table.
+# --------------------------------------------------------------------------- #
+ONLINE_PID = 9_901_234
+
+
+@pytest.fixture
+def online_engine(_engine: Engine) -> Generator[Engine, None, None]:
+    engine = create_engine(_engine.url, isolation_level="READ COMMITTED")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+def _seed_project_logs(engine: Engine, pid: int, owners: list[str]) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO project (id, name) VALUES (:p, 'online-promote-test')"),
+            {"p": pid},
+        )
+        for i, owner_key in enumerate(owners, start=1):
+            conn.execute(
+                text(
+                    "INSERT INTO log_event (project_id, id, owner_key, data) "
+                    "VALUES (:p, :i, :o, '{}'::jsonb)",
+                ),
+                {"p": pid, "i": i, "o": owner_key},
+            )
+
+
+def _project_count(engine: Engine) -> int:
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT count(*) FROM log_event WHERE project_id = :p"),
+            {"p": ONLINE_PID},
+        ).scalar()
+
+
+def _owner_counts(engine: Engine) -> dict[str, int]:
+    with engine.connect() as conn:
+        return {
+            ok: conn.execute(
+                text(
+                    "SELECT count(*) FROM log_event "
+                    "WHERE project_id = :p AND owner_key = :o",
+                ),
+                {"p": ONLINE_PID, "o": ok},
+            ).scalar()
+            for ok in ("a1", "a2", "sys")
+        }
+
+
+def test_promote_project_online(online_engine: Engine) -> None:
+    """Online project promotion moves rows into a dedicated partition, no lock.
+
+    Asserts the rows are preserved and served from the new dedicated partition
+    (the DEFAULT no longer holds them), every kernel table gets an attached
+    partition, the heavy secondary indexes attached (no in-lock rebuild), and a
+    re-run is an idempotent no-op.
+    """
+    owners = ["a1", "a1", "a2", "sys"]
+    _seed_project_logs(online_engine, ONLINE_PID, owners)
+
+    with online_engine.connect() as conn:
+        assert not relation_exists(
+            conn,
+            dedicated_partition_name("log_event", ONLINE_PID),
+        )
+    assert _project_count(online_engine) == len(owners)
+
+    created = promote_project_online(online_engine, ONLINE_PID)
+    assert dedicated_partition_name("log_event", ONLINE_PID) in created
+
+    leaf = dedicated_partition_name("log_event", ONLINE_PID)
+    with online_engine.connect() as conn:
+        for table in PARTITIONED_TABLES:
+            assert relation_exists(conn, dedicated_partition_name(table, ONLINE_PID))
+        # Rows preserved, now in the dedicated partition; DEFAULT cleared of them.
+        assert conn.execute(
+            text(f'SELECT count(*) FROM "{leaf}"'),
+        ).scalar() == len(owners)
+        assert (
+            conn.execute(
+                text('SELECT count(*) FROM "log_event_default" WHERE project_id = :p'),
+                {"p": ONLINE_PID},
+            ).scalar()
+            == 0
+        )
+        # The parent's heavy secondary indexes (incl. the GIN on data) are
+        # attached to the new leaf, not left to rebuild under lock.
+        assert len(_public_index_names(conn, leaf)) >= len(
+            _public_index_names(conn, "log_event_default"),
+        )
+    assert _project_count(online_engine) == len(owners)
+
+    # Idempotent: the partition is already attached, so a re-run attaches nothing.
+    assert promote_project_online(online_engine, ONLINE_PID) == []
+
+
+def test_online_owner_subpartition_lifecycle(online_engine: Engine) -> None:
+    """Online carve + owner promote reach the same end state as the in-txn path.
+
+    Carves the project into an owner-keyed sub-partition and promotes one owner,
+    both online (offline index build + brief cutover), then verifies the promoted
+    owner drops in O(1) without touching the others.
+    """
+    owners = ["a1", "a1", "a1", "a2", "a2", "sys"]
+    _seed_project_logs(online_engine, ONLINE_PID, owners)
+
+    # Carve online; rows are preserved and the project's partition is now itself
+    # partitioned by owner_key.
+    sub_partition_project_by_owner_online(online_engine, ONLINE_PID)
+    sub_parent = dedicated_partition_name("log_event", ONLINE_PID)
+    with online_engine.connect() as conn:
+        assert relation_exists(conn, sub_parent)
+        assert is_partitioned(conn, sub_parent)
+        assert find_owner_promotion_candidates(conn, ONLINE_PID, 3) == [("a1", 3)]
+    assert _owner_counts(online_engine) == {"a1": 3, "a2": 2, "sys": 1}
+
+    # Promote a1 online into its own sub-partition (precondition for O(1) drop).
+    created = promote_owner_online(online_engine, ONLINE_PID, "a1")
+    assert len(created) == len(OWNER_SUB_TABLES)
+    with online_engine.connect() as conn:
+        assert relation_exists(
+            conn,
+            owner_subpartition_name("log_event", ONLINE_PID, "a1"),
+        )
+    assert _owner_counts(online_engine) == {"a1": 3, "a2": 2, "sys": 1}
+
+    # Dropping the promoted owner is an O(1) partition drop; others untouched.
+    with online_engine.begin() as conn:
+        assert drop_owner(conn, ONLINE_PID, "a1") == "drop_partition"
+    assert _owner_counts(online_engine) == {"a1": 0, "a2": 2, "sys": 1}
+
+    # Idempotent: the sub-parent is already attached, so a re-run is a no-op.
+    assert sub_partition_project_by_owner_online(online_engine, ONLINE_PID) == []
