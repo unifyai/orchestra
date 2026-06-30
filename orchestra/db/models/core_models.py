@@ -115,8 +115,8 @@ class LogEventContext(Base):
         primary_key=True,
     )
     # Owning scope of the referenced log_event (see orchestra.db.scope). Carried
-    # on every association (including those into aggregation views) so all of an
-    # assistant/team's associations live in its sub-partition and drop together.
+    # on every association so all of an assistant/team's associations live in its
+    # sub-partition and drop together.
     owner_key = Column(
         String,
         nullable=False,
@@ -159,7 +159,7 @@ class Context(Base):
     current_commit_hash = Column(String, nullable=True)
     # Ownership scope: the entity whose data this context holds and the unit of
     # bulk deletion (see orchestra.db.scope). ``owner_scope`` is one of
-    # assistant/team/aggregation/system; ``owner_id`` is the agent_id (assistant)
+    # assistant/team/system; ``owner_id`` is the agent_id (assistant)
     # or team_id (team), else NULL. Logs created here denormalize this owner onto
     # the heavy tables so an assistant/team can be dropped as a partition.
     owner_scope = Column(String, nullable=True)

@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -910,10 +909,6 @@ class AtomicFieldUpdateRequest(BaseModel):
         description="(Upsert mode) Data to use when creating a new log entry. Must include all unique key values.",
         example={"_assistant_id": "123", "month": "2026-01", "_org_id": 456},
     )
-    add_to_all_context: bool = Field(
-        default=False,
-        description="(Upsert mode) If true, also adds the log to the 'All/*' archive context.",
-    )
 
 
 class AtomicFieldUpdateResponse(BaseModel):
@@ -929,8 +924,4 @@ class AtomicFieldUpdateResponse(BaseModel):
     created: Optional[bool] = Field(
         default=None,
         description="True if a new log was created (upsert mode only).",
-    )
-    mirrored_contexts: Optional[List[str]] = Field(
-        default=None,
-        description="List of archive contexts the log was mirrored to (upsert mode only).",
     )

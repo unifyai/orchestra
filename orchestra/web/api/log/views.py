@@ -200,12 +200,6 @@ def _sanitize_sql_error(error: Exception) -> str:
     return error_msg
 
 
-# Import sibling context cleanup from shared module
-from orchestra.db.dao.sibling_context_cleanup import (
-    get_assistants_sibling_context_info as _get_assistants_sibling_context_info,
-)
-
-
 def _recompute_derived_for_logs(
     *,
     session,
@@ -1519,7 +1513,6 @@ def atomic_field_update(
                         "log_id": 789,
                         "new_value": 83.50,
                         "created": False,
-                        "mirrored_contexts": ["All/Spending/Monthly"],
                     },
                 },
             },
@@ -1557,7 +1550,6 @@ def atomic_field_upsert(
     2. Acquires an advisory lock on the unique key values (prevents race on first insert)
     3. Finds an existing log by unique_keys or creates it with initial_data
     4. Applies an atomic operation to the specified field
-    5. If add_to_all_context=true, mirrors non-team logs to the All/* archive context
 
     Required body fields for upsert mode:
     - project: Name of the project
@@ -1906,14 +1898,10 @@ def _atomic_upsert_mode(
 
     session.commit()
 
-    # ``add_to_all_context`` is accepted for backward compatibility but no longer
-    # mirrors into All/* aggregation contexts (that concept has been retired): a
-    # log's only durable home is its owning assistant/team context.
     return AtomicFieldUpdateResponse(
         new_value=new_value,
         log_id=log_id,
         created=created,
-        mirrored_contexts=None,
     )
 
 
@@ -2642,16 +2630,11 @@ def _delete_logs(
     log_event_dao: LogEventDAO,
     field_type_dao: FieldTypeDAO,
     context_dao: ContextDAO,
-    is_assistants_dual_context: bool = False,
 ):
     """
     Log deletion helper function.
 
     This function handles log deletions by modifying LogEvent.data JSONB column directly.
-
-    For Assistants/UnityTests projects with 3-tier context hierarchies, this function
-    also handles cascading deletions across sibling contexts (All/X, User/All/X,
-    User/Assistant/X).
 
     Args:
         session: Database session
@@ -2665,7 +2648,6 @@ def _delete_logs(
         log_event_dao: LogEventDAO instance
         field_type_dao: FieldTypeDAO instance
         context_dao: ContextDAO instance
-        is_assistants_dual_context: If True, enables 3-tier context cascade deletion
 
     Returns:
         Dict with deletion result info
@@ -2878,32 +2860,18 @@ def _delete_logs(
             field_names=None,  # Check all media fields
         )
 
-        # Get sibling context IDs for 3-tier context cascade (Assistants/UnityTests)
-        sibling_context_map: Dict[int, List[int]] = {}
-        if is_assistants_dual_context:
-            sibling_context_map = _get_assistants_sibling_context_info(
-                session=session,
-                project_id=project_id,
-                context_id=context_id,
-                context_name=context_name,
-                log_event_ids=entire_log_deletions,
-                context_dao=context_dao,
-            )
-
-        # Partition logs: those in other contexts vs those to delete entirely
-        # For 3-tier projects, sibling contexts don't count as "other" contexts
+        # Partition logs: those still referenced by another context vs those to
+        # delete entirely.
         logs_in_other_contexts = []
         logs_to_delete = []
 
         for log_id in entire_log_deletions:
-            exclude_context_ids = [context_id] + sibling_context_map.get(log_id, [])
-
             other_contexts = (
                 session.query(LogEventContext.context_id)
                 .filter(
                     LogEventContext.project_id == project_id,
                     LogEventContext.log_event_id == log_id,
-                    LogEventContext.context_id.notin_(exclude_context_ids),
+                    LogEventContext.context_id != context_id,
                 )
                 .all()
             )
@@ -2929,41 +2897,6 @@ def _delete_logs(
                     f"Removed {removed_count} log events from context '{context_name}'",
                 )
                 context_updated = True
-
-        # Cascade deletion to sibling contexts (3-tier hierarchy)
-        if is_assistants_dual_context and sibling_context_map:
-            sibling_removals = [
-                log_id
-                for log_id in logs_in_other_contexts
-                if log_id in sibling_context_map
-            ]
-            if sibling_removals:
-                sibling_ctx_to_logs: Dict[int, List[int]] = {}
-                for log_id in sibling_removals:
-                    for sib_ctx_id in sibling_context_map[log_id]:
-                        sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(log_id)
-
-                for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
-                    sibling_removed = (
-                        session.query(LogEventContext)
-                        .filter(
-                            LogEventContext.project_id == project_id,
-                            LogEventContext.log_event_id.in_(log_ids),
-                            LogEventContext.context_id == sib_ctx_id,
-                        )
-                        .delete(synchronize_session=False)
-                    )
-                    if sibling_removed > 0:
-                        sib_ctx = context_dao.filter(
-                            project_id=project_id,
-                            id=sib_ctx_id,
-                        )
-                        sib_ctx_name = (
-                            sib_ctx[0][0].name if sib_ctx else f"id={sib_ctx_id}"
-                        )
-                        context_description.append(
-                            f"Removed {sibling_removed} log events from sibling context '{sib_ctx_name}'",
-                        )
 
         # Apply FK CASCADE and SET NULL actions before deletion
         if logs_to_delete:
@@ -3402,16 +3335,6 @@ def delete_logs(
         )
     context_id = context[0][0].id
 
-    # Detect Assistants project dual-context pattern
-    # When project is "Assistants" or "UnityTests", logs exist in both "All/<SubContext>"
-    # and "{user_id}/{assistant_id}/<SubContext>" contexts. Deleting from one should also
-    # delete from the sibling context.
-    is_assistants_dual_context = (
-        (body.project_name == "Assistants" or "UnityTests" in body.project_name)
-        and context_name
-        and "/" in context_name
-    )
-
     # Preprocess ids_and_fields to handle dict-based selectors
     processed_ids_and_fields = []
     for id_spec, fields in body.ids_and_fields:
@@ -3452,7 +3375,6 @@ def delete_logs(
         log_event_dao=log_event_dao,
         field_type_dao=field_type_dao,
         context_dao=context_dao,
-        is_assistants_dual_context=is_assistants_dual_context,
     )
 
 
