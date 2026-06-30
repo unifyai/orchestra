@@ -131,6 +131,33 @@ def owner_key(scope: OwnerScope, owner_id: int | None) -> str:
     return "sys"
 
 
+def single_owner_key(owner_scope, owner_id: int | None) -> str | None:
+    """The owner sub-partition key to prune by for a *single-owner* context, or
+    ``None`` when the context is not safely owner-homogeneous.
+
+    Only assistant/team contexts with a real ``owner_id`` are single-owner: all
+    their logs share one ``owner_key`` (enforced by ``ContextDAO.add_logs``), so a
+    query filtered to one such context can prune to its owner sub-partition.
+    Aggregation/system contexts return ``None`` -- they may legitimately hold logs
+    from many owners, so no single ``owner_key`` predicate is valid.
+
+    ``owner_scope`` accepts an :class:`OwnerScope` or its stored string value
+    (or ``None``).
+    """
+    if owner_scope is None:
+        return None
+    if isinstance(owner_scope, OwnerScope):
+        scope = owner_scope
+    else:
+        try:
+            scope = OwnerScope(owner_scope)
+        except ValueError:
+            # Unrecognized scope -> treat as not-single-owner (do not prune).
+            return None
+    key = owner_key(scope, owner_id)
+    return None if key == "sys" else key
+
+
 def owner_key_for_context(conn: Connection, context_id: int) -> str:
     """Resolve the ``owner_key`` for a context (its logs inherit this).
 
@@ -144,6 +171,22 @@ def owner_key_for_context(conn: Connection, context_id: int) -> str:
     if row is None or row[0] is None:
         return "sys"
     return owner_key(OwnerScope(row[0]), row[1])
+
+
+def single_owner_key_for_context(
+    conn: Connection,
+    context_id: int | None,
+) -> str | None:
+    """:func:`single_owner_key` resolved from the DB by ``context_id``.
+
+    Returns the owner sub-partition key for single-owner (assistant/team)
+    contexts, or ``None`` for aggregation/system/missing contexts (which must not
+    be pinned to one owner).
+    """
+    if context_id is None:
+        return None
+    key = owner_key_for_context(conn, context_id)
+    return None if key == "sys" else key
 
 
 def owner_key_for_log(conn: Connection, log_event_id: int) -> str:

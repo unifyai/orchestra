@@ -35,6 +35,12 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.log_queries import (
+    embedding_scope,
+    log_event_context_join,
+    owner_scope_clause,
+    project_scope,
+)
 from orchestra.db.models.core_models import (
     Context,
     Embedding,
@@ -42,6 +48,7 @@ from orchestra.db.models.core_models import (
     LogEvent,
     LogEventContext,
 )
+from orchestra.db.scope import single_owner_key
 from orchestra.settings import settings
 from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
 from orchestra.web.api.log.schema import CreateLogConfig
@@ -464,6 +471,8 @@ def _build_unified_logs_limited(
     session,
     ids_subq: Subquery,
     context_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    owner_key: Optional[str] = None,
 ) -> Subquery:
     """
     Build unified logs subquery limited to the specified log_event_ids.
@@ -474,6 +483,8 @@ def _build_unified_logs_limited(
         session=session,
         event_ids=id_only_sq,
         context_id=context_id,
+        project_id=project_id,
+        owner_key=owner_key,
     )
 
 
@@ -523,6 +534,8 @@ def _build_sort_clauses(
     relevant_log_events,
     sort_val_sqs,
     sort_criteria,
+    project_id=None,
+    context_id=None,
 ):
     """
     Helper function to build sorting clauses for log queries.
@@ -602,6 +615,7 @@ def _build_sort_clauses(
                         session=session,
                         relevant_log_events=relevant_log_events,
                         key=sort_key,  # ❷  filter at source
+                        project_id=project_id,
                     )
 
                     cast_expr = _build_sort_criteria(
@@ -641,6 +655,8 @@ def _build_sort_clauses(
                         LogEvent,
                         session,
                         log_event_ids=event_ids_subq,
+                        project_id=project_id,
+                        context_id=context_id,
                     )
                     rand = random.randint(1, 1000000)
                     base_sq = sort_expr.alias(f"sort_base_{rand}")
@@ -850,6 +866,11 @@ def _get_logs_query(
     # STEP 3: Apply context filter
     # =========================================================================
     context_id = None
+    # owner_key of the resolved single-owner (assistant/team) context, or None for
+    # aggregation/system/default contexts. When set, it prunes to one owner
+    # sub-partition within the Assistants project (carried through the join + the
+    # embedding/ANN/subquery scans below).
+    owner_key_filter = None
     if context:
         context_obj = context_dao.filter(name=context, project_id=project_id)
         if not context_obj:
@@ -857,29 +878,37 @@ def _get_logs_query(
                 status_code=404,
                 detail=f"Context '{context}' not found",
             )
-        context_id = context_obj[0][0].id
+        ctx_row = context_obj[0][0]
+        context_id = ctx_row.id
+        owner_key_filter = single_owner_key(ctx_row.owner_scope, ctx_row.owner_id)
         query = query.join(
             LogEventContext,
-            LogEventContext.log_event_id == LogEvent.id,
+            log_event_context_join(owner_key=owner_key_filter),
         ).filter(
             # project_id is redundant (context is project-scoped) but lets the
             # LIST(project_id) partition pruner skip other projects' partitions.
             LogEventContext.project_id == project_id,
             LogEventContext.context_id == context_id,
+            owner_scope_clause(LogEvent, owner_key_filter),
+            owner_scope_clause(LogEventContext, owner_key_filter),
         )
     else:
         # Get the default context (empty string name)
         context_obj = context_dao.filter(name="", project_id=project_id)
         if context_obj:
-            context_id = context_obj[0][0].id
+            ctx_row = context_obj[0][0]
+            context_id = ctx_row.id
+            owner_key_filter = single_owner_key(ctx_row.owner_scope, ctx_row.owner_id)
             # Also filter by context membership for default context
             # This ensures logs removed from default context aren't returned
             query = query.join(
                 LogEventContext,
-                LogEventContext.log_event_id == LogEvent.id,
+                log_event_context_join(owner_key=owner_key_filter),
             ).filter(
                 LogEventContext.project_id == project_id,
                 LogEventContext.context_id == context_id,
+                owner_scope_clause(LogEvent, owner_key_filter),
+                owner_scope_clause(LogEventContext, owner_key_filter),
             )
         else:
             # No default context exists - return empty results
@@ -1075,7 +1104,11 @@ def _get_logs_query(
         embedding_exists = (
             session.query(Embedding.ref_id)
             .filter(
-                Embedding.project_id == LogEvent.project_id,
+                # Literal project_id (not == LogEvent.project_id): a correlated
+                # equijoin only prunes the embedding partition at runtime, not at
+                # plan time, so pin it to the known project.
+                embedding_scope(Embedding, project_id),
+                owner_scope_clause(Embedding, owner_key_filter),
                 Embedding.ref_id == LogEvent.id,
                 Embedding.key.in_(allowed_fields),
                 Embedding.is_deleted
@@ -1208,7 +1241,13 @@ def _get_logs_query(
 
                 # Query Embedding table to detect model and dimension
                 embedding_model_query = session.execute(
-                    select(Embedding.model).where(Embedding.key == lhs_key).limit(1),
+                    select(Embedding.model)
+                    .where(
+                        Embedding.key == lhs_key,
+                        embedding_scope(Embedding, project_id),
+                        owner_scope_clause(Embedding, owner_key_filter),
+                    )
+                    .limit(1),
                 ).scalar()
 
                 # Map model to dimension for HNSW index usage
@@ -1260,6 +1299,7 @@ def _get_logs_query(
                         # Constrain to this project's partition so the planner
                         # prunes to a single per-partition HNSW index.
                         Embedding.project_id == project_id,
+                        owner_scope_clause(Embedding, owner_key_filter),
                         Embedding.key == lhs_key,
                         model_filter,
                         Embedding.is_deleted == False,  # noqa: E712
@@ -1305,6 +1345,7 @@ def _get_logs_query(
                         paginated_ids_cte.c.dist,
                     )
                     .join(paginated_ids_cte, LogEvent.id == paginated_ids_cte.c.id)
+                    .filter(project_scope(LogEvent, project_id))
                     .order_by(paginated_ids_cte.c.row_num)
                 )
 
@@ -1545,6 +1586,7 @@ def _get_logs_query(
             func.to_jsonb(Embedding.vector).label("vector_list"),
         ).where(
             Embedding.project_id == project_id,
+            owner_scope_clause(Embedding, owner_key_filter),
             Embedding.ref_id.in_(page_ids),
         )
 
@@ -2195,6 +2237,8 @@ def _build_unified_logs_subquery(
     relevant_log_events: Optional[Subquery] = None,
     key: str = None,
     context_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    owner_key: Optional[str] = None,
 ) -> Subquery:
     """
     Build a unified subquery over JSONB log fields.
@@ -2208,6 +2252,14 @@ def _build_unified_logs_subquery(
         raise ValueError("Either event_ids or relevant_log_events must be provided")
 
     def _apply_event_filter(query):
+        # Prune to the project (and owner sub-partition for single-owner contexts)
+        # so the unified scan does not fan out across every tenant's partition (the
+        # id/relevant subqueries are project-scoped, but this outer LogEvent scan
+        # needs its own predicate).
+        query = query.filter(
+            project_scope(LogEvent, project_id),
+            owner_scope_clause(LogEvent, owner_key),
+        )
         if event_ids is not None:
             event_ids_selectable = (
                 select(event_ids) if isinstance(event_ids, Subquery) else event_ids
@@ -3103,7 +3155,7 @@ def _build_direct_join_side_source(
     query = (
         session.query(*select_columns)
         .select_from(LogEventContext)
-        .join(LogEvent, LogEvent.id == LogEventContext.log_event_id)
+        .join(LogEvent, log_event_context_join())
         .filter(
             LogEventContext.context_id == context_id,
             LogEvent.project_id == project_id,
@@ -3127,6 +3179,8 @@ def _build_direct_join_side_source(
             log_event_ids=select(literal(1)).subquery("dummy_ids"),
             is_derived=False,
             local_scope=local_scope,
+            project_id=project_id,
+            context_id=context_id,
         )
         query = query.filter(filter_condition)
 
@@ -3563,6 +3617,7 @@ def _build_log_subquery(
     # Apply the filter to get only the log events we want
     final_query = base_query.filter(
         LogEvent.id.in_(select(event_ids_subq)),
+        project_scope(LogEvent, project_id),
     ).order_by(LogEvent.id.asc())
 
     # Return as a subquery with the specified alias
@@ -3580,6 +3635,7 @@ def _construct_join_query(
     include_log_ids: bool = False,
     session=None,
     skip_merge: bool = False,
+    project_id: Optional[int] = None,
 ):
     """
     JSONB version: Construct join using A.data || B.data merge.
@@ -3652,6 +3708,7 @@ def _construct_join_query(
             log_event_ids=select(subq_a.c.log_event_id).subquery("event_ids"),
             is_derived=False,
             local_scope=local_scope,
+            project_id=project_id,
         )
     except Exception as e:
         raise ValueError(f"Error processing join expression: {e}")
@@ -4052,6 +4109,7 @@ def _create_logs_from_joined_rows(
         source_embeddings = (
             session.query(Embedding)
             .filter(
+                embedding_scope(Embedding, project_id),
                 Embedding.ref_id.in_(source_log_event_ids),
                 Embedding.is_deleted
                 == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
@@ -4353,6 +4411,7 @@ def _join_logs_internal(
             fields_b=fields_b,
             include_log_ids=True,  # Always include log IDs for embedding lookups
             session=session,
+            project_id=project_id,
         )
 
         # --- Phase 3: Execute the join query ---
@@ -4684,6 +4743,7 @@ def _join_query_internal(
             include_log_ids=False,
             session=session,
             skip_merge=_use_direct_reduce,
+            project_id=project_id,
         )
 
         if filter_expr:
@@ -4715,6 +4775,7 @@ def _join_query_internal(
                 log_event_ids=select(literal(1)).subquery("dummy_ids"),
                 is_derived=False,
                 local_scope=local_scope,
+                project_id=project_id,
             )
             joined_query = (
                 select(pre_merged.label("merged_data"))

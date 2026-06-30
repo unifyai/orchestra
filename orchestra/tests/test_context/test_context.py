@@ -510,6 +510,57 @@ async def test_implicit_context_creation(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_add_logs_enforces_owner_homogeneity(client: AsyncClient):
+    """Foreign add_logs into an assistant/team context is rejected so the
+    owner_key sub-partition stays homogeneous; aggregation/system contexts may
+    still collect logs from multiple owners."""
+    project_name = "test-owner-homogeneity"
+    await client.post("/v0/project", json={"name": project_name}, headers=HEADERS)
+
+    async def _log(context: str) -> int:
+        resp = await client.post(
+            "/v0/logs",
+            json={
+                "project_name": project_name,
+                "context": context,
+                "entries": {"value": "x"},
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()["log_event_ids"][0]
+
+    # Logs owned by two different assistants (owner_key a42 / a99 by name inference).
+    log_a42 = await _log("user1/42/MemoryA")
+    log_a99 = await _log("user1/99/MemoryC")
+
+    # Same-owner association into another a42 context is allowed.
+    same_owner = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": "user1/42/MemoryB", "log_ids": [log_a42]},
+        headers=HEADERS,
+    )
+    assert same_owner.status_code == 200, same_owner.text
+
+    # Foreign association into an assistant context is rejected.
+    foreign = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": "user1/42/MemoryA", "log_ids": [log_a99]},
+        headers=HEADERS,
+    )
+    assert foreign.status_code == 400
+    assert "owner_key mismatch" in foreign.json()["detail"].lower()
+
+    # An aggregation context (name contains "All") may collect both owners' logs.
+    agg = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": "All/Shared", "log_ids": [log_a42, log_a99]},
+        headers=HEADERS,
+    )
+    assert agg.status_code == 200, agg.text
+
+
+@pytest.mark.anyio
 async def test_get_logs_by_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "test-context"

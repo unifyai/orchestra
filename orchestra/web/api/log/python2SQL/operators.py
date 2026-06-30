@@ -295,6 +295,8 @@ def _handle_logical_operator(
     is_derived=False,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handles logical operators ('and', 'or', 'not') using CASE statements
@@ -312,6 +314,8 @@ def _handle_logical_operator(
             is_derived=is_derived,
             local_scope=local_scope,
             is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
         )
         if isinstance(rhs, Subquery):
             # Re-use the truthiness condition, but negate it
@@ -346,6 +350,7 @@ def _handle_logical_operator(
                 session=session,
                 is_derived=is_derived,
                 is_vector=is_vector,
+                project_id=project_id,
             )
 
             # Extract value column and type from the identifier subquery
@@ -364,6 +369,8 @@ def _handle_logical_operator(
                 is_derived=is_derived,
                 local_scope=local_scope,
                 is_vector=is_vector,
+                project_id=project_id,
+                context_id=context_id,
             )
             rhs_rhs_expr = build_sql_query(
                 rhs_rhs_node,
@@ -373,6 +380,8 @@ def _handle_logical_operator(
                 is_derived=is_derived,
                 local_scope=local_scope,
                 is_vector=is_vector,
+                project_id=project_id,
+                context_id=context_id,
             )
 
             # Get RHS values and types
@@ -443,6 +452,8 @@ def _handle_logical_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
     rhs = build_sql_query(
         rhs_node,
@@ -452,6 +463,8 @@ def _handle_logical_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1505,6 +1518,8 @@ def _handle_slice_operator(
     is_derived=False,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle the SLICE operator in a filter expression.
@@ -1532,6 +1547,8 @@ def _handle_slice_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     # Handle direct JSONB expressions

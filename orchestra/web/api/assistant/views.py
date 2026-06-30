@@ -47,6 +47,7 @@ from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.log_queries import log_event_context_join
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
@@ -4394,29 +4395,10 @@ async def transfer_assistant_to_org(
                 from orchestra.db.dao.log_event_dao import LogEventDAO
 
                 le_dao = LogEventDAO(session)
-                for ctx in contexts_to_transfer:
-                    # Move all of this context's logs to the org project, keeping
-                    # the denormalized partition key (project_id) consistent across
-                    # log_event AND its child tables (log_event_context / embedding
-                    # / embedding_queue). Updating only log_event would desync the
-                    # children from their parent's partition.
-                    ctx_log_ids = [
-                        row[0]
-                        for row in session.query(LogEventContext.log_event_id)
-                        .filter(LogEventContext.context_id == ctx.id)
-                        .all()
-                    ]
-                    le_dao.reproject_logs(ctx_log_ids, org_project.id)
-                    # Update the context's project_id
-                    ctx.project_id = org_project.id
 
-                # =========================================================
-                # Transfer logs from shared aggregate contexts (3-tier hierarchy)
-                # - Tier 1: All/* (global aggregate)
-                # - Tier 2: User/All/* (user aggregate)
-                # These contexts may contain logs from multiple assistants,
-                # so we only transfer logs where _assistant_id matches
-                # =========================================================
+                # Shared aggregate contexts (Tier 1 ``All/*``, Tier 2
+                # ``User/All/*``) may hold logs from multiple assistants, so only
+                # this assistant's are transferred.
                 shared_contexts = (
                     session.query(Context)
                     .filter(
@@ -4429,18 +4411,34 @@ async def transfer_assistant_to_org(
                     .all()
                 )
 
-                shared_logs_transferred = False
+                # Phase 1 -- discover every log to move while it is still in the
+                # personal project, so each lookup carries a single literal
+                # project_id and prunes both partitioned tables. All discovery
+                # must finish BEFORE any reproject: reproject_logs moves a
+                # log_event AND all of its log_event_context rows wholesale, so
+                # moving a log shared between a tier-3 and an aggregate context
+                # would otherwise hide it from a later per-context lookup.
+                tier3_log_ids: list[int] = []
+                for ctx in contexts_to_transfer:
+                    tier3_log_ids.extend(
+                        row[0]
+                        for row in session.query(LogEventContext.log_event_id)
+                        .filter(
+                            LogEventContext.project_id == personal_project.id,
+                            LogEventContext.context_id == ctx.id,
+                        )
+                        .all()
+                    )
+
+                shared_relink: list[tuple[list[int], Context]] = []
                 for shared_ctx in shared_contexts:
-                    # Find logs belonging to this assistant in the shared context
                     assistant_log_ids = [
                         row[0]
                         for row in (
                             session.query(LogEventContext.log_event_id)
-                            .join(
-                                LogEvent,
-                                LogEvent.id == LogEventContext.log_event_id,
-                            )
+                            .join(LogEvent, log_event_context_join())
                             .filter(
+                                LogEvent.project_id == personal_project.id,
                                 LogEventContext.context_id == shared_ctx.id,
                                 LogEvent.data["_assistant_id"].astext
                                 == str(assistant_id),
@@ -4448,13 +4446,28 @@ async def transfer_assistant_to_org(
                             .all()
                         )
                     ]
+                    if assistant_log_ids:
+                        shared_relink.append((assistant_log_ids, shared_ctx))
 
-                    if not assistant_log_ids:
-                        continue
+                # Phase 2 -- reproject every discovered log to the org project in
+                # one pass, keeping the denormalized partition key (project_id)
+                # consistent across log_event and its child tables
+                # (log_event_context / embedding / embedding_queue).
+                all_log_ids = list(
+                    set(tier3_log_ids)
+                    | {lid for ids, _ in shared_relink for lid in ids},
+                )
+                if all_log_ids:
+                    le_dao.reproject_logs(all_log_ids, org_project.id)
 
-                    shared_logs_transferred = True
+                # Phase 3a -- move the assistant's own (tier-3) contexts to org.
+                for ctx in contexts_to_transfer:
+                    ctx.project_id = org_project.id
 
-                    # Check if shared context exists in org project
+                # Phase 3b -- point each shared context's relinked rows (now in the
+                # org partition) at the org's copy of that aggregate context.
+                shared_logs_transferred = bool(shared_relink)
+                for assistant_log_ids, shared_ctx in shared_relink:
                     org_shared_ctx = (
                         session.query(Context)
                         .filter(
@@ -4463,11 +4476,9 @@ async def transfer_assistant_to_org(
                         )
                         .first()
                     )
-
                     if org_shared_ctx:
                         target_ctx_id = org_shared_ctx.id
                     else:
-                        # Create the shared context in org project
                         new_ctx = Context(
                             project_id=org_project.id,
                             name=shared_ctx.name,
@@ -4476,12 +4487,8 @@ async def transfer_assistant_to_org(
                         session.flush()
                         target_ctx_id = new_ctx.id
 
-                    # Move logs to org project, keeping the denormalized partition
-                    # key consistent across log_event and its child tables.
-                    le_dao.reproject_logs(assistant_log_ids, org_project.id)
-
-                    # Update context links to point to org's context
                     session.query(LogEventContext).filter(
+                        LogEventContext.project_id == org_project.id,
                         LogEventContext.log_event_id.in_(assistant_log_ids),
                         LogEventContext.context_id == shared_ctx.id,
                     ).update(

@@ -35,6 +35,7 @@ from .helpers import (
     cast_expr,
     unify_inferred_types,
 )
+from .prune import project_scope
 
 __all__ = [
     "_handle_functions",
@@ -228,6 +229,7 @@ def _handle_dict_method(
                 session,
                 local_scope=local_scope,
                 prefix="dict_method_src_wrapped",
+                project_id=project_id,
             )
 
     if not isinstance(src, Subquery):
@@ -475,7 +477,9 @@ def _handle_if_expr(
             )
         else:
             ids_subq = alias_utils.subquery_with_unique_alias(
-                select(log_event_alias.id.label("log_event_id")),
+                select(log_event_alias.id.label("log_event_id")).where(
+                    project_scope(log_event_alias, project_id),
+                ),
                 prefix="ids_subq",
             )
 
@@ -664,6 +668,7 @@ def _handle_list_comp(
                 session,
                 local_scope=local_scope,
                 prefix="list_comp_iter_wrapped",
+                project_id=project_id,
             )
 
     if not isinstance(iter_subq, Subquery):
@@ -1329,6 +1334,7 @@ def _handle_dict_comp(
                 session,
                 local_scope=local_scope,
                 prefix="dict_comp_iter_wrapped",
+                project_id=project_id,
             )
 
     if not isinstance(iter_subq, Subquery):

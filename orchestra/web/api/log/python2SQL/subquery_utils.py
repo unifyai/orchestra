@@ -20,6 +20,7 @@ from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.selectable import Subquery
 
 from . import alias_utils
+from .prune import project_scope
 
 
 def build_result_subquery(
@@ -74,6 +75,7 @@ def build_result_subquery_with_join(
     value_expr: ClauseElement,
     result_type: str,
     prefix: str = "result",
+    project_id=None,
 ) -> Subquery:
     """
     Build a result subquery with a JOIN to another table.
@@ -109,8 +111,18 @@ def build_result_subquery_with_join(
 
     from_clause = base_subq.join(join_target, join_condition)
 
+    # Scope the joined-back partitioned table to the project so the planner
+    # prunes it (the join condition alone joins on id, which fans out).
+    stmt = (
+        select(*select_cols)
+        .select_from(from_clause)
+        .where(
+            project_scope(join_target, project_id),
+        )
+    )
+
     return alias_utils.subquery_with_unique_alias(
-        select(*select_cols).select_from(from_clause),
+        stmt,
         prefix=prefix,
     )
 

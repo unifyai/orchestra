@@ -378,7 +378,8 @@ class ProjectDAO:
                             FOR UPDATE SKIP LOCKED
                         )
                         DELETE FROM log_event
-                        WHERE id IN (SELECT id FROM batch)
+                        WHERE project_id = :project_id
+                          AND id IN (SELECT id FROM batch)
                     """,
                     ),
                     {"project_id": id, "batch_size": batch_size},

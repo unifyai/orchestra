@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.team_dao import TEAM_STATUS_ACTIVE, TEAM_STATUS_DELETING
+from orchestra.db.log_queries import log_event_context_join
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_TEAM,
     Assistant,
@@ -145,10 +146,13 @@ def _scheduled_activations_for_team(
     destination = _team_destination(team_id)
     query = (
         select(LogEvent.data)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(LogEventContext, log_event_context_join())
         .join(Context, Context.id == LogEventContext.context_id)
         .where(
             LogEvent.project_id.in_(project_ids),
+            # IN-lists do not propagate through the equijoin's equivalence class
+            # the way a single = does, so pin lec directly too.
+            LogEventContext.project_id.in_(project_ids),
             Context.project_id.in_(project_ids),
             Context.name.like(
                 f"%/{task_machine_state_service.TASK_ACTIVATIONS_CONTEXT_NAME}",
@@ -233,6 +237,8 @@ def _claim_shared_team_contexts(
         return
 
     context_ids = [int(context.id) for context in contexts]
+    # Anchor the partitioned UPDATEs to the contexts' projects so they prune.
+    project_ids = sorted({int(context.project_id) for context in contexts})
     team_owner_key = f"t{team_id}"
     session.execute(
         text(
@@ -252,22 +258,32 @@ def _claim_shared_team_contexts(
             FROM log_event_context lec
             WHERE lec.log_event_id = le.id
               AND lec.project_id = le.project_id
+              AND le.project_id = ANY(:project_ids)
               AND lec.context_id = ANY(:context_ids)
               AND le.owner_key = 'sys'
             """,
         ),
-        {"owner_key": team_owner_key, "context_ids": context_ids},
+        {
+            "owner_key": team_owner_key,
+            "context_ids": context_ids,
+            "project_ids": project_ids,
+        },
     )
     session.execute(
         text(
             """
             UPDATE log_event_context
             SET owner_key = :owner_key
-            WHERE context_id = ANY(:context_ids)
+            WHERE project_id = ANY(:project_ids)
+              AND context_id = ANY(:context_ids)
               AND owner_key = 'sys'
             """,
         ),
-        {"owner_key": team_owner_key, "context_ids": context_ids},
+        {
+            "owner_key": team_owner_key,
+            "context_ids": context_ids,
+            "project_ids": project_ids,
+        },
     )
     session.execute(
         text(
@@ -277,11 +293,16 @@ def _claim_shared_team_contexts(
             FROM log_event_context lec
             WHERE lec.log_event_id = e.ref_id
               AND lec.project_id = e.project_id
+              AND e.project_id = ANY(:project_ids)
               AND lec.context_id = ANY(:context_ids)
               AND e.owner_key = 'sys'
             """,
         ),
-        {"owner_key": team_owner_key, "context_ids": context_ids},
+        {
+            "owner_key": team_owner_key,
+            "context_ids": context_ids,
+            "project_ids": project_ids,
+        },
     )
     session.flush()
 

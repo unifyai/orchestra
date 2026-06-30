@@ -54,6 +54,7 @@ from .helpers import (
 )
 from .image_utils import fetch_media_with_retry, get_phash_from_node
 from .operators import _arithmetic_expr, _null_safe_eq, _null_safe_ne
+from .prune import embedding_scope, project_scope
 from .subquery_utils import build_result_subquery, build_result_subquery_with_join
 from .temporal_utils import (
     build_naive_datetime_subtraction_subquery,
@@ -284,7 +285,9 @@ def _build_jsonb_field_expression(
 
         # Look up the actual model used for this embedding key
         model_result = session.execute(
-            select(Embedding.model).where(Embedding.key == key).limit(1),
+            select(Embedding.model)
+            .where(Embedding.key == key, embedding_scope(Embedding, project_id))
+            .limit(1),
         ).scalar()
         model_name = model_result if model_result else DEFAULT_EMBEDDING_MODEL
 
@@ -309,6 +312,7 @@ def _build_jsonb_field_expression(
                     Embedding.ref_id == id_column,
                     Embedding.key == literal(key),
                     Embedding.model == literal(model_name),
+                    embedding_scope(Embedding, project_id),
                 ),
             )
         )
@@ -667,6 +671,7 @@ def _handle_comparison_operator_jsonb(
             value_expr=expr,
             result_type="bool",
             prefix="comparison_op",
+            project_id=project_id,
         )
     else:  # rhs_is_sub
         # LHS is a JSONB expression - need to join subquery with log_event_alias
@@ -677,6 +682,7 @@ def _handle_comparison_operator_jsonb(
             value_expr=expr,
             result_type="bool",
             prefix="comparison_op",
+            project_id=project_id,
         )
 
 
@@ -857,8 +863,16 @@ def _handle_arithmetic_operator_jsonb(
             # Handle datetime subtraction with naive timestamps (timezone-agnostic)
             if operand == "-" and lhs_type == "datetime" and rhs_type == "datetime":
                 # Use temporal_utils to build naive timestamp expressions
-                lhs_ts = build_naive_timestamp_expr(lhs_dict, log_event_alias)
-                rhs_ts = build_naive_timestamp_expr(rhs_dict, log_event_alias)
+                lhs_ts = build_naive_timestamp_expr(
+                    lhs_dict,
+                    log_event_alias,
+                    project_id,
+                )
+                rhs_ts = build_naive_timestamp_expr(
+                    rhs_dict,
+                    log_event_alias,
+                    project_id,
+                )
 
                 if lhs_ts is not None and rhs_ts is not None:
                     return lhs_ts - rhs_ts
@@ -940,6 +954,7 @@ def _handle_arithmetic_operator_jsonb(
                 rhs_base_ids=rhs_base_ids,
                 lhs_expr=lhs_expr,
                 lhs_is_sub=lhs_is_sub,
+                project_id=project_id,
             )
 
         # Fallback: try stripping from converted values (may not work for UTC-converted values)
@@ -963,6 +978,7 @@ def _handle_arithmetic_operator_jsonb(
             value_expr=expr,
             result_type=result_type,
             prefix="arithmetic_op",
+            project_id=project_id,
         )
     else:  # rhs_is_sub
         # LHS is a JSONB expression - join subquery with log_event_alias
@@ -973,6 +989,7 @@ def _handle_arithmetic_operator_jsonb(
             value_expr=expr,
             result_type=result_type,
             prefix="arithmetic_op",
+            project_id=project_id,
         )
 
 
@@ -1214,6 +1231,7 @@ def _handle_membership_operator_jsonb(
             value_expr=expr,
             result_type="bool",
             prefix="membership_op",
+            project_id=project_id,
         )
     else:  # rhs_is_sub
         # LHS is a JSONB expression - join subquery with log_event_alias
@@ -1224,6 +1242,7 @@ def _handle_membership_operator_jsonb(
             value_expr=expr,
             result_type="bool",
             prefix="membership_op",
+            project_id=project_id,
         )
 
 
@@ -1406,6 +1425,7 @@ def _handle_logical_operator_jsonb(
             value_expr=case_expr,
             result_type="bool",
             prefix="logical_op",
+            project_id=project_id,
         )
     else:  # rhs_is_sub
         # LHS is a JSONB expression - join subquery with log_event_alias
@@ -1416,6 +1436,7 @@ def _handle_logical_operator_jsonb(
             value_expr=case_expr,
             result_type="bool",
             prefix="logical_op",
+            project_id=project_id,
         )
 
 
@@ -2269,7 +2290,12 @@ def _handle_functions_jsonb(
                 # This handles cases where some logs have null values for the field
                 sample_query = (
                     select(func.jsonb_typeof(ref_log_event.data.op("->")(key)))
-                    .where(ref_log_event.id.in_(base_ids))
+                    .where(
+                        and_(
+                            ref_log_event.id.in_(base_ids),
+                            project_scope(ref_log_event, project_id),
+                        ),
+                    )
                     .where(ref_log_event.data.op("->")(key).isnot(None))  # Skip nulls
                     .limit(1)
                 )
@@ -2280,7 +2306,12 @@ def _handle_functions_jsonb(
                     # All values are null or field doesn't exist - check if field exists at all
                     exists_query = (
                         select(func.jsonb_typeof(ref_log_event.data.op("->")(key)))
-                        .where(ref_log_event.id.in_(base_ids))
+                        .where(
+                            and_(
+                                ref_log_event.id.in_(base_ids),
+                                project_scope(ref_log_event, project_id),
+                            ),
+                        )
                         .limit(1)
                     )
                     json_type = session.execute(exists_query).scalar()
@@ -2299,7 +2330,12 @@ def _handle_functions_jsonb(
                     # to detect temporal types (datetime, date, time, timedelta)
                     value_sample = session.execute(
                         select(ref_log_event.data.op("->>")(key))
-                        .where(ref_log_event.id.in_(base_ids))
+                        .where(
+                            and_(
+                                ref_log_event.id.in_(base_ids),
+                                project_scope(ref_log_event, project_id),
+                            ),
+                        )
                         .where(
                             ref_log_event.data.op("->>")(key).isnot(None),
                         )  # Skip nulls
@@ -2318,7 +2354,12 @@ def _handle_functions_jsonb(
                     # - "25" can be cast to INTEGER
                     value_sample = session.execute(
                         select(ref_log_event.data.op("->>")(key))
-                        .where(ref_log_event.id.in_(base_ids))
+                        .where(
+                            and_(
+                                ref_log_event.id.in_(base_ids),
+                                project_scope(ref_log_event, project_id),
+                            ),
+                        )
                         .where(
                             ref_log_event.data.op("->>")(key).isnot(None),
                         )  # Skip nulls
@@ -2394,9 +2435,15 @@ def _handle_functions_jsonb(
                         Embedding.ref_id == ref_log_event.id,
                         Embedding.key == literal(key),
                         Embedding.model == literal(model_name),
+                        embedding_scope(Embedding, project_id),
                     ),
                 )
-                .where(ref_log_event.id.in_(base_ids))
+                .where(
+                    and_(
+                        ref_log_event.id.in_(base_ids),
+                        project_scope(ref_log_event, project_id),
+                    ),
+                )
             )
 
             return alias_utils.subquery_with_unique_alias(
@@ -2444,13 +2491,23 @@ def _handle_functions_jsonb(
                     ref_log_event,
                     ref_log_event.id == outer_comp_base.c.log_event_id,
                 )
-                .where(ref_log_event.id.in_(base_ids))
+                .where(
+                    and_(
+                        ref_log_event.id.in_(base_ids),
+                        project_scope(ref_log_event, project_id),
+                    ),
+                )
             )
         else:
             base_subq = (
                 select(*select_cols)
                 .select_from(ref_log_event)
-                .where(ref_log_event.id.in_(base_ids))
+                .where(
+                    and_(
+                        ref_log_event.id.in_(base_ids),
+                        project_scope(ref_log_event, project_id),
+                    ),
+                )
             )
 
         return alias_utils.subquery_with_unique_alias(
@@ -2785,6 +2842,7 @@ def _wrap_expression_as_subquery(
     session,
     local_scope=None,
     prefix: str = "wrapped_expr",
+    project_id=None,
 ):
     """
     Wrap a JSONB expression in a subquery with standard columns (log_event_id, value, inferred_type).
@@ -2850,6 +2908,11 @@ def _wrap_expression_as_subquery(
     )
 
     subq = select(*select_cols).select_from(from_clause)
+    # When selecting straight off the partitioned table (not a pre-scoped base
+    # subquery), prune to the project so the iterator does not scan every
+    # tenant's partition.
+    if from_clause is log_event_alias:
+        subq = subq.where(project_scope(log_event_alias, project_id))
 
     return alias_utils.subquery_with_unique_alias(subq, prefix=prefix)
 
@@ -2928,6 +2991,7 @@ def _handle_list_comp_jsonb(
             session,
             local_scope=local_scope,
             prefix="list_comp_iter_jsonb",
+            project_id=project_id,
         )
 
     # Create a modified filter_dict with the wrapped iter subquery
@@ -2998,6 +3062,7 @@ def _handle_dict_comp_jsonb(
             session,
             local_scope=local_scope,
             prefix="dict_comp_iter_jsonb",
+            project_id=project_id,
         )
 
     # Create a modified filter_dict with the wrapped iter subquery
@@ -3325,6 +3390,8 @@ def _handle_slice_operator_jsonb(
             is_derived=is_derived,
             local_scope=local_scope,
             is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
         )
 
     # Handle JSONB expressions directly
@@ -3548,6 +3615,7 @@ def _handle_dict_method_jsonb(
         session,
         local_scope=local_scope,
         prefix="dict_method_src",
+        project_id=project_id,
     )
 
     # Create a modified filter_dict with the wrapped src subquery
@@ -3945,6 +4013,7 @@ def _handle_zip_jsonb(
                 session,
                 local_scope=local_scope,
                 prefix=f"zip_arg_{idx}",
+                project_id=project_id,
             )
 
         # Now we have a subquery, prepare it for joining
@@ -4163,10 +4232,14 @@ def _handle_embed_jsonb(
 
     # JSONB-native: Query LogEvent.data directly to get text values
     # Build query: SELECT id, data->>'key' FROM log_event WHERE id IN (log_event_ids)
-    text_query = select(
-        log_event_alias.id.label("log_event_id"),
-        log_event_alias.data.op("->>")(key).label("text_value"),
-    ).select_from(log_event_alias)
+    text_query = (
+        select(
+            log_event_alias.id.label("log_event_id"),
+            log_event_alias.data.op("->>")(key).label("text_value"),
+        )
+        .select_from(log_event_alias)
+        .where(project_scope(log_event_alias, project_id))
+    )
 
     # Filter by log_event_ids to scope query to user's project/context
     if log_event_ids is not None:
@@ -4199,6 +4272,7 @@ def _handle_embed_jsonb(
                 model=model,
                 dimensions=dimensions,
                 key=target_key,  # Target key for Embedding.key
+                project_id=project_id,
             )
         else:
             # Sync: generate embeddings immediately with TARGET key
@@ -4210,6 +4284,7 @@ def _handle_embed_jsonb(
                 model=model,
                 dimensions=dimensions,
                 key=target_key,  # Use target key, not source key
+                project_id=project_id,
             )
 
     # JSONB-native: Build subquery joining LogEvent with Embedding table
@@ -4229,6 +4304,7 @@ def _handle_embed_jsonb(
                 Embedding.ref_id == log_event_ids.c.id,
                 Embedding.key == literal(target_key),  # Use target key for lookup
                 Embedding.model == literal(model_name),
+                embedding_scope(Embedding, project_id),
             ),
         )
     )
@@ -4384,10 +4460,14 @@ def _handle_embed_image_jsonb(
     elif _is_jsonb_expression(image_expr):
         # Query LogEvent.data directly to get image URLs
         # Filter by log_event_ids to only process relevant logs
-        query = select(
-            log_event_alias.id.label("log_event_id"),
-            image_expr.label("value"),
-        ).select_from(log_event_alias)
+        query = (
+            select(
+                log_event_alias.id.label("log_event_id"),
+                image_expr.label("value"),
+            )
+            .select_from(log_event_alias)
+            .where(project_scope(log_event_alias, project_id))
+        )
 
         # Apply log_event_ids filter if provided
         if log_event_ids is not None:
@@ -4576,10 +4656,14 @@ def _handle_phash_jsonb(
     # In JSONB mode, identifiers return JSONB expressions, not subqueries
     elif _is_jsonb_expression(image_expr):
         # Query LogEvent.data directly to get image URLs
-        query = select(
-            log_event_alias.id.label("log_event_id"),
-            image_expr.label("value"),
-        ).select_from(log_event_alias)
+        query = (
+            select(
+                log_event_alias.id.label("log_event_id"),
+                image_expr.label("value"),
+            )
+            .select_from(log_event_alias)
+            .where(project_scope(log_event_alias, project_id))
+        )
 
         # Filter by log_event_ids to scope query to user's project/context
         if log_event_ids is not None:

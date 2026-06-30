@@ -21,7 +21,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.log_queries import log_event_context_join, owner_scope_clause
 from orchestra.db.models.core_models import LogEvent, LogEventContext
+from orchestra.db.scope import single_owner_key_for_context
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
 
@@ -874,12 +876,18 @@ def _compute_metric_for_key_grouped(
             group_by_fields.append(field)
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    owner_key_filter = single_owner_key_for_context(session, context_id)
+    query = session.query(LogEvent.id).filter(
+        LogEvent.project_id == project_obj.id,
+        owner_scope_clause(LogEvent, owner_key_filter),
+    )
     if context_id is not None:
         query = query.join(
-            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            LogEventContext,
+            log_event_context_join(owner_key=owner_key_filter),
         ).filter(
             LogEventContext.context_id == context_id,
+            owner_scope_clause(LogEventContext, owner_key_filter),
         )
 
     assert not (key_from_ids and key_exclude_ids), (
@@ -946,6 +954,8 @@ def _compute_metric_for_key_grouped(
             func.array_agg(raw_value_expr).label("raw_values"),
         )
         .select_from(LogEvent)
+        .filter(LogEvent.project_id == project_obj.id)
+        .filter(owner_scope_clause(LogEvent, owner_key_filter))
         .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
         # Only include rows where the aggregation key exists in JSONB
         .filter(LogEvent.data.op("?")(literal(key)))
@@ -1028,12 +1038,18 @@ def compute_metric_for_key(
     }
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    owner_key_filter = single_owner_key_for_context(session, context_id)
+    query = session.query(LogEvent.id).filter(
+        LogEvent.project_id == project_obj.id,
+        owner_scope_clause(LogEvent, owner_key_filter),
+    )
     if context_id is not None:
         query = query.join(
-            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            LogEventContext,
+            log_event_context_join(owner_key=owner_key_filter),
         ).filter(
             LogEventContext.context_id == context_id,
+            owner_scope_clause(LogEventContext, owner_key_filter),
         )
 
     assert not (key_from_ids and key_exclude_ids), (
@@ -1089,6 +1105,8 @@ def compute_metric_for_key(
     metric_query = (
         session.query(reduction_methods[metric](cast_expr))
         .select_from(LogEvent)
+        .filter(LogEvent.project_id == project_obj.id)
+        .filter(owner_scope_clause(LogEvent, owner_key_filter))
         .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
         # Filter to only rows where the key exists
         .filter(LogEvent.data.op("?")(literal(key)))
@@ -1209,12 +1227,18 @@ def compute_metric_bulk(
         return {}
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
+    owner_key_filter = single_owner_key_for_context(session, context_id)
+    query = session.query(LogEvent.id).filter(
+        LogEvent.project_id == project_id,
+        owner_scope_clause(LogEvent, owner_key_filter),
+    )
     if context_id is not None:
         query = query.join(
-            LogEventContext, LogEventContext.log_event_id == LogEvent.id
+            LogEventContext,
+            log_event_context_join(owner_key=owner_key_filter),
         ).filter(
             LogEventContext.context_id == context_id,
+            owner_scope_clause(LogEventContext, owner_key_filter),
         )
 
     assert not (from_ids and exclude_ids), (
@@ -1308,6 +1332,8 @@ def compute_metric_bulk(
         metric_query = (
             session.query(*aggregate_columns)
             .select_from(LogEvent)
+            .filter(LogEvent.project_id == project_id)
+            .filter(owner_scope_clause(LogEvent, owner_key_filter))
             .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
         )
     else:

@@ -2355,6 +2355,7 @@ def admin_duplicate_project(
         log_event_contexts = (
             session.query(LogEventContext)
             .filter(
+                LogEventContext.project_id == source_project.id,
                 LogEventContext.log_event_id.in_(list(log_event_id_map.keys())),
             )
             .all()
