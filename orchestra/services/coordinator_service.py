@@ -22,6 +22,7 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.slack_dao import SlackDAO
 from orchestra.db.dao.team_dao import TeamDAO
+from orchestra.db.log_queries import project_scoped_log_events
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -787,11 +788,8 @@ def _context_has_logs(
 ) -> bool:
     return (
         session.scalar(
-            select(LogEvent.id)
-            .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-            .where(
-                LogEventContext.context_id == context.id,
-            )
+            project_scoped_log_events(context.project_id, LogEvent.id)
+            .where(LogEventContext.context_id == context.id)
             .limit(1),
         )
         is not None
@@ -959,8 +957,7 @@ def _latest_coordinator_state_row(
     if context is None:
         return None
     log = session.scalar(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        project_scoped_log_events(project.id)
         .where(LogEventContext.context_id == context.id)
         .order_by(LogEvent.id.desc())
         .limit(1),
@@ -1655,13 +1652,9 @@ def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
         f"Teams/{team_id}/{COORDINATOR_TASKS_CONTEXT}" for team_id in team_ids
     )
     row = session.scalar(
-        select(LogEvent.id)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        project_scoped_log_events(project.id, LogEvent.id)
         .join(Context, Context.id == LogEventContext.context_id)
-        .where(
-            Context.project_id == project.id,
-            Context.name.in_(context_names),
-        )
+        .where(Context.name.in_(context_names))
         .limit(1),
     )
     return row is not None
@@ -1722,8 +1715,7 @@ def _has_user_transcript_message(
     if context is None:
         return False
     query = (
-        select(LogEvent.id)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        project_scoped_log_events(project.id, LogEvent.id)
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data["medium"].astext.in_(tuple(mediums)),
@@ -1761,8 +1753,7 @@ def _assistant_transcript_created_at(
     if context is None:
         return None
     query = (
-        select(LogEvent.created_at)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        project_scoped_log_events(project.id, LogEvent.created_at)
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data["medium"].astext.in_(tuple(mediums)),

@@ -17,6 +17,7 @@ from orchestra.db.dao.unique_constraint_dao import (
     COMPOSITE_KEY_FIELD,
     UniqueConstraintDAO,
 )
+from orchestra.db.log_queries import project_scoped_log_events
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -148,8 +149,7 @@ def _find_contact_log_by_contact_id(
     contact_id: int,
 ) -> LogEvent | None:
     logs = session.scalars(
-        select(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        project_scoped_log_events(context.project_id)
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data.has_key("contact_id"),
