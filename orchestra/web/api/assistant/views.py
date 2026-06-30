@@ -4445,7 +4445,13 @@ async def transfer_assistant_to_org(
                                 log_event_context_join(),
                             )
                             .filter(
-                                LogEvent.project_id == shared_ctx.project_id,
+                                # A log shared with a tier-3 (assistant) context
+                                # may already have been reprojected to org above;
+                                # match either partition so it is still found
+                                # (both are literals, so the planner still prunes).
+                                LogEvent.project_id.in_(
+                                    [personal_project.id, org_project.id],
+                                ),
                                 LogEventContext.context_id == shared_ctx.id,
                                 LogEvent.data["_assistant_id"].astext
                                 == str(assistant_id),
