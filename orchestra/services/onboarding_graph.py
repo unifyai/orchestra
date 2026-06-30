@@ -132,6 +132,22 @@ COMMUNICATION_FRAMING = (
     "as normal, so the confirmation lands in both places."
 )
 
+WORKSPACE_FRAMING = (
+    "Once the user has connected their Google or Microsoft workspace, T-W1N "
+    "proves the connection is real and immediately useful by actually reading "
+    "from it and reporting back — never by asking the user to do the work. For "
+    "each workspace demo T-W1N reads the relevant area with its own tools "
+    "(recent mailbox, Drive/OneDrive files, or the upcoming calendar), then "
+    "delivers one short, plain-spoken summary to the user as a single "
+    "unify_message. That delivered message is the proof the demo worked, so it "
+    "must be sent as an assistant message back to the user — not merely spoken "
+    "on a call. Afterwards T-W1N offers exactly one natural follow-up and only "
+    "acts on it if the user says yes: draft a reply to a notable email, suggest "
+    "a simple optional way to tidy a messy Drive, or flag a conflict or gap on "
+    "the calendar. If the area is empty or T-W1N genuinely cannot read it, it "
+    "says so honestly and moves on rather than inventing content."
+)
+
 
 @dataclass(frozen=True)
 class OnboardingPhase:
@@ -167,6 +183,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_WORKSPACE,
         title="Workspace",
         description="Give me access to your Google or Microsoft workspace.",
+        framing=WORKSPACE_FRAMING,
     ),
     OnboardingPhase(
         id="integrations",
@@ -278,6 +295,66 @@ def _trigger(
         derivable=False,
         channel=channel,
         paired_reply=paired_reply,
+        nudge_chat=nudge_chat,
+        nudge_voice=nudge_voice,
+        event=event,
+    )
+
+
+def _demo(
+    step_id: str,
+    title: str,
+    *,
+    channel: str,
+    depends_on: dict[str, int],
+    nudge_chat: str,
+    nudge_voice: str,
+) -> OnboardingStep:
+    """A workspace demo trigger row.
+
+    Structurally a trigger (clicking it asks Twin to act now) but, unlike the
+    reference-quiz triggers, it has no paired reply: the proof of completion is
+    the assistant-authored summary delivered back to the user over
+    ``unify_message`` (see ``DEMO_TO_OUTBOUND_MEDIUMS``). The ``workspace_demo``
+    interaction type lets Unity narrate it differently from a quiz clue.
+    """
+    interaction = {
+        "type": "workspace_demo",
+        "trigger_step_id": step_id,
+        "channel": channel,
+        "instructions": WORKSPACE_FRAMING,
+    }
+    event = OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}', so they want T-W1N to run this "
+            "workspace demo now: read the relevant part of their connected "
+            "workspace and send the summary back to them as a unify_message. "
+            "This is a poll, not a request to repeat work already done: if the "
+            "summary has already been delivered, treat this as confirmation and "
+            "do NOT send a duplicate."
+        ),
+        subtype="workspace_demo_requested",
+        details={
+            "trigger_step_id": step_id,
+            "channel": channel,
+            "framing": WORKSPACE_FRAMING,
+            "phase": PHASE_WORKSPACE,
+            "phase_id": "workspace",
+            "phase_framing": WORKSPACE_FRAMING,
+            "interaction": interaction,
+        },
+    )
+    return OnboardingStep(
+        id=step_id,
+        title=title,
+        phase=PHASE_WORKSPACE,
+        kind="trigger",
+        depends_on=depends_on,
+        can_skip=True,
+        derivable=False,
+        channel=channel,
+        paired_reply=None,
         nudge_chat=nudge_chat,
         nudge_voice=nudge_voice,
         event=event,
@@ -572,6 +649,48 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "clicking the 'Give me access to your workspace' row in the Onboarding checklist"
         ),
     ),
+    _demo(
+        "workspace-mailbox",
+        "Summarise my mailbox",
+        channel="workspace_mailbox",
+        depends_on={"workspace": COMPLETED},
+        nudge_chat=(
+            "Once their workspace is connected, invite them to click the "
+            "'Summarise my mailbox' row in the Onboarding checklist; I read their "
+            "recent mail and send back a short summary, then offer to draft a reply."
+        ),
+        nudge_voice=(
+            "clicking the 'Summarise my mailbox' row in the Onboarding checklist"
+        ),
+    ),
+    _demo(
+        "workspace-drive",
+        "Take a look at my files",
+        channel="workspace_drive",
+        depends_on={"workspace": COMPLETED},
+        nudge_chat=(
+            "Invite them to click the 'Take a look at my files' row in the "
+            "Onboarding checklist; I scan their Drive or OneDrive and send back a "
+            "short summary, then suggest a simple, optional tidy-up if it looks messy."
+        ),
+        nudge_voice=(
+            "clicking the 'Take a look at my files' row in the Onboarding checklist"
+        ),
+    ),
+    _demo(
+        "workspace-calendar",
+        "Check my calendar",
+        channel="workspace_calendar",
+        depends_on={"workspace": COMPLETED},
+        nudge_chat=(
+            "Invite them to click the 'Check my calendar' row in the Onboarding "
+            "checklist; I read their upcoming calendar and send back a short "
+            "summary, flagging any conflicts or gaps."
+        ),
+        nudge_voice=(
+            "clicking the 'Check my calendar' row in the Onboarding checklist"
+        ),
+    ),
     OnboardingStep(
         id="apps",
         title="Connect me with your apps",
@@ -649,6 +768,18 @@ TRIGGER_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     ]
     for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
 }
+
+# Workspace demo trigger rows have no paired reply: completion is proved by the
+# assistant's own summary delivered back to the user over ``unify_message``.
+# They derive through the same trigger-outbound path as the reference quiz, so
+# they merge into ``TRIGGER_TO_OUTBOUND_MEDIUMS`` and are picked up by
+# ``derive_onboarding_progress`` without any extra wiring.
+DEMO_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
+    "workspace-mailbox": ("unify_message",),
+    "workspace-drive": ("unify_message",),
+    "workspace-calendar": ("unify_message",),
+}
+TRIGGER_TO_OUTBOUND_MEDIUMS.update(DEMO_TO_OUTBOUND_MEDIUMS)
 
 # Steps whose completion Orchestra derives from durable domain state.
 DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
@@ -756,6 +887,21 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "Required for everything else in onboarding.",
         "~30s",
     ),
+    "workspace-mailbox": StepPresentation(
+        "T-W1N reads your recent mail and sends back a short summary, then "
+        "offers to draft a reply.",
+        "~30s",
+    ),
+    "workspace-drive": StepPresentation(
+        "T-W1N scans your Drive or OneDrive and sends back a short summary, with "
+        "an optional tidy-up suggestion if it looks messy.",
+        "~30s",
+    ),
+    "workspace-calendar": StepPresentation(
+        "T-W1N reviews your upcoming calendar and sends back a short summary, "
+        "flagging any conflicts or gaps.",
+        "~30s",
+    ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
     "schedule": StepPresentation(
         "Set up a recurring or event-triggered task.",
@@ -837,6 +983,27 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "OAuth dialog (Google Workspace or Microsoft 365). Completing OAuth "
         "grants me access to their email, calendar, files, and other workspace "
         "resources."
+    ),
+    "workspace-mailbox": (
+        "Clicking the 'Summarise my mailbox' row tells me the user wants a live "
+        "demo of their connected mailbox: I read their recent mail with my own "
+        "tools and deliver one short summary back to them as a single "
+        "unify_message, then offer to draft a reply to a notable thread. If I "
+        "have already delivered the summary I just confirm it rather than "
+        "sending another."
+    ),
+    "workspace-drive": (
+        "Clicking the 'Take a look at my files' row tells me the user wants a "
+        "demo of their connected Drive or OneDrive: I read what's there and send "
+        "one short summary back as a single unify_message, then offer a simple, "
+        "optional way to tidy things up if the files look disorganised. I only "
+        "reorganise anything if they say yes."
+    ),
+    "workspace-calendar": (
+        "Clicking the 'Check my calendar' row tells me the user wants a demo of "
+        "their connected calendar: I read their upcoming events and send one "
+        "short summary back as a single unify_message, flagging any conflicts "
+        "or gaps."
     ),
     "apps": (
         "Clicking the 'Connect me with your apps' row opens the Integrations "

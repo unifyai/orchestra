@@ -1476,6 +1476,11 @@ SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
 SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
 SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
 SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
+# Fired when the user clicks a workspace demo row (mailbox / Drive /
+# calendar). Twin reads that area of the connected workspace and delivers a
+# short summary back as a single unify_message, which is also what proves the
+# step complete (see onboarding_graph.DEMO_TO_OUTBOUND_MEDIUMS).
+SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1508,6 +1513,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
+        SUBTYPE_WORKSPACE_DEMO_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )

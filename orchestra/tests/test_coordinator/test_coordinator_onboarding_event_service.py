@@ -252,6 +252,35 @@ async def test_graph_owned_step_event_embeds_interaction_and_render() -> None:
 
 
 @pytest.mark.anyio
+async def test_graph_owned_workspace_demo_event_embeds_interaction() -> None:
+    """Workspace demos emit through the gated path with no paired-reply pointer."""
+    coordinator = _fake_coordinator(agent_id=21)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "set_coordinator_state") as set_state,
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_step_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            step_id="workspace-mailbox",
+        )
+
+    assert result is True
+    # No paired reply, so the active onboarding step is left untouched.
+    set_state.assert_not_called()
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields["subtype"] == svc.SUBTYPE_WORKSPACE_DEMO_REQUESTED
+    details = fields["details"]
+    assert details["trigger_step_id"] == "workspace-mailbox"
+    assert details["phase_id"] == "workspace"
+    assert details["interaction"]["type"] == "workspace_demo"
+    assert details["interaction"]["channel"] == "workspace_mailbox"
+    assert details["onboarding"] == _RENDER
+
+
+@pytest.mark.anyio
 async def test_step_skipped_event_embeds_step_snapshots() -> None:
     """Skip events tell Unity which step was skipped and what is resolved so far."""
     coordinator = _fake_coordinator(agent_id=15)

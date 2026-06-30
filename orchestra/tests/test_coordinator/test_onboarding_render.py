@@ -37,16 +37,38 @@ def _next_ids(render: dict) -> list[str]:
 def test_graph_integrity_and_pairing() -> None:
     """The graph imports cleanly and exposes a consistent trigger pairing."""
     # Import already ran ``_assert_graph_integrity`` without raising.
-    assert len(graph.ONBOARDING_GRAPH) == 27
+    assert len(graph.ONBOARDING_GRAPH) == 30
     assert len(graph.TRIGGER_TO_REPLY) == 7
-    assert len(graph.TRIGGER_TO_OUTBOUND_MEDIUMS) == 7
-    # Every trigger points at a real reply step.
+    # 7 reference-quiz triggers + 3 workspace demo triggers all derive from
+    # assistant outbound evidence.
+    assert len(graph.TRIGGER_TO_OUTBOUND_MEDIUMS) == 10
+    # Every reference-quiz trigger points at a real reply step.
     for trigger_id, reply_id in graph.TRIGGER_TO_REPLY.items():
         trigger = graph.STEP_BY_ID[trigger_id]
         assert trigger.kind == "trigger"
         assert trigger.can_skip is True
         assert reply_id in graph.STEP_BY_ID
         assert graph.TRIGGER_TO_OUTBOUND_MEDIUMS[trigger_id]
+
+
+def test_workspace_demo_trigger_contract() -> None:
+    """Workspace demos are reply-less triggers that derive from a unify_message."""
+    demo_ids = ("workspace-mailbox", "workspace-drive", "workspace-calendar")
+    for step_id in demo_ids:
+        step = graph.STEP_BY_ID[step_id]
+        assert step.kind == "trigger"
+        assert step.phase == graph.PHASE_WORKSPACE
+        assert step.can_skip is True
+        assert step.derivable is False
+        # No paired reply: completion is the assistant's delivered summary.
+        assert step.paired_reply is None
+        assert step_id not in graph.TRIGGER_TO_REPLY
+        assert graph.TRIGGER_TO_OUTBOUND_MEDIUMS[step_id] == ("unify_message",)
+        assert step.depends_on == {"workspace": graph.COMPLETED}
+        interaction = step.event.details["interaction"]
+        assert interaction["type"] == "workspace_demo"
+        assert interaction["channel"] == step.channel
+        assert interaction["instructions"]
 
 
 def test_dependencies_satisfied_levels() -> None:
@@ -224,6 +246,37 @@ def test_render_outbound_trigger_done_unlocks_reply() -> None:
     statuses = _statuses(render)
     assert statuses["email-reference"] == "done"
     assert statuses["email-reply"] == "available"
+
+
+def test_render_workspace_demos_lock_until_workspace_connected() -> None:
+    """Demo rows stay locked until workspace completes, then become targets."""
+    fresh = _statuses(_render_with(completed=[], skipped=[], active=None))
+    assert fresh["workspace-mailbox"] == "locked"
+    assert fresh["workspace-drive"] == "locked"
+    assert fresh["workspace-calendar"] == "locked"
+
+    connected = _render_with(completed=["workspace"], skipped=[], active=None)
+    statuses = _statuses(connected)
+    assert statuses["workspace"] == "done"
+    assert statuses["workspace-mailbox"] == "available"
+    assert statuses["workspace-drive"] == "available"
+    assert statuses["workspace-calendar"] == "available"
+    next_ids = _next_ids(connected)
+    assert "workspace-mailbox" in next_ids
+    assert "workspace-drive" in next_ids
+    assert "workspace-calendar" in next_ids
+
+
+def test_render_workspace_demo_done_from_outbound() -> None:
+    """A delivered demo summary renders the demo row as done."""
+    render = _render_with(
+        completed=["workspace", "workspace-mailbox"],
+        skipped=[],
+        active=None,
+    )
+    statuses = _statuses(render)
+    assert statuses["workspace-mailbox"] == "done"
+    assert statuses["workspace-drive"] == "available"
 
 
 def test_render_skipped_completed_dependency_cascades_to_dependents() -> None:
