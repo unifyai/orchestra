@@ -635,7 +635,7 @@ def tool_catalog_row(
         "verify": confirmation_required
         or action_class in {"write", "destructive", "bulk_export"},
         "is_primitive": True,
-        "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+        "primitive_class": "unify.integrations.primitives.IntegrationPrimitives",
         "primitive_method": item.get("function_manager_name")
         or name.replace(".", "__"),
         "metadata": metadata,
