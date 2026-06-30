@@ -41,6 +41,7 @@ CURRENT_TEST_INFO = {"name": None, "mode": None}
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
+from orchestra.tests import partition_prune_guard  # registers the SQL prune guard
 from orchestra.web.application import get_app
 from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
 
@@ -151,6 +152,10 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     with engine.begin() as conn:
         for _ptable in PARTITIONED_TABLES:
             ensure_partitions(conn, _ptable)
+        # Tracer partitions for the prune guard (see partition_prune_guard): an
+        # unpruned log query's plan will reference these; a pruned one never will.
+        if partition_prune_guard.enabled():
+            partition_prune_guard.ensure_sentinel_partitions(conn)
     with engine.begin() as conn:
         # Create the hamming_distance function for tests
         conn.execute(
@@ -1339,6 +1344,19 @@ def pytest_sessionfinish(session, exitstatus):
     :param session: The pytest session object.
     :param exitstatus: The exit status of the session.
     """
+    # Partition-prune guard: emit any log queries that failed to prune by
+    # project_id (and fail the session in strict mode).
+    if partition_prune_guard.enabled():
+        # Every process writes its own violations file (xdist workers run the
+        # queries; the controller's own set is empty).
+        partition_prune_guard.report()
+        # Only the controller (no xdist ``workerinput``) decides pass/fail, by
+        # unioning all workers' files -- so strict mode works under xdist too.
+        is_controller = not hasattr(session.config, "workerinput")
+        if is_controller and partition_prune_guard.strict():
+            if partition_prune_guard.aggregate():
+                session.exitstatus = 1
+
     # ========================================================================
     # Test Results Report
     # ========================================================================

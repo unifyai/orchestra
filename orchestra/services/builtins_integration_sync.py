@@ -1111,8 +1111,11 @@ def upsert_context_rows(
                 if winner_id is None:
                     raise RuntimeError("Unique-key race lost but no winner was found")
                 session.execute(
-                    text("DELETE FROM log_event WHERE id = :log_event_id"),
-                    {"log_event_id": new_log_event_id},
+                    text(
+                        "DELETE FROM log_event "
+                        "WHERE project_id = :project_id AND id = :log_event_id",
+                    ),
+                    {"project_id": project_id, "log_event_id": new_log_event_id},
                 )
                 log_event_id = winner_id
                 session.execute(
@@ -1121,13 +1124,14 @@ def upsert_context_rows(
                         UPDATE log_event
                         SET data = CAST(:data AS jsonb),
                             updated_at = :updated_at
-                        WHERE id = :log_event_id
+                        WHERE project_id = :project_id AND id = :log_event_id
                         """,
                     ),
                     {
                         "data": data_json,
                         "updated_at": now,
                         "log_event_id": log_event_id,
+                        "project_id": project_id,
                     },
                 )
                 updated += 1
@@ -1138,13 +1142,14 @@ def upsert_context_rows(
                     UPDATE log_event
                     SET data = CAST(:data AS jsonb),
                         updated_at = :updated_at
-                    WHERE id = :log_event_id
+                    WHERE project_id = :project_id AND id = :log_event_id
                     """,
                 ),
                 {
                     "data": data_json,
                     "updated_at": now,
                     "log_event_id": log_event_id,
+                    "project_id": project_id,
                 },
             )
             updated += 1

@@ -30,6 +30,7 @@ from .ast_utils import (
     is_literal_node,
     parse_base_params,
 )
+from .prune import project_scope
 
 
 def strip_timezone_sql(text_expr: ClauseElement) -> ClauseElement:
@@ -94,6 +95,7 @@ def build_naive_timestamp_for_identifier(
 def build_naive_timestamp_for_base(
     event_ids: list,
     key: str,
+    project_id: Optional[int] = None,
 ) -> Optional[ClauseElement]:
     """
     Build a naive TIMESTAMP expression for a BASE reference.
@@ -118,7 +120,7 @@ def build_naive_timestamp_for_base(
 
     raw_text_subq = (
         select(ref_log_event.data.op("->>")(key).label("raw_ts"))
-        .where(ref_log_event.id == ref_id)
+        .where(ref_log_event.id == ref_id, project_scope(ref_log_event, project_id))
         .scalar_subquery()
     )
     return strip_timezone_and_cast(raw_text_subq)
@@ -127,6 +129,7 @@ def build_naive_timestamp_for_base(
 def build_naive_timestamp_expr(
     node: Any,
     log_event_alias,
+    project_id: Optional[int] = None,
 ) -> Optional[ClauseElement]:
     """
     Build a naive TIMESTAMP expression for an AST node.
@@ -156,7 +159,7 @@ def build_naive_timestamp_expr(
     if is_base_node(node):
         event_ids, key = parse_base_params(node)
         if event_ids and key:
-            return build_naive_timestamp_for_base(event_ids, key)
+            return build_naive_timestamp_for_base(event_ids, key, project_id)
         return None
 
     if is_literal_node(node):
@@ -177,6 +180,7 @@ def build_naive_datetime_subtraction_subquery(
     rhs_base_ids: list,
     lhs_expr=None,
     lhs_is_sub: bool = False,
+    project_id: Optional[int] = None,
 ) -> ClauseElement:
     """
     Build a subquery for datetime subtraction between two BASE expressions.
@@ -229,6 +233,8 @@ def build_naive_datetime_subtraction_subquery(
         lhs_log.id.in_(lhs_base_ids),
         rhs_log.id.in_(rhs_base_ids),
         lhs_log.id == rhs_log.id,
+        project_scope(lhs_log, project_id),
+        project_scope(rhs_log, project_id),
     )
 
     result_subq = alias_utils.subquery_with_unique_alias(

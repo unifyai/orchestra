@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.log_queries import log_event_context_join
 from orchestra.db.models.core_models import (
     Context,
     FieldType,
@@ -388,7 +389,7 @@ class LogEventDAO:
         if context_ids:
             query = query.join(
                 LogEventContext,
-                LogEventContext.log_event_id == LogEvent.id,
+                log_event_context_join(),
             ).where(LogEventContext.context_id.in_(context_ids))
 
         for key, value in filters.items():
@@ -419,7 +420,7 @@ class LogEventDAO:
             if context_id:
                 log_event_query = log_event_query.join(
                     LogEventContext,
-                    LogEventContext.log_event_id == LogEvent.id,
+                    log_event_context_join(),
                 ).where(LogEventContext.context_id == context_id)
 
             log_event_ids = [row[0] for row in self.session.execute(log_event_query)]
@@ -602,7 +603,7 @@ class LogEventDAO:
                 )
                 .join(
                     LogEventContext,
-                    LogEventContext.log_event_id == LogEvent.id,
+                    log_event_context_join(),
                 )
                 # project_id prunes the partitioned log_event table to the
                 # owning project's partition (PK leads with project_id); the
@@ -818,7 +819,7 @@ class LogEventDAO:
 
             existing = (
                 self.session.query(LogEvent.id)
-                .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+                .join(LogEventContext, log_event_context_join())
                 .filter(LogEvent.project_id == project_id)
                 .filter(LogEventContext.context_id == context_id)
                 .filter(
@@ -1121,7 +1122,7 @@ class LogEventDAO:
                 )
                 .join(
                     LogEventContext,
-                    LogEventContext.log_event_id == LogEvent.id,
+                    log_event_context_join(),
                 )
                 .filter(LogEvent.project_id == project_id)
                 .filter(LogEventContext.context_id == context_id)
@@ -1873,6 +1874,7 @@ class LogEventDAO:
                 LogEvent,
                 self.session,
                 log_ids_subq,
+                project_id=template.project_id,
             )
 
             if not computed_values:
@@ -2024,7 +2026,7 @@ class LogEventDAO:
         if context_id:
             query = query.join(
                 LogEventContext,
-                LogEventContext.log_event_id == LogEvent.id,
+                log_event_context_join(),
             ).where(
                 LogEventContext.context_id == context_id,
             )

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.context_naming import is_team_context_name
 from orchestra.db.dao.context_dao import delete_orphaned_log_events
 from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+from orchestra.db.log_queries import log_event_context_join
 from orchestra.db.models.orchestra_models import (
     TEAM_STATUS_ACTIVE,
     Assistant,
@@ -345,6 +346,7 @@ def _get_task_surface_context_name_for_log_id(
         .join(LogEventContext, LogEventContext.context_id == Context.id)
         .filter(
             Context.project_id == project_id,
+            LogEventContext.project_id == project_id,
             LogEventContext.log_event_id == log_event_id,
         )
         .all()
@@ -1241,7 +1243,7 @@ def get_latest_task_run_for_task(
         )
     return (
         session.query(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(LogEventContext, log_event_context_join())
         .filter(*filters)
         .order_by(LogEvent.updated_at.desc(), LogEvent.created_at.desc())
         .first()
@@ -1390,7 +1392,7 @@ def get_task_ids_for_log_ids(
 
     rows = (
         session.query(LogEvent.data)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(LogEventContext, log_event_context_join())
         .filter(
             LogEvent.project_id == project_id,
             LogEvent.id.in_(ids),
@@ -1757,7 +1759,7 @@ def _load_task_rows(
             LogEvent.updated_at,
             LogEvent.created_at,
         )
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(LogEventContext, log_event_context_join())
         .filter(
             LogEvent.project_id == project_id,
             LogEventContext.context_id == context_id,
@@ -1817,7 +1819,7 @@ def _delete_activation_rows_by_task_destination(
 
     rows = (
         session.query(LogEvent, LogEventContext.context_id)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(LogEventContext, log_event_context_join())
         .join(Context, Context.id == LogEventContext.context_id)
         .filter(
             Context.project_id == project_id,
@@ -2027,6 +2029,7 @@ def _upsert_machine_row(
 
     session.execute(
         delete(LogEventContext).where(
+            LogEventContext.project_id == project_id,
             LogEventContext.log_event_id == log_event.id,
             LogEventContext.context_id == context_id,
         ),
@@ -2076,6 +2079,7 @@ def _delete_machine_row_by_unique_field(
     )
     session.execute(
         delete(LogEventContext).where(
+            LogEventContext.project_id == project_id,
             LogEventContext.log_event_id == existing.id,
             LogEventContext.context_id == context_id,
         ),
@@ -2099,10 +2103,16 @@ def _get_machine_row_by_unique_field(
 ) -> LogEvent | None:
     """Return a machine row by a top-level unique field value."""
 
+    # Resolve the context's project so the partitioned scan prunes (the context
+    # uniquely determines its project).
+    project_id = (
+        session.query(Context.project_id).filter(Context.id == context_id).scalar()
+    )
     rows = (
         session.query(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(LogEventContext, log_event_context_join())
         .filter(
+            LogEvent.project_id == project_id,
             LogEventContext.context_id == context_id,
             LogEvent.data.has_key(unique_field_name),
             LogEvent.data.op("->>")(unique_field_name) == str(unique_field_value),

@@ -51,6 +51,7 @@ from orchestra.db.models.core_models import Embedding
 
 from . import alias_utils
 from .image_utils import fetch_media_with_retry
+from .prune import embedding_scope, project_scope
 
 __all__ = [
     "unify_inferred_types",
@@ -1125,6 +1126,7 @@ def _build_subquery_for_identifier(
     session=None,
     is_derived=False,
     is_vector=False,
+    project_id=None,
 ):
     """
     Build a JSONB-only subselect for a given log key.
@@ -1148,9 +1150,12 @@ def _build_subquery_for_identifier(
     use_join = isinstance(log_event_ids, (Subquery, CTE))
 
     if log_event_ids is None:
-        log_event_condition = True
+        log_event_condition = project_scope(log_event_alias, project_id)
     elif isinstance(log_event_ids, list):
-        log_event_condition = log_event_alias.id.in_(log_event_ids)
+        log_event_condition = and_(
+            log_event_alias.id.in_(log_event_ids),
+            project_scope(log_event_alias, project_id),
+        )
     else:
         log_event_condition = None
 
@@ -1172,7 +1177,10 @@ def _build_subquery_for_identifier(
         ]
         subq = select(*log_id_select_cols).select_from(log_event_alias)
         if use_join:
-            subq = subq.join(log_event_ids, log_event_ids.c.id == log_event_alias.id)
+            subq = subq.join(
+                log_event_ids,
+                log_event_ids.c.id == log_event_alias.id,
+            ).where(project_scope(log_event_alias, project_id))
         else:
             subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(
@@ -1201,7 +1209,10 @@ def _build_subquery_for_identifier(
         ]
         subq = select(*timestamp_select_cols).select_from(log_event_alias)
         if use_join:
-            subq = subq.join(log_event_ids, log_event_ids.c.id == log_event_alias.id)
+            subq = subq.join(
+                log_event_ids,
+                log_event_ids.c.id == log_event_alias.id,
+            ).where(project_scope(log_event_alias, project_id))
         else:
             subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(subq, prefix=safe_alias or key)
@@ -1270,7 +1281,10 @@ def _build_subquery_for_identifier(
 
     subq = select(*select_cols).select_from(log_event_alias)
     if use_join:
-        subq = subq.join(log_event_ids, log_event_ids.c.id == log_event_alias.id)
+        subq = subq.join(
+            log_event_ids,
+            log_event_ids.c.id == log_event_alias.id,
+        ).where(project_scope(log_event_alias, project_id))
     else:
         subq = subq.where(log_event_condition)
 
@@ -2047,6 +2061,7 @@ def _queue_embeddings_for_generation(
     model: Optional[str],
     dimensions: Optional[int],
     key: str,
+    project_id: Optional[int] = None,
 ) -> None:
     """
     Queue embeddings for background generation instead of creating them synchronously.
@@ -2079,6 +2094,7 @@ def _queue_embeddings_for_generation(
                     Embedding.key == key,
                     Embedding.model == model_name,
                     Embedding.ref_id.in_(all_ids),
+                    embedding_scope(Embedding, project_id),
                     Embedding.is_deleted
                     == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
                 ),
@@ -2105,6 +2121,7 @@ def _queue_embeddings_for_generation(
         session.execute(
             select(LogEvent.id, LogEvent.project_id).where(
                 LogEvent.id.in_(ids_to_queue),
+                project_scope(LogEvent, project_id),
             ),
         ).all(),
     )
@@ -2231,6 +2248,7 @@ def _ensure_vectors_exist(
     model: Optional[str],
     dimensions: Optional[int],
     key: str,
+    project_id: Optional[int] = None,
 ) -> None:
     """
     For each log_event_id/text pair, ensure a Embedding row with
@@ -2261,6 +2279,7 @@ def _ensure_vectors_exist(
                     Embedding.key == key,
                     Embedding.model == model_name,
                     Embedding.ref_id.in_(all_ids),
+                    embedding_scope(Embedding, project_id),
                     Embedding.is_deleted
                     == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
                 ),
@@ -2308,7 +2327,7 @@ def _ensure_vectors_exist(
     id_to_log = {
         r[0]: (r[1], r[2])
         for r in session.query(LogEvent.id, LogEvent.project_id, LogEvent.owner_key)
-        .filter(LogEvent.id.in_(ids_to_embed))
+        .filter(LogEvent.id.in_(ids_to_embed), project_scope(LogEvent, project_id))
         .all()
     }
     rows_to_upsert = []

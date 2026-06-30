@@ -35,6 +35,11 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.log_queries import (
+    embedding_scope,
+    log_event_context_join,
+    project_scope,
+)
 from orchestra.db.models.core_models import (
     Context,
     Embedding,
@@ -464,6 +469,7 @@ def _build_unified_logs_limited(
     session,
     ids_subq: Subquery,
     context_id: Optional[int] = None,
+    project_id: Optional[int] = None,
 ) -> Subquery:
     """
     Build unified logs subquery limited to the specified log_event_ids.
@@ -474,6 +480,7 @@ def _build_unified_logs_limited(
         session=session,
         event_ids=id_only_sq,
         context_id=context_id,
+        project_id=project_id,
     )
 
 
@@ -523,6 +530,8 @@ def _build_sort_clauses(
     relevant_log_events,
     sort_val_sqs,
     sort_criteria,
+    project_id=None,
+    context_id=None,
 ):
     """
     Helper function to build sorting clauses for log queries.
@@ -602,6 +611,7 @@ def _build_sort_clauses(
                         session=session,
                         relevant_log_events=relevant_log_events,
                         key=sort_key,  # ❷  filter at source
+                        project_id=project_id,
                     )
 
                     cast_expr = _build_sort_criteria(
@@ -641,6 +651,8 @@ def _build_sort_clauses(
                         LogEvent,
                         session,
                         log_event_ids=event_ids_subq,
+                        project_id=project_id,
+                        context_id=context_id,
                     )
                     rand = random.randint(1, 1000000)
                     base_sq = sort_expr.alias(f"sort_base_{rand}")
@@ -1075,7 +1087,10 @@ def _get_logs_query(
         embedding_exists = (
             session.query(Embedding.ref_id)
             .filter(
-                Embedding.project_id == LogEvent.project_id,
+                # Literal project_id (not == LogEvent.project_id): a correlated
+                # equijoin only prunes the embedding partition at runtime, not at
+                # plan time, so pin it to the known project.
+                embedding_scope(Embedding, project_id),
                 Embedding.ref_id == LogEvent.id,
                 Embedding.key.in_(allowed_fields),
                 Embedding.is_deleted
@@ -1208,7 +1223,12 @@ def _get_logs_query(
 
                 # Query Embedding table to detect model and dimension
                 embedding_model_query = session.execute(
-                    select(Embedding.model).where(Embedding.key == lhs_key).limit(1),
+                    select(Embedding.model)
+                    .where(
+                        Embedding.key == lhs_key,
+                        embedding_scope(Embedding, project_id),
+                    )
+                    .limit(1),
                 ).scalar()
 
                 # Map model to dimension for HNSW index usage
@@ -1305,6 +1325,7 @@ def _get_logs_query(
                         paginated_ids_cte.c.dist,
                     )
                     .join(paginated_ids_cte, LogEvent.id == paginated_ids_cte.c.id)
+                    .filter(project_scope(LogEvent, project_id))
                     .order_by(paginated_ids_cte.c.row_num)
                 )
 
@@ -2195,6 +2216,7 @@ def _build_unified_logs_subquery(
     relevant_log_events: Optional[Subquery] = None,
     key: str = None,
     context_id: Optional[int] = None,
+    project_id: Optional[int] = None,
 ) -> Subquery:
     """
     Build a unified subquery over JSONB log fields.
@@ -2208,6 +2230,10 @@ def _build_unified_logs_subquery(
         raise ValueError("Either event_ids or relevant_log_events must be provided")
 
     def _apply_event_filter(query):
+        # Prune to the project so the unified scan does not fan out across every
+        # tenant's partition (the id/relevant subqueries are project-scoped, but
+        # this outer LogEvent scan needs its own predicate).
+        query = query.filter(project_scope(LogEvent, project_id))
         if event_ids is not None:
             event_ids_selectable = (
                 select(event_ids) if isinstance(event_ids, Subquery) else event_ids
@@ -3103,7 +3129,7 @@ def _build_direct_join_side_source(
     query = (
         session.query(*select_columns)
         .select_from(LogEventContext)
-        .join(LogEvent, LogEvent.id == LogEventContext.log_event_id)
+        .join(LogEvent, log_event_context_join())
         .filter(
             LogEventContext.context_id == context_id,
             LogEvent.project_id == project_id,
@@ -3127,6 +3153,8 @@ def _build_direct_join_side_source(
             log_event_ids=select(literal(1)).subquery("dummy_ids"),
             is_derived=False,
             local_scope=local_scope,
+            project_id=project_id,
+            context_id=context_id,
         )
         query = query.filter(filter_condition)
 
@@ -3563,6 +3591,7 @@ def _build_log_subquery(
     # Apply the filter to get only the log events we want
     final_query = base_query.filter(
         LogEvent.id.in_(select(event_ids_subq)),
+        project_scope(LogEvent, project_id),
     ).order_by(LogEvent.id.asc())
 
     # Return as a subquery with the specified alias
@@ -3652,6 +3681,7 @@ def _construct_join_query(
             log_event_ids=select(subq_a.c.log_event_id).subquery("event_ids"),
             is_derived=False,
             local_scope=local_scope,
+            project_id=project_id,
         )
     except Exception as e:
         raise ValueError(f"Error processing join expression: {e}")
@@ -4052,6 +4082,7 @@ def _create_logs_from_joined_rows(
         source_embeddings = (
             session.query(Embedding)
             .filter(
+                embedding_scope(Embedding, project_id),
                 Embedding.ref_id.in_(source_log_event_ids),
                 Embedding.is_deleted
                 == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
@@ -4715,6 +4746,7 @@ def _join_query_internal(
                 log_event_ids=select(literal(1)).subquery("dummy_ids"),
                 is_derived=False,
                 local_scope=local_scope,
+                project_id=project_id,
             )
             joined_query = (
                 select(pre_merged.label("merged_data"))

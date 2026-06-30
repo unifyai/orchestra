@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from orchestra.db.log_queries import log_event_context_join, project_scope
 from orchestra.db.models.core_models import (
     ActiveDerivedLog,
     Context,
@@ -69,6 +70,7 @@ def delete_orphaned_log_events(
                 SELECT 1
                 FROM log_event_context lec
                 WHERE lec.log_event_id = le.id
+                  AND lec.project_id = le.project_id
               );
             """,
             ),
@@ -3139,6 +3141,7 @@ class ContextDAO:
                     removed = remove_logs_from_sibling_contexts(
                         self.session,
                         sibling_map,
+                        project_id,
                     )
                     self.session.flush()
                     logger.info(
@@ -3429,9 +3432,15 @@ class ContextDAO:
             if not context:
                 raise ValueError(f"Context with id {context_id} not found")
 
-            # Get all log events
+            # Get all log events (scoped to the context's project so the
+            # partitioned scan prunes instead of fanning out).
             log_events = (
-                self.session.query(LogEvent).filter(LogEvent.id.in_(log_ids)).all()
+                self.session.query(LogEvent)
+                .filter(
+                    LogEvent.id.in_(log_ids),
+                    project_scope(LogEvent, context.project_id),
+                )
+                .all()
             )
             found_ids = {log.id for log in log_events}
             missing_ids = set(log_ids) - found_ids
@@ -4053,8 +4062,11 @@ class ContextDAO:
                 LogEvent.created_at,
                 LogEvent.updated_at,
             )
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .filter(LogEventContext.context_id == context.id)
+            .join(LogEventContext, log_event_context_join())
+            .filter(
+                LogEvent.project_id == context.project_id,
+                LogEventContext.context_id == context.id,
+            )
             .all()
         )
 
@@ -4099,8 +4111,12 @@ class ContextDAO:
         # 2. Get the context for project_id
         context = self.session.query(Context).filter_by(id=context_id).one()
 
-        # 3. Clear existing context associations
-        self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
+        # 3. Clear existing context associations (project-scoped so the
+        # partitioned delete prunes to one partition).
+        self.session.query(LogEventContext).filter(
+            LogEventContext.project_id == context.project_id,
+            LogEventContext.context_id == context_id,
+        ).delete(
             synchronize_session=False,
         )
 

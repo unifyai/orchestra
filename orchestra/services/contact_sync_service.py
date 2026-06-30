@@ -181,11 +181,16 @@ class ContactSyncService:
             UPDATE log_event
             SET data = data || jsonb_build_object(:update_field, :new_value),
                 updated_at = NOW()
-            WHERE id IN (
+            WHERE project_id = (SELECT project_id FROM context WHERE id = :context_id)
+              AND id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
-                WHERE lec.context_id = :context_id
+                  AND lec.project_id = le.project_id
+                WHERE le.project_id = (
+                    SELECT project_id FROM context WHERE id = :context_id
+                  )
+                  AND lec.context_id = :context_id
                   AND le.data->>'email_address' = :email
                   AND (le.data->>'is_system')::boolean = true
             )
@@ -229,11 +234,16 @@ class ContactSyncService:
             UPDATE log_event
             SET data = data || jsonb_build_object(:update_field, :new_value),
                 updated_at = NOW()
-            WHERE id IN (
+            WHERE project_id = (SELECT project_id FROM context WHERE id = :context_id)
+              AND id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
-                WHERE lec.context_id = :context_id
+                  AND lec.project_id = le.project_id
+                WHERE le.project_id = (
+                    SELECT project_id FROM context WHERE id = :context_id
+                  )
+                  AND lec.context_id = :context_id
                   AND le.data->>'_assistant' = :assistant_context_id
                   AND (le.data->>'contact_id')::int = :self_contact_id
             )
@@ -615,11 +625,14 @@ class ContactSyncService:
             UPDATE log_event
             SET data = data || jsonb_build_object('is_system', false),
                 updated_at = NOW()
-            WHERE id IN (
+            WHERE project_id = :project_id
+              AND id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
-                WHERE lec.context_id = :context_id
+                  AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
                   AND le.data->>'email_address' = :email
                   AND (le.data->>'is_system')::boolean = true
             )
@@ -629,6 +642,7 @@ class ContactSyncService:
         result = self.session.execute(
             query,
             {
+                "project_id": project.id,
                 "context_id": context.id,
                 "email": email,
             },

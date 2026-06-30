@@ -47,6 +47,7 @@ from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.log_queries import log_event_context_join
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
@@ -4438,9 +4439,10 @@ async def transfer_assistant_to_org(
                             session.query(LogEventContext.log_event_id)
                             .join(
                                 LogEvent,
-                                LogEvent.id == LogEventContext.log_event_id,
+                                log_event_context_join(),
                             )
                             .filter(
+                                LogEvent.project_id == shared_ctx.project_id,
                                 LogEventContext.context_id == shared_ctx.id,
                                 LogEvent.data["_assistant_id"].astext
                                 == str(assistant_id),
@@ -4480,8 +4482,11 @@ async def transfer_assistant_to_org(
                     # key consistent across log_event and its child tables.
                     le_dao.reproject_logs(assistant_log_ids, org_project.id)
 
-                    # Update context links to point to org's context
+                    # Update context links to point to org's context. reproject_logs
+                    # above already moved these rows' partition key to org_project,
+                    # so scope the update there.
                     session.query(LogEventContext).filter(
+                        LogEventContext.project_id == org_project.id,
                         LogEventContext.log_event_id.in_(assistant_log_ids),
                         LogEventContext.context_id == shared_ctx.id,
                     ).update(

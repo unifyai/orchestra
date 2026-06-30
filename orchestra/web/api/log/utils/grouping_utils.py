@@ -25,6 +25,7 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.log_queries import log_event_context_join, project_scope
 from orchestra.db.models.core_models import LogEvent, LogEventContext
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
@@ -160,6 +161,7 @@ def _get_distinct_group_values(
     session,
     field_types: Dict[str, str],
     sort_direction: Optional[str] = None,
+    project_id: Optional[int] = None,
 ) -> List[Any]:
     """
     Get distinct values for a group key using direct data column extraction.
@@ -190,7 +192,10 @@ def _get_distinct_group_values(
         session.query(
             func.distinct(LogEvent.data.op("->>")(raw_key)).label("value"),
         )
-        .filter(LogEvent.id.in_(select(log_event_ids)))
+        .filter(
+            LogEvent.id.in_(select(log_event_ids)),
+            project_scope(LogEvent, project_id),
+        )
         .filter(LogEvent.data.op("?")(raw_key))  # Key exists check
     )
 
@@ -260,6 +265,7 @@ def _get_log_event_ids_for_group_value(
     group_value: Any,
     session,
     field_types: Dict[str, str],
+    project_id: Optional[int] = None,
 ) -> List[int]:
     """
     Get log event IDs matching a specific group value.
@@ -289,7 +295,10 @@ def _get_log_event_ids_for_group_value(
     # This matches how _get_distinct_group_values extracts values via ->>
     query = (
         session.query(LogEvent.id)
-        .filter(LogEvent.id.in_(select(log_event_ids)))
+        .filter(
+            LogEvent.id.in_(select(log_event_ids)),
+            project_scope(LogEvent, project_id),
+        )
         .filter(LogEvent.data.op("->>")(raw_key) == group_value)
     )
 
@@ -519,7 +528,7 @@ def _get_all_filtered_log_event_ids(
                 .select_from(LogEventContext)
                 .where(
                     and_(
-                        LogEventContext.log_event_id == LogEvent.id,
+                        log_event_context_join(),
                         LogEventContext.context_id == ctx_id,
                     ),
                 ),
@@ -573,7 +582,10 @@ def _fetch_logs_for_event_ids(
     if isinstance(event_ids, list):
         event_ids_cte = (
             session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(event_ids))
+            .filter(
+                LogEvent.id.in_(event_ids),
+                project_scope(LogEvent, project_id),
+            )
             .cte("event_ids_cte")
         )
     else:
@@ -596,6 +608,7 @@ def _fetch_logs_for_event_ids(
             session=session,
             relevant_log_events=event_ids_cte,
             context_id=ctx_id,
+            project_id=project_id,
         )
 
         sort_dict = json.loads(sorting)
@@ -675,6 +688,7 @@ def _fetch_logs_for_event_ids(
             session=session,
             relevant_log_events=paginated_ids_subq,
             context_id=ctx_id,
+            project_id=project_id,
         )
         max_ts = session.query(
             func.max(unified_logs_for_timestamp.c.updated_at),
@@ -686,6 +700,7 @@ def _fetch_logs_for_event_ids(
         session,
         paginated_ids_subq,
         context_id=ctx_id,
+        project_id=project_id,
     )
 
     exclude_params = exclude_entries = False
@@ -787,6 +802,7 @@ def _build_grouping_sets_query(
     group_sorting: Optional[str] = None,
     group_limit: Optional[int] = None,
     group_offset: int = 0,
+    project_id: Optional[int] = None,
 ):
     """
     Build a single SQL query using GROUPING SETS to get all group counts.
@@ -945,6 +961,7 @@ def _build_grouping_sets_query(
     query = (
         session.query(*select_columns)
         .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(project_scope(LogEvent, project_id))
         .group_by(func.grouping_sets(*grouping_sets_tuples))
     )
 
@@ -1414,6 +1431,7 @@ def _build_grouped_data_with_grouping_sets(
     group_sorting: Optional[str] = None,
     group_limit: Optional[int] = None,
     group_offset: int = 0,
+    project_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Build grouped data using GROUPING SETS optimization.
@@ -1463,7 +1481,10 @@ def _build_grouped_data_with_grouping_sets(
         _, raw_key = parse_group_key(group_by[0])
         count_query = session.query(
             func.count(func.distinct(LogEvent.data.op("->>")(raw_key))),
-        ).filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        ).filter(
+            LogEvent.id.in_(select(event_ids_cte.c.id)),
+            project_scope(LogEvent, project_id),
+        )
         total_group_count = count_query.scalar() or 0
 
     # Build the GROUPING SETS query
@@ -1476,6 +1497,7 @@ def _build_grouped_data_with_grouping_sets(
         group_sorting=group_sorting,
         group_limit=group_limit,
         group_offset=group_offset,
+        project_id=project_id,
     )
 
     # Optional: Capture SQL for performance testing
@@ -1535,6 +1557,7 @@ def _handle_group_depth_level(
     group_limit: Optional[int],
     group_offset: int,
     level: int,
+    project_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     JSONB implementation of group depth level handling.
@@ -1572,7 +1595,10 @@ def _handle_group_depth_level(
     if isinstance(log_event_ids, list):
         event_ids_cte = (
             session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(log_event_ids))
+            .filter(
+                LogEvent.id.in_(log_event_ids),
+                project_scope(LogEvent, project_id),
+            )
             .cte("event_ids_cte")
         )
     else:
@@ -1590,6 +1616,7 @@ def _handle_group_depth_level(
             func.count(func.distinct(LogEvent.id)).label("log_count"),
         )
         .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(project_scope(LogEvent, project_id))
         .filter(LogEvent.data.op("?")(raw_key))  # Key exists
         .group_by(group_value_expr)
         .order_by(desc(func.max(LogEvent.id)).nulls_last())
@@ -1688,6 +1715,7 @@ def _handle_group_depth_level(
     present_ids_q = (
         session.query(LogEvent.id)
         .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(project_scope(LogEvent, project_id))
         .filter(LogEvent.data.op("?")(raw_key))
     ).subquery()
     missing_ids_q = select(event_ids_cte.c.id).except_(select(present_ids_q.c.id))
@@ -1747,7 +1775,10 @@ def _build_grouped_data(
             return {}
         event_ids_cte = (
             session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(log_event_ids))
+            .filter(
+                LogEvent.id.in_(log_event_ids),
+                project_scope(LogEvent, project_id),
+            )
             .cte("event_ids_cte")
         )
     else:
@@ -1776,6 +1807,7 @@ def _build_grouped_data(
             group_sorting=group_sorting,
             group_limit=group_limit,
             group_offset=group_offset,
+            project_id=project_id,
         )
 
     # Base case: reached end of group_by list
@@ -1784,7 +1816,10 @@ def _build_grouped_data(
             if return_timestamps:
                 rows = (
                     session.query(LogEvent.id, LogEvent.created_at)
-                    .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+                    .filter(
+                        LogEvent.id.in_(select(event_ids_cte.c.id)),
+                        project_scope(LogEvent, project_id),
+                    )
                     .all()
                 )
                 return {
@@ -1830,6 +1865,7 @@ def _build_grouped_data(
             group_limit=group_limit,
             group_offset=group_offset,
             level=level,
+            project_id=project_id,
         )
 
     # Parse current group key
@@ -1854,6 +1890,7 @@ def _build_grouped_data(
             func.array_agg(func.distinct(LogEvent.id)).label("event_ids"),
         )
         .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(project_scope(LogEvent, project_id))
         .filter(LogEvent.data.op("?")(raw_key))  # Key exists
         .group_by(group_value_expr)
     )
@@ -2057,6 +2094,7 @@ def _build_grouped_data(
     present_ids_q = (
         session.query(LogEvent.id)
         .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(project_scope(LogEvent, project_id))
         .filter(LogEvent.data.op("?")(raw_key))
     ).subquery()
     missing_ids_q = select(event_ids_cte.c.id).except_(select(present_ids_q.c.id))
@@ -2163,6 +2201,7 @@ def _fetch_leaf_logs(
     # Build query for LogEvent with JSONB data
     query = session.query(LogEvent.id, LogEvent.data, LogEvent.created_at).filter(
         LogEvent.id.in_(select(event_ids.c.id)),
+        project_scope(LogEvent, project_id),
     )
 
     # Apply sorting if specified

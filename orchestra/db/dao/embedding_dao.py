@@ -73,6 +73,7 @@ class EmbeddingDAO:
                         error_message = :reason
                     FROM log_event le
                     WHERE eq.ref_id = le.id
+                      AND eq.project_id = :project_id
                       AND le.project_id = :project_id
                       AND eq.status IN {ACTIVE_QUEUE_STATUSES}
                 """,
@@ -142,7 +143,8 @@ class EmbeddingDAO:
                         UPDATE embedding e
                         SET is_deleted = true
                         FROM batch b
-                        WHERE e.project_id = b.project_id AND e.id = b.id
+                        WHERE e.project_id = :project_id
+                          AND e.project_id = b.project_id AND e.id = b.id
                     """,
                     ),
                     {"project_id": project_id, "batch_size": batch_size},

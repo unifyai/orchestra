@@ -38,6 +38,11 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.log_queries import (
+    embedding_scope,
+    log_event_context_join,
+    project_scope,
+)
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
@@ -809,6 +814,8 @@ def create_from_logs(
                 LogEvent,
                 session,
                 log_event_ids=log_event_ids_subq,
+                project_id=project_obj.id,
+                context_id=context_id,
             )
 
             # 4) Prepare updates for bulk_update
@@ -909,7 +916,7 @@ def create_from_logs(
             # Get filtered log events
             log_event_ids_subq = (
                 session.query(LogEvent.id)
-                .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+                .join(LogEventContext, log_event_context_join())
                 .filter(LogEvent.project_id == project_obj.id)
                 .filter(
                     LogEventContext.context_id == context_id,
@@ -1305,7 +1312,10 @@ def update_derived_log(
 
                 remove_stmt = (
                     sql_update(LogEvent)
-                    .where(LogEvent.id.in_(logs_to_remove_from))
+                    .where(
+                        LogEvent.project_id == template.project_id,
+                        LogEvent.id.in_(logs_to_remove_from),
+                    )
                     .values(
                         data=LogEvent.data.op("-")(template.key),
                         updated_at=datetime.now(timezone.utc),
@@ -1776,6 +1786,7 @@ def _atomic_upsert_mode(
         SELECT le.id, le.data
         FROM log_event le
         JOIN log_event_context lec ON lec.log_event_id = le.id
+          AND lec.project_id = le.project_id
         WHERE le.project_id = :project_id
           AND lec.context_id = :context_id
           AND {conditions_str}
@@ -1886,7 +1897,8 @@ def _atomic_upsert_mode(
                 """
                 INSERT INTO log_event_context (project_id, log_event_id, context_id, owner_key)
                 VALUES (:project_id, :log_id, :context_id,
-                        (SELECT owner_key FROM log_event WHERE id = :log_id))
+                        (SELECT owner_key FROM log_event
+                         WHERE project_id = :project_id AND id = :log_id))
                 """,
             ),
             {"project_id": project_id, "log_id": log_id, "context_id": context_id},
@@ -2388,7 +2400,12 @@ def _update_logs(
         columns_values_map: Dict[str, List[Any]] = {}
         for log_id in log_ids_being_updated:
             log_event = (
-                session.query(LogEvent.data).filter(LogEvent.id == log_id).one_or_none()
+                session.query(LogEvent.data)
+                .filter(
+                    LogEvent.id == log_id,
+                    LogEvent.project_id == project_id,
+                )
+                .one_or_none()
             )
             if log_event and log_event.data:
                 for key in columns_being_updated:
@@ -2704,7 +2721,10 @@ def _delete_logs(
     context_log_ids = [
         row[0]
         for row in session.query(LogEventContext.log_event_id)
-        .filter(LogEventContext.context_id == context_id)
+        .filter(
+            LogEventContext.project_id == project_id,
+            LogEventContext.context_id == context_id,
+        )
         .all()
     ]
     pre_sync_task_ids: Set[int] = set()
@@ -2749,7 +2769,12 @@ def _delete_logs(
         # Apply FK CASCADE and SET NULL actions before deletion
         columns_values_to_delete: Dict[str, List[Any]] = {}
         logs_data = (
-            session.query(LogEvent.data).filter(LogEvent.id.in_(context_log_ids)).all()
+            session.query(LogEvent.data)
+            .filter(
+                LogEvent.id.in_(context_log_ids),
+                project_scope(LogEvent, project_id),
+            )
+            .all()
         )
         for (data,) in logs_data:
             if data:
@@ -2876,6 +2901,7 @@ def _delete_logs(
             other_contexts = (
                 session.query(LogEventContext.context_id)
                 .filter(
+                    LogEventContext.project_id == project_id,
                     LogEventContext.log_event_id == log_id,
                     LogEventContext.context_id.notin_(exclude_context_ids),
                 )
@@ -2892,6 +2918,7 @@ def _delete_logs(
             removed_count = (
                 session.query(LogEventContext)
                 .filter(
+                    LogEventContext.project_id == project_id,
                     LogEventContext.log_event_id.in_(logs_in_other_contexts),
                     LogEventContext.context_id == context_id,
                 )
@@ -2920,6 +2947,7 @@ def _delete_logs(
                     sibling_removed = (
                         session.query(LogEventContext)
                         .filter(
+                            LogEventContext.project_id == project_id,
                             LogEventContext.log_event_id.in_(log_ids),
                             LogEventContext.context_id == sib_ctx_id,
                         )
@@ -2943,7 +2971,10 @@ def _delete_logs(
             columns_values_to_delete: Dict[str, List[Any]] = {}
             logs_data = (
                 session.query(LogEvent.data)
-                .filter(LogEvent.id.in_(logs_to_delete))
+                .filter(
+                    LogEvent.id.in_(logs_to_delete),
+                    project_scope(LogEvent, project_id),
+                )
                 .all()
             )
             for (data,) in logs_data:
@@ -2971,9 +3002,16 @@ def _delete_logs(
             embedding_dao.cancel_queue(
                 log_event_ids=logs_to_delete,
                 reason="Log deleted",
+                project_id=project_id,
             )
-            embedding_dao.soft_delete(log_event_ids=logs_to_delete)
-            embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+            embedding_dao.soft_delete(
+                log_event_ids=logs_to_delete,
+                project_id=project_id,
+            )
+            embedding_dao.null_ref_ids(
+                log_event_ids=logs_to_delete,
+                project_id=project_id,
+            )
             # log_unique_constraint no longer cascades with log_event (FK dropped
             # for partitioning); clear its rows so deleting+recreating a unique
             # machine row (e.g. activation reprojection) does not hit a stale
@@ -2982,7 +3020,10 @@ def _delete_logs(
 
             deleted_count = (
                 session.query(LogEvent)
-                .filter(LogEvent.id.in_(logs_to_delete))
+                .filter(
+                    LogEvent.id.in_(logs_to_delete),
+                    project_scope(LogEvent, project_id),
+                )
                 .delete(synchronize_session=False)
             )
             if deleted_count > 0:
@@ -3039,7 +3080,10 @@ def _delete_logs(
             columns_values_to_delete: Dict[str, List[Any]] = {}
             logs_data = (
                 session.query(LogEvent.id, LogEvent.data)
-                .filter(LogEvent.id.in_(potential_empty_logs))
+                .filter(
+                    LogEvent.id.in_(potential_empty_logs),
+                    project_scope(LogEvent, project_id),
+                )
                 .all()
             )
             for log_id, data in logs_data:
@@ -3077,7 +3121,10 @@ def _delete_logs(
             for field_set, log_ids in fields_to_logs.items():
                 fields_list = list(field_set)
                 fields_array = cast(fields_list, ARRAY(TEXT))
-                session.query(LogEvent).filter(LogEvent.id.in_(log_ids)).update(
+                session.query(LogEvent).filter(
+                    LogEvent.id.in_(log_ids),
+                    project_scope(LogEvent, project_id),
+                ).update(
                     {LogEvent.data: LogEvent.data.op("-")(fields_array)},
                     synchronize_session=False,
                 )
@@ -3096,6 +3143,7 @@ def _delete_logs(
             session.query(LogEvent.id)
             .filter(
                 LogEvent.id.in_(potential_empty_logs),
+                project_scope(LogEvent, project_id),
                 LogEvent.data == {},
             )
             .all()
@@ -3108,6 +3156,7 @@ def _delete_logs(
                 row[0]
                 for row in session.query(LogEventContext.log_event_id)
                 .filter(
+                    LogEventContext.project_id == project_id,
                     LogEventContext.log_event_id.in_(empty_log_ids),
                     LogEventContext.context_id != context_id,
                 )
@@ -3130,6 +3179,7 @@ def _delete_logs(
                 removed_count = (
                     session.query(LogEventContext)
                     .filter(
+                        LogEventContext.project_id == project_id,
                         LogEventContext.log_event_id.in_(logs_in_other_contexts),
                         LogEventContext.context_id == context_id,
                     )
@@ -3151,9 +3201,16 @@ def _delete_logs(
                 embedding_dao.cancel_queue(
                     log_event_ids=logs_to_delete,
                     reason="Log deleted",
+                    project_id=project_id,
                 )
-                embedding_dao.soft_delete(log_event_ids=logs_to_delete)
-                embedding_dao.null_ref_ids(log_event_ids=logs_to_delete)
+                embedding_dao.soft_delete(
+                    log_event_ids=logs_to_delete,
+                    project_id=project_id,
+                )
+                embedding_dao.null_ref_ids(
+                    log_event_ids=logs_to_delete,
+                    project_id=project_id,
+                )
                 # log_unique_constraint no longer cascades with log_event (FK
                 # dropped for partitioning); clear its rows explicitly.
                 UniqueConstraintDAO(session).remove_constraints_for_logs(
@@ -3162,7 +3219,10 @@ def _delete_logs(
 
                 deleted_count = (
                     session.query(LogEvent)
-                    .filter(LogEvent.id.in_(logs_to_delete))
+                    .filter(
+                        LogEvent.id.in_(logs_to_delete),
+                        project_scope(LogEvent, project_id),
+                    )
                     .delete(synchronize_session=False)
                 )
                 if deleted_count > 0:
@@ -3818,6 +3878,7 @@ def get_logs(
                     group_key=raw_key,
                     session=session,
                     field_types={},
+                    project_id=project_id,
                 )
                 value_to_ids = {}
                 used_ids = set()
@@ -3828,6 +3889,7 @@ def get_logs(
                         group_value=val,
                         session=session,
                         field_types={},
+                        project_id=project_id,
                     )
                     value_to_ids[val] = subset_ids
                     used_ids.update(subset_ids)
@@ -5462,6 +5524,7 @@ def create_fields(
                         updated_at = now()
                     FROM log_event_context lec
                     WHERE lec.log_event_id = le.id
+                      AND lec.project_id = le.project_id
                       AND lec.context_id = :context_id
                       AND le.project_id = :project_id
                       AND NOT (le.data ?& CAST(:field_names AS text[]))
@@ -5689,7 +5752,7 @@ def delete_fields(
             # Get log events where the field exists in LogEvent.data
             jsonb_log_events = (
                 session.query(LogEvent.id)
-                .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+                .join(LogEventContext, log_event_context_join())
                 .filter(
                     LogEvent.project_id == project_id,
                     LogEventContext.context_id == context_id,
@@ -5713,13 +5776,15 @@ def delete_fields(
                             """
                             UPDATE log_event
                             SET data = data - :field_name
-                            WHERE id = ANY(:event_ids)
+                            WHERE project_id = :project_id
+                            AND id = ANY(:event_ids)
                             AND data ? :field_name
                         """,
                         ),
                         {
                             "field_name": field_name,
                             "event_ids": event_ids,
+                            "project_id": project_id,
                         },
                     )
                 total_updated_events += len(event_ids)
@@ -5865,7 +5930,7 @@ def update_active_derived_logs(
             is_emb = _is_embedding_template(template)
             q = session.query(LogEvent.id).join(
                 LogEventContext,
-                LogEventContext.log_event_id == LogEvent.id,
+                log_event_context_join(),
             )
             if is_emb:
                 q = q.outerjoin(
@@ -5873,6 +5938,7 @@ def update_active_derived_logs(
                     and_(
                         Embedding.ref_id == LogEvent.id,
                         Embedding.key == template.key,
+                        embedding_scope(Embedding, template.project_id),
                         Embedding.is_deleted == False,  # noqa: E712
                     ),
                 ).filter(
@@ -5977,7 +6043,7 @@ def update_active_derived_logs(
                         session.query(*cols)
                         .join(
                             LogEventContext,
-                            LogEventContext.log_event_id == LogEvent.id,
+                            log_event_context_join(),
                         )
                         .filter(
                             LogEvent.project_id == project_id,
@@ -6008,7 +6074,7 @@ def update_active_derived_logs(
                         session.query(sa_func.count(LogEvent.id))
                         .join(
                             LogEventContext,
-                            LogEventContext.log_event_id == LogEvent.id,
+                            log_event_context_join(),
                         )
                         .filter(
                             LogEvent.project_id == project_id,
@@ -6026,7 +6092,7 @@ def update_active_derived_logs(
                         .join(LogEvent, LogEvent.id == Embedding.ref_id)
                         .join(
                             LogEventContext,
-                            LogEventContext.log_event_id == LogEvent.id,
+                            log_event_context_join(),
                         )
                         .filter(
                             LogEvent.project_id == project_id,

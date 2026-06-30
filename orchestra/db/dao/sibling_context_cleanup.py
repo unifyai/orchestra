@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Dict, List, Set, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from orchestra.db.log_queries import project_scope
 from orchestra.db.models.core_models import Context, LogEvent, LogEventContext
 
 if TYPE_CHECKING:
@@ -94,6 +95,7 @@ def get_assistants_sibling_context_info(
                 )
                 .filter(
                     LogEvent.id.in_(_chunk),
+                    project_scope(LogEvent, project_id),
                     LogEvent.data.has_key(field_name),
                 )
                 .all()
@@ -125,6 +127,7 @@ def get_assistants_sibling_context_info(
                 .join(Context, Context.id == LogEventContext.context_id)
                 .filter(
                     LogEventContext.log_event_id.in_(_chunk),
+                    LogEventContext.project_id == project_id,
                     Context.project_id == project_id,
                 )
                 .all()
@@ -268,9 +271,11 @@ def get_assistants_sibling_context_info(
     verify_rows = session.execute(
         text(
             "SELECT log_event_id, context_id FROM log_event_context "
-            "WHERE log_event_id = ANY(:log_ids) AND context_id = ANY(:ctx_ids)",
+            "WHERE project_id = :project_id "
+            "AND log_event_id = ANY(:log_ids) AND context_id = ANY(:ctx_ids)",
         ),
         {
+            "project_id": project_id,
             "log_ids": list(candidate_log_ids),
             "ctx_ids": list(candidate_ctx_ids),
         },
@@ -296,6 +301,7 @@ def get_assistants_sibling_context_info(
 def remove_logs_from_sibling_contexts(
     session: Session,
     sibling_context_map: Dict[int, List[int]],
+    project_id: int,
 ) -> int:
     """
     Remove log associations from sibling contexts using a single bulk DELETE.
@@ -325,10 +331,11 @@ def remove_logs_from_sibling_contexts(
         result = session.execute(
             text(
                 "DELETE FROM log_event_context "
-                "WHERE context_id = :ctx_id "
+                "WHERE project_id = :project_id "
+                "AND context_id = :ctx_id "
                 "AND log_event_id = ANY(:log_ids)",
             ),
-            {"ctx_id": ctx_id, "log_ids": log_ids},
+            {"project_id": project_id, "ctx_id": ctx_id, "log_ids": log_ids},
         )
         removed += result.rowcount
 

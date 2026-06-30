@@ -14,9 +14,44 @@ physically cannot build an unscoped log query through this helper.
 
 from __future__ import annotations
 
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, select, true
 
 from orchestra.db.models.orchestra_models import LogEvent, LogEventContext
+
+
+def log_event_context_join(le=LogEvent, lec=LogEventContext):
+    """Canonical, partition-pruning join condition between log_event and its
+    context association.
+
+    Always carries ``project_id`` into the join (``lec.project_id == le.project_id``)
+    in addition to the id equality, so that constraining either side's
+    ``project_id`` prunes BOTH partitioned tables. Use everywhere instead of the
+    bare ``lec.log_event_id == le.id`` join. ``le`` / ``lec`` may be aliases.
+    """
+    return and_(
+        lec.log_event_id == le.id,
+        lec.project_id == le.project_id,
+    )
+
+
+def project_scope(log_event_alias, project_id):
+    """A ``WHERE`` term pinning a ``log_event`` scan to ``project_id`` (prunes the
+    ``LIST(project_id)`` partition); ``TRUE`` when ``project_id`` is ``None`` so it
+    can be applied unconditionally. Use on any standalone ``log_event`` scan that
+    is filtered by id / context but not yet by project."""
+    if project_id is None:
+        return true()
+    return log_event_alias.project_id == project_id
+
+
+def embedding_scope(embedding_alias, project_id):
+    """A ``WHERE`` term pinning an ``embedding`` scan to ``project_id`` (prunes the
+    ``LIST(project_id)`` partition); ``TRUE`` when ``project_id`` is ``None`` so it
+    can be applied unconditionally. ``embedding`` is partitioned like log_event and
+    fans out the same way when scanned by ``ref_id`` / ``key`` alone."""
+    if project_id is None:
+        return true()
+    return embedding_alias.project_id == project_id
 
 
 def project_scoped_log_events(project_id: int, *columns) -> Select:
