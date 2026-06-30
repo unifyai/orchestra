@@ -828,10 +828,11 @@ def add_logs_to_context(
                     log_ids=log_ids,
                 )
         except ValueError as e:
-            if "duplicate" in str(e).lower():
+            msg = str(e)
+            if "duplicate" in msg.lower() or "owner_key mismatch" in msg.lower():
                 raise HTTPException(
                     status_code=400,
-                    detail=str(e),
+                    detail=msg,
                 )
             raise
 
@@ -1239,6 +1240,7 @@ def admin_copy_context(
         source_log_event_ids=source_le_ids,
         target_context_id=target_context_id,
         target_project_id=target_project.id,
+        source_project_id=source_context.project_id,
         batch_size=request.batch_size,
     )
 
@@ -1259,6 +1261,8 @@ def admin_copy_context(
     if request.copy_embeddings and id_map:
         emb_count = context_dao.queue_embedding_copies(
             id_map=id_map,
+            source_project_id=source_context.project_id,
+            target_project_id=target_project.id,
             batch_size=request.batch_size,
         )
 

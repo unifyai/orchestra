@@ -123,6 +123,12 @@ def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
     This is called after rollback to clean up field metadata for fields that
     were created after the rolled-back commit point.
     """
+    # Resolve project_id to a literal so the LIST(project_id) partition prunes
+    # (the equijoin alone has no literal anchor to prune by).
+    project_id = session.execute(
+        text("SELECT project_id FROM context WHERE id = :cid"),
+        {"cid": context_id},
+    ).scalar()
     # Get all field names that currently exist in log events for this context
     existing_fields_result = session.execute(
         text(
@@ -131,10 +137,11 @@ def cleanup_orphaned_field_types(session: Session, context_id: int) -> None:
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+            AND lec.context_id = :context_id
             """,
         ),
-        {"context_id": context_id},
+        {"context_id": context_id, "project_id": project_id},
     ).fetchall()
 
     existing_field_names = {row[0] for row in existing_fields_result}
@@ -173,6 +180,12 @@ def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) ->
     This is called after rollback to clean up derived field templates that were
     created after the rolled-back commit point.
     """
+    # Resolve project_id to a literal so the LIST(project_id) partition prunes
+    # (the equijoin alone has no literal anchor to prune by).
+    project_id = session.execute(
+        text("SELECT project_id FROM context WHERE id = :cid"),
+        {"cid": context_id},
+    ).scalar()
     # Get all field names that currently exist in log events for this context
     existing_fields_result = session.execute(
         text(
@@ -181,10 +194,11 @@ def cleanup_orphaned_derived_log_templates(session: Session, context_id: int) ->
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+            AND lec.context_id = :context_id
             """,
         ),
-        {"context_id": context_id},
+        {"context_id": context_id, "project_id": project_id},
     ).fetchall()
 
     existing_field_names = {row[0] for row in existing_fields_result}
@@ -1924,13 +1938,15 @@ class ContextDAO:
 
         # Find all log_event_ids that have this value at the nested path
         # Query LogEvent.data directly
+        project_id = self._project_id_for_context(context_id)
         query = text(
             """
             SELECT DISTINCT le.id, le.data, le.project_id
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.data ? :root_field
         """,
         )
@@ -1939,6 +1955,7 @@ class ContextDAO:
             query,
             {
                 "context_id": context_id,
+                "project_id": project_id,
                 "root_field": root_field,
             },
         )
@@ -2034,13 +2051,15 @@ class ContextDAO:
 
         # Find all logs that need updating
         # Query LogEvent.data directly
+        project_id = self._project_id_for_context(context_id)
         query = text(
             """
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.data ? :root_field
         """,
         )
@@ -2049,6 +2068,7 @@ class ContextDAO:
             query,
             {
                 "context_id": context_id,
+                "project_id": project_id,
                 "root_field": root_field,
             },
         )
@@ -2188,14 +2208,17 @@ class ContextDAO:
         # Get root field name
         root_field = FKPathParser.get_root_field(fk_path)
 
-        # Find all logs that need updating
+        # Find all logs that need updating (project_id literal prunes the
+        # LIST(project_id) partition; the equijoin alone has no anchor).
+        project_id = self._project_id_for_context(context_id)
         query = text(
             """
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.data ? :root_field
         """,
         )
@@ -2204,6 +2227,7 @@ class ContextDAO:
             query,
             {
                 "context_id": context_id,
+                "project_id": project_id,
                 "root_field": root_field,
             },
         )
@@ -2339,14 +2363,17 @@ class ContextDAO:
         # Get root field name
         root_field = FKPathParser.get_root_field(fk_path)
 
-        # Find all logs that need updating
+        # Find all logs that need updating (project_id literal prunes the
+        # LIST(project_id) partition; the equijoin alone has no anchor).
+        project_id = self._project_id_for_context(context_id)
         query = text(
             """
             SELECT le.id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.data ? :root_field
         """,
         )
@@ -2355,6 +2382,7 @@ class ContextDAO:
             query,
             {
                 "context_id": context_id,
+                "project_id": project_id,
                 "root_field": root_field,
             },
         )
@@ -3456,10 +3484,31 @@ class ContextDAO:
                             f"Duplicate log entry detected. Context '{context.name}' does not allow duplicates.",
                         )
 
+            # Owner homogeneity invariant: an assistant/team context may only
+            # hold logs owned by that same assistant/team, so its owner_key
+            # sub-partition stays homogeneous and single-owner reads can prune to
+            # it. Aggregation/system contexts ('sys' key) may legitimately
+            # collect logs from multiple owners, so they are not constrained.
+            from orchestra.db.scope import OwnerScope
+            from orchestra.db.scope import owner_key as _compute_owner_key
+
+            context_owner_key = (
+                _compute_owner_key(OwnerScope(context.owner_scope), context.owner_id)
+                if context.owner_scope
+                else "sys"
+            )
+            enforce_owner = context_owner_key != "sys"
+
             # Create associations between log events and context. The owner is
-            # the LOG's owning scope (this may be an aggregation/cross context),
-            # so the association lands in the log owner's sub-partition.
+            # the LOG's owning scope, so the association lands in the log owner's
+            # sub-partition; for assistant/team targets that must equal the
+            # context's owner (enforced above).
             for log_event in log_events:
+                if enforce_owner and log_event.owner_key != context_owner_key:
+                    raise ValueError(
+                        "Cannot add logs owned by a different assistant or team "
+                        "to this context (owner_key mismatch).",
+                    )
                 association = LogEventContext(
                     project_id=log_event.project_id,
                     log_event_id=log_event.id,
@@ -3650,7 +3699,8 @@ class ContextDAO:
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
         duplicates AS (
@@ -3719,7 +3769,8 @@ class ContextDAO:
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
         duplicates AS (
@@ -3769,16 +3820,39 @@ class ContextDAO:
             # Get current timestamp for all new records
             current_time = datetime.now(timezone.utc)
 
+            # Owner homogeneity invariant (see add_logs): copies into an
+            # assistant/team context must belong to that same owner so the
+            # context's owner_key sub-partition stays homogeneous.
+            from orchestra.db.scope import OwnerScope
+            from orchestra.db.scope import owner_key as _compute_owner_key
+
+            context_owner_key = (
+                _compute_owner_key(OwnerScope(context.owner_scope), context.owner_id)
+                if context.owner_scope
+                else "sys"
+            )
+            enforce_owner = context_owner_key != "sys"
+
             # Process each log event
             for original_log_id in log_ids:
-                # Query the original LogEvent
+                # Query the original LogEvent (scoped to the context's project so
+                # the partitioned point lookup prunes instead of scanning all
+                # partitions; the source logs live in this project).
                 original_log_event = (
                     self.session.query(LogEvent)
-                    .filter_by(id=original_log_id)
+                    .filter(
+                        LogEvent.id == original_log_id,
+                        LogEvent.project_id == context.project_id,
+                    )
                     .one_or_none()
                 )
                 if not original_log_event:
                     raise ValueError(f"Log event with id {original_log_id} not found")
+                if enforce_owner and original_log_event.owner_key != context_owner_key:
+                    raise ValueError(
+                        "Cannot copy logs owned by a different assistant or team "
+                        "to this context (owner_key mismatch).",
+                    )
 
                 # Check for duplicates if the context doesn't allow them
                 if not context.allow_duplicates:
@@ -4202,6 +4276,7 @@ class ContextDAO:
         source_log_event_ids: List[int],
         target_context_id: int,
         target_project_id: int,
+        source_project_id: int,
         batch_size: int = 10000,
     ) -> Dict[int, int]:
         """Deep-copy log events and associate them with a target context.
@@ -4227,7 +4302,10 @@ class ContextDAO:
 
             source_events = (
                 self.session.query(LogEvent)
-                .filter(LogEvent.id.in_(batch_ids))
+                .filter(
+                    LogEvent.id.in_(batch_ids),
+                    LogEvent.project_id == source_project_id,
+                )
                 .order_by(LogEvent.id)
                 .all()
             )
@@ -4380,6 +4458,8 @@ class ContextDAO:
     def queue_embedding_copies(
         self,
         id_map: Dict[int, int],
+        source_project_id: int,
+        target_project_id: int,
         batch_size: int = 10000,
     ) -> int:
         """Queue copies of embeddings for HNSW-safe insertion.
@@ -4407,7 +4487,10 @@ class ContextDAO:
         # referenced log_event); resolve each new log event's project.
         new_id_to_project = dict(
             self.session.query(LogEvent.id, LogEvent.project_id)
-            .filter(LogEvent.id.in_(list(id_map.values())))
+            .filter(
+                LogEvent.id.in_(list(id_map.values())),
+                LogEvent.project_id == target_project_id,
+            )
             .all(),
         )
         total = 0
@@ -4419,6 +4502,7 @@ class ContextDAO:
                 self.session.query(Embedding)
                 .filter(
                     Embedding.ref_id.in_(batch_old),
+                    Embedding.project_id == source_project_id,
                     Embedding.is_deleted.is_(False),
                 )
                 .all()

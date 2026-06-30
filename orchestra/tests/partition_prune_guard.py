@@ -32,7 +32,7 @@ import threading
 import traceback
 from collections import OrderedDict
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 
 from orchestra.db.partitioning import PARTITIONED_TABLES
@@ -72,6 +72,9 @@ _ALLOWLIST: tuple[str, ...] = (
     # id -> owner_key, and a context-batched maintenance backfill.
     "db/scope.py::owner_key_for_log",
     "db/scope.py::reclassify_heavy_owner_keys",
+    # Team delete: reclaim a deleted team's shared contexts across the team's
+    # hosting projects (genuinely multi-project; bounded by context_ids).
+    "services/team_cleanup_service.py::_claim_shared_team_contexts",
     # Auth gate: bare id -> project_id, then access check.
     "web/api/log/views.py::_atomic_field_update_impl",
     # Deliberate admin global contact search across all projects.
@@ -104,6 +107,66 @@ def ensure_sentinel_partitions(conn) -> None:
 
     for table in PARTITIONED_TABLES:
         create_dedicated_partition(conn, table, SENTINEL_PROJECT_ID)
+
+
+# ---------------------------------------------------------------------------
+# Owner-level pruning guard (within an owner-sub-partitioned project).
+#
+# A second-level analogue of the project sentinel: within an owner-sub-partitioned
+# project (the shared Assistants project), a query that constrains owner_key to a
+# single value prunes to one owner sub-partition; one that does not fans out across
+# all of them. We promote a reserved owner sentinel sub-partition so a fan-out
+# query's plan references it -- letting targeted tests assert that single-owner
+# reads prune to the owner sub-partition. ``SENTINEL_OWNER_KEY`` is never produced
+# by ``orchestra.db.scope.owner_key`` (not ``a*`` / ``t*`` / ``sys``).
+# ---------------------------------------------------------------------------
+SENTINEL_OWNER_KEY = "ppownersentinel"
+_SENTINEL_OWNER_TOKEN = f"_{SENTINEL_OWNER_KEY}"
+
+
+def setup_owner_partitions(conn, project_id: int, owner_keys) -> None:
+    """Owner-sub-partition a (test) project and promote each of ``owner_keys`` plus
+    the owner sentinel.
+
+    After this, a single-owner read constrained to ``owner_key == X`` prunes to
+    ``log_event_p{project_id}_{X}`` and excludes the sentinel; an owner-agnostic
+    read fans out across every owner sub-partition including the sentinel. The
+    project's existing rows must currently live in the top-level DEFAULT partition
+    (the usual state for a freshly created test project).
+    """
+    from orchestra.db.partitioning import promote_owner, sub_partition_project_by_owner
+
+    sub_partition_project_by_owner(conn, project_id)
+    for ok in [*owner_keys, SENTINEL_OWNER_KEY]:
+        promote_owner(conn, project_id, ok)
+
+
+def _explain_text(session, query) -> str:
+    """Return the EXPLAIN (no ANALYZE) plan text for a SQLAlchemy Query/Select."""
+    from sqlalchemy.dialects import postgresql
+
+    statement = getattr(query, "statement", query)
+    compiled = statement.compile(
+        dialect=postgresql.dialect(),
+        compile_kwargs={"literal_binds": True},
+    )
+    rows = session.execute(text("EXPLAIN " + str(compiled))).fetchall()
+    return "\n".join(row[0] for row in rows)
+
+
+def assert_prunes_to_owner(session, query, *, owner_key: str) -> None:
+    """Assert ``query`` prunes to a single owner sub-partition.
+
+    Its EXPLAIN plan must NOT reference the owner sentinel sub-partition; if it
+    does, the query fans out across all owners within the project (the
+    optimization regressed / was never applied). Requires
+    :func:`setup_owner_partitions` to have promoted the owner sentinel.
+    """
+    plan = _explain_text(session, query)
+    assert _SENTINEL_OWNER_TOKEN not in plan, (
+        f"query did not prune to owner sub-partition for owner_key={owner_key!r} "
+        f"(owner sentinel scanned -> fans out across owners):\n{plan}"
+    )
 
 
 def _callsite() -> list[str]:
@@ -180,10 +243,17 @@ def _before_cursor_execute(conn, cursor, statement, parameters, context, execute
     if not plan or _SENTINEL_TOKEN not in plan:
         return
     callsite = _callsite()
+    if not callsite:
+        # No application frame on the stack => the query was issued by test
+        # code, a seed helper, or a SQLAlchemy-internal/ORM lazy load, not by a
+        # production code path. A real production log query always passes
+        # through an orchestra app frame, so an empty call site cannot point at
+        # an actionable fan-out to fix. We deliberately do not gate on these.
+        return
     if _allowlisted(callsite):
         return
     with _lock:
-        violations[norm] = {"sql": norm[:20000], "callsite": callsite}
+        violations[norm] = {"sql": norm[:1000], "callsite": callsite}
 
 
 def report() -> int:

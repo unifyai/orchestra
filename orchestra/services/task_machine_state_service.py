@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.context_naming import is_team_context_name
 from orchestra.db.dao.context_dao import delete_orphaned_log_events
 from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
-from orchestra.db.log_queries import log_event_context_join
+from orchestra.db.log_queries import log_event_context_join, owner_scope_clause
 from orchestra.db.models.orchestra_models import (
     TEAM_STATUS_ACTIVE,
     Assistant,
@@ -37,6 +37,7 @@ from orchestra.db.models.orchestra_models import (
     Team,
     TeamAssistantMembership,
 )
+from orchestra.db.scope import single_owner_key_for_context
 from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
@@ -1225,8 +1226,14 @@ def get_latest_task_run_for_task(
         project_id=project_id,
         tasks_context_name=resolved_tasks_context_name,
     )
+    owner_key_filter = single_owner_key_for_context(
+        session,
+        context_ids.runs_context_id,
+    )
     filters = [
         LogEvent.project_id == project_id,
+        owner_scope_clause(LogEvent, owner_key_filter),
+        owner_scope_clause(LogEventContext, owner_key_filter),
         LogEventContext.context_id == context_ids.runs_context_id,
         LogEvent.data.has_key("assistant_id"),
         LogEvent.data.has_key("task_id"),
@@ -1243,7 +1250,7 @@ def get_latest_task_run_for_task(
         )
     return (
         session.query(LogEvent)
-        .join(LogEventContext, log_event_context_join())
+        .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(*filters)
         .order_by(LogEvent.updated_at.desc(), LogEvent.created_at.desc())
         .first()
@@ -1390,11 +1397,14 @@ def get_task_ids_for_log_ids(
     if context_id is None:
         return set()
 
+    owner_key_filter = single_owner_key_for_context(session, context_id)
     rows = (
         session.query(LogEvent.data)
-        .join(LogEventContext, log_event_context_join())
+        .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(
             LogEvent.project_id == project_id,
+            owner_scope_clause(LogEvent, owner_key_filter),
+            owner_scope_clause(LogEventContext, owner_key_filter),
             LogEvent.id.in_(ids),
             LogEventContext.context_id == context_id,
         )
@@ -1752,6 +1762,7 @@ def _load_task_rows(
     """Load task rows for the given logical task ids."""
 
     task_id_strings = [str(task_id) for task_id in task_ids]
+    owner_key_filter = single_owner_key_for_context(session, context_id)
     rows = (
         session.query(
             LogEvent.id,
@@ -1759,9 +1770,11 @@ def _load_task_rows(
             LogEvent.updated_at,
             LogEvent.created_at,
         )
-        .join(LogEventContext, log_event_context_join())
+        .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(
             LogEvent.project_id == project_id,
+            owner_scope_clause(LogEvent, owner_key_filter),
+            owner_scope_clause(LogEventContext, owner_key_filter),
             LogEventContext.context_id == context_id,
             LogEvent.data.has_key("task_id"),
             LogEvent.data.op("->>")("task_id").in_(task_id_strings),
@@ -2108,11 +2121,14 @@ def _get_machine_row_by_unique_field(
     project_id = (
         session.query(Context.project_id).filter(Context.id == context_id).scalar()
     )
+    owner_key_filter = single_owner_key_for_context(session, context_id)
     rows = (
         session.query(LogEvent)
-        .join(LogEventContext, log_event_context_join())
+        .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(
             LogEvent.project_id == project_id,
+            owner_scope_clause(LogEvent, owner_key_filter),
+            owner_scope_clause(LogEventContext, owner_key_filter),
             LogEventContext.context_id == context_id,
             LogEvent.data.has_key(unique_field_name),
             LogEvent.data.op("->>")(unique_field_name) == str(unique_field_value),

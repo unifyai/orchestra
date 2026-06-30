@@ -27,6 +27,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.db.scope import single_owner_key
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
 
@@ -149,7 +150,10 @@ def _find_contact_log_by_contact_id(
     contact_id: int,
 ) -> LogEvent | None:
     logs = session.scalars(
-        project_scoped_log_events(context.project_id)
+        project_scoped_log_events(
+            context.project_id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data.has_key("contact_id"),

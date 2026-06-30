@@ -1189,6 +1189,7 @@ def upsert_context_rows(
             model=None,
             dimensions=None,
             key="_embedding_text_emb",
+            project_id=project_id,
         )
     else:
         session.flush()

@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.core_models import LogUniqueConstraint
+from orchestra.db.scope import single_owner_key_for_context
 from orchestra.settings import UniqueValidationMode, settings
 
 logger = logging.getLogger(__name__)
@@ -265,11 +266,21 @@ class UniqueConstraintDAO:
             or_conditions.append(f"le.data @> CAST(:value_{i} AS jsonb)")
             case_parts.append(f"WHEN le.data @> CAST(:value_{i} AS jsonb) THEN {i}")
 
+        owner_key_filter = single_owner_key_for_context(self.session, context_id)
+        owner_clause = ""
+        if owner_key_filter is not None:
+            owner_clause = (
+                " AND le.owner_key = :owner_key AND lec.owner_key = :owner_key "
+            )
+            params["owner_key"] = owner_key_filter
+
         jsonb_query = f"""
             SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND lec.project_id = le.project_id
             WHERE le.project_id = :project_id
+            {owner_clause}
             AND lec.context_id = :context_id
             AND le.id != ALL(:exclude_ids)
             AND ({' OR '.join(or_conditions)})
@@ -479,13 +490,22 @@ class UniqueConstraintDAO:
         if pid is not None:
             params["project_id"] = pid
 
+        # Owner sub-partition pruning for single-owner (assistant/team) contexts.
+        owner_key_filter = single_owner_key_for_context(self.session, context_id)
+        owner_filter = ""
+        if owner_key_filter is not None:
+            owner_filter = (
+                "AND le.owner_key = :owner_key AND lec.owner_key = :owner_key\n"
+            )
+            params["owner_key"] = owner_key_filter
+
         query = f"""
             SELECT le.id
             FROM log_event le
             JOIN log_event_context lec ON lec.log_event_id = le.id
             AND le.project_id = lec.project_id
             WHERE lec.context_id = :context_id
-            {project_filter}AND ({' OR '.join(or_conditions)})
+            {project_filter}{owner_filter}AND ({' OR '.join(or_conditions)})
             LIMIT 1
         """
 

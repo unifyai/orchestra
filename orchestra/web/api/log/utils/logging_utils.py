@@ -38,6 +38,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.log_queries import (
     embedding_scope,
     log_event_context_join,
+    owner_scope_clause,
     project_scope,
 )
 from orchestra.db.models.core_models import (
@@ -47,6 +48,7 @@ from orchestra.db.models.core_models import (
     LogEvent,
     LogEventContext,
 )
+from orchestra.db.scope import single_owner_key
 from orchestra.settings import settings
 from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
 from orchestra.web.api.log.schema import CreateLogConfig
@@ -470,6 +472,7 @@ def _build_unified_logs_limited(
     ids_subq: Subquery,
     context_id: Optional[int] = None,
     project_id: Optional[int] = None,
+    owner_key: Optional[str] = None,
 ) -> Subquery:
     """
     Build unified logs subquery limited to the specified log_event_ids.
@@ -481,6 +484,7 @@ def _build_unified_logs_limited(
         event_ids=id_only_sq,
         context_id=context_id,
         project_id=project_id,
+        owner_key=owner_key,
     )
 
 
@@ -862,6 +866,11 @@ def _get_logs_query(
     # STEP 3: Apply context filter
     # =========================================================================
     context_id = None
+    # owner_key of the resolved single-owner (assistant/team) context, or None for
+    # aggregation/system/default contexts. When set, it prunes to one owner
+    # sub-partition within the Assistants project (carried through the join + the
+    # embedding/ANN/subquery scans below).
+    owner_key_filter = None
     if context:
         context_obj = context_dao.filter(name=context, project_id=project_id)
         if not context_obj:
@@ -869,29 +878,37 @@ def _get_logs_query(
                 status_code=404,
                 detail=f"Context '{context}' not found",
             )
-        context_id = context_obj[0][0].id
+        ctx_row = context_obj[0][0]
+        context_id = ctx_row.id
+        owner_key_filter = single_owner_key(ctx_row.owner_scope, ctx_row.owner_id)
         query = query.join(
             LogEventContext,
-            LogEventContext.log_event_id == LogEvent.id,
+            log_event_context_join(owner_key=owner_key_filter),
         ).filter(
             # project_id is redundant (context is project-scoped) but lets the
             # LIST(project_id) partition pruner skip other projects' partitions.
             LogEventContext.project_id == project_id,
             LogEventContext.context_id == context_id,
+            owner_scope_clause(LogEvent, owner_key_filter),
+            owner_scope_clause(LogEventContext, owner_key_filter),
         )
     else:
         # Get the default context (empty string name)
         context_obj = context_dao.filter(name="", project_id=project_id)
         if context_obj:
-            context_id = context_obj[0][0].id
+            ctx_row = context_obj[0][0]
+            context_id = ctx_row.id
+            owner_key_filter = single_owner_key(ctx_row.owner_scope, ctx_row.owner_id)
             # Also filter by context membership for default context
             # This ensures logs removed from default context aren't returned
             query = query.join(
                 LogEventContext,
-                LogEventContext.log_event_id == LogEvent.id,
+                log_event_context_join(owner_key=owner_key_filter),
             ).filter(
                 LogEventContext.project_id == project_id,
                 LogEventContext.context_id == context_id,
+                owner_scope_clause(LogEvent, owner_key_filter),
+                owner_scope_clause(LogEventContext, owner_key_filter),
             )
         else:
             # No default context exists - return empty results
@@ -1091,6 +1108,7 @@ def _get_logs_query(
                 # equijoin only prunes the embedding partition at runtime, not at
                 # plan time, so pin it to the known project.
                 embedding_scope(Embedding, project_id),
+                owner_scope_clause(Embedding, owner_key_filter),
                 Embedding.ref_id == LogEvent.id,
                 Embedding.key.in_(allowed_fields),
                 Embedding.is_deleted
@@ -1227,6 +1245,7 @@ def _get_logs_query(
                     .where(
                         Embedding.key == lhs_key,
                         embedding_scope(Embedding, project_id),
+                        owner_scope_clause(Embedding, owner_key_filter),
                     )
                     .limit(1),
                 ).scalar()
@@ -1280,6 +1299,7 @@ def _get_logs_query(
                         # Constrain to this project's partition so the planner
                         # prunes to a single per-partition HNSW index.
                         Embedding.project_id == project_id,
+                        owner_scope_clause(Embedding, owner_key_filter),
                         Embedding.key == lhs_key,
                         model_filter,
                         Embedding.is_deleted == False,  # noqa: E712
@@ -1566,6 +1586,7 @@ def _get_logs_query(
             func.to_jsonb(Embedding.vector).label("vector_list"),
         ).where(
             Embedding.project_id == project_id,
+            owner_scope_clause(Embedding, owner_key_filter),
             Embedding.ref_id.in_(page_ids),
         )
 
@@ -2217,6 +2238,7 @@ def _build_unified_logs_subquery(
     key: str = None,
     context_id: Optional[int] = None,
     project_id: Optional[int] = None,
+    owner_key: Optional[str] = None,
 ) -> Subquery:
     """
     Build a unified subquery over JSONB log fields.
@@ -2230,10 +2252,14 @@ def _build_unified_logs_subquery(
         raise ValueError("Either event_ids or relevant_log_events must be provided")
 
     def _apply_event_filter(query):
-        # Prune to the project so the unified scan does not fan out across every
-        # tenant's partition (the id/relevant subqueries are project-scoped, but
-        # this outer LogEvent scan needs its own predicate).
-        query = query.filter(project_scope(LogEvent, project_id))
+        # Prune to the project (and owner sub-partition for single-owner contexts)
+        # so the unified scan does not fan out across every tenant's partition (the
+        # id/relevant subqueries are project-scoped, but this outer LogEvent scan
+        # needs its own predicate).
+        query = query.filter(
+            project_scope(LogEvent, project_id),
+            owner_scope_clause(LogEvent, owner_key),
+        )
         if event_ids is not None:
             event_ids_selectable = (
                 select(event_ids) if isinstance(event_ids, Subquery) else event_ids
@@ -3609,6 +3635,7 @@ def _construct_join_query(
     include_log_ids: bool = False,
     session=None,
     skip_merge: bool = False,
+    project_id: Optional[int] = None,
 ):
     """
     JSONB version: Construct join using A.data || B.data merge.
@@ -4384,6 +4411,7 @@ def _join_logs_internal(
             fields_b=fields_b,
             include_log_ids=True,  # Always include log IDs for embedding lookups
             session=session,
+            project_id=project_id,
         )
 
         # --- Phase 3: Execute the join query ---
@@ -4715,6 +4743,7 @@ def _join_query_internal(
             include_log_ids=False,
             session=session,
             skip_merge=_use_direct_reduce,
+            project_id=project_id,
         )
 
         if filter_expr:

@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.log_queries import log_event_context_join
+from orchestra.db.log_queries import log_event_context_join, owner_scope_clause
 from orchestra.db.models.core_models import (
     Context,
     FieldType,
@@ -22,6 +22,7 @@ from orchestra.db.models.core_models import (
     LogUniqueConstraint,
     Project,
 )
+from orchestra.db.scope import single_owner_key
 from orchestra.services.bucket_service import create_bucket_service
 
 logger = logging.getLogger(__name__)
@@ -539,6 +540,8 @@ class LogEventDAO:
         context = self.session.query(Context).filter_by(id=context_id).one()
         auto_counting = context.auto_counting or {}
         unique_key_columns = context.unique_key_names or list(unique_keys.keys())
+        # Owner sub-partition pruning for single-owner (assistant/team) contexts.
+        owner_key_filter = single_owner_key(context.owner_scope, context.owner_id)
 
         counting_columns = list(auto_counting.keys())
         all_columns = unique_key_columns[:]
@@ -603,13 +606,18 @@ class LogEventDAO:
                 )
                 .join(
                     LogEventContext,
-                    log_event_context_join(),
+                    log_event_context_join(owner_key=owner_key_filter),
                 )
                 # project_id prunes the partitioned log_event table to the
                 # owning project's partition (PK leads with project_id); the
                 # context already belongs to this project so the matched set
                 # is unchanged. Mirrors the partition-pruning convention.
+                # owner_key further prunes to the owner sub-partition.
                 .filter(LogEvent.project_id == project_id)
+                .filter(
+                    owner_scope_clause(LogEvent, owner_key_filter),
+                    owner_scope_clause(LogEventContext, owner_key_filter),
+                )
                 .filter(LogEventContext.context_id == context_id)
             )
             for parent_key, parent_value in parent_values.items():
@@ -819,8 +827,15 @@ class LogEventDAO:
 
             existing = (
                 self.session.query(LogEvent.id)
-                .join(LogEventContext, log_event_context_join())
+                .join(
+                    LogEventContext,
+                    log_event_context_join(owner_key=owner_key_filter),
+                )
                 .filter(LogEvent.project_id == project_id)
+                .filter(
+                    owner_scope_clause(LogEvent, owner_key_filter),
+                    owner_scope_clause(LogEventContext, owner_key_filter),
+                )
                 .filter(LogEventContext.context_id == context_id)
                 .filter(
                     LogEvent.data.op("@>")(

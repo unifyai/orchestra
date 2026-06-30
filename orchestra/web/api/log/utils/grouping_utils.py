@@ -25,8 +25,13 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.log_queries import log_event_context_join, project_scope
+from orchestra.db.log_queries import (
+    log_event_context_join,
+    owner_scope_clause,
+    project_scope,
+)
 from orchestra.db.models.core_models import LogEvent, LogEventContext
+from orchestra.db.scope import single_owner_key
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
 from .logging_utils import (
@@ -521,6 +526,12 @@ def _get_all_filtered_log_event_ids(
         )
     context_obj = context_obj[0][0]
     ctx_id = context_obj.id
+    # Prune to the owner sub-partition for single-owner (assistant/team) contexts.
+    owner_key_filter = single_owner_key(context_obj.owner_scope, context_obj.owner_id)
+    if owner_key_filter is not None:
+        log_event_query = log_event_query.filter(
+            owner_scope_clause(LogEvent, owner_key_filter),
+        )
     if ctx_id:
         log_event_query = log_event_query.filter(
             exists(
@@ -528,7 +539,8 @@ def _get_all_filtered_log_event_ids(
                 .select_from(LogEventContext)
                 .where(
                     and_(
-                        log_event_context_join(),
+                        log_event_context_join(owner_key=owner_key_filter),
+                        owner_scope_clause(LogEventContext, owner_key_filter),
                         LogEventContext.context_id == ctx_id,
                     ),
                 ),
@@ -579,24 +591,27 @@ def _fetch_logs_for_event_ids(
         if not session.query(event_ids.c.id).limit(1).first():
             return ([], 0) if not latest_timestamp else None
 
+    # Resolve the context up front (for field types + owner sub-partition pruning).
+    context_name = "" if not context else context
+    ctx_rows = context_dao.filter(name=context_name, project_id=project_id)
+    ctx_obj = ctx_rows[0][0] if ctx_rows else None
+    ctx_id = ctx_obj.id if ctx_obj else None
+    owner_key_filter = (
+        single_owner_key(ctx_obj.owner_scope, ctx_obj.owner_id) if ctx_obj else None
+    )
+
     if isinstance(event_ids, list):
         event_ids_cte = (
             session.query(LogEvent.id.label("id"))
             .filter(
                 LogEvent.id.in_(event_ids),
                 project_scope(LogEvent, project_id),
+                owner_scope_clause(LogEvent, owner_key_filter),
             )
             .cte("event_ids_cte")
         )
     else:
         event_ids_cte = event_ids  # already a sub‑query with "id"
-
-    context_name = "" if not context else context
-    ctx_id = (
-        context_dao.filter(name=context_name, project_id=project_id)[0][0].id
-        if context_name or context_name == ""
-        else None
-    )
     field_types = field_type_dao.get_field_types(project_id, context_id=ctx_id)
 
     sort_val_sqs: List[Subquery] = []
@@ -609,6 +624,7 @@ def _fetch_logs_for_event_ids(
             relevant_log_events=event_ids_cte,
             context_id=ctx_id,
             project_id=project_id,
+            owner_key=owner_key_filter,
         )
 
         sort_dict = json.loads(sorting)
@@ -689,6 +705,7 @@ def _fetch_logs_for_event_ids(
             relevant_log_events=paginated_ids_subq,
             context_id=ctx_id,
             project_id=project_id,
+            owner_key=owner_key_filter,
         )
         max_ts = session.query(
             func.max(unified_logs_for_timestamp.c.updated_at),
@@ -701,6 +718,7 @@ def _fetch_logs_for_event_ids(
         paginated_ids_subq,
         context_id=ctx_id,
         project_id=project_id,
+        owner_key=owner_key_filter,
     )
 
     exclude_params = exclude_entries = False

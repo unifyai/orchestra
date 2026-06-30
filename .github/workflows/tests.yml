@@ -232,12 +232,12 @@ jobs:
         ORCHESTRA_DB_USER: orchestra
         ORCHESTRA_DB_PASS: orchestra
         ORCHESTRA_DB_BASE: orchestra
-        # Collect + report any log query that can't prune by project_id (the
-        # partitioned log_event/log_event_context/embedding tables fan out across
-        # every tenant otherwise). See orchestra/tests/partition_prune_guard.py.
-        # `warn` reports without failing; flip to `strict` to gate once the
-        # remaining low-severity async-embedding tail is scoped to zero.
-        PARTITION_PRUNE_GUARD: warn
+        # Fail the run if any application-issued log query can't prune by
+        # project_id (the partitioned log_event/log_event_context/embedding
+        # tables fan out across every tenant otherwise -- the June production
+        # slowdown). Test/seed/ORM-internal queries (no app call site) are not
+        # gated. See orchestra/tests/partition_prune_guard.py.
+        PARTITION_PRUNE_GUARD: strict
         # Logging
         ORCHESTRA_LOG_DIR: ${{ env.LOGS_DIR }}/orchestra
         # GCP configuration (from org-level variables)

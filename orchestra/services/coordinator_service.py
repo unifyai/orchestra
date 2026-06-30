@@ -33,6 +33,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
     User,
 )
+from orchestra.db.scope import single_owner_key
 from orchestra.services import onboarding_graph
 from orchestra.services.assistant_bootstrap import ensure_owner_contact_row
 from orchestra.services.contact_membership_service import (
@@ -788,7 +789,11 @@ def _context_has_logs(
 ) -> bool:
     return (
         session.scalar(
-            project_scoped_log_events(context.project_id, LogEvent.id)
+            project_scoped_log_events(
+                context.project_id,
+                LogEvent.id,
+                owner_key=single_owner_key(context.owner_scope, context.owner_id),
+            )
             .where(LogEventContext.context_id == context.id)
             .limit(1),
         )
@@ -957,7 +962,10 @@ def _latest_coordinator_state_row(
     if context is None:
         return None
     log = session.scalar(
-        project_scoped_log_events(project.id)
+        project_scoped_log_events(
+            project.id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
         .where(LogEventContext.context_id == context.id)
         .order_by(LogEvent.id.desc())
         .limit(1),
@@ -1715,7 +1723,11 @@ def _has_user_transcript_message(
     if context is None:
         return False
     query = (
-        project_scoped_log_events(project.id, LogEvent.id)
+        project_scoped_log_events(
+            project.id,
+            LogEvent.id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data["medium"].astext.in_(tuple(mediums)),
@@ -1753,7 +1765,11 @@ def _assistant_transcript_created_at(
     if context is None:
         return None
     query = (
-        project_scoped_log_events(project.id, LogEvent.created_at)
+        project_scoped_log_events(
+            project.id,
+            LogEvent.created_at,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data["medium"].astext.in_(tuple(mediums)),

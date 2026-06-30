@@ -176,20 +176,24 @@ class ContactSyncService:
         Returns:
             Number of logs updated
         """
+        # Resolve project_id to a literal (a scalar subquery does not prune the
+        # LIST(project_id) partition at plan time; a literal does).
+        project_id = self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :context_id"),
+            {"context_id": context_id},
+        ).scalar()
         query = text(
             """
             UPDATE log_event
             SET data = data || jsonb_build_object(:update_field, :new_value),
                 updated_at = NOW()
-            WHERE project_id = (SELECT project_id FROM context WHERE id = :context_id)
+            WHERE project_id = :project_id
               AND id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                   AND lec.project_id = le.project_id
-                WHERE le.project_id = (
-                    SELECT project_id FROM context WHERE id = :context_id
-                  )
+                WHERE le.project_id = :project_id
                   AND lec.context_id = :context_id
                   AND le.data->>'email_address' = :email
                   AND (le.data->>'is_system')::boolean = true
@@ -201,6 +205,7 @@ class ContactSyncService:
             query,
             {
                 "context_id": context_id,
+                "project_id": project_id,
                 "email": email,
                 "update_field": update_field,
                 "new_value": new_value,
@@ -229,20 +234,23 @@ class ContactSyncService:
         Returns:
             Number of logs updated
         """
+        # Resolve project_id to a literal (see _update_contact_logs_user).
+        project_id = self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :context_id"),
+            {"context_id": context_id},
+        ).scalar()
         query = text(
             """
             UPDATE log_event
             SET data = data || jsonb_build_object(:update_field, :new_value),
                 updated_at = NOW()
-            WHERE project_id = (SELECT project_id FROM context WHERE id = :context_id)
+            WHERE project_id = :project_id
               AND id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                   AND lec.project_id = le.project_id
-                WHERE le.project_id = (
-                    SELECT project_id FROM context WHERE id = :context_id
-                  )
+                WHERE le.project_id = :project_id
                   AND lec.context_id = :context_id
                   AND le.data->>'_assistant' = :assistant_context_id
                   AND (le.data->>'contact_id')::int = :self_contact_id
@@ -254,6 +262,7 @@ class ContactSyncService:
             query,
             {
                 "context_id": context_id,
+                "project_id": project_id,
                 "assistant_context_id": assistant_context_id,
                 "self_contact_id": self_contact_id,
                 "update_field": update_field,

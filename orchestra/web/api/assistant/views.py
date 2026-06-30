@@ -4404,7 +4404,10 @@ async def transfer_assistant_to_org(
                     ctx_log_ids = [
                         row[0]
                         for row in session.query(LogEventContext.log_event_id)
-                        .filter(LogEventContext.context_id == ctx.id)
+                        .filter(
+                            LogEventContext.project_id == personal_project.id,
+                            LogEventContext.context_id == ctx.id,
+                        )
                         .all()
                     ]
                     le_dao.reproject_logs(ctx_log_ids, org_project.id)
