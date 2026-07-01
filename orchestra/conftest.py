@@ -40,10 +40,11 @@ CURRENT_TEST_INFO = {"name": None, "mode": None}
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
+from orchestra.observability.otel_setup import flush_opentelemetry
 from orchestra.settings import settings
 from orchestra.tests import partition_prune_guard  # registers the SQL prune guard
 from orchestra.web.application import get_app
-from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
+from orchestra.web.lifetime import setup_opentelemetry
 
 
 def _xdist_worker_suffix(worker_id) -> str:
