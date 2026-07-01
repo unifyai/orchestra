@@ -1566,7 +1566,8 @@ ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
-ONBOARDING_STEP_SCHEDULE = "schedule"
+ONBOARDING_STEP_LAUNCH_MISSION = "launch-mission"
+ONBOARDING_STEP_ARM_TRIPWIRE = "arm-tripwire"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
 DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_EMAIL_REPLY,
@@ -1582,7 +1583,8 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
-    ONBOARDING_STEP_SCHEDULE,
+    ONBOARDING_STEP_LAUNCH_MISSION,
+    ONBOARDING_STEP_ARM_TRIPWIRE,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
     *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
@@ -1690,11 +1692,17 @@ def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
     )
 
 
-def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
-    """Schedule step: any row exists in a readable ``Tasks`` context.
+def _coordinator_task_rows(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> list[LogEvent]:
+    """Task rows readable by the Coordinator across all its Tasks roots.
 
-    Reads across the Coordinator's roots — the personal context plus
-    one per live team membership — mirroring the Tasks panel.
+    Reads across the Coordinator's roots — the personal context plus one
+    per live team membership — mirroring the Tasks panel. Returns the full
+    ``LogEvent`` rows so callers can inspect each task's ``data`` (its
+    ``schedule`` / ``trigger`` shape) rather than just existence.
     """
     project = _project_for_coordinator(session, coordinator)
     context_names = [
@@ -1704,13 +1712,40 @@ def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
     context_names.extend(
         f"Teams/{team_id}/{COORDINATOR_TASKS_CONTEXT}" for team_id in team_ids
     )
-    row = session.scalar(
-        project_scoped_log_events(project.id, LogEvent.id)
-        .join(Context, Context.id == LogEventContext.context_id)
-        .where(Context.name.in_(context_names))
-        .limit(1),
+    return list(
+        session.scalars(
+            project_scoped_log_events(project.id, LogEvent)
+            .join(Context, Context.id == LogEventContext.context_id)
+            .where(Context.name.in_(context_names)),
+        ),
     )
-    return row is not None
+
+
+def _has_scheduled_mission(session: Session, *, coordinator: Assistant) -> bool:
+    """Launch-a-mission step: a schedule-bearing task exists.
+
+    Completion proof for the "boomerang" beat — the user set up a task that
+    reaches back out on its own. Kept distinct from the tripwire beat by
+    matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
+    so arming a tripwire never ticks this row.
+    """
+    return any(
+        isinstance(row.data, dict) and row.data.get("schedule")
+        for row in _coordinator_task_rows(session, coordinator=coordinator)
+    )
+
+
+def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
+    """Arm-a-tripwire step: a trigger-bearing task exists.
+
+    Completion proof for the "tripwire" beat — the user armed a task that
+    fires on an event. Matches only tasks carrying a ``trigger`` so a purely
+    scheduled mission never ticks this row.
+    """
+    return any(
+        isinstance(row.data, dict) and row.data.get("trigger")
+        for row in _coordinator_task_rows(session, coordinator=coordinator)
+    )
 
 
 def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User | None:
@@ -1931,7 +1966,8 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_app_secret,
-        ONBOARDING_STEP_SCHEDULE: _has_scheduled_task,
+        ONBOARDING_STEP_LAUNCH_MISSION: _has_scheduled_mission,
+        ONBOARDING_STEP_ARM_TRIPWIRE: _has_triggerable_task,
     }
     completed: list[str] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:
