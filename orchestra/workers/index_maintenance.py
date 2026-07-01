@@ -49,6 +49,24 @@ Cloud Run Job (weekly reindex - long-running, no HTTP timeout):
    - Env: MAINTENANCE_MODE=full, MAINTENANCE_SKIP_VACUUM=true
    - Task timeout: 3h, Max retries: 0
 
+5. Partition Promotion (weekly) - Move DEFAULT whales into dedicated partitions
+   - Cloud Run Jobs: orchestra-partition-promote (prod),
+     orchestra-staging-partition-promote (staging). Their image is kept current
+     by the "Update promote job image" step in deploy/cloudbuild*.yaml.
+   - Cloud Scheduler: orchestra-partition-promote-scheduler-trigger (+ staging),
+     cron 0 5 * * 0, POST to the job's :run endpoint (oauth default-compute SA).
+   - Env: MAINTENANCE_MODE=promote, MAINTENANCE_PROMOTE_ONLINE=true (non-locking
+     backfill + offline index build + brief cutover), MAINTENANCE_MAX_PROMOTIONS=1,
+     MAINTENANCE_PROMOTION_THRESHOLD=500000, MAINTENANCE_DRY_RUN (see below).
+   - Task timeout: 3h, Max retries: 0.
+   - Arming: created with MAINTENANCE_DRY_RUN=true so scheduled runs only log the
+     candidate selection. To arm (let it actually promote), flip the flag:
+         gcloud run jobs update orchestra-partition-promote \
+             --region=europe-west3 --project=gcp-project-saas \
+             --update-env-vars=MAINTENANCE_DRY_RUN=false
+     Owner sub-partitioning stays off (MAINTENANCE_OWNER_PROVISIONING unset)
+     until per-owner DROP PARTITION is wired into the deletion flows.
+
 Usage (standalone):
     python -m orchestra.workers.index_maintenance
 

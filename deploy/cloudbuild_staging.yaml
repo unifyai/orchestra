@@ -72,6 +72,20 @@ steps:
   - run
   - jobs
   - update
+  - $_PROMOTE_JOB_NAME
+  - >-
+    --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+  - '--region=$_JOB_REGION'
+  - '--quiet'
+  id: Update promote job image
+  entrypoint: gcloud
+  waitFor:
+  - 'Push Orchestra'
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  args:
+  - run
+  - jobs
+  - update
   - $_BUILTINS_SEED_JOB_NAME
   - >-
     --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
@@ -304,6 +318,7 @@ substitutions:
   _PLATFORM: managed
   _JOB_NAME: orchestra-staging-migrator
   _REINDEX_JOB_NAME: orchestra-staging-index-maintenance-reindex
+  _PROMOTE_JOB_NAME: orchestra-staging-partition-promote
   _BUILTINS_SEED_JOB_NAME: orchestra-staging-builtins-seed
   _CLOUDSQL_INSTANCE: gcp-project-saas:europe-west3:staging-ssd
 tags:

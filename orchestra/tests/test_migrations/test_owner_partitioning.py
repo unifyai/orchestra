@@ -35,6 +35,7 @@ from orchestra.db.partitioning import (
     relation_exists,
     sub_partition_project_by_owner,
     sub_partition_project_by_owner_online,
+    tune_partition_storage,
 )
 
 PID = 9_900_001
@@ -127,6 +128,60 @@ def test_owner_partition_lifecycle(dbsession) -> None:
     # Dropping an un-promoted owner falls back to a scoped row delete.
     assert drop_owner(conn, PID, "a2") == "row_delete"
     assert _counts(conn) == {"a1": 0, "a2": 0, "sys": 1}
+
+
+def _leaf_reloptions(conn, qualified_leaf: str) -> dict[str, str]:
+    opts = conn.execute(
+        text("SELECT reloptions FROM pg_class WHERE oid = cast(:n AS regclass)"),
+        {"n": qualified_leaf},
+    ).scalar()
+    return dict(opt.split("=", 1) for opt in (opts or []))
+
+
+def test_tune_partition_storage_right_sizes_the_queue(dbsession) -> None:
+    """The high-churn ``embedding_queue`` leaves get small autovacuum thresholds
+    while the growing ``log_event`` leaves keep the large fixed thresholds.
+
+    Builds scratch copies of the two families (search_path scoped to the scratch
+    schema so the real public tables are invisible to the literal-name lookups
+    in ``tune_partition_storage``) and inspects the applied reloptions.
+    """
+    conn = dbsession.connection()
+    conn.execute(text("CREATE SCHEMA queue_tune_scratch"))
+    conn.execute(text("SET search_path TO queue_tune_scratch"))
+
+    conn.execute(
+        text(
+            "CREATE TABLE log_event (project_id int NOT NULL, id bigint NOT NULL, "
+            "owner_key varchar NOT NULL, data jsonb, "
+            "PRIMARY KEY (project_id, id, owner_key)) PARTITION BY LIST (project_id)",
+        ),
+    )
+    conn.execute(text("CREATE TABLE log_event_default PARTITION OF log_event DEFAULT"))
+    conn.execute(
+        text(
+            "CREATE TABLE embedding_queue (project_id int NOT NULL, id bigint NOT NULL, "
+            "owner_key varchar NOT NULL, PRIMARY KEY (project_id, id, owner_key)) "
+            "PARTITION BY LIST (project_id)",
+        ),
+    )
+    conn.execute(
+        text(
+            "CREATE TABLE embedding_queue_default PARTITION OF embedding_queue DEFAULT",
+        ),
+    )
+
+    tune_partition_storage(conn)
+
+    queue = _leaf_reloptions(conn, "queue_tune_scratch.embedding_queue_default")
+    log_event = _leaf_reloptions(conn, "queue_tune_scratch.log_event_default")
+
+    assert queue["autovacuum_vacuum_threshold"] == "1000"
+    assert queue["autovacuum_analyze_threshold"] == "1000"
+    assert queue["autovacuum_vacuum_scale_factor"] == "0.02"
+    # The large log partitions keep the size-independent fixed thresholds.
+    assert log_event["autovacuum_vacuum_threshold"] == "50000"
+    assert log_event["autovacuum_vacuum_scale_factor"] == "0"
 
 
 def _public_index_names(conn, table: str) -> list[str]:
