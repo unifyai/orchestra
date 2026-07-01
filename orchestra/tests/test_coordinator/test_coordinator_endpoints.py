@@ -91,6 +91,7 @@ async def _create_org(
     organization_payload = response.json()
     coordinator_response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
+        params={"organization_id": organization_payload["id"]},
         headers=owner["headers"],
     )
     assert coordinator_response.status_code in {
@@ -366,43 +367,21 @@ def _assert_coordinator_provisioned(
     coordinator = dbsession.get(Assistant, coordinator_id)
     assert coordinator is not None
     assert coordinator.is_coordinator is True
-    assert coordinator.organization_id is None
+    assert coordinator.organization_id == org_data["id"]
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
     assert coordinator.about == ""
     assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
     assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
-    org_scoped_coordinator = dbsession.scalar(
+    only_org_coordinator = dbsession.scalar(
         select(Assistant).where(
             Assistant.organization_id == org_data["id"],
             Assistant.is_coordinator.is_(True),
         ),
     )
-    assert org_scoped_coordinator is not None
-    assert org_scoped_coordinator.agent_id != coordinator.agent_id
-    assert org_scoped_coordinator.is_coordinator is True
-    assert org_scoped_coordinator.organization_id == org_data["id"]
-    assert org_scoped_coordinator.user_id == owner_user_id
-    assert (
-        org_scoped_coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
-    )
-    assert (
-        org_scoped_coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    )
-    assert org_scoped_coordinator.about == ""
-    assert org_scoped_coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
-    assert org_scoped_coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
-    assert {
-        (membership.contact_id, membership.relationship)
-        for membership in _personal_memberships(
-            dbsession,
-            assistant_id=coordinator.agent_id,
-        )
-    } == {
-        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
-        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
-    }
+    assert only_org_coordinator is not None
+    assert only_org_coordinator.agent_id == coordinator.agent_id
 
     resource_access_dao = ResourceAccessDAO(dbsession)
     assert resource_access_dao.check_user_permission(
@@ -411,20 +390,9 @@ def _assert_coordinator_provisioned(
         coordinator.agent_id,
         "assistant:write",
     )
-    assert resource_access_dao.check_user_permission(
-        owner_user_id,
-        "assistant",
-        org_scoped_coordinator.agent_id,
-        "assistant:write",
-    )
     _assert_owner_contact_row(
         dbsession,
         coordinator=coordinator,
-        owner_user_id=owner_user_id,
-    )
-    _assert_owner_contact_row(
-        dbsession,
-        coordinator=org_scoped_coordinator,
         owner_user_id=owner_user_id,
     )
 
@@ -469,6 +437,7 @@ async def test_admin_create_organization_provisions_coordinator_without_implicit
     assert "coordinator_id" not in org_data
     coordinator_response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
+        params={"organization_id": org_data["id"]},
         headers=owner["headers"],
     )
     assert coordinator_response.status_code in {

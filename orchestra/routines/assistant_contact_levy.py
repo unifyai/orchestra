@@ -38,7 +38,6 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
@@ -50,6 +49,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.routines.assistant_contact_notifications import (
     LEVY_INSUFFICIENT_CREDITS_SUBJECT,
     build_insufficient_credits_email,
+    get_account_label_for_ba,
     get_notification_emails_for_ba,
     send_notification_emails_sync,
     set_last_notification_day,
@@ -131,6 +131,8 @@ def _get_billing_account_for_assistant(
 
     # Personal assistant
     user = session.query(User).filter(User.id == assistant.user_id).first()
+    if user and user.personal_workspace_disabled_at is not None:
+        return None
     if user and user.billing_account_id:
         return (
             session.query(BillingAccount)
@@ -523,7 +525,7 @@ def _send_day1_notification(
             send_notification_emails_sync(
                 recipients,
                 LEVY_INSUFFICIENT_CREDITS_SUBJECT,
-                build_insufficient_credits_email(),
+                build_insufficient_credits_email(get_account_label_for_ba(session, ba)),
             )
             logger.info(
                 "Day-1 insufficient credits notification sent for BA %d " "to %s.",

@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import BillingAccount, BillingMode
+from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,11 @@ def get_billing_entity(
     ba_dao = BillingAccountDAO(session)
 
     if organization_id is None:
+        if personal_workspace_is_disabled(session, user_id):
+            raise ValueError(
+                "Personal workspace is disabled for organization members.",
+            )
+
         # Personal context – bill the user directly
         ba = ba_dao.resolve_for_user(user_id)
         if ba is None:

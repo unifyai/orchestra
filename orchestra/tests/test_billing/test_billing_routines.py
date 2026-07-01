@@ -26,7 +26,7 @@ Covers:
 
 from __future__ import annotations
 
-import calendar
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -37,7 +37,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     AssistantContactCost,
-    BillingAccount,
     DemoAssistantMeta,
     Organization,
     Recharge,
@@ -148,6 +147,32 @@ class TestLevyUnbillableContacts:
 
         assert result.total_contacts_billed == 0
         assert result.accounts_processed == 0
+
+    def test_disabled_personal_workspace_contacts_skipped(self, dbsession: Session):
+        """Personal contacts for disabled workspaces are not billed."""
+        ba = make_billing_account(dbsession, credits=10)
+        user = make_user(dbsession, "disabled_personal_u1", ba)
+        user.personal_workspace_disabled_at = datetime.now(timezone.utc)
+        user.personal_workspace_disabled_reason = "organization_membership"
+        asst = make_assistant(dbsession, user.id, first_name="DisabledPersonal")
+        contact = make_contact(
+            dbsession,
+            asst.agent_id,
+            contact_type="whatsapp",
+            contact_value="+15553019999",
+            provider="twilio",
+            country_code=None,
+        )
+        dbsession.flush()
+
+        result = levy_provisioned_resources(2026, 3, session=dbsession)
+
+        assert result.total_contacts_billed == 0
+        assert result.accounts_processed == 0
+        dbsession.refresh(ba)
+        dbsession.refresh(contact)
+        assert ba.credits == Decimal("10")
+        assert contact.last_billed_month is None
 
 
 # ============================================================================
@@ -3827,10 +3852,7 @@ class TestCreditGrantExpirySweep:
 
     def test_sweep_routine_forfeits_expired_grants(self, dbsession: Session) -> None:
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-        from orchestra.lib.credit_grants import (
-            GRANT_KIND_TRIAL,
-            grant_expiring_credits,
-        )
+        from orchestra.lib.credit_grants import GRANT_KIND_TRIAL, grant_expiring_credits
         from orchestra.routines.credit_grant_expiry_sweep import sweep_expired_grants
 
         _u1, ba1 = make_user_with_billing(dbsession, "sweep_a")
@@ -3885,10 +3907,7 @@ class TestCreditExpiryReminder:
         dbsession: Session,
         monkeypatch,
     ) -> None:
-        from orchestra.lib.credit_grants import (
-            GRANT_KIND_TRIAL,
-            grant_expiring_credits,
-        )
+        from orchestra.lib.credit_grants import GRANT_KIND_TRIAL, grant_expiring_credits
         from orchestra.routines.credit_expiry_reminder import (
             send_credit_expiry_reminders,
         )
@@ -3922,10 +3941,7 @@ class TestCreditExpiryReminder:
         dbsession: Session,
         monkeypatch,
     ) -> None:
-        from orchestra.lib.credit_grants import (
-            GRANT_KIND_PLAN,
-            grant_expiring_credits,
-        )
+        from orchestra.lib.credit_grants import GRANT_KIND_PLAN, grant_expiring_credits
         from orchestra.routines.credit_expiry_reminder import (
             send_credit_expiry_reminders,
         )
@@ -3957,10 +3973,7 @@ class TestCreditExpiryReminder:
         dbsession: Session,
         monkeypatch,
     ) -> None:
-        from orchestra.lib.credit_grants import (
-            GRANT_KIND_PLAN,
-            grant_expiring_credits,
-        )
+        from orchestra.lib.credit_grants import GRANT_KIND_PLAN, grant_expiring_credits
         from orchestra.routines.credit_expiry_reminder import (
             send_credit_expiry_reminders,
         )

@@ -112,6 +112,7 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.org_wide_sharing_service import (
     enroll_assistant_in_org_wide_team,
 )
+from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.services.team_membership_refresh_service import (
@@ -4543,6 +4544,11 @@ async def transfer_assistant_to_personal(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Must use an organization API key to transfer org assistants.",
+        )
+    if personal_workspace_is_disabled(session, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Personal workspace is disabled for organization members.",
         )
 
     # Get the org assistant

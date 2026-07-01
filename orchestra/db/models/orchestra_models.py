@@ -877,6 +877,14 @@ class User(Base):
     # Toggles managed by usage quotas
     queries_enabled = Column(Boolean, nullable=False, server_default="true")
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
+    personal_workspace_disabled_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    personal_workspace_disabled_reason = Column(Text, nullable=True)
+    personal_workspace_disabled_org_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     store_prompts = Column(
         Boolean,
         nullable=False,
