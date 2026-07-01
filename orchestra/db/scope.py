@@ -435,3 +435,108 @@ def backfill_context_owners(conn: Connection, batch: int = 5000) -> int:
             updated += 1
         last_id = rows[-1][0]
     return updated
+
+
+def delete_events_mirror_logs(
+    conn: Connection,
+    batch: int = 1000,
+    dry_run: bool = False,
+) -> int:
+    """Delete the redundant base ``Events`` mirror rows left by the old dual-write.
+
+    Unity's EventBus used to write every event twice: once to the base context
+    ``{user}/{assistant}/Events`` (a ``payload_json`` blob) and once to the
+    per-type context ``{user}/{assistant}/Events/{Type}`` (payload fields spread
+    into columns). Only the per-type copy is read now, so the base copies are
+    pure duplication (~half of a user's event rows). This removes them.
+
+    It is driven from the (small) set of base ``Events`` contexts -- exactly
+    those whose name is ``Events`` or ends in ``/Events`` (never the ``/Events/``
+    children) -- and deletes their ``log_event`` / ``log_event_context`` /
+    ``log_unique_constraint`` rows in ``context_id``-scoped, id-batched passes.
+    Every batch is served by ``idx_log_event_context_context_id`` plus
+    ``project_id`` partition pruning, never a whole-table scan, and the base
+    ``context`` row itself is retained (EventBus recreates it idempotently).
+
+    Run under an **autocommit** connection so each batch commits independently;
+    idempotent and resumable (a re-run simply finds fewer remaining rows). With
+    ``dry_run`` it only counts the rows that would be deleted and returns without
+    mutating anything. Returns the number of ``log_event`` rows removed (or that
+    would be removed, for ``dry_run``). Intended as a standalone out-of-band job,
+    not a deploy migration.
+    """
+    base_ctxs = conn.execute(
+        text(
+            "SELECT id, project_id FROM context "
+            "WHERE name = 'Events' OR name LIKE '%/Events'",
+        ),
+    ).all()
+    logger.info(
+        "delete_events_mirror_logs: %s base Events context(s), batch=%s, dry_run=%s",
+        len(base_ctxs),
+        batch,
+        dry_run,
+    )
+
+    total = 0
+    for ctx_id, pid in base_ctxs:
+        params = {"pid": pid, "ctx": ctx_id}
+        if dry_run:
+            n = conn.execute(
+                text(
+                    "SELECT count(*) FROM log_event_context "
+                    "WHERE project_id = :pid AND context_id = :ctx",
+                ),
+                params,
+            ).scalar()
+            total += int(n or 0)
+            continue
+
+        while True:
+            ids = (
+                conn.execute(
+                    text(
+                        "SELECT log_event_id FROM log_event_context "
+                        "WHERE project_id = :pid AND context_id = :ctx "
+                        "LIMIT :lim",
+                    ),
+                    {**params, "lim": batch},
+                )
+                .scalars()
+                .all()
+            )
+            if not ids:
+                break
+            id_params = {**params, "ids": list(ids)}
+            # Delete by (project_id, id): prunes to the project partition and
+            # uses the log_event id index, independent of owner_key labelling.
+            conn.execute(
+                text(
+                    "DELETE FROM log_event "
+                    "WHERE project_id = :pid AND id = ANY(:ids)",
+                ),
+                id_params,
+            )
+            conn.execute(
+                text(
+                    "DELETE FROM log_event_context "
+                    "WHERE project_id = :pid AND context_id = :ctx "
+                    "AND log_event_id = ANY(:ids)",
+                ),
+                id_params,
+            )
+            conn.execute(
+                text(
+                    "DELETE FROM log_unique_constraint "
+                    "WHERE context_id = :ctx AND log_event_id = ANY(:ids)",
+                ),
+                id_params,
+            )
+            total += len(ids)
+        logger.info(
+            "delete_events_mirror_logs: context %s (project %s) done; running total=%s",
+            ctx_id,
+            pid,
+            total,
+        )
+    return total
