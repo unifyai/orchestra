@@ -3687,6 +3687,65 @@ class TestCallSessionEndpoints:
             == 1
         )
 
+    async def test_active_call_endpoint_tracks_live_terminal_and_window(
+        self,
+        client: AsyncClient,
+        test_assistant: Assistant,
+    ):
+        aid = test_assistant.agent_id
+
+        async def _upsert(status_value: str) -> None:
+            resp = await client.post(
+                "/v0/admin/phone/call-session",
+                json={
+                    "provider": "twilio",
+                    "provider_call_sid": "CA_active_call_probe",
+                    "channel": "phone",
+                    "assistant_id": aid,
+                    "from_number": "+15550100002",
+                    "to_number": "+15550100001",
+                    "pool_number": "+15550100002",
+                    "conference_name": "",
+                    "livekit_room": "unity_room_active_call_probe",
+                    "status": status_value,
+                },
+                headers=ADMIN_HEADERS,
+            )
+            assert resp.status_code == status.HTTP_200_OK, resp.text
+
+        async def _active(within_minutes: int | None = None) -> dict:
+            params = {"assistant_id": aid}
+            if within_minutes is not None:
+                params["within_minutes"] = within_minutes
+            resp = await client.get(
+                "/v0/admin/phone/active-call",
+                params=params,
+                headers=ADMIN_HEADERS,
+            )
+            assert resp.status_code == status.HTTP_200_OK, resp.text
+            return resp.json()
+
+        # No call session yet -> inactive.
+        assert await _active() == {"assistant_id": aid, "active": False, "count": 0}
+
+        # A freshly-placed ("created") call is a live call.
+        await _upsert("created")
+        assert (await _active())["active"] is True
+
+        # Answered ("in-progress") is still a live call.
+        await _upsert("in-progress")
+        assert (await _active())["active"] is True
+
+        # A zero-minute window excludes the row (created_at is already in the
+        # past), proving the recency guard so a stuck row cannot pin forever.
+        assert (await _active(within_minutes=0))["active"] is False
+
+        # Terminal outcomes are not live calls.
+        await _upsert("completed")
+        assert (await _active())["active"] is False
+        await _upsert("no-answer")
+        assert await _active() == {"assistant_id": aid, "active": False, "count": 0}
+
 
 class TestSharedCoordinatorEmailRouting:
     """Shared coordinator email routing uses the universal owner model."""

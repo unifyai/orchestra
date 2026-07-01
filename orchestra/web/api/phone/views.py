@@ -1,9 +1,10 @@
 """Admin endpoints for shared phone routing."""
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
@@ -11,6 +12,17 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import CommunicationCallSession
 
 admin_router = APIRouter()
+
+# A PSTN call is considered "in flight" while its routing row carries a
+# non-terminal status. Terminal negative outcomes and completion are excluded
+# so a finished call never keeps pinning the assistant's runtime alive.
+ACTIVE_CALL_STATUSES = ("created", "in-progress")
+
+# Upper bound on how long a call-session row can vouch for a live call. A row
+# older than this is treated as stale even if its status never advanced past
+# ``in-progress`` (the provider hangup callback does not always land), so a
+# stuck row cannot block runtime cleanup indefinitely.
+ACTIVE_CALL_WINDOW_MINUTES = 60
 
 
 class ResolveResponse(BaseModel):
@@ -55,6 +67,12 @@ class CallSessionResponse(BaseModel):
     status: str
     recording_url: Optional[str]
     metadata: Optional[dict]
+
+
+class ActiveCallResponse(BaseModel):
+    assistant_id: int
+    active: bool
+    count: int
 
 
 @admin_router.get("/phone/resolve")
@@ -121,6 +139,39 @@ def upsert_call_session(
     session.commit()
     session.refresh(call_session)
     return _call_session_response(call_session)
+
+
+@admin_router.get("/phone/active-call")
+def has_active_call(
+    assistant_id: int = Query(..., description="Assistant to check for a live call."),
+    within_minutes: int = Query(
+        ACTIVE_CALL_WINDOW_MINUTES,
+        ge=0,
+        description="Only count call-session rows created within this window.",
+    ),
+    session: Session = Depends(get_db_session),
+) -> ActiveCallResponse:
+    """Report whether an assistant currently has a live or pending PSTN call.
+
+    Used by infra maintenance to avoid tearing down a runtime that is mid-call.
+    A call counts as active while its routing row has a non-terminal status and
+    was created within ``within_minutes``.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=within_minutes)
+    count = (
+        session.query(CommunicationCallSession)
+        .filter(
+            CommunicationCallSession.assistant_id == assistant_id,
+            CommunicationCallSession.status.in_(ACTIVE_CALL_STATUSES),
+            CommunicationCallSession.created_at >= cutoff,
+        )
+        .count()
+    )
+    return ActiveCallResponse(
+        assistant_id=assistant_id,
+        active=count > 0,
+        count=count,
+    )
 
 
 @admin_router.get("/phone/call-session/{provider_call_sid}")

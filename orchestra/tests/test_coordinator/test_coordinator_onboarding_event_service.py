@@ -224,34 +224,6 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
 
 
 @pytest.mark.anyio
-async def test_graph_owned_step_event_embeds_interaction_and_render() -> None:
-    """Reference quiz triggers travel through the same gated event path."""
-    coordinator = _fake_coordinator(agent_id=18)
-    with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "set_coordinator_state") as set_state,
-        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
-    ):
-        result = await svc.emit_onboarding_step_event(
-            session=MagicMock(),
-            coordinator=coordinator,
-            step_id="email-reference",
-        )
-
-    assert result is True
-    set_state.assert_called_once()
-    fields = post.await_args.kwargs["extra_event_fields"]
-    assert fields["subtype"] == svc.SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED
-    details = fields["details"]
-    assert details["trigger_step_id"] == "email-reference"
-    assert details["reply_step_id"] == "email-reply"
-    assert details["phase_id"] == "communication"
-    assert details["interaction"]["type"] == "reference_quiz"
-    assert details["onboarding"] == _RENDER
-
-
-@pytest.mark.anyio
 async def test_step_skipped_event_embeds_step_snapshots() -> None:
     """Skip events tell Unity which step was skipped and what is resolved so far."""
     coordinator = _fake_coordinator(agent_id=15)
@@ -275,6 +247,37 @@ async def test_step_skipped_event_embeds_step_snapshots() -> None:
             "step_id": "workspace",
             "completed_step_ids": ["apps"],
             "skipped_step_ids": ["workspace"],
+            "onboarding": _RENDER,
+        },
+    }
+
+
+@pytest.mark.anyio
+async def test_step_reset_event_embeds_step_snapshots() -> None:
+    """Reset events tell Unity which step reverted and carry the fresh render."""
+    coordinator = _fake_coordinator(agent_id=16)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_step_reset_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            step_id="workspace-mailbox",
+            reset_step_ids=["workspace-mailbox"],
+            completed_step_ids=["apps"],
+            skipped_step_ids=[],
+        )
+    assert result is True
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields == {
+        "subtype": svc.SUBTYPE_ONBOARDING_STEP_RESET,
+        "details": {
+            "step_id": "workspace-mailbox",
+            "reset_step_ids": ["workspace-mailbox"],
+            "completed_step_ids": ["apps"],
+            "skipped_step_ids": [],
             "onboarding": _RENDER,
         },
     }
@@ -319,6 +322,64 @@ def test_classify_secret_generic_name_yields_integration_subtype() -> None:
     subtype, msg = svc._classify_secret_for_onboarding("SLACK_BOT_TOKEN")
     assert subtype == svc.SUBTYPE_INTEGRATION_CONNECTED
     assert "SLACK_BOT_TOKEN" in msg
+
+
+@pytest.mark.anyio
+async def test_secret_landed_workspace_narrates_once_on_access_token_create() -> None:
+    """The access-token create is the one write that fires the connect nudge."""
+    coordinator = _fake_coordinator()
+    with patch.object(svc, "maybe_notify_for_assistant_async", new=AsyncMock()) as n:
+        await svc.emit_secret_landed_event(
+            MagicMock(),
+            assistant=coordinator,
+            secret_name="GOOGLE_ACCESS_TOKEN",
+            is_create=True,
+        )
+    n.assert_awaited_once()
+    assert n.await_args.kwargs["subtype"] == svc.SUBTYPE_WORKSPACE_CONNECTED
+
+
+@pytest.mark.anyio
+async def test_secret_landed_workspace_silent_on_access_token_refresh() -> None:
+    """A token refresh updates (not creates) the row, so it must not re-nudge."""
+    coordinator = _fake_coordinator()
+    with patch.object(svc, "maybe_notify_for_assistant_async", new=AsyncMock()) as n:
+        await svc.emit_secret_landed_event(
+            MagicMock(),
+            assistant=coordinator,
+            secret_name="MICROSOFT_ACCESS_TOKEN",
+            is_create=False,
+        )
+    n.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_secret_landed_workspace_silent_on_bundle_secret_create() -> None:
+    """Other secrets in the connect bundle (refresh token, scopes, ...) stay quiet."""
+    coordinator = _fake_coordinator()
+    with patch.object(svc, "maybe_notify_for_assistant_async", new=AsyncMock()) as n:
+        await svc.emit_secret_landed_event(
+            MagicMock(),
+            assistant=coordinator,
+            secret_name="GOOGLE_REFRESH_TOKEN",
+            is_create=True,
+        )
+    n.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_secret_landed_integration_narrates_on_every_write() -> None:
+    """Integration secrets are unaffected by the workspace-connect de-dupe gate."""
+    coordinator = _fake_coordinator()
+    with patch.object(svc, "maybe_notify_for_assistant_async", new=AsyncMock()) as n:
+        await svc.emit_secret_landed_event(
+            MagicMock(),
+            assistant=coordinator,
+            secret_name="SLACK_BOT_TOKEN",
+            is_create=False,
+        )
+    n.assert_awaited_once()
+    assert n.await_args.kwargs["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECTED
 
 
 def test_derive_onboarding_progress_orders_steps_canonically() -> None:

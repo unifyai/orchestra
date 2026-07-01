@@ -21,31 +21,31 @@ class TestGetEnv:
         with patch.dict(
             os.environ,
             {
-                "ORCHESTRA_OPENAI_API_KEY": "prefixed-key",
-                "OPENAI_API_KEY": "unprefixed-key",
+                "ORCHESTRA_OPENROUTER_API_KEY": "prefixed-key",
+                "OPENROUTER_API_KEY": "unprefixed-key",
             },
         ):
-            result = get_env("ORCHESTRA_OPENAI_API_KEY")
+            result = get_env("ORCHESTRA_OPENROUTER_API_KEY")
             assert result == "prefixed-key"
 
     def test_fallback_to_unprefixed(self):
         """Should fall back to unprefixed var when prefixed is not set."""
-        env = {"OPENAI_API_KEY": "unprefixed-key"}
-        # Ensure ORCHESTRA_OPENAI_API_KEY is not set
+        env = {"OPENROUTER_API_KEY": "unprefixed-key"}
+        # Ensure ORCHESTRA_OPENROUTER_API_KEY is not set
         with patch.dict(os.environ, env, clear=True):
-            result = get_env("ORCHESTRA_OPENAI_API_KEY")
+            result = get_env("ORCHESTRA_OPENROUTER_API_KEY")
             assert result == "unprefixed-key"
 
     def test_default_when_neither_set(self):
         """Should return default when neither prefixed nor unprefixed is set."""
         with patch.dict(os.environ, {}, clear=True):
-            result = get_env("ORCHESTRA_OPENAI_API_KEY", "default-value")
+            result = get_env("ORCHESTRA_OPENROUTER_API_KEY", "default-value")
             assert result == "default-value"
 
     def test_none_when_neither_set_no_default(self):
         """Should return None when neither is set and no default provided."""
         with patch.dict(os.environ, {}, clear=True):
-            result = get_env("ORCHESTRA_OPENAI_API_KEY")
+            result = get_env("ORCHESTRA_OPENROUTER_API_KEY")
             assert result is None
 
     def test_no_fallback_for_internal_vars(self):
@@ -72,36 +72,36 @@ class TestGetEnvBool:
 
     def test_true_values(self):
         """Should recognize 'true' and '1' as True."""
-        with patch.dict(os.environ, {"ORCHESTRA_OPENAI_API_KEY": "true"}):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY") is True
+        with patch.dict(os.environ, {"ORCHESTRA_OPENROUTER_API_KEY": "true"}):
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY") is True
 
-        with patch.dict(os.environ, {"ORCHESTRA_OPENAI_API_KEY": "TRUE"}):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY") is True
+        with patch.dict(os.environ, {"ORCHESTRA_OPENROUTER_API_KEY": "TRUE"}):
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY") is True
 
-        with patch.dict(os.environ, {"ORCHESTRA_OPENAI_API_KEY": "1"}):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY") is True
+        with patch.dict(os.environ, {"ORCHESTRA_OPENROUTER_API_KEY": "1"}):
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY") is True
 
     def test_false_values(self):
         """Should return False for other values."""
-        with patch.dict(os.environ, {"ORCHESTRA_OPENAI_API_KEY": "false"}):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY") is False
+        with patch.dict(os.environ, {"ORCHESTRA_OPENROUTER_API_KEY": "false"}):
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY") is False
 
-        with patch.dict(os.environ, {"ORCHESTRA_OPENAI_API_KEY": "0"}):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY") is False
+        with patch.dict(os.environ, {"ORCHESTRA_OPENROUTER_API_KEY": "0"}):
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY") is False
 
-        with patch.dict(os.environ, {"ORCHESTRA_OPENAI_API_KEY": "anything"}):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY") is False
+        with patch.dict(os.environ, {"ORCHESTRA_OPENROUTER_API_KEY": "anything"}):
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY") is False
 
     def test_default_value(self):
         """Should return default when env var is not set."""
         with patch.dict(os.environ, {}, clear=True):
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY", default=True) is True
-            assert get_env_bool("ORCHESTRA_OPENAI_API_KEY", default=False) is False
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY", default=True) is True
+            assert get_env_bool("ORCHESTRA_OPENROUTER_API_KEY", default=False) is False
 
     def test_fallback_with_bool(self):
         """Should use fallback value for bool evaluation."""
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "true"}, clear=True):
-            result = get_env_bool("ORCHESTRA_OPENAI_API_KEY")
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "true"}, clear=True):
+            result = get_env_bool("ORCHESTRA_OPENROUTER_API_KEY")
             assert result is True
 
 
@@ -109,16 +109,22 @@ class TestStandardFallbacks:
     """Tests for the STANDARD_FALLBACKS mapping."""
 
     def test_api_key_fallbacks_exist(self):
-        """OpenAI API key (used for embeddings) should have fallback defined."""
+        """Provider API keys should have fallbacks defined."""
         expected_keys = [
-            "ORCHESTRA_OPENAI_API_KEY",
+            "ORCHESTRA_OPENROUTER_API_KEY",
+            "ORCHESTRA_OPENROUTER_API_BASE",
         ]
         for key in expected_keys:
             assert key in STANDARD_FALLBACKS, f"Missing fallback for {key}"
 
     def test_fallback_values_are_standard_names(self):
         """Fallback values should be the standard (unprefixed) names."""
-        assert STANDARD_FALLBACKS["ORCHESTRA_OPENAI_API_KEY"] == "OPENAI_API_KEY"
+        assert (
+            STANDARD_FALLBACKS["ORCHESTRA_OPENROUTER_API_KEY"] == "OPENROUTER_API_KEY"
+        )
+        assert (
+            STANDARD_FALLBACKS["ORCHESTRA_OPENROUTER_API_BASE"] == "OPENROUTER_API_BASE"
+        )
 
 
 class TestAllProviderApiKeys:
@@ -127,7 +133,8 @@ class TestAllProviderApiKeys:
     @pytest.mark.parametrize(
         "orchestra_key,standard_key",
         [
-            ("ORCHESTRA_OPENAI_API_KEY", "OPENAI_API_KEY"),
+            ("ORCHESTRA_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+            ("ORCHESTRA_OPENROUTER_API_BASE", "OPENROUTER_API_BASE"),
         ],
     )
     def test_api_key_fallback(self, orchestra_key: str, standard_key: str):

@@ -96,6 +96,26 @@ def get_notification_emails_for_ba(
     return emails
 
 
+def get_account_label_for_ba(
+    session: Session,
+    ba: BillingAccount,
+) -> str:
+    """Return a customer-facing label for a billing account."""
+    user = session.query(User).filter(User.billing_account_id == ba.id).first()
+    if user is not None:
+        return "your personal account"
+
+    org = (
+        session.query(Organization)
+        .filter(Organization.billing_account_id == ba.id)
+        .first()
+    )
+    if org is not None:
+        return f"the {org.name} organization account"
+
+    return "your account"
+
+
 # ---------------------------------------------------------------------------
 # Email body builders
 # ---------------------------------------------------------------------------
@@ -110,14 +130,14 @@ _FOOTER = (
 )
 
 
-def build_insufficient_credits_email() -> str:
+def build_insufficient_credits_email(account_label: str = "your account") -> str:
     """Day 1: sent by the levy when credits go negative."""
     return f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #d97706;">Insufficient Credits</h2>
 
-        <p>Your account has been charged for provisioned assistant contact
+        <p>{account_label.capitalize()} has been charged for provisioned assistant contact
         details, but you do not have enough credits to cover the cost.</p>
 
         <p style="color: #d97706;">
@@ -136,14 +156,17 @@ def build_insufficient_credits_email() -> str:
     """
 
 
-def build_warning_email(days_remaining: int) -> str:
+def build_warning_email(
+    days_remaining: int,
+    account_label: str = "your account",
+) -> str:
     """Build the HTML email body for grace-period warnings/reminders."""
     return f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #d97706;">Insufficient Credits – Contact Details at Risk</h2>
 
-        <p>Your account does not have enough credits to maintain your
+        <p>{account_label.capitalize()} does not have enough credits to maintain your
         provisioned assistant contact details.</p>
 
         <p style="color: #d97706;">
@@ -165,7 +188,7 @@ def build_warning_email(days_remaining: int) -> str:
     """
 
 
-def build_deletion_email() -> str:
+def build_deletion_email(account_label: str = "your account") -> str:
     """Build the HTML email body for the deletion notification."""
     return f"""
     <html>
@@ -173,7 +196,7 @@ def build_deletion_email() -> str:
         <h2 style="color: #dc2626;">Contact Details Deleted</h2>
 
         <p>Your provisioned assistant contact details have been deleted due
-        to insufficient credits after a 14-day grace period.</p>
+        to insufficient credits on {account_label} after a 14-day grace period.</p>
 
         <p>The underlying resources (phone numbers, email addresses) have
         been released and <strong>cannot be recovered</strong>. If you need

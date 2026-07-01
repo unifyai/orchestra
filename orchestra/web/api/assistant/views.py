@@ -3,6 +3,7 @@ import base64
 import io
 import logging
 import math
+import os
 import re
 import time
 import urllib.request
@@ -47,7 +48,6 @@ from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.log_queries import log_event_context_join
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS,
     CONTACT_MEMBERSHIP_RELATIONSHIP_SELF,
@@ -95,6 +95,7 @@ from orchestra.services.coordinator_service import (
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
     emit_onboarding_step_event,
+    emit_onboarding_step_reset_event,
     emit_onboarding_step_skipped_event,
     emit_onboarding_step_started_event,
     emit_secret_landed_event,
@@ -112,6 +113,7 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.org_wide_sharing_service import (
     enroll_assistant_in_org_wide_team,
 )
+from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.services.team_cleanup_service import purge_assistant_memberships
 from orchestra.services.team_membership_refresh_service import (
@@ -1645,6 +1647,19 @@ async def update_coordinator_state_endpoint(
             completed_step_ids=completed_step_ids,
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
+    if update.reset_onboarding_step:
+        completed_step_ids = (
+            derive_onboarding_progress(session, coordinator=coordinator)
+            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+            else []
+        )
+        await emit_onboarding_step_reset_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.reset_onboarding_step,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
     session.commit()
     return InfoResponse(
         info=_coordinator_state_response(session, coordinator=coordinator),
@@ -2733,7 +2748,6 @@ async def connect_assistant_account(
     import hashlib
     import hmac as hmac_mod
     import json
-    import os
     from urllib.parse import urlencode
 
     from orchestra.web.api.assistant.scopes import build_scope_string
@@ -2903,8 +2917,6 @@ async def disconnect_assistant_account(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse:
-    import os
-
     import httpx
 
     user_id = request.state.user_id
@@ -2989,6 +3001,7 @@ async def disconnect_assistant_account(
             "GOOGLE_REFRESH_TOKEN",
             "GOOGLE_TOKEN_EXPIRES_AT",
             "GOOGLE_GRANTED_SCOPES",
+            "GOOGLE_ACCOUNT_EMAIL",
         ):
             secret_dao.delete(assistant_id, key)
 
@@ -3014,6 +3027,7 @@ async def disconnect_assistant_account(
             "MICROSOFT_TOKEN_EXPIRES_AT",
             "MICROSOFT_GRANTED_SCOPES",
             "MICROSOFT_TOKEN_SOURCE",
+            "MICROSOFT_ACCOUNT_EMAIL",
         ):
             secret_dao.delete(assistant_id, key)
 
@@ -3107,6 +3121,11 @@ async def get_granted_features(
                 provider="google",
                 features=map_scopes_to_features("google", google_scopes),
                 required_features=REQUIRED_FEATURES["google"],
+                connected_account_email=secret_dao.get(
+                    assistant_id,
+                    "GOOGLE_ACCOUNT_EMAIL",
+                )
+                or None,
             ),
         )
     if ms_scopes:
@@ -3115,6 +3134,11 @@ async def get_granted_features(
                 provider="microsoft",
                 features=map_scopes_to_features("microsoft", ms_scopes),
                 required_features=REQUIRED_FEATURES["microsoft"],
+                connected_account_email=secret_dao.get(
+                    assistant_id,
+                    "MICROSOFT_ACCOUNT_EMAIL",
+                )
+                or None,
             ),
         )
 
@@ -3195,18 +3219,43 @@ async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
         )
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     base = "drive" if provider == "google" else "sharepoint"
-    async with httpx.AsyncClient(timeout=30) as http:
-        resp = await http.get(
-            f"{comms_url}/{base}/{path}",
-            params=params,
-            headers={"Authorization": f"Bearer {admin_key}"},
+    url = f"{comms_url}/{base}/{path}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.get(
+                url,
+                params=params,
+                headers={"Authorization": f"Bearer {admin_key}"},
+            )
+    except httpx.HTTPError as exc:
+        logging.error("Workspace gateway request to %s failed: %s", url, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Workspace gateway is unreachable.",
         )
     if resp.status_code >= 400:
+        logging.error(
+            "Workspace gateway %s returned %s: %s",
+            url,
+            resp.status_code,
+            resp.text[:500],
+        )
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to browse workspace files.",
         )
-    return resp.json()
+    try:
+        return resp.json()
+    except ValueError as exc:
+        logging.error(
+            "Workspace gateway %s returned non-JSON body: %s",
+            url,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Workspace gateway returned an invalid response.",
+        )
 
 
 def _ms_node(raw: dict, drive_id: str) -> WorkspaceFileNode:
@@ -3505,6 +3554,7 @@ async def create_assistant_secret(
         session,
         assistant=assistant,
         secret_name=body.secret_name,
+        is_create=True,
     )
     return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
 
@@ -3568,12 +3618,14 @@ async def update_assistant_secret(
     )
     session.commit()
     # See sibling note on the POST handler — same narration emit, same
-    # gating semantics. Updates also count because the workspace OAuth
-    # refresh path overwrites the existing token row.
+    # gating semantics. Updates pass ``is_create=False`` so the workspace
+    # OAuth refresh path (which overwrites the token row on a schedule) does
+    # not re-narrate the connection; only the first-connect create does.
     await emit_secret_landed_event(
         session,
         assistant=assistant,
         secret_name=secret_name,
+        is_create=False,
     )
     return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
 
@@ -4396,31 +4448,16 @@ async def transfer_assistant_to_org(
 
                 le_dao = LogEventDAO(session)
 
-                # Shared aggregate contexts (Tier 1 ``All/*``, Tier 2
-                # ``User/All/*``) may hold logs from multiple assistants, so only
-                # this assistant's are transferred.
-                shared_contexts = (
-                    session.query(Context)
-                    .filter(
-                        Context.project_id == personal_project.id,
-                        or_(
-                            Context.name.like("All/%"),  # Tier 1: All/*
-                            Context.name.like("%/All/%"),  # Tier 2: User/All/*
-                        ),
-                    )
-                    .all()
-                )
-
-                # Phase 1 -- discover every log to move while it is still in the
-                # personal project, so each lookup carries a single literal
-                # project_id and prunes both partitioned tables. All discovery
-                # must finish BEFORE any reproject: reproject_logs moves a
-                # log_event AND all of its log_event_context rows wholesale, so
-                # moving a log shared between a tier-3 and an aggregate context
-                # would otherwise hide it from a later per-context lookup.
-                tier3_log_ids: list[int] = []
+                # Move the assistant's owner-homogeneous contexts (and every log
+                # they hold) to the org project, keeping the denormalized
+                # partition key (project_id) consistent across log_event and its
+                # child tables (log_event_context / embedding / embedding_queue).
+                # Each lookup carries a literal project_id so it prunes; discovery
+                # finishes before reproject (which moves a log_event and all its
+                # associations wholesale).
+                log_ids: list[int] = []
                 for ctx in contexts_to_transfer:
-                    tier3_log_ids.extend(
+                    log_ids.extend(
                         row[0]
                         for row in session.query(LogEventContext.log_event_id)
                         .filter(
@@ -4429,76 +4466,12 @@ async def transfer_assistant_to_org(
                         )
                         .all()
                     )
-
-                shared_relink: list[tuple[list[int], Context]] = []
-                for shared_ctx in shared_contexts:
-                    assistant_log_ids = [
-                        row[0]
-                        for row in (
-                            session.query(LogEventContext.log_event_id)
-                            .join(LogEvent, log_event_context_join())
-                            .filter(
-                                LogEvent.project_id == personal_project.id,
-                                LogEventContext.context_id == shared_ctx.id,
-                                LogEvent.data["_assistant_id"].astext
-                                == str(assistant_id),
-                            )
-                            .all()
-                        )
-                    ]
-                    if assistant_log_ids:
-                        shared_relink.append((assistant_log_ids, shared_ctx))
-
-                # Phase 2 -- reproject every discovered log to the org project in
-                # one pass, keeping the denormalized partition key (project_id)
-                # consistent across log_event and its child tables
-                # (log_event_context / embedding / embedding_queue).
-                all_log_ids = list(
-                    set(tier3_log_ids)
-                    | {lid for ids, _ in shared_relink for lid in ids},
-                )
-                if all_log_ids:
-                    le_dao.reproject_logs(all_log_ids, org_project.id)
-
-                # Phase 3a -- move the assistant's own (tier-3) contexts to org.
+                if log_ids:
+                    le_dao.reproject_logs(log_ids, org_project.id)
                 for ctx in contexts_to_transfer:
                     ctx.project_id = org_project.id
 
-                # Phase 3b -- point each shared context's relinked rows (now in the
-                # org partition) at the org's copy of that aggregate context.
-                shared_logs_transferred = bool(shared_relink)
-                for assistant_log_ids, shared_ctx in shared_relink:
-                    org_shared_ctx = (
-                        session.query(Context)
-                        .filter(
-                            Context.project_id == org_project.id,
-                            Context.name == shared_ctx.name,
-                        )
-                        .first()
-                    )
-                    if org_shared_ctx:
-                        target_ctx_id = org_shared_ctx.id
-                    else:
-                        new_ctx = Context(
-                            project_id=org_project.id,
-                            name=shared_ctx.name,
-                        )
-                        session.add(new_ctx)
-                        session.flush()
-                        target_ctx_id = new_ctx.id
-
-                    session.query(LogEventContext).filter(
-                        LogEventContext.project_id == org_project.id,
-                        LogEventContext.log_event_id.in_(assistant_log_ids),
-                        LogEventContext.context_id == shared_ctx.id,
-                    ).update(
-                        {LogEventContext.context_id: target_ctx_id},
-                        synchronize_session=False,
-                    )
-
-                logs_transferred = (
-                    len(contexts_to_transfer) > 0 or shared_logs_transferred
-                )
+                logs_transferred = len(contexts_to_transfer) > 0
 
         # Transfer the assistant to org
         transferred = assistant_dao.transfer_to_organization(
@@ -4594,6 +4567,11 @@ async def transfer_assistant_to_personal(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Must use an organization API key to transfer org assistants.",
+        )
+    if personal_workspace_is_disabled(session, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Personal workspace is disabled for organization members.",
         )
 
     # Get the org assistant
@@ -5203,7 +5181,6 @@ async def generate_speech(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
-    openai_service: OpenAIService = Depends(),
 ) -> Response:
     user_id = request.state.user_id
     audio_bytes: bytes
@@ -5231,13 +5208,6 @@ async def generate_speech(
                 stability=request_data.elevenlabs_voice_settings_stability,
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
-        elif request_data.provider == "openai":
-            audio_bytes, content_type = openai_service.generate_speech(
-                text=request_data.text,
-                voice_id=request_data.voice_id,
-                model_id=request_data.model_id or "gpt-4o-mini-tts",
-                output_format=request_data.output_format,
-            )
         else:
             # This case should be prevented by Pydantic's Literal validation
             raise HTTPException(
@@ -5247,7 +5217,7 @@ async def generate_speech(
 
         return Response(content=audio_bytes, media_type=content_type)
 
-    except (CartesiaAPIError, ElevenLabsAPIError, OpenAIAPIError) as e:
+    except (CartesiaAPIError, ElevenLabsAPIError) as e:
         logging.error(
             f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}",
         )
@@ -6134,21 +6104,6 @@ async def animate_video_endpoint(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Image moderation failed: The image was flagged as inappropriate. Reason: {image_analysis.reason}",
-                )
-
-            audio_analysis = openai_service.analyze_audio(
-                audio_url=final_audio_url_for_replicate,
-            )
-            # New check for speech content
-            if not audio_analysis.contains_speech:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Audio moderation failed: No speech was detected in the audio file. Reason: {audio_analysis.reason}",
-                )
-            if audio_analysis.is_nsfw:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Audio moderation failed: The audio was flagged as inappropriate. Reason: {audio_analysis.reason}",
                 )
 
         except OpenAIAPIError as e:

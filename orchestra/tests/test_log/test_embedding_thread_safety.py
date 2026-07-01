@@ -1,13 +1,9 @@
 """
-Tests for OpenAI client thread safety in the sync implementation.
+Tests for OpenRouter client thread safety in the sync implementation.
 
-Previously, there was a bug where a shared global AsyncOpenAI client's
-connection pool got confused when called from different event loops via
-the _run_async_in_sync bridge, causing PoolTimeout errors.
-
-The fix: Use a sync OpenAI client (openai.OpenAI) which uses httpx.Client
-with thread-safe connection pooling. No event loops are involved, so
-the pool contention bug cannot occur.
+The embedding path uses a shared sync httpx.Client with thread-safe
+connection pooling. No event loops are involved, so pool contention across
+async test contexts should not occur.
 
 This test verifies that concurrent embedding calls from multiple threads
 complete successfully without hanging.
@@ -21,7 +17,7 @@ import pytest
 
 class TestSyncClientThreadSafety:
     """
-    Tests verifying that the sync OpenAI client handles concurrent
+    Tests verifying that the sync OpenRouter client handles concurrent
     calls from multiple threads without issues.
     """
 
@@ -36,17 +32,15 @@ class TestSyncClientThreadSafety:
         2. Makes concurrent sync embedding calls from a thread pool
         3. All calls should complete without hanging or pool contention
 
-        Before the sync refactor, this would hang with pool contention due to
-        the AsyncOpenAI client being used from multiple event loops.
-        After the refactor, the sync OpenAI client handles this correctly.
+        The sync OpenRouter client should handle this correctly.
         """
         from orchestra.web.api.log.python2SQL.helpers import (
-            OPENAI_API_KEY,
+            OPENROUTER_API_KEY,
             _get_embeddings_batch,
         )
 
-        if not OPENAI_API_KEY:
-            pytest.skip("No OpenAI API key configured")
+        if not OPENROUTER_API_KEY:
+            pytest.skip("No OpenRouter API key configured")
 
         num_concurrent_calls = 10
         texts_per_call = ["test text for embedding"] * 2
@@ -113,21 +107,21 @@ class TestSyncClientThreadSafety:
 
     def test_sync_client_is_shared_across_threads(self):
         """
-        Verify that the sync OpenAI client is properly shared and reused
+        Verify that the sync OpenRouter client is properly shared and reused
         across multiple threads (single global instance).
         """
         from orchestra.web.api.log.python2SQL.helpers import (
-            OPENAI_API_KEY,
-            _get_openai_client,
+            OPENROUTER_API_KEY,
+            _get_openrouter_client,
         )
 
-        if not OPENAI_API_KEY:
-            pytest.skip("No OpenAI API key configured")
+        if not OPENROUTER_API_KEY:
+            pytest.skip("No OpenRouter API key configured")
 
         observed_client_ids = []
 
         def get_client_id():
-            client = _get_openai_client()
+            client = _get_openrouter_client()
             return id(client)
 
         # Get client IDs from multiple threads

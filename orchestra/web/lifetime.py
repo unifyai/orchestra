@@ -4,7 +4,6 @@ from typing import Callable
 
 from fastapi import FastAPI
 from google.cloud import aiplatform
-from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -15,7 +14,7 @@ from orchestra.observability.inactivity_shutdown import (
     start_inactivity_monitor,
     stop_inactivity_monitor,
 )
-from orchestra.observability.otel_setup import flush_opentelemetry, stop_opentelemetry
+from orchestra.observability.otel_setup import stop_opentelemetry
 from orchestra.settings import settings
 from orchestra.web.api.utils.resource_limits_instrumentation import instrument_db_pool
 
@@ -23,10 +22,6 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store the engine instance
 _engine = None
-
-# Tracks whether the OpenAI instrumentation has been added on top of the
-# kernel's OTel setup. Idempotent across multiple app instances in tests.
-_openai_instrumented = False
 
 
 def _setup_db(app: FastAPI) -> None:  # pragma: no cover
@@ -118,25 +113,12 @@ def get_engine():
 
 
 def setup_opentelemetry(app: FastAPI) -> None:
-    """Set up the kernel OTel stack and layer the platform's OpenAI instrumentation.
-
-    The TracerProvider, exporters, and per-app FastAPI/SQLAlchemy/httpx
-    instrumentation are owned by orchestra. The OpenAI instrumentation is
-    a platform-only addition (the kernel does not call OpenAI directly).
-    """
-    global _openai_instrumented
+    """Set up the kernel OTel stack and SQLAlchemy instrumentation."""
 
     otel_setup.setup_opentelemetry(app)
 
     if not settings.otel_enabled or not otel_setup._otel_tracer_provider_initialized:
         return
-
-    if not _openai_instrumented:
-        from opentelemetry.trace import get_tracer_provider
-
-        OpenAIInstrumentor().instrument(tracer_provider=get_tracer_provider())
-        _openai_instrumented = True
-        logger.info("Instrumented OpenAI client for tracing (platform)")
 
     try:
         SQLAlchemyInstrumentor().uninstrument()

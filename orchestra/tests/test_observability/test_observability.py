@@ -426,12 +426,6 @@ class TestInstrumentorInstallation:
 
         assert HTTPXClientInstrumentor is not None
 
-    def test_openai_instrumentor_import(self):
-        """Verify OpenAIInstrumentor can be imported."""
-        from opentelemetry.instrumentation.openai import OpenAIInstrumentor
-
-        assert OpenAIInstrumentor is not None
-
     def test_sqlalchemy_instrumentor_import(self):
         """Verify SQLAlchemyInstrumentor can be imported."""
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
@@ -445,22 +439,14 @@ class TestInstrumentorInstallation:
         assert FastAPIInstrumentor is not None
 
     def test_lifetime_imports_all_instrumentors(self):
-        """Verify the OTel instrumentors are reachable in their post-split locations.
-
-        After the orchestra split, lifetime.py owns only the
-        platform-specific OpenAI instrumentation. The HTTPX and SQLAlchemy
-        instrumentors moved to orchestra.observability.otel_setup,
-        which lifetime.py delegates to.
-        """
+        """Verify the OTel instrumentors are reachable in their post-split locations."""
         from orchestra.observability.otel_setup import (
             FastAPIInstrumentor,
             HTTPXClientInstrumentor,
             SQLAlchemyInstrumentor,
         )
-        from orchestra.web.lifetime import OpenAIInstrumentor
 
         assert HTTPXClientInstrumentor is not None
-        assert OpenAIInstrumentor is not None
         assert SQLAlchemyInstrumentor is not None
         assert FastAPIInstrumentor is not None
 

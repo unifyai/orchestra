@@ -245,8 +245,8 @@ jobs:
         GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.gcp-auth.outputs.credentials_file_path }}
         ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
         ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
-        # OpenAI API key (used for embeddings in log search)
-        ORCHESTRA_OPENAI_API_KEY: ${{ secrets.ORCHESTRA_OPENAI_API_KEY }}
+        # OpenRouter API key (used for OpenAI-compatible model calls)
+        ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         # Orchestra-specific configuration
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
         AUTH_ACCOUNT_API_KEY: ${{ vars.AUTH_ACCOUNT_API_KEY }}

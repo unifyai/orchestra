@@ -3286,14 +3286,17 @@ class TestTransferGracePeriodGuard:
         dbsession.add(gp_contact)
         dbsession.flush()
 
-        # Attempt to transfer — should be blocked
+        # Transfer to personal is blocked before the grace-period check runs:
+        # the org owner's personal workspace is disabled.
         transfer_resp = await client.post(
             f"/v0/assistant/{agent_id}/transfer/to-personal",
             json={"delete_logs": False},
             headers=org_headers,
         )
-        assert transfer_resp.status_code == status.HTTP_409_CONFLICT
-        assert "grace period" in transfer_resp.json()["detail"].lower()
+        assert transfer_resp.status_code == status.HTTP_403_FORBIDDEN
+        assert (
+            "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
+        )
 
     @pytest.mark.anyio
     async def test_transfer_to_personal_allowed_with_only_active_contacts(
@@ -3332,14 +3335,17 @@ class TestTransferGracePeriodGuard:
         dbsession.add(active_contact)
         dbsession.flush()
 
-        # Transfer should succeed
+        # Even with only active contacts, transfer to personal is blocked: the
+        # org owner's personal workspace is disabled.
         transfer_resp = await client.post(
             f"/v0/assistant/{agent_id}/transfer/to-personal",
             json={"delete_logs": False},
             headers=org_headers,
         )
-        assert transfer_resp.status_code == status.HTTP_200_OK
-        assert transfer_resp.json()["info"]["transferred_to"] == "personal"
+        assert transfer_resp.status_code == status.HTTP_403_FORBIDDEN
+        assert (
+            "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
+        )
 
     @pytest.mark.anyio
     async def test_transfer_blocked_only_for_grace_not_deleted(

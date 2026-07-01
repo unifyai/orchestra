@@ -57,6 +57,9 @@ from orchestra.services.org_wide_sharing_service import (
     enable_org_wide_sharing,
     enroll_member_in_org_wide_team,
 )
+from orchestra.services.personal_workspace_service import (
+    disable_personal_workspace_for_org_member,
+)
 from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
 from orchestra.services.team_cleanup_service import (
     purge_assistant_overlay as purge_team_member_overlay,
@@ -84,10 +87,10 @@ from orchestra.web.api.organization.schema import (
     OrganizationOwnershipTransfer,
     OrganizationResponse,
     OrganizationUpdate,
-    OrgSharingSettingsRequest,
-    OrgSharingSettingsResponse,
     OrgMFASettingsRequest,
     OrgMFASettingsResponse,
+    OrgSharingSettingsRequest,
+    OrgSharingSettingsResponse,
     OrgSpendingLimitRequest,
     OrgSpendingLimitResponse,
     OrgSpendResponse,
@@ -188,16 +191,6 @@ async def _create_organization_with_owner_coordinator(
             organization_id=org.id,
         )
 
-        personal_coordinator, created_personal_coordinator = (
-            await ensure_workspace_coordinator_provisioned(
-                session,
-                user_id=owner_user_id,
-                organization_id=None,
-            )
-        )
-        if created_personal_coordinator:
-            created_coordinator_ids.append(personal_coordinator.agent_id)
-
         org_coordinator, created_org_coordinator = (
             await ensure_workspace_coordinator_provisioned(
                 session,
@@ -207,6 +200,12 @@ async def _create_organization_with_owner_coordinator(
         )
         if created_org_coordinator:
             created_coordinator_ids.append(org_coordinator.agent_id)
+
+        disable_personal_workspace_for_org_member(
+            session,
+            owner_user_id,
+            org.id,
+        )
 
         sharing_refresh_payloads = []
         if data_sharing_mode == "shared":
@@ -951,6 +950,12 @@ async def add_organization_member(
         )
         if created_org_coordinator:
             created_org_coordinator_id = org_coordinator.agent_id
+
+        disable_personal_workspace_for_org_member(
+            session,
+            member_data.user_id,
+            organization_id,
+        )
 
         if org.org_wide_sharing_enabled:
             sharing_result = await enroll_member_in_org_wide_team(
@@ -2009,6 +2014,12 @@ async def accept_invite(
         )
         if created_org_coordinator:
             created_org_coordinator_id = org_coordinator.agent_id
+
+        disable_personal_workspace_for_org_member(
+            session,
+            user_id,
+            invite.organization_id,
+        )
 
         if org.org_wide_sharing_enabled:
             sharing_result = await enroll_member_in_org_wide_team(

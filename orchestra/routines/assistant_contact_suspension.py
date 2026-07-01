@@ -44,6 +44,7 @@ from orchestra.routines.assistant_contact_notifications import (
     NOTIFICATION_SCHEDULE,
     build_deletion_email,
     build_warning_email,
+    get_account_label_for_ba,
     get_last_notification_day,
     get_notification_emails_for_ba,
     send_notification_emails,
@@ -463,10 +464,11 @@ async def _process_ba_grace_contacts(
     if had_deletions:
         try:
             notification_emails = get_notification_emails_for_ba(session, ba)
+            account_label = get_account_label_for_ba(session, ba)
             await send_notification_emails(
                 notification_emails,
                 DELETION_SUBJECT,
-                build_deletion_email(),
+                build_deletion_email(account_label),
             )
             ar.deletion_email_sent = True
         except Exception as e:
@@ -483,10 +485,11 @@ async def _process_ba_grace_contacts(
 
         try:
             notification_emails = get_notification_emails_for_ba(session, ba)
+            account_label = get_account_label_for_ba(session, ba)
             await send_notification_emails(
                 notification_emails,
                 schedule_entry["subject"],
-                build_warning_email(schedule_entry["days_remaining"]),
+                build_warning_email(schedule_entry["days_remaining"], account_label),
             )
 
             # Record that this notification day was sent

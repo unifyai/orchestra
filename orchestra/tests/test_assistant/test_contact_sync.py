@@ -90,7 +90,7 @@ async def test_user_timezone_sync_updates_contact_log(
     # Create a Contact log with email_address and is_system=True
     log_payload = {
         "project_name": "Assistants",
-        "context": "All/Contacts",
+        "context": f"{user['id']}/{9000001}/Contacts",
         "entries": [
             {
                 "email_address": user["email"],  # matches the user's email
@@ -121,7 +121,7 @@ async def test_user_timezone_sync_updates_contact_log(
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{9000001}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.status_code == 200
@@ -144,7 +144,7 @@ async def test_user_timezone_sync_to_multiple_projects(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{9000001}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -173,7 +173,7 @@ async def test_user_timezone_sync_to_multiple_projects(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{9000001}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -201,13 +201,13 @@ async def test_user_timezone_sync_to_multiple_projects(
 
     # Verify both Contact logs were updated
     logs_personal = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{9000001}/Contacts",
         headers=user["headers"],
     )
     assert logs_personal.json()["logs"][0]["entries"]["timezone"] == "Asia/Tokyo"
 
     logs_org = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{9000001}/Contacts",
         headers=org_headers,
     )
     assert logs_org.json()["logs"][0]["entries"]["timezone"] == "Asia/Tokyo"
@@ -249,7 +249,7 @@ async def test_user_timezone_sync_no_matching_logs(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{9000001}/Contacts",
             "entries": [
                 {
                     "email_address": "different_user@test.com",
@@ -278,7 +278,7 @@ async def test_user_timezone_sync_no_matching_logs(
 
     # Verify the other user's log was not changed
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{9000001}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.json()["logs"][0]["entries"]["timezone"] == "UTC"
@@ -303,7 +303,7 @@ async def test_user_bio_sync_updates_contact_log(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{9000001}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -333,7 +333,7 @@ async def test_user_bio_sync_updates_contact_log(
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{9000001}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.json()["logs"][0]["entries"]["bio"] == "Updated bio for testing"
@@ -353,7 +353,7 @@ async def test_user_bio_and_timezone_sync_together(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{9000001}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -385,7 +385,7 @@ async def test_user_bio_and_timezone_sync_together(
 
     # Verify both fields updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{9000001}/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
@@ -425,7 +425,7 @@ async def test_assistant_timezone_sync_updates_contact_log(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "_assistant": str(agent_id),
@@ -448,7 +448,7 @@ async def test_assistant_timezone_sync_updates_contact_log(
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.status_code == 200
@@ -505,7 +505,7 @@ async def test_assistant_timezone_sync_filters_by_resolved_self_contact_id(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
                 {
@@ -528,7 +528,7 @@ async def test_assistant_timezone_sync_filters_by_resolved_self_contact_id(
 
     # Verify only the resolved self contact was updated.
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
@@ -577,7 +577,7 @@ async def test_assistant_bio_sync_updates_contact_log(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {"_assistant": str(agent_id), "contact_id": 0, "bio": "Original bio"},
             ],
@@ -595,7 +595,7 @@ async def test_assistant_bio_sync_updates_contact_log(
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
@@ -638,7 +638,7 @@ async def test_assistant_bio_and_timezone_sync_together(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "_assistant": str(agent_id),
@@ -665,7 +665,7 @@ async def test_assistant_bio_and_timezone_sync_together(
 
     # Verify both fields updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
@@ -725,7 +725,7 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {"_assistant": str(agent_id), "contact_id": 0, "timezone": "UTC"},
             ],
@@ -745,7 +745,7 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=org_headers,
     )
     assert logs_resp.status_code == 200
@@ -775,7 +775,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     1. User A creates an org
     2. Users B and C are added as members
     3. A hires an org assistant (creates Assistants project)
-    4. Contact logs for A, B, C are created in All/Contacts with is_system=True
+    4. Contact logs for A, B, C are created in each assistant Contacts context with is_system=True
     5. B updates their timezone/bio via /admin/assistant/update-user
     6. Verify B's Contact in the org's Assistants project is updated
     """
@@ -831,13 +831,13 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     assert assistant_resp.status_code == 200
     agent_id = assistant_resp.json()["info"]["agent_id"]
 
-    # Create Contact logs for all members (A, B, C) in org's All/Contacts
+    # Create Contact logs for all members (A, B, C) in the org assistant Contacts context
     # These would normally be created when assistants are hired
     await client.post(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{owner['id']}/{9000001}/Contacts",
             "entries": [
                 {
                     "email_address": owner["email"],
@@ -870,7 +870,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
 
     # Verify all contacts exist
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={owner['id']}/{9000001}/Contacts",
         headers=org_headers,
     )
     assert logs_resp.status_code == 200
@@ -891,7 +891,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
 
     # Verify B's Contact in org's Assistants project was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={owner['id']}/{9000001}/Contacts",
         headers=org_headers,
     )
     assert logs_resp.status_code == 200
@@ -972,7 +972,7 @@ async def test_sync_with_null_name_fields(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -998,7 +998,7 @@ async def test_sync_with_null_name_fields(
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.json()["logs"][0]["entries"]["timezone"] == "Europe/London"
@@ -1045,7 +1045,7 @@ async def test_sync_sets_null_timezone(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -1076,7 +1076,7 @@ async def test_sync_sets_null_timezone(
 
     # Verify Contact log has null timezone
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.json()["logs"][0]["entries"]["timezone"] is None
@@ -1112,7 +1112,7 @@ async def test_sync_only_affects_is_system_true_logs(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "email_address": user["email"],
@@ -1146,7 +1146,7 @@ async def test_sync_only_affects_is_system_true_logs(
 
     # Verify only is_system=True was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]
@@ -1187,7 +1187,7 @@ async def test_assistant_name_sync_updates_contact_log(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "_assistant": str(agent_id),
@@ -1214,7 +1214,7 @@ async def test_assistant_name_sync_updates_contact_log(
 
     # Verify Contact log was updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     assert logs_resp.status_code == 200
@@ -1264,7 +1264,7 @@ async def test_assistant_all_contact_fields_sync_together(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{user['id']}/{agent_id}/Contacts",
             "entries": [
                 {
                     "_assistant": str(agent_id),
@@ -1295,7 +1295,7 @@ async def test_assistant_all_contact_fields_sync_together(
 
     # Verify all synced fields updated
     logs_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={user['id']}/{agent_id}/Contacts",
         headers=user["headers"],
     )
     logs = logs_resp.json()["logs"]

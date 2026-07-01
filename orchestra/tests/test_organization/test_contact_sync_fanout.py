@@ -282,13 +282,13 @@ async def test_transfer_assistant_to_personal_triggers_contact_sync(
     assert create_resp.status_code == status.HTTP_200_OK
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
+    # Transfer to personal is blocked (the org owner's personal workspace is
+    # disabled), so no contact-sync fan-out is triggered.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == status.HTTP_200_OK
+    assert transfer_resp.status_code == status.HTTP_403_FORBIDDEN, transfer_resp.json()
 
-    mocked_infra["trigger"].assert_awaited_once()
-    args, _kwargs = mocked_infra["trigger"].call_args
-    assert args[0] == agent_id
+    mocked_infra["trigger"].assert_not_awaited()

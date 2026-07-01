@@ -727,7 +727,11 @@ async def test_transfer_personal_to_org(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_transfer_org_to_personal(client: AsyncClient, dbsession):
-    """Test transferring an org assistant to personal workspace."""
+    """Org members cannot transfer an org assistant into a disabled personal workspace.
+
+    Joining/owning an organization disables the member's personal workspace, so
+    transferring an org assistant back into it is forbidden.
+    """
     user = await create_test_user(
         client,
         "transfer_to_personal@test.com",
@@ -753,24 +757,20 @@ async def test_transfer_org_to_personal(client: AsyncClient, dbsession):
     agent_id = int(create_resp.json()["info"]["agent_id"])
     assert create_resp.json()["info"]["organization_id"] == org_id
 
-    # Transfer to personal (using org API key)
+    # Transfer to personal (using org API key) is blocked: the owner's personal
+    # workspace was disabled when the organization was created.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == 200
+    assert transfer_resp.status_code == 403, transfer_resp.json()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
-    transfer_data = transfer_resp.json()["info"]
-    assert transfer_data["agent_id"] == agent_id
-    assert transfer_data["transferred_from"] == "organization"
-    assert transfer_data["transferred_to"] == "personal"
-
-    # Verify assistant is now personal
+    # Assistant stays in the organization.
     assistant_dao = AssistantDAO(dbsession)
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
-    assert assistant.organization_id is None
-    assert assistant.user_id == user["id"]
+    assert assistant.organization_id == org_id
 
 
 @pytest.mark.anyio
@@ -1274,129 +1274,6 @@ async def test_transfer_personal_to_org_with_logs_transfer(
 
 
 @pytest.mark.anyio
-async def test_transfer_personal_to_org_3tier_context_transfer(
-    client: AsyncClient,
-    dbsession,
-):
-    """
-    Test that 3-tier context logs are transferred correctly personal -> org.
-
-    Uses 3-tier context hierarchy:
-    - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: user_id/All/Transcripts (user aggregate)
-    - Tier 3: user_id/assistant_id/Transcripts (user + assistant specific)
-
-    When transferring with transfer_logs=True:
-    - All assistant-specific contexts (Tier 3) should be moved
-    - Logs in shared contexts (Tier 1 & 2) matching _assistant_id should be moved
-    """
-    user = await create_test_user(
-        client,
-        "3tier_transfer@test.com",
-    )
-
-    # Create personal Assistants project
-    await ensure_assistants_project(client, user["headers"])
-
-    # Create personal assistant
-    create_resp = await client.post(
-        "/v0/assistant",
-        json={"first_name": "ThreeTier", "surname": "Transfer", "create_infra": False},
-        headers=user["headers"],
-    )
-    assert create_resp.status_code == 200
-    assistant_info = create_resp.json()["info"]
-    agent_id = int(assistant_info["agent_id"])
-    assistant_name = str(agent_id)
-
-    # Define 3-tier context names using the actual user_id
-    # The transfer endpoint uses context_prefix = f"{user_id}/{assistant_id}"
-    tier3_context = f"{user['id']}/{assistant_name}/Transcripts"
-    tier2_context = f"{user['id']}/All/Transcripts"
-    tier1_context = "All/Transcripts"
-
-    # Create log in Tier 3 context with proper fields
-    log_resp = await client.post(
-        "/v0/logs",
-        json={
-            "project_name": "Assistants",
-            "context": tier3_context,
-            "entries": [
-                {
-                    "message": "Log to transfer",
-                    "_user": user["id"],
-                    "_assistant": assistant_name,
-                    "_assistant_id": agent_id,
-                },
-            ],
-        },
-        headers=user["headers"],
-    )
-    assert log_resp.status_code == 200
-    log_id = log_resp.json()["log_event_ids"][0]
-
-    # Add log to Tier 1 and Tier 2 contexts
-    for ctx in [tier1_context, tier2_context]:
-        add_resp = await client.post(
-            "/v0/project/Assistants/contexts/add_logs",
-            json={"context_name": ctx, "log_ids": [log_id]},
-            headers=user["headers"],
-        )
-        assert add_resp.status_code == 200
-
-    # Verify log exists in all personal contexts
-    for ctx in [tier1_context, tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=user["headers"],
-        )
-        assert logs_resp.status_code == 200
-        assert log_id in [log["id"] for log in logs_resp.json()["logs"]]
-
-    # Create organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "3Tier Transfer Org"},
-        headers=user["headers"],
-    )
-    org_id = org_resp.json()["id"]
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Transfer assistant to org with transfer_logs=True
-    transfer_resp = await client.post(
-        f"/v0/assistant/{agent_id}/transfer/to-org",
-        json={"organization_id": org_id, "transfer_logs": True},
-        headers=user["headers"],
-    )
-    assert transfer_resp.status_code == 200
-    transfer_data = transfer_resp.json()["info"]
-    assert transfer_data["logs_transferred"] is True
-
-    # Verify log is now accessible via org API key in all 3 tiers
-    for ctx in [tier1_context, tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        assert log_id in [
-            log["id"] for log in logs_resp.json()["logs"]
-        ], f"Log should be in org's {ctx}"
-
-    # Verify log is no longer in personal project contexts
-    for ctx in [tier1_context, tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=user["headers"],
-        )
-        # Either 404 or empty
-        if logs_resp.status_code == 200:
-            assert log_id not in [
-                log["id"] for log in logs_resp.json()["logs"]
-            ], f"Log should be removed from personal {ctx}"
-
-
-@pytest.mark.anyio
 async def test_transfer_org_to_personal_with_logs_deletion(
     client: AsyncClient,
     dbsession,
@@ -1447,28 +1324,22 @@ async def test_transfer_org_to_personal_with_logs_deletion(
     assert logs_before.status_code == 200
     assert logs_before.json()["count"] > 0, "Logs should exist before transfer"
 
-    # Transfer assistant to personal with delete_logs=True
+    # Transfer to personal is blocked (org owner's personal workspace is
+    # disabled), so the org logs are left untouched.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": True},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == 200
-    transfer_data = transfer_resp.json()["info"]
-    # logs_deleted may be True or False depending on context matching
-    assert "logs_deleted" in transfer_data
+    assert transfer_resp.status_code == 403, transfer_resp.json()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
-    # If logs were deleted, verify they're gone
-    if transfer_data["logs_deleted"]:
-        logs_after = await client.get(
-            f"/v0/logs?project_name={project_name}&context={context_name}",
-            headers=org_headers,
-        )
-        # Should either be 404 (context gone) or 200 with count=0
-        if logs_after.status_code == 200:
-            assert (
-                logs_after.json()["count"] == 0
-            ), "Logs should be deleted from org project"
+    logs_after = await client.get(
+        f"/v0/logs?project_name={project_name}&context={context_name}",
+        headers=org_headers,
+    )
+    assert logs_after.status_code == 200
+    assert logs_after.json()["count"] > 0, "Logs must survive the blocked transfer"
 
 
 @pytest.mark.anyio
@@ -2187,14 +2058,15 @@ async def test_transfer_org_to_personal_requires_delete_permission(
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    # Member tries to transfer to personal - should fail (no delete permission)
+    # Member tries to transfer to personal - blocked: joining the org disabled
+    # their personal workspace (the guard precedes the delete-permission check).
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=member_org_headers,
     )
     assert transfer_resp.status_code == 403
-    assert "permission" in transfer_resp.json()["detail"].lower()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
 
 @pytest.mark.anyio
@@ -2287,15 +2159,15 @@ async def test_transfer_response_logs_deleted_flag(client: AsyncClient, dbsessio
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    # Transfer with delete_logs=False
+    # Transfer to personal is blocked: the org owner's personal workspace is
+    # disabled, so no transfer (and no log deletion) occurs.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == 200
-    # logs_deleted should be False when delete_logs=False
-    assert transfer_resp.json()["info"]["logs_deleted"] is False
+    assert transfer_resp.status_code == 403, transfer_resp.json()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
 
 @pytest.mark.anyio
@@ -2555,525 +2427,6 @@ async def test_transfer_no_duplicate_grant_if_already_has_access(
     assert (
         count_after == count_before
     ), "Should not create duplicate grant if user already has access"
-
-
-@pytest.mark.anyio
-async def test_transfer_shared_all_context_logs(
-    client: AsyncClient,
-    dbsession,
-):
-    """
-    Test that logs in shared 'All/*' contexts are transferred correctly.
-
-    When transferring an assistant with transfer_logs=True:
-    - Logs in "All/Contact" (or other "All/*" contexts) that belong to the
-      assistant (identified by _assistant_id) should be transferred
-    - If "All/Contact" exists in org, logs should be linked to existing context
-    - If "All/Contact" doesn't exist in org, it should be created
-    """
-    user = await create_test_user(
-        client,
-        "shared_ctx_transfer@test.com",
-    )
-
-    # Create personal Assistants project
-    await ensure_assistants_project(client, user["headers"])
-
-    # Create personal assistant
-    create_resp = await client.post(
-        "/v0/assistant",
-        json={"first_name": "SharedCtx", "surname": "Test", "create_infra": False},
-        headers=user["headers"],
-    )
-    assert create_resp.status_code == 200
-    assistant_info = create_resp.json()["info"]
-    agent_id = int(assistant_info["agent_id"])
-    assistant_name = str(agent_id)
-
-    # Create logs in assistant-specific context using {user_id}/{assistant_id} pattern
-    # (matches the transfer endpoint's context_prefix = f"{user_id}/{assistant_id}")
-    specific_context = f"{user['id']}/{assistant_name}"
-    specific_log_payload = {
-        "project_name": "Assistants",
-        "context": specific_context,
-        "entries": [
-            {
-                "message": "Specific context log",
-                "_assistant_id": agent_id,
-            },
-        ],
-    }
-    log_resp = await client.post(
-        "/v0/logs",
-        json=specific_log_payload,
-        headers=user["headers"],
-    )
-    assert log_resp.status_code == 200
-
-    # Create logs in shared "All/Contact" context with _assistant_id
-    shared_log_payload = {
-        "project_name": "Assistants",
-        "context": "All/Contact",
-        "entries": [
-            {
-                "message": "Shared context log for this assistant",
-                "_assistant_id": agent_id,
-            },
-        ],
-    }
-    log_resp2 = await client.post(
-        "/v0/logs",
-        json=shared_log_payload,
-        headers=user["headers"],
-    )
-    assert log_resp2.status_code == 200
-
-    # Verify logs exist in personal project's "All/Contact"
-    logs_before = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contact",
-        headers=user["headers"],
-    )
-    assert logs_before.status_code == 200
-    assert logs_before.json()["count"] > 0, "Shared context logs should exist"
-
-    # Create organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "Shared Ctx Transfer Org"},
-        headers=user["headers"],
-    )
-    org_id = org_resp.json()["id"]
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Transfer assistant to org with transfer_logs=True
-    transfer_resp = await client.post(
-        f"/v0/assistant/{agent_id}/transfer/to-org",
-        json={"organization_id": org_id, "transfer_logs": True},
-        headers=user["headers"],
-    )
-    assert transfer_resp.status_code == 200
-    transfer_data = transfer_resp.json()["info"]
-    assert transfer_data["logs_transferred"] is True
-
-    # Verify assistant-specific logs are in org project
-    specific_logs_org = await client.get(
-        f"/v0/logs?project_name=Assistants&context={specific_context}",
-        headers=org_headers,
-    )
-    assert specific_logs_org.status_code == 200
-    assert (
-        specific_logs_org.json()["count"] > 0
-    ), "Assistant-specific logs should be in org"
-
-    # Verify shared "All/Contact" logs are in org project
-    shared_logs_org = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contact",
-        headers=org_headers,
-    )
-    assert shared_logs_org.status_code == 200
-    assert (
-        shared_logs_org.json()["count"] > 0
-    ), "Shared context logs should be transferred to org"
-
-    # Verify the shared context logs are no longer in personal project
-    # (they were moved, not copied)
-    shared_logs_personal = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contact",
-        headers=user["headers"],
-    )
-    # Either 404 (context gone) or 200 with count=0 (context exists but no logs)
-    if shared_logs_personal.status_code == 200:
-        assert (
-            shared_logs_personal.json()["count"] == 0
-        ), "Shared context logs should be removed from personal project"
-
-
-@pytest.mark.anyio
-async def test_transfer_shared_context_to_existing_org_context(
-    client: AsyncClient,
-    dbsession,
-):
-    """
-    Test that when org already has 'All/Contact' context, logs are linked to it.
-
-    This tests the scenario where:
-    1. Org already has "All/Contact" context (from previous assistant transfers)
-    2. A new assistant is transferred with logs in "All/Contact"
-    3. The logs should be linked to the existing org context
-    """
-    user = await create_test_user(
-        client,
-        "existing_shared_ctx@test.com",
-    )
-
-    # Create personal Assistants project
-    await ensure_assistants_project(client, user["headers"])
-
-    # Create organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "Existing Shared Ctx Org"},
-        headers=user["headers"],
-    )
-    org_id = org_resp.json()["id"]
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Create org Assistants project with "All/Contact" context already existing
-    await ensure_assistants_project(client, org_headers)
-
-    # Create a log in org's "All/Contact" to establish the context
-    existing_log_payload = {
-        "project_name": "Assistants",
-        "context": "All/Contact",
-        "entries": [{"message": "Pre-existing org log", "_assistant_id": 999}],
-    }
-    existing_log_resp = await client.post(
-        "/v0/logs",
-        json=existing_log_payload,
-        headers=org_headers,
-    )
-    assert existing_log_resp.status_code == 200
-
-    # Now create a personal assistant
-    create_resp = await client.post(
-        "/v0/assistant",
-        json={"first_name": "ExistingCtx", "surname": "Test", "create_infra": False},
-        headers=user["headers"],
-    )
-    assert create_resp.status_code == 200
-    agent_id = int(create_resp.json()["info"]["agent_id"])
-
-    # Create logs in personal "All/Contact" for this assistant
-    personal_shared_log = {
-        "project_name": "Assistants",
-        "context": "All/Contact",
-        "entries": [
-            {
-                "message": "Personal shared context log",
-                "_assistant_id": agent_id,
-            },
-        ],
-    }
-    log_resp = await client.post(
-        "/v0/logs",
-        json=personal_shared_log,
-        headers=user["headers"],
-    )
-    assert log_resp.status_code == 200
-
-    # Get count of logs in org's "All/Contact" before transfer
-    logs_before = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contact",
-        headers=org_headers,
-    )
-    count_before = logs_before.json()["count"]
-
-    # Transfer assistant to org
-    transfer_resp = await client.post(
-        f"/v0/assistant/{agent_id}/transfer/to-org",
-        json={"organization_id": org_id, "transfer_logs": True},
-        headers=user["headers"],
-    )
-    assert transfer_resp.status_code == 200
-
-    # Verify org's "All/Contact" now has more logs (existing + transferred)
-    logs_after = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contact",
-        headers=org_headers,
-    )
-    assert logs_after.status_code == 200
-    count_after = logs_after.json()["count"]
-
-    assert (
-        count_after > count_before
-    ), "Org's All/Contact should have more logs after transfer"
-
-
-@pytest.mark.anyio
-async def test_transfer_org_to_personal_cleans_lower_tiers_and_preserves_archive(
-    client: AsyncClient,
-    dbsession,
-):
-    """
-    Transfer-to-personal removes logs from all tiers (uniform cascade, no archive protection).
-
-    Uses 3-tier context hierarchy:
-    - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: user_id/All/Transcripts (user aggregate)
-    - Tier 3: user_id/assistant_id/Transcripts (user + assistant specific)
-
-    When transferring an assistant from org to personal with delete_logs=True:
-    - Assistant-specific contexts (Tier 3) should be deleted
-    - Tier 2 user aggregates should be cleaned via context_dao.delete()
-    - Tier 1 All/* should also be cleaned (uniform cascade)
-    """
-    user = await create_test_user(
-        client,
-        "shared_ctx_delete@test.com",
-    )
-    user_name = "test-user"
-
-    # Create organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "Shared Ctx Delete Org"},
-        headers=user["headers"],
-    )
-    org_id = org_resp.json()["id"]
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Create org Assistants project
-    await ensure_assistants_project(client, org_headers)
-
-    # Create org assistant
-    create_resp = await client.post(
-        "/v0/assistant",
-        json={"first_name": "SharedDel", "surname": "Test", "create_infra": False},
-        headers=org_headers,
-    )
-    assert create_resp.status_code == 200
-    assistant_info = create_resp.json()["info"]
-    agent_id = int(assistant_info["agent_id"])
-    assistant_name = str(agent_id)
-
-    # Define 3-tier context names
-    tier3_context = f"{user_name}/{assistant_name}/Transcripts"
-    tier2_context = f"{user_name}/All/Transcripts"
-    tier1_context = "All/Transcripts"
-
-    # Create log in Tier 3 (assistant-specific) context with _user and _assistant fields
-    tier3_log_payload = {
-        "project_name": "Assistants",
-        "context": tier3_context,
-        "entries": [
-            {
-                "message": "Assistant-specific log",
-                "_user": user_name,
-                "_assistant": assistant_name,
-                "_assistant_id": agent_id,
-            },
-        ],
-    }
-    log_resp = await client.post(
-        "/v0/logs",
-        json=tier3_log_payload,
-        headers=org_headers,
-    )
-    assert log_resp.status_code == 200
-    log_id = log_resp.json()["log_event_ids"][0]
-
-    # Add the same log to Tier 1 and Tier 2 contexts
-    for ctx in [tier1_context, tier2_context]:
-        add_resp = await client.post(
-            "/v0/project/Assistants/contexts/add_logs",
-            json={"context_name": ctx, "log_ids": [log_id]},
-            headers=org_headers,
-        )
-        assert add_resp.status_code == 200
-
-    # Verify log exists in all three contexts
-    for ctx in [tier1_context, tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        assert log_id in [
-            log["id"] for log in logs_resp.json()["logs"]
-        ], f"Log should exist in {ctx}"
-
-    # Transfer assistant to personal with delete_logs=True
-    transfer_resp = await client.post(
-        f"/v0/assistant/{agent_id}/transfer/to-personal",
-        json={"delete_logs": True},
-        headers=org_headers,
-    )
-    assert transfer_resp.status_code == 200
-    transfer_data = transfer_resp.json()["info"]
-    assert transfer_data["logs_deleted"] is True
-
-    # Verify log is removed from all three tiers (uniform cascade, no archive protection)
-    for ctx in [tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        if logs_resp.status_code == 200:
-            assert log_id not in [
-                log["id"] for log in logs_resp.json()["logs"]
-            ], f"Log should be cleaned from {ctx}"
-
-    # Uniform cascade: log is also removed from topmost All/* context
-    logs_resp = await client.get(
-        f"/v0/logs?project_name=Assistants&context={tier1_context}",
-        headers=org_headers,
-    )
-    if logs_resp.status_code == 200:
-        assert log_id not in [
-            log["id"] for log in logs_resp.json()["logs"]
-        ], f"Log should be removed from {tier1_context} (uniform cascade, no archive protection)"
-
-
-@pytest.mark.anyio
-async def test_transfer_org_to_personal_preserves_other_assistant_logs(
-    client: AsyncClient,
-    dbsession,
-):
-    """
-    Test that logs from OTHER assistants in shared contexts are preserved during transfer.
-
-    When transferring assistant A with delete_logs=True:
-    - Assistant A's logs should be removed from all tiers (uniform cascade, no archive protection)
-    - Assistant B's logs in shared All/* contexts should NOT be affected
-    """
-    user = await create_test_user(
-        client,
-        "preserve_other_logs@test.com",
-    )
-    user_name = "preserve-user"
-
-    # Create organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "Preserve Other Logs Org"},
-        headers=user["headers"],
-    )
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Create org Assistants project
-    await ensure_assistants_project(client, org_headers)
-
-    # Create TWO org assistants
-    create_resp_a = await client.post(
-        "/v0/assistant",
-        json={"first_name": "AssistantA", "surname": "Transfer", "create_infra": False},
-        headers=org_headers,
-    )
-    assert create_resp_a.status_code == 200
-    agent_id_a = int(create_resp_a.json()["info"]["agent_id"])
-    assistant_name_a = str(agent_id_a)
-
-    create_resp_b = await client.post(
-        "/v0/assistant",
-        json={"first_name": "AssistantB", "surname": "Keep", "create_infra": False},
-        headers=org_headers,
-    )
-    assert create_resp_b.status_code == 200
-    agent_id_b = int(create_resp_b.json()["info"]["agent_id"])
-    assistant_name_b = str(agent_id_b)
-
-    # Create 3-tier contexts for Assistant A
-    tier3_a = f"{user_name}/{assistant_name_a}/Transcripts"
-    tier2_context = f"{user_name}/All/Transcripts"
-    tier1_context = "All/Transcripts"
-
-    # Create 3-tier contexts for Assistant B
-    tier3_b = f"{user_name}/{assistant_name_b}/Transcripts"
-
-    # Create log for Assistant A
-    log_resp_a = await client.post(
-        "/v0/logs",
-        json={
-            "project_name": "Assistants",
-            "context": tier3_a,
-            "entries": [
-                {
-                    "message": "Log from Assistant A",
-                    "_user": user_name,
-                    "_assistant": assistant_name_a,
-                    "_assistant_id": agent_id_a,
-                },
-            ],
-        },
-        headers=org_headers,
-    )
-    assert log_resp_a.status_code == 200
-    log_id_a = log_resp_a.json()["log_event_ids"][0]
-
-    # Create log for Assistant B
-    log_resp_b = await client.post(
-        "/v0/logs",
-        json={
-            "project_name": "Assistants",
-            "context": tier3_b,
-            "entries": [
-                {
-                    "message": "Log from Assistant B",
-                    "_user": user_name,
-                    "_assistant": assistant_name_b,
-                    "_assistant_id": agent_id_b,
-                },
-            ],
-        },
-        headers=org_headers,
-    )
-    assert log_resp_b.status_code == 200
-    log_id_b = log_resp_b.json()["log_event_ids"][0]
-
-    # Add both logs to shared contexts (Tier 1 and Tier 2)
-    for log_id in [log_id_a, log_id_b]:
-        for ctx in [tier1_context, tier2_context]:
-            add_resp = await client.post(
-                "/v0/project/Assistants/contexts/add_logs",
-                json={"context_name": ctx, "log_ids": [log_id]},
-                headers=org_headers,
-            )
-            assert add_resp.status_code == 200
-
-    # Verify both logs exist in shared contexts
-    for ctx in [tier1_context, tier2_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project_name=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-        assert log_id_a in log_ids, f"Log A should exist in {ctx}"
-        assert log_id_b in log_ids, f"Log B should exist in {ctx}"
-
-    # Transfer Assistant A to personal (deleting logs)
-    transfer_resp = await client.post(
-        f"/v0/assistant/{agent_id_a}/transfer/to-personal",
-        json={"delete_logs": True},
-        headers=org_headers,
-    )
-    assert transfer_resp.status_code == 200
-
-    # Verify Assistant A's log is removed from tier2 context
-    logs_resp = await client.get(
-        f"/v0/logs?project_name=Assistants&context={tier2_context}",
-        headers=org_headers,
-    )
-    assert logs_resp.status_code == 200
-    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-    assert log_id_a not in log_ids, f"Log A should be removed from {tier2_context}"
-    # Assistant B's log should still exist
-    assert log_id_b in log_ids, f"Log B should still exist in {tier2_context}"
-
-    # Uniform cascade: log A is also removed from topmost All/* context
-    logs_resp = await client.get(
-        f"/v0/logs?project_name=Assistants&context={tier1_context}",
-        headers=org_headers,
-    )
-    assert logs_resp.status_code == 200
-    log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-    assert (
-        log_id_a not in log_ids
-    ), f"Log A should be removed from {tier1_context} (uniform cascade, no archive protection)"
-    assert log_id_b in log_ids, f"Log B should still exist in {tier1_context}"
-
-    # Verify Assistant B's Tier 3 context is untouched
-    logs_resp_b = await client.get(
-        f"/v0/logs?project_name=Assistants&context={tier3_b}",
-        headers=org_headers,
-    )
-    assert logs_resp_b.status_code == 200
-    assert log_id_b in [log["id"] for log in logs_resp_b.json()["logs"]]
-
-
-# =============================================================================
-# Org Assistant Assistants Project Access Tests
-# =============================================================================
 
 
 @pytest.mark.anyio

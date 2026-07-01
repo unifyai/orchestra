@@ -3,8 +3,17 @@ Service for syncing User/Assistant profile fields to Contact logs.
 
 When users or assistants update their profile fields (timezone, bio,
 first_name, surname), this service propagates those changes to the
-corresponding Contact log entries in the "Assistants" project's
-"All/Contacts" context.
+corresponding Contact log entries.
+
+Contacts live in each assistant's own owner-homogeneous Contacts context
+(``{user_id}/{agent_id}/Contacts``). A profile change is therefore fanned out
+across the relevant assistants' own Contacts contexts: a user's row (matched by
+email) is updated in every assistant that knows them; an assistant's self row
+(matched by its resolved self ``contact_id``) is updated in its own context.
+
+Each per-context update is pruned to the project's ``LIST(project_id)``
+partition and, within the shared Assistants project, to the assistant's
+``owner_key`` sub-partition.
 """
 
 import logging
@@ -21,6 +30,7 @@ from orchestra.db.models.orchestra_models import (
     Context,
     Project,
 )
+from orchestra.db.scope import OwnerScope, owner_from_context_name
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +40,17 @@ class ContactSyncService:
     Service for syncing profile fields between User/Assistant and Contact logs.
 
     Handles:
-    - User timezone → Contact logs (first_name + surname, is_system=True)
-    - User bio → Contact logs (first_name + surname, is_system=True)
-    - Assistant timezone → Contact logs for the resolved self contact
-    - Assistant about → Contact logs for the resolved self contact
-    - Assistant first_name → Contact logs for the resolved self contact
-    - Assistant surname → Contact logs for the resolved self contact
+    - User timezone/bio -> Contact rows (matched by email, is_system=True) in
+      every assistant's own Contacts context the user appears in.
+    - Assistant timezone/bio/first_name/surname -> the assistant's self Contact
+      row (matched by resolved self contact_id) in its own Contacts context.
+    - Member removal -> flips is_system=False on the departing member's Contact
+      rows across the org's assistants' Contacts contexts.
     """
 
     ASSISTANTS_PROJECT_NAME = "Assistants"
-    CONTACTS_CONTEXT_NAME = "All/Contacts"
+    # Per-assistant contacts contexts are named ``{user_id}/{agent_id}/Contacts``.
+    CONTACTS_CONTEXT_SUFFIX = "/Contacts"
 
     def __init__(self, session: Session):
         self.session = session
@@ -119,16 +130,38 @@ class ContactSyncService:
                 .first()
             )
 
-    def _get_contacts_context(self, project_id: int) -> Optional[Context]:
-        """Get the All/Contacts context for a project."""
-        return (
+    def _assistant_contacts_contexts(self, project_id: int) -> List[Context]:
+        """All per-assistant Contacts contexts in a project.
+
+        Ownership is derived from the context name (the convention source of
+        truth) rather than the stored ``owner_scope`` column, which is only
+        backfilled out-of-band and may be unset on freshly created contexts.
+        Each returned context is owner-homogeneous (assistant-owned).
+        """
+        rows = (
             self.session.query(Context)
             .filter(
                 Context.project_id == project_id,
-                Context.name == self.CONTACTS_CONTEXT_NAME,
+                Context.name.like(f"%{self.CONTACTS_CONTEXT_SUFFIX}"),
             )
-            .first()
+            .all()
         )
+        return [
+            c
+            for c in rows
+            if owner_from_context_name(c.name).scope == OwnerScope.ASSISTANT
+        ]
+
+    def _assistant_own_contacts_context(
+        self,
+        project_id: int,
+        agent_id: int,
+    ) -> Optional[Context]:
+        """The Contacts context owned by a specific assistant in a project."""
+        for c in self._assistant_contacts_contexts(project_id):
+            if owner_from_context_name(c.name).owner_id == agent_id:
+                return c
+        return None
 
     def _resolve_assistant_self_contact_id(self, agent_id: int) -> Optional[int]:
         """Return the assistant's personal self contact id from membership overlays."""
@@ -157,123 +190,124 @@ class ContactSyncService:
         self._self_contact_id_cache[agent_id] = self_contact_id
         return self_contact_id
 
-    def _update_contact_logs_user(
+    # =========================================================================
+    # Per-context updates (project_id + owner_key pruned)
+    # =========================================================================
+
+    def _set_field_where(
         self,
-        context_id: int,
+        context: Context,
+        set_pairs: str,
+        match_clause: str,
+        params: dict,
+    ) -> int:
+        """Run a partition-pruned UPDATE of ``log_event.data`` in one context.
+
+        ``set_pairs`` is the ``jsonb_build_object(...)`` payload merged into
+        ``data``; ``match_clause`` is the extra ``data``-field predicate that
+        selects the row(s). ``project_id`` (and, where the project is owner
+        sub-partitioned, ``owner_key``) are pinned to literals so the scan
+        prunes instead of fanning out.
+        """
+        query = text(
+            f"""
+            UPDATE log_event
+            SET data = data || {set_pairs},
+                updated_at = NOW()
+            WHERE project_id = :project_id
+              AND id IN (
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                  AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
+                  {match_clause}
+            )
+        """,
+        )
+        bound = {
+            "project_id": context.project_id,
+            "context_id": context.id,
+            **params,
+        }
+        return self.session.execute(query, bound).rowcount
+
+    def _update_user_contact_row(
+        self,
+        context: Context,
         email: str,
         update_field: str,
         new_value: Optional[str],
     ) -> int:
-        """
-        Update Contact logs for a user (where email_address matches and is_system=True).
-
-        Args:
-            context_id: The context ID to search within
-            email: The user's email to filter by (matches email_address field in logs)
-            update_field: The field name to update (e.g., "timezone", "bio")
-            new_value: The new value to set
-
-        Returns:
-            Number of logs updated
-        """
-        # Resolve project_id to a literal (a scalar subquery does not prune the
-        # LIST(project_id) partition at plan time; a literal does).
-        project_id = self.session.execute(
-            text("SELECT project_id FROM context WHERE id = :context_id"),
-            {"context_id": context_id},
-        ).scalar()
-        query = text(
-            """
-            UPDATE log_event
-            SET data = data || jsonb_build_object(:update_field, :new_value),
-                updated_at = NOW()
-            WHERE project_id = :project_id
-              AND id IN (
-                SELECT le.id
-                FROM log_event le
-                JOIN log_event_context lec ON le.id = lec.log_event_id
-                  AND lec.project_id = le.project_id
-                WHERE le.project_id = :project_id
-                  AND lec.context_id = :context_id
-                  AND le.data->>'email_address' = :email
-                  AND (le.data->>'is_system')::boolean = true
-            )
-        """,
-        )
-
-        result = self.session.execute(
-            query,
-            {
-                "context_id": context_id,
-                "project_id": project_id,
-                "email": email,
+        """Update the user's (is_system) Contact row in one context, by email."""
+        return self._set_field_where(
+            context,
+            set_pairs="jsonb_build_object(:update_field, :new_value)",
+            match_clause=(
+                "AND le.data->>'email_address' = :email "
+                "AND (le.data->>'is_system')::boolean = true"
+            ),
+            params={
                 "update_field": update_field,
                 "new_value": new_value,
+                "email": email,
             },
         )
-        return result.rowcount
 
-    def _update_contact_logs_assistant(
+    def _update_assistant_self_row(
         self,
-        context_id: int,
-        assistant_context_id: str,
+        context: Context,
         self_contact_id: int,
         update_field: str,
         new_value: Optional[str],
     ) -> int:
-        """
-        Update Contact logs for an assistant's resolved self contact.
-
-        Args:
-            context_id: The context ID to search within
-            assistant_context_id: The _assistant value to filter by (str(agent_id))
-            self_contact_id: Resolved self contact ID for this assistant
-            update_field: The field name to update (e.g., "timezone", "bio")
-            new_value: The new value to set
-
-        Returns:
-            Number of logs updated
-        """
-        # Resolve project_id to a literal (see _update_contact_logs_user).
-        project_id = self.session.execute(
-            text("SELECT project_id FROM context WHERE id = :context_id"),
-            {"context_id": context_id},
-        ).scalar()
-        query = text(
-            """
-            UPDATE log_event
-            SET data = data || jsonb_build_object(:update_field, :new_value),
-                updated_at = NOW()
-            WHERE project_id = :project_id
-              AND id IN (
-                SELECT le.id
-                FROM log_event le
-                JOIN log_event_context lec ON le.id = lec.log_event_id
-                  AND lec.project_id = le.project_id
-                WHERE le.project_id = :project_id
-                  AND lec.context_id = :context_id
-                  AND le.data->>'_assistant' = :assistant_context_id
-                  AND (le.data->>'contact_id')::int = :self_contact_id
-            )
-        """,
-        )
-
-        result = self.session.execute(
-            query,
-            {
-                "context_id": context_id,
-                "project_id": project_id,
-                "assistant_context_id": assistant_context_id,
-                "self_contact_id": self_contact_id,
+        """Update the assistant's self Contact row in its own context."""
+        return self._set_field_where(
+            context,
+            set_pairs="jsonb_build_object(:update_field, :new_value)",
+            match_clause="AND (le.data->>'contact_id')::int = :self_contact_id",
+            params={
                 "update_field": update_field,
                 "new_value": new_value,
+                "self_contact_id": self_contact_id,
             },
         )
-        return result.rowcount
 
     # =========================================================================
     # USER SYNC METHODS
     # =========================================================================
+
+    def _sync_user_field(
+        self,
+        user_id: str,
+        email: str,
+        update_field: str,
+        new_value: Optional[str],
+    ) -> int:
+        """Fan a user profile field out to their Contact row in every assistant's
+        Contacts context, across all the user's accessible Assistants projects."""
+        if not email:
+            logger.debug("Skipping user %s sync: no email available", update_field)
+            return 0
+
+        total_updated = 0
+        for project in self._get_all_assistants_projects_for_user(user_id):
+            for context in self._assistant_contacts_contexts(project.id):
+                updated = self._update_user_contact_row(
+                    context=context,
+                    email=email,
+                    update_field=update_field,
+                    new_value=new_value,
+                )
+                total_updated += updated
+        if total_updated:
+            logger.debug(
+                "Synced user %s to %d contact rows",
+                update_field,
+                total_updated,
+            )
+        return total_updated
 
     def sync_user_timezone(
         self,
@@ -281,50 +315,8 @@ class ContactSyncService:
         email: str,
         new_timezone: Optional[str],
     ) -> int:
-        """
-        Sync user timezone to All/Contacts logs.
-
-        Updates logs where:
-        - email field matches
-        - is_system = True
-
-        Syncs to ALL accessible Assistants projects (personal + all org memberships).
-
-        Args:
-            user_id: The user's ID
-            email: User's email (matches contact email)
-            new_timezone: The new timezone value to set
-
-        Returns:
-            Total number of logs updated across all projects
-        """
-        if not email:
-            logger.debug("Skipping user timezone sync: no email available")
-            return 0
-
-        total_updated = 0
-
-        # Get all Assistants projects for this user
-        projects = self._get_all_assistants_projects_for_user(user_id)
-
-        for project in projects:
-            context = self._get_contacts_context(project.id)
-            if not context:
-                continue
-
-            updated = self._update_contact_logs_user(
-                context_id=context.id,
-                email=email,
-                update_field="timezone",
-                new_value=new_timezone,
-            )
-            total_updated += updated
-            if updated > 0:
-                logger.debug(
-                    f"Synced user timezone to {updated} logs in project {project.id}",
-                )
-
-        return total_updated
+        """Sync user timezone to their Contact rows across all assistants."""
+        return self._sync_user_field(user_id, email, "timezone", new_timezone)
 
     def sync_user_bio(
         self,
@@ -332,53 +324,57 @@ class ContactSyncService:
         email: str,
         new_bio: Optional[str],
     ) -> int:
-        """
-        Sync user bio to All/Contacts logs.
-
-        Updates logs where:
-        - email field matches
-        - is_system = True
-
-        Syncs to ALL accessible Assistants projects (personal + all org memberships).
-
-        Args:
-            user_id: The user's ID
-            email: User's email (matches contact email)
-            new_bio: The new bio value to set
-
-        Returns:
-            Total number of logs updated across all projects
-        """
-        if not email:
-            logger.debug("Skipping user bio sync: no email available")
-            return 0
-
-        total_updated = 0
-
-        projects = self._get_all_assistants_projects_for_user(user_id)
-
-        for project in projects:
-            context = self._get_contacts_context(project.id)
-            if not context:
-                continue
-
-            updated = self._update_contact_logs_user(
-                context_id=context.id,
-                email=email,
-                update_field="bio",
-                new_value=new_bio,
-            )
-            total_updated += updated
-            if updated > 0:
-                logger.debug(
-                    f"Synced user bio to {updated} logs in project {project.id}",
-                )
-
-        return total_updated
+        """Sync user bio to their Contact rows across all assistants."""
+        return self._sync_user_field(user_id, email, "bio", new_bio)
 
     # =========================================================================
     # ASSISTANT SYNC METHODS
     # =========================================================================
+
+    def _sync_assistant_field(
+        self,
+        user_id: str,
+        organization_id: Optional[int],
+        agent_id: int,
+        update_field: str,
+        new_value: Optional[str],
+    ) -> int:
+        """Update the assistant's self Contact row in its own Contacts context."""
+        project = self._get_assistants_project_for_assistant(user_id, organization_id)
+        if not project:
+            logger.debug(
+                "Skipping assistant %s sync: no Assistants project",
+                update_field,
+            )
+            return 0
+
+        context = self._assistant_own_contacts_context(project.id, agent_id)
+        if not context:
+            logger.debug(
+                "Skipping assistant %s sync: no Contacts context for assistant %s",
+                update_field,
+                agent_id,
+            )
+            return 0
+
+        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
+        if self_contact_id is None:
+            return 0
+
+        updated = self._update_assistant_self_row(
+            context=context,
+            self_contact_id=self_contact_id,
+            update_field=update_field,
+            new_value=new_value,
+        )
+        if updated:
+            logger.debug(
+                "Synced assistant %s to %d logs in project %s",
+                update_field,
+                updated,
+                project.id,
+            )
+        return updated
 
     def sync_assistant_timezone(
         self,
@@ -387,48 +383,14 @@ class ContactSyncService:
         agent_id: int,
         new_timezone: Optional[str],
     ) -> int:
-        """
-        Sync assistant timezone to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id matches the assistant's self contact overlay
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_timezone: The new timezone value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant timezone sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant timezone sync: no All/Contacts context")
-            return 0
-
-        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
-        if self_contact_id is None:
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            self_contact_id=self_contact_id,
-            update_field="timezone",
-            new_value=new_timezone,
+        """Sync assistant timezone to its self Contact row."""
+        return self._sync_assistant_field(
+            user_id,
+            organization_id,
+            agent_id,
+            "timezone",
+            new_timezone,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant timezone to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def sync_assistant_bio(
         self,
@@ -437,48 +399,14 @@ class ContactSyncService:
         agent_id: int,
         new_bio: Optional[str],
     ) -> int:
-        """
-        Sync assistant about/bio to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id matches the assistant's self contact overlay
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_bio: The new bio value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant bio sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant bio sync: no All/Contacts context")
-            return 0
-
-        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
-        if self_contact_id is None:
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            self_contact_id=self_contact_id,
-            update_field="bio",
-            new_value=new_bio,
+        """Sync assistant about/bio to its self Contact row."""
+        return self._sync_assistant_field(
+            user_id,
+            organization_id,
+            agent_id,
+            "bio",
+            new_bio,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant bio to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def sync_assistant_first_name(
         self,
@@ -487,48 +415,14 @@ class ContactSyncService:
         agent_id: int,
         new_first_name: Optional[str],
     ) -> int:
-        """
-        Sync assistant first_name to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id matches the assistant's self contact overlay
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_first_name: The new first_name value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant first_name sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant first_name sync: no All/Contacts context")
-            return 0
-
-        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
-        if self_contact_id is None:
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            self_contact_id=self_contact_id,
-            update_field="first_name",
-            new_value=new_first_name,
+        """Sync assistant first_name to its self Contact row."""
+        return self._sync_assistant_field(
+            user_id,
+            organization_id,
+            agent_id,
+            "first_name",
+            new_first_name,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant first_name to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def sync_assistant_surname(
         self,
@@ -537,48 +431,14 @@ class ContactSyncService:
         agent_id: int,
         new_surname: Optional[str],
     ) -> int:
-        """
-        Sync assistant surname to All/Contacts logs.
-
-        Updates logs where:
-        - _assistant = str(agent_id)
-        - contact_id matches the assistant's self contact overlay
-
-        Args:
-            user_id: The user ID (owner for personal, creator for org)
-            organization_id: The organization ID (None for personal assistants)
-            agent_id: The assistant's agent_id
-            new_surname: The new surname value to set
-
-        Returns:
-            Number of logs updated
-        """
-        project = self._get_assistants_project_for_assistant(user_id, organization_id)
-        if not project:
-            logger.debug("Skipping assistant surname sync: no Assistants project")
-            return 0
-
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug("Skipping assistant surname sync: no All/Contacts context")
-            return 0
-
-        self_contact_id = self._resolve_assistant_self_contact_id(agent_id)
-        if self_contact_id is None:
-            return 0
-
-        updated = self._update_contact_logs_assistant(
-            context_id=context.id,
-            assistant_context_id=str(agent_id),
-            self_contact_id=self_contact_id,
-            update_field="surname",
-            new_value=new_surname,
+        """Sync assistant surname to its self Contact row."""
+        return self._sync_assistant_field(
+            user_id,
+            organization_id,
+            agent_id,
+            "surname",
+            new_surname,
         )
-        if updated > 0:
-            logger.debug(
-                f"Synced assistant surname to {updated} logs in project {project.id}",
-            )
-        return updated
 
     def mark_member_contact_as_non_system(
         self,
@@ -586,25 +446,17 @@ class ContactSyncService:
         email: str,
     ) -> int:
         """
-        Mark a departing member's Contact log as non-system (is_system=False).
+        Mark a departing member's Contact rows as non-system (is_system=False).
 
-        Called when a member is removed from an organization. This updates
-        their Contact entry in the org's Assistants project's All/Contacts
-        context to set is_system=False, indicating they are no longer a
-        system user for that organization.
-
-        Args:
-            organization_id: The organization ID
-            email: User's email (matches contact email)
-
-        Returns:
-            Number of logs updated
+        Called when a member is removed from an organization. Flips
+        ``is_system`` to false on that member's Contact row across every
+        assistant's Contacts context in the org's Assistants project, so a
+        departed person is no longer treated as a system user there.
         """
         if not email:
             logger.debug("Skipping Contact update: no email available")
             return 0
 
-        # Find the org's Assistants project
         project = (
             self.session.query(Project)
             .filter(
@@ -613,54 +465,31 @@ class ContactSyncService:
             )
             .first()
         )
-
         if not project:
             logger.debug(
-                f"No Assistants project found for org {organization_id}, "
-                "skipping Contact is_system update",
+                "No Assistants project found for org %s, skipping Contact "
+                "is_system update",
+                organization_id,
             )
             return 0
 
-        context = self._get_contacts_context(project.id)
-        if not context:
-            logger.debug(
-                f"No All/Contacts context in org {organization_id}'s Assistants project",
+        total_updated = 0
+        for context in self._assistant_contacts_contexts(project.id):
+            total_updated += self._set_field_where(
+                context,
+                set_pairs="jsonb_build_object('is_system', false)",
+                match_clause=(
+                    "AND le.data->>'email_address' = :email "
+                    "AND (le.data->>'is_system')::boolean = true"
+                ),
+                params={"email": email},
             )
-            return 0
 
-        # Update is_system to false for this user's Contact row
-        query = text(
-            """
-            UPDATE log_event
-            SET data = data || jsonb_build_object('is_system', false),
-                updated_at = NOW()
-            WHERE project_id = :project_id
-              AND id IN (
-                SELECT le.id
-                FROM log_event le
-                JOIN log_event_context lec ON le.id = lec.log_event_id
-                  AND lec.project_id = le.project_id
-                WHERE le.project_id = :project_id
-                  AND lec.context_id = :context_id
-                  AND le.data->>'email_address' = :email
-                  AND (le.data->>'is_system')::boolean = true
-            )
-        """,
-        )
-
-        result = self.session.execute(
-            query,
-            {
-                "project_id": project.id,
-                "context_id": context.id,
-                "email": email,
-            },
-        )
-
-        updated = result.rowcount
-        if updated > 0:
+        if total_updated:
             logger.info(
-                f"Marked {updated} Contact log(s) as non-system for user "
-                f"'{email}' in org {organization_id}",
+                "Marked %d Contact log(s) as non-system for user '%s' in org %s",
+                total_updated,
+                email,
+                organization_id,
             )
-        return updated
+        return total_updated

@@ -3113,17 +3113,12 @@ class ContextDAO:
         Delete a context and clean up associated data in phases.
 
         Phase 0: Collect the context's log_event_ids (used by all later phases)
-        Phase 1: Sibling cleanup for Assistants/UnityTests (batched)
         Phase 2: GCS media cleanup (must happen while log data exists)
         Phase 3: Delete context row (cascades log_event_context)
         Phase 4: Scoped orphan detection + embedding cleanup + log deletion
         """
         from orchestra.db.dao.embedding_dao import EmbeddingDAO
         from orchestra.db.dao.log_event_dao import LogEventDAO
-        from orchestra.db.dao.sibling_context_cleanup import (
-            get_assistants_sibling_context_info,
-            remove_logs_from_sibling_contexts,
-        )
 
         try:
             context = self.session.query(Context).filter_by(id=id).one()
@@ -3149,32 +3144,6 @@ class ContextDAO:
                     {"ctx_id": id, "project_id": project_id},
                 ).fetchall()
             ]
-
-            # ── Phase 1: Sibling cleanup (batched queries) ──
-            # For Assistants/UnityTests projects, clean up sibling contexts first.
-            # This must happen BEFORE deleting the context while associations exist.
-            is_assistants_project = project.name in ("Assistants", "UnityTests")
-
-            if is_assistants_project and "/" in context_name and log_event_ids:
-                sibling_map = get_assistants_sibling_context_info(
-                    session=self.session,
-                    project_id=project_id,
-                    context_id=id,
-                    context_name=context_name,
-                    log_event_ids=log_event_ids,
-                    context_dao=self,
-                )
-
-                if sibling_map:
-                    removed = remove_logs_from_sibling_contexts(
-                        self.session,
-                        sibling_map,
-                        project_id,
-                    )
-                    self.session.flush()
-                    logger.info(
-                        f"Phase 1: Removed {removed} sibling context associations",
-                    )
 
             # ── Phase 2: GCS media cleanup ──
             # Delete associated GCS media BEFORE deleting the context,

@@ -91,6 +91,7 @@ async def _create_org(
     organization_payload = response.json()
     coordinator_response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
+        params={"organization_id": organization_payload["id"]},
         headers=owner["headers"],
     )
     assert coordinator_response.status_code in {
@@ -366,43 +367,21 @@ def _assert_coordinator_provisioned(
     coordinator = dbsession.get(Assistant, coordinator_id)
     assert coordinator is not None
     assert coordinator.is_coordinator is True
-    assert coordinator.organization_id is None
+    assert coordinator.organization_id == org_data["id"]
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
     assert coordinator.about == ""
     assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
     assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
-    org_scoped_coordinator = dbsession.scalar(
+    only_org_coordinator = dbsession.scalar(
         select(Assistant).where(
             Assistant.organization_id == org_data["id"],
             Assistant.is_coordinator.is_(True),
         ),
     )
-    assert org_scoped_coordinator is not None
-    assert org_scoped_coordinator.agent_id != coordinator.agent_id
-    assert org_scoped_coordinator.is_coordinator is True
-    assert org_scoped_coordinator.organization_id == org_data["id"]
-    assert org_scoped_coordinator.user_id == owner_user_id
-    assert (
-        org_scoped_coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
-    )
-    assert (
-        org_scoped_coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    )
-    assert org_scoped_coordinator.about == ""
-    assert org_scoped_coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
-    assert org_scoped_coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
-    assert {
-        (membership.contact_id, membership.relationship)
-        for membership in _personal_memberships(
-            dbsession,
-            assistant_id=coordinator.agent_id,
-        )
-    } == {
-        (0, CONTACT_MEMBERSHIP_RELATIONSHIP_SELF),
-        (1, CONTACT_MEMBERSHIP_RELATIONSHIP_BOSS),
-    }
+    assert only_org_coordinator is not None
+    assert only_org_coordinator.agent_id == coordinator.agent_id
 
     resource_access_dao = ResourceAccessDAO(dbsession)
     assert resource_access_dao.check_user_permission(
@@ -411,20 +390,9 @@ def _assert_coordinator_provisioned(
         coordinator.agent_id,
         "assistant:write",
     )
-    assert resource_access_dao.check_user_permission(
-        owner_user_id,
-        "assistant",
-        org_scoped_coordinator.agent_id,
-        "assistant:write",
-    )
     _assert_owner_contact_row(
         dbsession,
         coordinator=coordinator,
-        owner_user_id=owner_user_id,
-    )
-    _assert_owner_contact_row(
-        dbsession,
-        coordinator=org_scoped_coordinator,
         owner_user_id=owner_user_id,
     )
 
@@ -469,6 +437,7 @@ async def test_admin_create_organization_provisions_coordinator_without_implicit
     assert "coordinator_id" not in org_data
     coordinator_response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
+        params={"organization_id": org_data["id"]},
         headers=owner["headers"],
     )
     assert coordinator_response.status_code in {
@@ -587,7 +556,7 @@ async def test_assistant_list_tolerates_missing_coordinator_owner_contact_row(
 
     response = await client.get(
         f"/v0/assistant?agent_id={coordinator_id}",
-        headers=owner["headers"],
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
@@ -625,6 +594,7 @@ async def test_coordinator_opt_in_repairs_missing_owner_contact_row(
 
     response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
+        params={"organization_id": org_data["id"]},
         headers=owner["headers"],
     )
 
@@ -922,81 +892,6 @@ async def test_intro_watched_backfill_marks_existing_coordinator_state(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_read_derives_completed_steps(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    """``completed_step_ids`` re-derives from durable domain state.
-
-    Pins the fix for pre-completed steps: a BYOD workspace email
-    contact and a non-workspace integration secret created in an
-    *earlier* session (here: written directly to the DB, with no
-    transition events fired) must surface as completed steps on the
-    next state read — and disappear from the payload once the
-    Coordinator leaves onboarding mode.
-    """
-    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-    from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-
-    owner = await _create_user(client, "state-derived-steps")
-    create = await client.post(
-        f"/v0/user/{owner['id']}/coordinator",
-        headers=owner["headers"],
-    )
-    assert create.status_code in {
-        status.HTTP_200_OK,
-        status.HTTP_201_CREATED,
-    }, create.json()
-    coordinator_id = int(create.json()["coordinator_id"])
-
-    contact_dao = AssistantContactDAO(dbsession)
-    # Replace any platform-provisioned mailbox with a BYOD one — the
-    # workspace OAuth flow writes a user-provisioned email contact.
-    contact_dao.soft_delete_assistant_contact(
-        assistant_id=coordinator_id,
-        contact_type="email",
-    )
-    contact_dao.upsert_assistant_contact(
-        assistant_id=coordinator_id,
-        contact_type="email",
-        contact_value="boss@example.com",
-        provider="google_workspace",
-        provisioned_by="user",
-    )
-    # Workspace OAuth tokens must not count as an app integration…
-    AssistantSecretDAO(dbsession).upsert(
-        user_id=owner["id"],
-        agent_id=coordinator_id,
-        name="GOOGLE_ACCESS_TOKEN",
-        value="token",
-    )
-    # …but a custom integration secret does.
-    AssistantSecretDAO(dbsession).upsert(
-        user_id=owner["id"],
-        agent_id=coordinator_id,
-        name="SLACK_BOT_TOKEN",
-        value="xoxb-123",
-    )
-    dbsession.commit()
-
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json()["info"]["completed_step_ids"] == ["workspace", "apps"]
-
-    # Leaving onboarding skips derivation entirely.
-    promote = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working"},
-        headers=owner["headers"],
-    )
-    assert promote.status_code == status.HTTP_200_OK, promote.json()
-    assert promote.json()["info"]["completed_step_ids"] == []
-
-
-@pytest.mark.anyio
 async def test_coordinator_state_seed_is_idempotent_on_repair(
     client: AsyncClient,
     dbsession: Session,
@@ -1081,12 +976,12 @@ async def test_coordinator_state_patch_records_onboarding_step(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_patch_records_skipped_steps(
+async def test_coordinator_state_patch_reset_emits_reset_event(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Skipped onboarding steps persist separately from completed steps."""
-    owner = await _create_user(client, "state-skipped-step")
+    """Resetting a step emits the reset narration so the brain de-sticks it."""
+    owner = await _create_user(client, "state-reset-step")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
         headers=owner["headers"],
@@ -1098,101 +993,17 @@ async def test_coordinator_state_patch_records_skipped_steps(
     coordinator_id = int(create.json()["coordinator_id"])
 
     with patch(
-        "orchestra.web.api.assistant.views.emit_onboarding_step_skipped_event",
+        "orchestra.web.api.assistant.views.emit_onboarding_step_reset_event",
         new=AsyncMock(return_value=True),
     ) as emit:
-        skip_apps = await client.patch(
+        reset = await client.patch(
             f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "apps"},
+            json={"reset_onboarding_step": "workspace"},
             headers=owner["headers"],
         )
-        assert skip_apps.status_code == status.HTTP_200_OK, skip_apps.json()
-        assert skip_apps.json()["info"]["skipped_step_ids"] == ["apps"]
-
-        skip_workspace = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "workspace"},
-            headers=owner["headers"],
-        )
-        assert skip_workspace.status_code == status.HTTP_200_OK, skip_workspace.json()
-        assert skip_workspace.json()["info"]["skipped_step_ids"] == [
-            "workspace",
-            "apps",
-        ]
-
-        duplicate = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "apps"},
-            headers=owner["headers"],
-        )
-        assert duplicate.status_code == status.HTTP_200_OK, duplicate.json()
-        assert duplicate.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
-
-        unskip_apps = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"unskip_onboarding_step": "apps"},
-            headers=owner["headers"],
-        )
-        assert unskip_apps.status_code == status.HTTP_200_OK, unskip_apps.json()
-        assert unskip_apps.json()["info"]["skipped_step_ids"] == ["workspace"]
-
-        skip_phone = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "phone-number"},
-            headers=owner["headers"],
-        )
-        assert skip_phone.status_code == status.HTTP_200_OK, skip_phone.json()
-        assert skip_phone.json()["info"]["skipped_step_ids"] == [
-            "phone-number",
-            "sms-reference",
-            "sms-message",
-            "phone-call-reference",
-            "phone-call",
-            "workspace",
-        ]
-
-        unskip_sms_message = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"unskip_onboarding_step": "sms-message"},
-            headers=owner["headers"],
-        )
-        assert (
-            unskip_sms_message.status_code == status.HTTP_200_OK
-        ), unskip_sms_message.json()
-        # Unskipping a leaf re-offers only that step; its prerequisites stay
-        # skipped (the step simply reads as locked until they are unskipped).
-        assert unskip_sms_message.json()["info"]["skipped_step_ids"] == [
-            "phone-number",
-            "sms-reference",
-            "phone-call-reference",
-            "phone-call",
-            "workspace",
-        ]
-
-    assert emit.await_count == 4
-    assert emit.await_args.kwargs["skipped_step_ids"] == [
-        "phone-number",
-        "sms-reference",
-        "sms-message",
-        "phone-call-reference",
-        "phone-call",
-        "workspace",
-    ]
-
-    promote = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
-        headers=owner["headers"],
-    )
-    assert promote.status_code == status.HTTP_200_OK, promote.json()
-    assert promote.json()["info"]["completed_step_ids"] == []
-    assert promote.json()["info"]["skipped_step_ids"] == [
-        "phone-number",
-        "sms-reference",
-        "phone-call-reference",
-        "phone-call",
-        "workspace",
-    ]
+        assert reset.status_code == status.HTTP_200_OK, reset.json()
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["step_id"] == "workspace"
 
 
 @pytest.mark.anyio
@@ -1685,7 +1496,7 @@ async def test_personal_coordinator_requires_owner_for_lifecycle_operations(
 
     delete = await client.delete(
         f"/v0/assistant/{coordinator_id}",
-        headers=owner["headers"],
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
     assert delete.status_code == status.HTTP_409_CONFLICT, delete.json()
     assert delete.json()["detail"] == "cannot_delete_coordinator"

@@ -995,15 +995,14 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
     Data-heavy contexts can hold millions of log events; binding them all into a
     single ``IN`` overflows the driver bind-parameter limit (pg8000 caps a
     statement at 65535 params) and is pathological on psycopg2. The deletion
-    path (sibling cleanup + GCS media scan) chunks these lookups. Run here with a
-    tiny chunk size so a small dataset spans several chunks, and assert the media
-    scan visits *every* log across all chunks (a regression to a single
-    un-merged query would only process the first chunk).
+    path (GCS media scan) chunks these lookups. Run here with a tiny chunk size
+    so a small dataset spans several chunks, and assert the media scan visits
+    *every* log across all chunks (a regression to a single un-merged query
+    would only process the first chunk).
     """
     from unittest.mock import MagicMock, patch
 
     from orchestra.db.dao import log_event_dao as led_module
-    from orchestra.db.dao import sibling_context_cleanup as sib_module
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.models.core_models import (
         Context,
@@ -1054,11 +1053,7 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
         led_module.LogEventDAO,
         "bucket_service_factory",
         lambda: mock_bucket,
-    ), patch.object(led_module, "_LOG_ID_IN_CHUNK", 2), patch.object(
-        sib_module,
-        "_LOG_ID_IN_CHUNK",
-        2,
-    ):
+    ), patch.object(led_module, "_LOG_ID_IN_CHUNK", 2):
         ContextDAO(dbsession).delete(context_id)
 
     # Every log across all chunks was scanned and its media deleted.

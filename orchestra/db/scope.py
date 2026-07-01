@@ -11,16 +11,12 @@ unit of bulk deletion. Owners are:
   (``owner_id`` = ``agent_id``).
 * ``team`` -- the shared-team contexts ``Teams/{team_id}/<Manager>/...``
   (``owner_id`` = ``team_id``).
-* ``aggregation`` -- the cross-cutting *view* contexts ``{user_id}/All/...`` and
-  ``All/...``. These do not own log events (logs are referenced into them by the
-  owning context), so they have no ``owner_id`` and never drive partitioning.
 * ``system`` -- everything else (builtins / system datasets) with no per-owner
   deletion semantics.
 
-A log event's owner is the owner of the context it is *created* in (the write
-root), not of any aggregation context it is later referenced into. That owner is
-denormalized onto the heavy tables so deleting an assistant or a team becomes an
-O(1) partition drop that also removes the aggregation references.
+Every context is owner-homogeneous: a log event's owner is the owner of the
+context it is created in. That owner is denormalized onto the heavy tables so
+deleting an assistant or a team is an O(1) owner sub-partition drop.
 """
 
 from __future__ import annotations
@@ -36,14 +32,11 @@ logger = logging.getLogger(__name__)
 
 # Top-level prefix for shared-team contexts (mirrors unity's ContextRegistry).
 TEAM_CONTEXT_PREFIX = "Teams"
-# Path component marking a cross-assistant / cross-user aggregation view.
-AGGREGATION_COMPONENT = "All"
 
 
 class OwnerScope(StrEnum):
     ASSISTANT = "assistant"
     TEAM = "team"
-    AGGREGATION = "aggregation"
     SYSTEM = "system"
 
 
@@ -62,10 +55,9 @@ def owner_from_context_name(name: str) -> Owner:
 
     Convention (see unity ``ContextRegistry`` / ``session_details``):
 
-    * ``Teams/{team_id}/...``            -> team-owned
-    * ``{user_id}/All/...`` or ``All/...`` -> aggregation view (no owner)
-    * ``{user_id}/{agent_id}/...``       -> assistant-owned
-    * anything else                      -> system
+    * ``Teams/{team_id}/...``      -> team-owned
+    * ``{user_id}/{agent_id}/...`` -> assistant-owned
+    * anything else                -> system
 
     Test contexts are prefixed with a ``tests/.../`` root; the trailing
     ``{user}/{agent}/...`` (or ``Teams/...``) shape is matched after skipping
@@ -81,11 +73,6 @@ def owner_from_context_name(name: str) -> Owner:
     for i in range(len(parts) - 1):
         if parts[i] == TEAM_CONTEXT_PREFIX and _is_int(parts[i + 1]):
             return Owner(OwnerScope.TEAM, int(parts[i + 1]))
-
-    # Cross-assistant / cross-user aggregation view: ``.../All/...``. These hold
-    # only by-reference logs and own nothing.
-    if AGGREGATION_COMPONENT in parts:
-        return Owner(OwnerScope.AGGREGATION, None)
 
     # Per-assistant: ``{user_id}/{agent_id}/...`` -- the agent_id is the first
     # integer component that follows a non-integer (the user_id), which also
@@ -120,9 +107,9 @@ def owner_key(scope: OwnerScope, owner_id: int | None) -> str:
     """Single-column partition key encoding an owner.
 
     ``a{agent_id}`` / ``t{team_id}`` for assistant/team owners; ``sys`` for
-    everything without a per-owner deletion identity (aggregation views never
-    own logs, system/builtins data). This is the LIST sub-partition key the
-    shared Assistants project is divided by.
+    everything without a per-owner deletion identity (system/builtins data).
+    This is the LIST sub-partition key the shared Assistants project is divided
+    by.
     """
     if scope == OwnerScope.ASSISTANT and owner_id is not None:
         return f"a{owner_id}"
@@ -138,8 +125,8 @@ def single_owner_key(owner_scope, owner_id: int | None) -> str | None:
     Only assistant/team contexts with a real ``owner_id`` are single-owner: all
     their logs share one ``owner_key`` (enforced by ``ContextDAO.add_logs``), so a
     query filtered to one such context can prune to its owner sub-partition.
-    Aggregation/system contexts return ``None`` -- they may legitimately hold logs
-    from many owners, so no single ``owner_key`` predicate is valid.
+    System contexts return ``None`` (``sys`` is a shared bucket, not a single
+    owner), so no single ``owner_key`` predicate is valid for them.
 
     ``owner_scope`` accepts an :class:`OwnerScope` or its stored string value
     (or ``None``).
@@ -180,8 +167,8 @@ def single_owner_key_for_context(
     """:func:`single_owner_key` resolved from the DB by ``context_id``.
 
     Returns the owner sub-partition key for single-owner (assistant/team)
-    contexts, or ``None`` for aggregation/system/missing contexts (which must not
-    be pinned to one owner).
+    contexts, or ``None`` for system/missing contexts (which must not be pinned
+    to one owner).
     """
     if context_id is None:
         return None
@@ -239,10 +226,10 @@ def purge_owner(
 def backfill_heavy_owner_keys(conn: Connection, batch: int = 50000) -> None:
     """Denormalize each log's owning scope onto the heavy tables as ``owner_key``.
 
-    A log's owner is its *creating* context (the assistant/team one), not the
-    aggregation views it is also referenced into -- so the join filters to
-    ``owner_scope IN ('assistant','team')``. Logs with no owning context fall
-    back to ``'sys'``. ``log_event_context`` and ``embedding`` inherit their
+    A log's owner is its creating (assistant/team) context -- so the join
+    filters to ``owner_scope IN ('assistant','team')``. Logs with no owning
+    context fall back to ``'sys'``. ``log_event_context`` and ``embedding``
+    inherit their
     log's ``owner_key`` so every association/vector lands in the same
     sub-partition and drops together. Batched by id; only NULL rows are touched,
     so it is idempotent and resumable.

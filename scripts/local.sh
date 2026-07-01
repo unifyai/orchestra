@@ -878,10 +878,9 @@ start_orchestra_server() {
   export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="$ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS"
 
   # API keys for embedding and LLM operations
-  # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first, then
-  # falls back to standard names (OPENAI_API_KEY, ANTHROPIC_API_KEY).
-  # litellm uses the standard names directly, so we export them if set.
-  [[ -n "${OPENAI_API_KEY:-}" ]] && export OPENAI_API_KEY
+  # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first,
+  # then falls back to standard provider names.
+  [[ -n "${OPENROUTER_API_KEY:-}" ]] && export OPENROUTER_API_KEY
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && export ANTHROPIC_API_KEY
   [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && export GOOGLE_APPLICATION_CREDENTIALS
 

@@ -1475,7 +1475,20 @@ SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
 SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
 SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
+# Fired when the user resets a completed step from the Console checklist.
+# The derivation already excludes evidence older than the reset cutoff, but
+# the brain caches the rendered progress between TTL fetches — without this
+# event the reset only self-corrects on the next backstop fetch (up to 30s),
+# so a nudge in that window can still claim the step is done. The event
+# pushes the freshly-derived render immediately and tells the brain the step
+# is no longer complete.
+SUBTYPE_ONBOARDING_STEP_RESET = "onboarding_step_reset"
 SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
+# Fired when the user clicks a workspace demo row (mailbox / Drive /
+# calendar). Twin reads that area of the connected workspace and delivers a
+# short summary back as a single unify_message, which is also what proves the
+# step complete (see onboarding_graph.DEMO_TO_OUTBOUND_MEDIUMS).
+SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1507,7 +1520,9 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_INTEGRATION_CONNECTED,
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
+        SUBTYPE_ONBOARDING_STEP_RESET,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
+        SUBTYPE_WORKSPACE_DEMO_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1521,6 +1536,18 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
 # ``WORKSPACE_MANAGED_SECRET_PREFIXES``
 # (src/hooks/Assistants/useAssistantIntegrations.ts) — keep in sync.
 _WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_", "AZURE_")
+
+# A single workspace connection writes a whole bundle of secrets (access +
+# refresh token, expiry, granted scopes, account email, ...) and the
+# token-refresh cron overwrites the access token on a schedule. To narrate
+# "workspace connected" exactly once per connection — and never on a refresh —
+# we only emit when the *created* secret is the provider's access-token row:
+# it is written on every connect path (BYOD and enterprise, Google and
+# Microsoft) and is only ever created (not updated) at first connect, since
+# refresh does an update and disconnect deletes it before a reconnect.
+_WORKSPACE_CONNECTED_MARKERS: frozenset[str] = frozenset(
+    {"GOOGLE_ACCESS_TOKEN", "MICROSOFT_ACCESS_TOKEN"},
+)
 
 # Onboarding checklist step ids derivable from durable domain state.
 # ``meet`` (picker resolution) is deliberately absent because it is
@@ -1539,7 +1566,8 @@ ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
-ONBOARDING_STEP_SCHEDULE = "schedule"
+ONBOARDING_STEP_LAUNCH_MISSION = "launch-mission"
+ONBOARDING_STEP_ARM_TRIPWIRE = "arm-tripwire"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
 DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_EMAIL_REPLY,
@@ -1555,7 +1583,8 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
-    ONBOARDING_STEP_SCHEDULE,
+    ONBOARDING_STEP_LAUNCH_MISSION,
+    ONBOARDING_STEP_ARM_TRIPWIRE,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
     *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
@@ -1618,22 +1647,40 @@ def _onboarding_step_phase(step_id: str) -> str | None:
 
 
 def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
-    """Workspace step: a BYOD email contact with a provider is live.
+    """Workspace step: the user connected a workspace, via either signal.
 
-    ``provisioned_by == 'user'`` is what distinguishes the workspace
-    OAuth handshake's contact row from the platform-provisioned
-    universal Unity mailbox every Coordinator gets at creation — the
-    latter must not count as "the user connected their workspace".
+    Two durable signals mark a connected workspace, and either counts:
+
+    * A BYOD email contact with a provider. Regular (non-coordinator)
+      assistants wire the connected mailbox into the ConversationManager
+      and get such a contact row. ``provisioned_by == 'user'`` is what
+      distinguishes it from the platform-provisioned universal Unity
+      mailbox every Coordinator gets at creation.
+    * A workspace OAuth grant, marked by ``GOOGLE_GRANTED_SCOPES`` /
+      ``MICROSOFT_GRANTED_SCOPES``. Coordinators keep their own mailbox
+      platform-managed and never get a BYOD contact row, so the OAuth
+      handshake's stored secrets are the only durable proof they
+      connected a workspace. The granted-scopes secret is the canonical
+      "connected" marker used by ``get_granted_features`` and cleared by
+      the disconnect flow, so it tracks the connection lifecycle exactly
+      — unlike the broad ``GOOGLE_``/``MICROSOFT_`` prefix, it can't be
+      left ticked by a stray secret (e.g. an orphaned ``*_ACCOUNT_EMAIL``).
     """
     contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
         coordinator.agent_id,
     )
-    return any(
+    if any(
         contact.contact_type == "email"
         and contact.provisioned_by == "user"
         and bool(contact.contact_value)
         and bool(contact.provider)
         for contact in contacts
+    ):
+        return True
+
+    secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
+    return bool(
+        secrets.get("GOOGLE_GRANTED_SCOPES") or secrets.get("MICROSOFT_GRANTED_SCOPES"),
     )
 
 
@@ -1645,11 +1692,17 @@ def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
     )
 
 
-def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
-    """Schedule step: any row exists in a readable ``Tasks`` context.
+def _coordinator_task_rows(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> list[LogEvent]:
+    """Task rows readable by the Coordinator across all its Tasks roots.
 
-    Reads across the Coordinator's roots — the personal context plus
-    one per live team membership — mirroring the Tasks panel.
+    Reads across the Coordinator's roots — the personal context plus one
+    per live team membership — mirroring the Tasks panel. Returns the full
+    ``LogEvent`` rows so callers can inspect each task's ``data`` (its
+    ``schedule`` / ``trigger`` shape) rather than just existence.
     """
     project = _project_for_coordinator(session, coordinator)
     context_names = [
@@ -1659,13 +1712,40 @@ def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
     context_names.extend(
         f"Teams/{team_id}/{COORDINATOR_TASKS_CONTEXT}" for team_id in team_ids
     )
-    row = session.scalar(
-        project_scoped_log_events(project.id, LogEvent.id)
-        .join(Context, Context.id == LogEventContext.context_id)
-        .where(Context.name.in_(context_names))
-        .limit(1),
+    return list(
+        session.scalars(
+            project_scoped_log_events(project.id, LogEvent)
+            .join(Context, Context.id == LogEventContext.context_id)
+            .where(Context.name.in_(context_names)),
+        ),
     )
-    return row is not None
+
+
+def _has_scheduled_mission(session: Session, *, coordinator: Assistant) -> bool:
+    """Launch-a-mission step: a schedule-bearing task exists.
+
+    Completion proof for the "boomerang" beat — the user set up a task that
+    reaches back out on its own. Kept distinct from the tripwire beat by
+    matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
+    so arming a tripwire never ticks this row.
+    """
+    return any(
+        isinstance(row.data, dict) and row.data.get("schedule")
+        for row in _coordinator_task_rows(session, coordinator=coordinator)
+    )
+
+
+def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
+    """Arm-a-tripwire step: a trigger-bearing task exists.
+
+    Completion proof for the "tripwire" beat — the user armed a task that
+    fires on an event. Matches only tasks carrying a ``trigger`` so a purely
+    scheduled mission never ticks this row.
+    """
+    return any(
+        isinstance(row.data, dict) and row.data.get("trigger")
+        for row in _coordinator_task_rows(session, coordinator=coordinator)
+    )
 
 
 def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User | None:
@@ -1886,7 +1966,8 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_app_secret,
-        ONBOARDING_STEP_SCHEDULE: _has_scheduled_task,
+        ONBOARDING_STEP_LAUNCH_MISSION: _has_scheduled_mission,
+        ONBOARDING_STEP_ARM_TRIPWIRE: _has_triggerable_task,
     }
     completed: list[str] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:
@@ -2597,6 +2678,7 @@ async def emit_secret_landed_event(
     *,
     assistant: Assistant,
     secret_name: str,
+    is_create: bool,
 ) -> None:
     """Fire the onboarding narration for one secret write.
 
@@ -2606,8 +2688,19 @@ async def emit_secret_landed_event(
     it's the Coordinator, otherwise the workspace's), gates on
     onboarding mode, and swallows transport errors so a transient
     adapters outage can't fail the surrounding request.
+
+    ``is_create`` is ``True`` for a POST (row created) and ``False``
+    for a PUT (row updated). The workspace-connected narration is
+    de-duped to the single create of the provider's access-token
+    marker (see :data:`_WORKSPACE_CONNECTED_MARKERS`) so a bundle of
+    OAuth secrets — and every scheduled token refresh — narrate the
+    connection exactly once instead of once per secret write.
     """
     subtype, message = _classify_secret_for_onboarding(secret_name)
+    if subtype == SUBTYPE_WORKSPACE_CONNECTED and not (
+        is_create and secret_name.upper() in _WORKSPACE_CONNECTED_MARKERS
+    ):
+        return
     await maybe_notify_for_assistant_async(
         session,
         assistant=assistant,
@@ -2675,6 +2768,52 @@ async def emit_onboarding_step_skipped_event(
         message=f"User skipped the '{step_id}' onboarding step.",
         details={
             "step_id": step_id,
+            "completed_step_ids": completed,
+            "skipped_step_ids": skipped,
+        },
+    )
+
+
+async def emit_onboarding_step_reset_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    reset_step_ids: Sequence[str] | None = None,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that the user reset a completed onboarding step.
+
+    Carries the recomputed progress (the reset step is no longer among
+    ``completed_step_ids``) so the brain's standing render corrects the
+    instant this lands, rather than waiting for the TTL backstop fetch.
+    """
+    completed = list(
+        (
+            completed_step_ids
+            if completed_step_ids is not None
+            else derive_onboarding_progress(session, coordinator=coordinator)
+        ),
+    )
+    skipped = normalize_onboarding_step_ids(
+        (
+            skipped_step_ids
+            if skipped_step_ids is not None
+            else get_coordinator_state(session, coordinator=coordinator).get(
+                "skipped_step_ids",
+            )
+        ),
+    )
+    reset_ids = list(reset_step_ids) if reset_step_ids is not None else [step_id]
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_RESET,
+        message=f"User reset the '{step_id}' onboarding step.",
+        details={
+            "step_id": step_id,
+            "reset_step_ids": reset_ids,
             "completed_step_ids": completed,
             "skipped_step_ids": skipped,
         },

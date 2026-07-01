@@ -589,9 +589,7 @@ def delete_context(
     within the context, but will remove their association with this context.
 
     When include_children is True (default), all child contexts sharing the same
-    prefix will also be deleted. For Assistants/UnityTests projects, logs that
-    exist in sibling contexts (All/X, User/All/X) will also have their associations
-    cleaned up.
+    prefix will also be deleted.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)

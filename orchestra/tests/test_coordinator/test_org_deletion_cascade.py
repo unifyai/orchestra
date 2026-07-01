@@ -121,7 +121,12 @@ async def _create_user(client: AsyncClient, suffix: str) -> dict:
     return await create_test_user(client, f"org-cascade-{suffix}@test.com")
 
 
-async def _create_org(client: AsyncClient, owner: dict, suffix: str) -> dict:
+async def _create_org(
+    client: AsyncClient,
+    owner: dict,
+    suffix: str,
+    dbsession: Session,
+) -> dict:
     response = await client.post(
         "/v0/organizations",
         headers=owner["headers"],
@@ -129,17 +134,20 @@ async def _create_org(client: AsyncClient, owner: dict, suffix: str) -> dict:
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()
     organization_payload = response.json()
-    coordinator_response = await client.post(
-        f"/v0/user/{owner['id']}/coordinator",
-        headers=owner["headers"],
+    # Creating the org disables the owner's personal workspace and provisions an
+    # org-scoped owner Coordinator; use that rather than a (now-blocked) personal
+    # coordinator.
+    dbsession.expire_all()
+    coordinator = dbsession.scalar(
+        sa.select(Assistant).where(
+            Assistant.organization_id == organization_payload["id"],
+            Assistant.is_coordinator.is_(True),
+        ),
     )
-    assert coordinator_response.status_code in {
-        status.HTTP_200_OK,
-        status.HTTP_201_CREATED,
-    }, coordinator_response.json()
+    assert coordinator is not None, "org creation should provision an owner coordinator"
     return {
         **organization_payload,
-        "coordinator_id": coordinator_response.json()["coordinator_id"],
+        "coordinator_id": coordinator.agent_id,
     }
 
 
@@ -314,7 +322,7 @@ async def test_org_deletion_cascades_through_team_cleanup_service(
     """Deleting an organization cleans every owned team before dropping the org."""
 
     owner = await _create_user(client, "success")
-    org = await _create_org(client, owner, "success")
+    org = await _create_org(client, owner, "success", dbsession)
     organization_id = org["id"]
     coordinator_id = int(org["coordinator_id"])
     first_team = await _create_org_team(
@@ -384,7 +392,8 @@ async def test_org_deletion_cascades_through_team_cleanup_service(
     dbsession.expire_all()
     assert dbsession.get(Team, first_team_id) is None
     assert dbsession.get(Team, second_team_id) is None
-    assert dbsession.get(Assistant, coordinator_id) is not None
+    # The owner Coordinator is org-scoped and is deleted with the organization.
+    assert dbsession.get(Assistant, coordinator_id) is None
     assert dbsession.get(Assistant, team_assistant_id) is None
     assert (
         dbsession.scalar(
@@ -411,7 +420,7 @@ async def test_org_deletion_retry_finishes_remaining_teams_after_partial_cleanup
     """Retried organization deletion resumes after completed team cleanup."""
 
     owner = await _create_user(client, "retry")
-    org = await _create_org(client, owner, "retry")
+    org = await _create_org(client, owner, "retry", dbsession)
     organization_id = org["id"]
     coordinator_id = int(org["coordinator_id"])
     first_team = await _create_org_team(
@@ -506,7 +515,8 @@ async def test_org_deletion_retry_finishes_remaining_teams_after_partial_cleanup
         == 0
     )
     assert dbsession.get(Assistant, team_assistant_id) is None
-    assert dbsession.get(Assistant, coordinator_id) is not None
+    # The owner Coordinator is org-scoped and is deleted with the organization.
+    assert dbsession.get(Assistant, coordinator_id) is None
     assert (
         _org_delete_cleanup_task_count(
             dbsession,

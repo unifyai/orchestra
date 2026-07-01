@@ -202,7 +202,7 @@ class ContextCreateRequest(BaseModel):
     owner_scope: Optional[str] = Field(
         default=None,
         description="Explicit ownership scope of this context "
-        "('assistant', 'team', 'aggregation', 'system'). When omitted, the "
+        "('assistant', 'team', 'system'). When omitted, the "
         "owner is inferred from the context name. Determines the unit of "
         "O(owner) bulk deletion.",
         example="assistant",

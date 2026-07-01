@@ -1446,7 +1446,7 @@ async def test_member_removal_sets_contact_is_system_false(
         "/v0/logs",
         json={
             "project_name": "Assistants",
-            "context": "All/Contacts",
+            "context": f"{owner['id']}/9000001/Contacts",
             "entries": [
                 {
                     "email_address": member["email"],  # Matches member's email
@@ -1463,7 +1463,7 @@ async def test_member_removal_sets_contact_is_system_false(
 
     # Verify Contact exists with is_system=True
     contacts_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={owner['id']}/9000001/Contacts",
         headers=org_headers,
     )
     assert contacts_resp.status_code == 200
@@ -1489,7 +1489,7 @@ async def test_member_removal_sets_contact_is_system_false(
 
     # Verify Contact now has is_system=False
     contacts_resp = await client.get(
-        "/v0/logs?project_name=Assistants&context=All/Contacts",
+        f"/v0/logs?project_name=Assistants&context={owner['id']}/9000001/Contacts",
         headers=org_headers,
     )
     assert contacts_resp.status_code == 200

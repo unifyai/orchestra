@@ -42,6 +42,7 @@ class CleanupSource(StrEnum):
     ASSISTANT_DELETE = "assistant_delete"
     ORGANIZATION_DELETE = "organization_delete"
     ORGANIZATION_MEMBER_REMOVAL = "organization_member_removal"
+    PERSONAL_WORKSPACE_DISABLED = "personal_workspace_disabled"
     USER_DELETE = "user_delete"
 
 

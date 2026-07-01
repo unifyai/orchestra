@@ -44,6 +44,7 @@ from orchestra.services.coordinator_service import (
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
 )
+from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.services.universal_unity_whatsapp import (
     ensure_coordinator_universal_whatsapp_contact,
 )
@@ -244,6 +245,8 @@ def get_user(
         "email": user_instance.email,
         "created_at": user_instance.created_at,
         "api_key": api_key_value,
+        "personal_workspace_disabled": user_instance.personal_workspace_disabled_at
+        is not None,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
         "onboarding_step": onboarding_step,
@@ -314,6 +317,8 @@ def get_user_by_email(
         "email": user_instance.email,
         "created_at": user_instance.created_at,
         "api_key": api_key_value,
+        "personal_workspace_disabled": user_instance.personal_workspace_disabled_at
+        is not None,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
         "onboarding_step": onboarding_step,
@@ -391,6 +396,8 @@ def get_user_by_account(
         "email": user_instance.email,
         "created_at": user_instance.created_at,
         "api_key": api_key_value,
+        "personal_workspace_disabled": user_instance.personal_workspace_disabled_at
+        is not None,
         "organizations": organizations,
         "has_claimed_credit_grant_link": has_claimed,
         "onboarding_step": onboarding_step,
@@ -1305,6 +1312,7 @@ def get_user_basic_info(
         "phone_number": user.phone_number,
         "whatsapp_number": user.whatsapp_number,
         "discord_id": user.discord_id,
+        "personal_workspace_disabled": user.personal_workspace_disabled_at is not None,
     }
 
 
@@ -1327,6 +1335,12 @@ async def create_personal_coordinator_endpoint(
     user_dao = UserDAO(session)
     if not user_dao.get_by_id(user_id):
         raise not_found("User")
+
+    if organization_id is None and personal_workspace_is_disabled(session, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Personal workspace is disabled for organization members.",
+        )
 
     if organization_id is not None:
         org_dao = OrganizationDAO(session)

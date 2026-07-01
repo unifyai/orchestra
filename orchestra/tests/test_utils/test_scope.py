@@ -13,9 +13,6 @@ from orchestra.db.scope import OwnerScope, owner_from_context_name
         ("a1b2-uuid/42/Knowledge/Facts", OwnerScope.ASSISTANT, 42),
         # Shared team contexts: Teams/{team_id}/...
         ("Teams/7/Contacts", OwnerScope.TEAM, 7),
-        # Aggregation views own nothing.
-        ("default/All/Contacts", OwnerScope.AGGREGATION, None),
-        ("All/Contacts", OwnerScope.AGGREGATION, None),
         # Test contexts carry a variable-depth tests/<...> root.
         ("tests/run123/default/5/Data", OwnerScope.ASSISTANT, 5),
         ("tests/run-x/y/Teams/9/Contacts", OwnerScope.TEAM, 9),
@@ -34,11 +31,3 @@ def test_owner_from_context_name(name, scope, owner_id):
 def test_team_prefix_not_misread_as_assistant():
     # The team_id integer must not be picked up by the assistant scan.
     assert owner_from_context_name("Teams/13/Knowledge").scope == OwnerScope.TEAM
-
-
-def test_aggregation_takes_precedence_over_trailing_ints():
-    # A trailing integer component in an aggregation path stays aggregation.
-    assert (
-        owner_from_context_name("default/All/Metrics/2024").scope
-        == OwnerScope.AGGREGATION
-    )

@@ -160,6 +160,15 @@ def test_context_deletion_orphan_queries_prune_to_project(dbsession) -> None:
             "WHERE id = ANY(:ids) {extra} LIMIT 5000) "
             "DELETE FROM log_event WHERE id IN (SELECT id FROM batch) {extra}"
         ),
+        # Derived-log backfill filter rebuild (views._build_pending_query): the
+        # outer log_event scan that gates the EXISTS(condition) must carry
+        # project_id, else it Seq/Index-scans every tenant's partition.
+        "derived-backfill": (
+            "SELECT le.id FROM log_event le "
+            "WHERE le.id = ANY(:ids) {extra} "
+            "AND EXISTS (SELECT 1 FROM log_event_context lec "
+            "WHERE lec.log_event_id = le.id {lec_extra})"
+        ),
     }
 
     def _count_partitions(plan: str) -> int:

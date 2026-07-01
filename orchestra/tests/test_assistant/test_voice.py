@@ -17,7 +17,6 @@ from orchestra.services.elevenlabs_service import ElevenLabsAPIError
 from orchestra.services.elevenlabs_service import (
     ElevenLabsService as OriginalElevenLabsService,
 )
-from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
 from orchestra.tests.utils import HEADERS, create_test_user
 
 
@@ -89,17 +88,10 @@ def mock_tts_services_factory(fastapi_app):
     deepgram_mock = MagicMock(spec=OriginalDeepgramService)
     deepgram_mock.detect_language_from_audio = MagicMock()
 
-    # OpenAIService methods are sync
-    openai_mock = MagicMock(spec=OriginalOpenAIService)
-    openai_mock.generate_speech = MagicMock()
-    openai_mock.detect_language_from_text = MagicMock()
-    openai_mock.generate_voice_description_from_bio = MagicMock()
-
     # Generate speech endpoint data
     mock_audio_bytes = b"mock_audio_data"
     cartesia_mock.generate_speech.return_value = (mock_audio_bytes, "audio/mpeg")
     elevenlabs_mock.generate_speech.return_value = (mock_audio_bytes, "audio/mpeg")
-    openai_mock.generate_speech.return_value = (mock_audio_bytes, "audio/mpeg")
 
     # Clone voice endpoint data
     cartesia_mock.clone_voice.return_value = {
@@ -134,16 +126,14 @@ def mock_tts_services_factory(fastapi_app):
 
     # Language detection mocks
     deepgram_mock.detect_language_from_audio.return_value = "en"
-    openai_mock.detect_language_from_text.return_value = "en"
 
     fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: cartesia_mock
     fastapi_app.dependency_overrides[OriginalElevenLabsService] = (
         lambda: elevenlabs_mock
     )
     fastapi_app.dependency_overrides[OriginalDeepgramService] = lambda: deepgram_mock
-    fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
-    yield cartesia_mock, elevenlabs_mock, deepgram_mock, openai_mock
+    yield cartesia_mock, elevenlabs_mock, deepgram_mock
 
     fastapi_app.dependency_overrides.clear()
 
@@ -164,7 +154,7 @@ async def test_register_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    _, _, _, _ = mock_tts_services_factory
+    _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     payload = {
         "voice_id": "cartesia-preset-echo",
@@ -198,7 +188,7 @@ async def test_register_non_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    _, _, _, _ = mock_tts_services_factory
+    _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     payload = {
         "voice_id": "user-owned-cartesia-voice-123",
@@ -232,7 +222,7 @@ async def test_register_voice_already_exists_in_db(
     dbsession,
     mock_tts_services_factory,
 ):
-    _, _, _, _ = mock_tts_services_factory
+    _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     payload = {
         "voice_id": "db-conflict-voice",
@@ -304,7 +294,7 @@ async def test_delete_non_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-non-preset-test"
     provider = "cartesia"
@@ -339,7 +329,7 @@ async def test_delete_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-preset-registration-test"
     provider = "cartesia"
@@ -372,7 +362,7 @@ async def test_delete_voice_in_use_fails(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_in_use = "voice-in-use-test"
     provider = "cartesia"
@@ -539,7 +529,7 @@ async def test_clone_voice_cartesia(
     dbsession,
     mock_tts_services_factory: MagicMock,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -597,7 +587,7 @@ async def test_clone_voice_autodetect_language(
     dbsession,
     mock_tts_services_factory: MagicMock,
 ):
-    cartesia_mock, _, deepgram_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, deepgram_mock = mock_tts_services_factory
     deepgram_mock.detect_language_from_audio.return_value = "fr"
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
@@ -651,7 +641,7 @@ async def test_clone_voice_cartesia_api_error_on_clone(
     client: AsyncClient,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -690,7 +680,7 @@ async def test_clone_voice_elevenlabs(
     dbsession,
     mock_tts_services_factory: MagicMock,
 ):
-    _, elevenlabs_mock, _, _ = mock_tts_services_factory
+    _, elevenlabs_mock, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -746,7 +736,7 @@ async def test_clone_voice_elevenlabs_api_error_on_clone(
     client: AsyncClient,
     mock_tts_services_factory,
 ):
-    _, elevenlabs_mock, _, _ = mock_tts_services_factory
+    _, elevenlabs_mock, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -791,7 +781,7 @@ async def test_generate_speech_cartesia_success(
     mock_tts_services_factory,
     dbsession,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
@@ -830,7 +820,7 @@ async def test_generate_speech_elevenlabs_success(
     mock_tts_services_factory,
     dbsession,
 ):
-    _, elevenlabs_mock, _, _ = mock_tts_services_factory
+    _, elevenlabs_mock, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
@@ -866,47 +856,12 @@ async def test_generate_speech_elevenlabs_success(
 
 
 @pytest.mark.anyio
-async def test_generate_speech_openai_success(
-    client: AsyncClient,
-    mock_tts_services_factory,
-    dbsession,
-):
-    _, _, _, openai_mock = mock_tts_services_factory
-    user_id = await get_user_id_from_request_state(client)
-
-    payload = {
-        "text": "Hello OpenAI",
-        "provider": "openai",
-        "voice_id": "marin",
-        "model_id": "gpt-4o-mini-tts",
-        "output_format": "mp3",
-    }
-    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-        mock_state.user_id = user_id
-        resp = await client.post(
-            "/v0/assistant/voice/generate",
-            json=payload,
-            headers=HEADERS,
-        )
-
-    assert resp.status_code == status.HTTP_200_OK
-    assert resp.content == b"mock_audio_data"
-    assert resp.headers["content-type"] == "audio/mpeg"
-    openai_mock.generate_speech.assert_called_once_with(
-        text="Hello OpenAI",
-        voice_id="marin",
-        model_id="gpt-4o-mini-tts",
-        output_format="mp3",
-    )
-
-
-@pytest.mark.anyio
 async def test_generate_speech_provider_api_error(
     client: AsyncClient,
     mock_tts_services_factory,
     dbsession,
 ):
-    cartesia_mock, _, _, _ = mock_tts_services_factory
+    cartesia_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     cartesia_mock.generate_speech.side_effect = CartesiaAPIError(
@@ -940,7 +895,7 @@ async def test_design_generate_previews_success(
     mock_tts_services_factory,
     dbsession,
 ):
-    _, elevenlabs_mock, _, _ = mock_tts_services_factory
+    _, elevenlabs_mock, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
