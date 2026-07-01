@@ -737,21 +737,34 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         ),
     ),
     OnboardingStep(
-        id="schedule",
-        title="Schedule a task for later",
+        id="launch-mission",
+        title="Launch a mission",
         phase=PHASE_TASKS,
         kind="schedule",
         depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Schedule a task for later' row in the "
-            "Onboarding checklist; it opens Tasks so they can set up recurring "
-            "or event-triggered work."
+            "Have them click the 'Launch a mission' row in the Onboarding "
+            "checklist; it opens Tasks so they can schedule a short-fuse task "
+            "and watch me report back on a channel they've connected."
         ),
-        nudge_voice=(
-            "clicking the 'Schedule a task for later' row in the Onboarding checklist"
+        nudge_voice=("clicking the 'Launch a mission' row in the Onboarding checklist"),
+    ),
+    OnboardingStep(
+        id="arm-tripwire",
+        title="Arm a tripwire",
+        phase=PHASE_TASKS,
+        kind="schedule",
+        depends_on={"launch-mission": ADDRESSED},
+        can_skip=True,
+        derivable=True,
+        nudge_chat=(
+            "Have them click the 'Arm a tripwire' row in the Onboarding "
+            "checklist; it opens Tasks so they can set a task that fires on an "
+            "event, then trip it with the Test-it control to watch it run."
         ),
+        nudge_voice=("clicking the 'Arm a tripwire' row in the Onboarding checklist"),
     ),
     _coming_soon("learning-coming-soon", PHASE_LEARNING),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
@@ -834,10 +847,41 @@ class StepPresentation:
     chips_call: tuple[OnboardingChip, ...] = ()
 
 
-_SCHEDULE_CHIPS: tuple[OnboardingChip, ...] = (
-    OnboardingChip("morning-briefing", "Send me a briefing tomorrow at 8am"),
-    OnboardingChip("weekly-recap", "Every Friday, recap my week"),
-    OnboardingChip("email-trigger", "When I get an email from my boss, alert me"),
+# Time-bound work that reaches back out on its own. The first chip is a
+# short-fuse "boomerang" the user can watch land live during onboarding and
+# would genuinely keep (real inbox triage, not a test ping); the rest are
+# real recurring routines referencing workspace data they've connected.
+_LAUNCH_MISSION_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "inbox-sweep-soon",
+        "In two minutes, check my inbox and text me anything urgent",
+    ),
+    OnboardingChip(
+        "morning-calendar",
+        "Every morning at 8am, send me a calendar rundown",
+    ),
+    OnboardingChip(
+        "weekly-recap",
+        "Every Friday afternoon, recap my week and email it to me",
+    ),
+)
+
+# Event-bound work that fires when something happens in the user's world.
+# Each names a trigger on a channel they've connected and a concrete output;
+# the user trips one deterministically with the Test-it control to see it fire.
+_ARM_TRIPWIRE_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "urgent-email",
+        "When I get an email marked urgent, text me straight away",
+    ),
+    OnboardingChip(
+        "after-hours-slack",
+        "When someone messages me on Slack after 6pm, send me a WhatsApp",
+    ),
+    OnboardingChip(
+        "calendar-invite",
+        "When a calendar invite lands for tomorrow, give me a heads-up here",
+    ),
 )
 
 # Presentation copy keyed by step id. Lives beside the graph so every
@@ -943,11 +987,17 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~30s",
     ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
-    "schedule": StepPresentation(
-        "Set up a recurring or event-triggered task.",
-        "~1 min",
-        _SCHEDULE_CHIPS,
-        _SCHEDULE_CHIPS,
+    "launch-mission": StepPresentation(
+        "Schedule a task and watch me report back on your channel.",
+        "~2 min",
+        _LAUNCH_MISSION_CHIPS,
+        _LAUNCH_MISSION_CHIPS,
+    ),
+    "arm-tripwire": StepPresentation(
+        "Set a task that fires on an event, then test it live.",
+        "~2 min",
+        _ARM_TRIPWIRE_CHIPS,
+        _ARM_TRIPWIRE_CHIPS,
     ),
 }
 
@@ -1062,10 +1112,19 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "Clicking the 'Connect me with your apps' row opens the Integrations "
         "tab; they connect at least one app from the gallery and authorize it."
     ),
-    "schedule": (
-        "Clicking the 'Schedule a task for later' row opens the Tasks tab. "
-        "Time- or event-bound work lands there and recurs or fires on a trigger. "
-        "Read-only suggestion chips render under the schedule row as inspiration only."
+    "launch-mission": (
+        "Clicking the 'Launch a mission' row opens the Tasks tab. The user "
+        "schedules a short-fuse task; it fires on its own and reports back on a "
+        "channel they've connected — the proof is me returning unprompted, not "
+        "the row existing. Read-only suggestion chips render under the row as "
+        "inspiration only."
+    ),
+    "arm-tripwire": (
+        "Clicking the 'Arm a tripwire' row opens the Tasks tab. The user arms an "
+        "event-triggered task, then trips it deterministically with the Test-it "
+        "control and watches it run; the trigger stays armed for the real event "
+        "afterwards. Read-only suggestion chips render under the row as "
+        "inspiration only."
     ),
 }
 
