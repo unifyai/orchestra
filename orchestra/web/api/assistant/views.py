@@ -3,6 +3,7 @@ import base64
 import io
 import logging
 import math
+import os
 import re
 import time
 import urllib.request
@@ -2747,7 +2748,6 @@ async def connect_assistant_account(
     import hashlib
     import hmac as hmac_mod
     import json
-    import os
     from urllib.parse import urlencode
 
     from orchestra.web.api.assistant.scopes import build_scope_string
@@ -2917,8 +2917,6 @@ async def disconnect_assistant_account(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse:
-    import os
-
     import httpx
 
     user_id = request.state.user_id
