@@ -930,7 +930,7 @@ async def test_design_generate_previews_el_api_error(
     mock_tts_services_factory,
     dbsession,
 ):
-    _, elevenlabs_mock, _, _ = mock_tts_services_factory
+    _, elevenlabs_mock, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     elevenlabs_mock.design_voice_generate_previews.side_effect = ElevenLabsAPIError(
