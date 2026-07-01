@@ -4,16 +4,11 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-from orchestra.services.bucket_service import (
-    BucketService as OriginalBucketService,
-    create_bucket_service,
-)
+from orchestra.services.bucket_service import BucketService as OriginalBucketService
+from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.openai_service import ImageAnalysisResponse
 from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
-from orchestra.services.openai_service import (
-    TextModerationResponse,
-    TextModerationResult,
-)
+from orchestra.services.openai_service import TextModerationResult
 from orchestra.services.replicate_service import (
     ReplicateService as OriginalReplicateService,
 )
@@ -68,18 +63,12 @@ def mock_media_services_factory(fastapi_app):
     # OpenAIService methods are sync
     openai_mock = MagicMock(spec=OriginalOpenAIService)
     openai_mock.analyze_image = MagicMock()
-    openai_mock.analyze_audio = MagicMock()
     openai_mock.moderate_text = MagicMock()
     # Default success response for moderation checks
     openai_mock.analyze_image.return_value = ImageAnalysisResponse(
         has_human_face=True,
         is_nsfw=False,
         reason="Image is OK.",
-    )
-    openai_mock.analyze_audio.return_value = TextModerationResponse(
-        contains_speech=True,
-        is_nsfw=False,
-        reason="Audio is OK.",
     )
     openai_mock.moderate_text.return_value = TextModerationResult(
         is_nsfw=False,
@@ -392,10 +381,6 @@ async def test_animate_video_with_urls_success(
     openai_mock.analyze_image.assert_called_once_with(
         image_url="https://example.com/image.png",
     )
-    openai_mock.analyze_audio.assert_called_once_with(
-        audio_url="https://example.com/audio.mp3",
-    )
-
     replicate_mock.create_video_animation.assert_called_once_with(
         image_url="https://example.com/image.png",
         audio_url="https://example.com/audio.mp3",
@@ -475,10 +460,6 @@ async def test_animate_video_with_files_success(
     openai_mock.analyze_image.assert_called_once_with(
         image_url="https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
     )
-    openai_mock.analyze_audio.assert_called_once_with(
-        audio_url="https://storage.googleapis.com/mock-bucket/tmp/temp_audio.mp3",
-    )
-
     replicate_mock.create_video_animation.assert_called_once_with(
         image_url="https://storage.googleapis.com/mock-bucket/tmp/temp_image.jpg",
         audio_url="https://storage.googleapis.com/mock-bucket/tmp/temp_audio.mp3",
@@ -528,7 +509,6 @@ async def test_animate_video_fails_moderation_no_face(
     openai_mock.analyze_image.assert_called_once_with(
         image_url="https://example.com/no_face.png",
     )
-    openai_mock.analyze_audio.assert_not_called()
     replicate_mock.create_video_animation.assert_not_called()
 
 
@@ -571,109 +551,6 @@ async def test_animate_video_fails_moderation_image_nsfw(
 
     openai_mock.analyze_image.assert_called_once_with(
         image_url="https://example.com/nsfw_image.png",
-    )
-    openai_mock.analyze_audio.assert_not_called()
-    replicate_mock.create_video_animation.assert_not_called()
-
-
-@pytest.mark.anyio
-@patch(
-    "orchestra.web.api.assistant.views.urllib.request.urlopen",
-    side_effect=Exception("mocked"),
-)
-async def test_animate_video_fails_moderation_audio_nsfw(
-    mock_urlopen,
-    client: AsyncClient,
-    mock_media_services_factory,
-):
-    replicate_mock, _, openai_mock = mock_media_services_factory
-
-    # Mock OpenAI to pass the image but reject the audio
-    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
-        has_human_face=True,
-        is_nsfw=False,
-        reason="OK",
-    )
-    openai_mock.analyze_audio.return_value = TextModerationResponse(
-        contains_speech=True,
-        is_nsfw=True,
-        reason="Explicit language detected.",
-    )
-
-    data_payload = {
-        "image_url": "https://example.com/clean_image.png",
-        "audio_url": "https://example.com/nsfw_audio.mp3",
-    }
-    request_headers = HEADERS.copy()
-    request_headers.pop("Content-Type", None)
-
-    resp = await client.post(
-        "/v0/assistant/photo/animate",
-        data=data_payload,
-        files={},
-        headers=request_headers,
-    )
-
-    assert resp.status_code == 400
-    assert "Audio moderation failed" in resp.json()["detail"]
-    assert "Explicit language detected" in resp.json()["detail"]
-
-    openai_mock.analyze_image.assert_called_once_with(
-        image_url="https://example.com/clean_image.png",
-    )
-    openai_mock.analyze_audio.assert_called_once_with(
-        audio_url="https://example.com/nsfw_audio.mp3",
-    )
-    replicate_mock.create_video_animation.assert_not_called()
-
-
-@pytest.mark.anyio
-@patch(
-    "orchestra.web.api.assistant.views.urllib.request.urlopen",
-    side_effect=Exception("mocked"),
-)
-async def test_animate_video_fails_moderation_no_speech(
-    mock_urlopen,
-    client: AsyncClient,
-    mock_media_services_factory,
-):
-    replicate_mock, _, openai_mock = mock_media_services_factory
-
-    # Mock OpenAI to pass the image but reject the audio due to no speech
-    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
-        has_human_face=True,
-        is_nsfw=False,
-        reason="OK",
-    )
-    openai_mock.analyze_audio.return_value = TextModerationResponse(
-        contains_speech=False,
-        is_nsfw=False,
-        reason="No speech detected.",
-    )
-
-    data_payload = {
-        "image_url": "https://example.com/clean_image.png",
-        "audio_url": "https://example.com/silent_audio.mp3",
-    }
-    request_headers = HEADERS.copy()
-    request_headers.pop("Content-Type", None)
-
-    resp = await client.post(
-        "/v0/assistant/photo/animate",
-        data=data_payload,
-        files={},
-        headers=request_headers,
-    )
-
-    assert resp.status_code == 400
-    assert "No speech was detected" in resp.json()["detail"]
-    assert "No speech detected" in resp.json()["detail"]
-
-    openai_mock.analyze_image.assert_called_once_with(
-        image_url="https://example.com/clean_image.png",
-    )
-    openai_mock.analyze_audio.assert_called_once_with(
-        audio_url="https://example.com/silent_audio.mp3",
     )
     replicate_mock.create_video_animation.assert_not_called()
 

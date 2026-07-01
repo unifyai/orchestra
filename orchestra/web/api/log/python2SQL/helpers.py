@@ -8,12 +8,12 @@ import math
 import os
 import re
 import threading
+from dataclasses import dataclass
 from typing import Optional, Union
 
 import httpx
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
-from openai import OpenAI
 from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
@@ -84,45 +84,45 @@ def _infer_type_from_value(value) -> str:
     return LogEventDAO.infer_type("", value)
 
 
-# OpenAI API key for embeddings
-# Uses get_env for fallback: ORCHESTRA_OPENAI_API_KEY -> OPENAI_API_KEY
-OPENAI_API_KEY = get_env("ORCHESTRA_OPENAI_API_KEY")
 OPENROUTER_API_KEY = get_env("ORCHESTRA_OPENROUTER_API_KEY")
 OPENROUTER_API_BASE = get_env(
     "ORCHESTRA_OPENROUTER_API_BASE",
     "https://openrouter.ai/api/v1",
 )
 
-# Global sync OpenAI client. Thread-safe via httpx.Client's connection pooling.
-_openai_client: OpenAI | None = None
-_openai_client_lock = threading.Lock()
+# Global sync OpenRouter client. Thread-safe via httpx.Client's connection pooling.
+_openrouter_client: httpx.Client | None = None
+_openrouter_client_lock = threading.Lock()
 
 
-def _get_openai_client() -> OpenAI | None:
+def _get_openrouter_client() -> httpx.Client | None:
     """
-    Get or create the global sync OpenAI client.
+    Get or create the global sync OpenRouter client.
 
     Thread-safe: Uses a lock for initialization.
     The sync httpx.Client connection pool is thread-safe without event loop issues.
 
     Returns:
-        OpenAI-compatible client, or None if no API key configured.
+        OpenRouter client, or None if no API key configured.
     """
-    global _openai_client
+    global _openrouter_client
 
-    api_key = OPENROUTER_API_KEY or OPENAI_API_KEY
-    if not api_key:
+    if not OPENROUTER_API_KEY:
         return None
 
-    if _openai_client is None:
-        with _openai_client_lock:
-            if _openai_client is None:
-                kwargs = {"api_key": api_key}
-                if OPENROUTER_API_KEY:
-                    kwargs["base_url"] = OPENROUTER_API_BASE
-                _openai_client = OpenAI(**kwargs)
+    if _openrouter_client is None:
+        with _openrouter_client_lock:
+            if _openrouter_client is None:
+                _openrouter_client = httpx.Client(
+                    base_url=OPENROUTER_API_BASE,
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=httpx.Timeout(30.0),
+                )
 
-    return _openai_client
+    return _openrouter_client
 
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -197,8 +197,8 @@ def _get_gcp_credentials():
 def count_tokens_per_utf_byte(document: str) -> int:
     """
     Estimates token count based on UTF-8 byte length.
-    Open AI uses this rather than `tiktoken` contrary
-    to what is mentioned in the docs:
+    The OpenAI-compatible embedding route uses this rather than `tiktoken`
+    contrary to what is mentioned in the docs:
     https://community.openai.com/t/max-total-embeddings-tokens-per-request/1254699/6
     """
     # Single C-level pass to UTF-8; then take length
@@ -238,9 +238,64 @@ def _get_embedding(
 
 
 def _embedding_model_for_api(model: str) -> str:
-    if OPENROUTER_API_KEY and not model.startswith("openai/"):
+    if not model.startswith("openai/"):
         return f"openai/{model}"
     return model
+
+
+@dataclass
+class _EmbeddingResult:
+    index: int
+    embedding: list[float]
+
+
+@dataclass
+class _EmbeddingUsage:
+    total_tokens: int | None = None
+    prompt_tokens: int | None = None
+
+
+@dataclass
+class _EmbeddingResponse:
+    data: list[_EmbeddingResult]
+    usage: _EmbeddingUsage | None = None
+
+
+def _create_embeddings(
+    *,
+    model: str,
+    input: list[str],
+    dimensions: int | None = None,
+) -> _EmbeddingResponse:
+    client = _get_openrouter_client()
+    if client is None:
+        raise ValueError(
+            "OPENROUTER_API_KEY or ORCHESTRA_OPENROUTER_API_KEY must be set to use embed()",
+        )
+    payload: dict = {"model": model, "input": input}
+    if dimensions is not None:
+        payload["dimensions"] = dimensions
+    response = client.post("/embeddings", json=payload)
+    response.raise_for_status()
+    body = response.json()
+    usage = body.get("usage") or {}
+    return _EmbeddingResponse(
+        data=[
+            _EmbeddingResult(
+                index=item["index"],
+                embedding=item["embedding"],
+            )
+            for item in body["data"]
+        ],
+        usage=(
+            _EmbeddingUsage(
+                total_tokens=usage.get("total_tokens"),
+                prompt_tokens=usage.get("prompt_tokens"),
+            )
+            if usage
+            else None
+        ),
+    )
 
 
 def _get_embeddings_batch(
@@ -276,12 +331,11 @@ def _get_embeddings_batch(
     """
     import time
 
-    import openai
     from opentelemetry import trace
 
-    if not (OPENROUTER_API_KEY or OPENAI_API_KEY):
+    if not OPENROUTER_API_KEY:
         raise ValueError(
-            "OPENROUTER_API_KEY/ORCHESTRA_OPENROUTER_API_KEY or OPENAI_API_KEY/ORCHESTRA_OPENAI_API_KEY must be set to use embed()",
+            "OPENROUTER_API_KEY or ORCHESTRA_OPENROUTER_API_KEY must be set to use embed()",
         )
 
     model = model or DEFAULT_EMBEDDING_MODEL
@@ -337,8 +391,7 @@ def _get_embeddings_batch(
 
             start_time = time.monotonic()
             try:
-                client = _get_openai_client()
-                resp = client.embeddings.create(**kwargs)
+                resp = _create_embeddings(**kwargs)
                 duration_ms = (time.monotonic() - start_time) * 1000
                 span.set_attribute("embedding.duration_ms", duration_ms)
                 span.set_attribute("embedding.success", True)
@@ -363,7 +416,9 @@ def _get_embeddings_batch(
 
                 return embs
 
-            except openai.RateLimitError as e:
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 429:
+                    raise
                 duration_ms = (time.monotonic() - start_time) * 1000
                 span.set_attribute("embedding.duration_ms", duration_ms)
                 span.set_attribute("embedding.success", False)
@@ -371,28 +426,27 @@ def _get_embeddings_batch(
                 span.set_attribute("embedding.error_message", str(e)[:500])
 
                 # Capture rate limit headers if available
-                if hasattr(e, "response") and e.response is not None:
-                    headers = getattr(e.response, "headers", {})
-                    if "retry-after" in headers:
-                        span.set_attribute(
-                            "embedding.rate_limit.retry_after",
-                            headers["retry-after"],
-                        )
-                    if "x-ratelimit-limit-requests" in headers:
-                        span.set_attribute(
-                            "embedding.rate_limit.limit_requests",
-                            headers["x-ratelimit-limit-requests"],
-                        )
-                    if "x-ratelimit-remaining-requests" in headers:
-                        span.set_attribute(
-                            "embedding.rate_limit.remaining_requests",
-                            headers["x-ratelimit-remaining-requests"],
-                        )
-                    if "x-ratelimit-reset-requests" in headers:
-                        span.set_attribute(
-                            "embedding.rate_limit.reset_requests",
-                            headers["x-ratelimit-reset-requests"],
-                        )
+                headers = e.response.headers
+                if "retry-after" in headers:
+                    span.set_attribute(
+                        "embedding.rate_limit.retry_after",
+                        headers["retry-after"],
+                    )
+                if "x-ratelimit-limit-requests" in headers:
+                    span.set_attribute(
+                        "embedding.rate_limit.limit_requests",
+                        headers["x-ratelimit-limit-requests"],
+                    )
+                if "x-ratelimit-remaining-requests" in headers:
+                    span.set_attribute(
+                        "embedding.rate_limit.remaining_requests",
+                        headers["x-ratelimit-remaining-requests"],
+                    )
+                if "x-ratelimit-reset-requests" in headers:
+                    span.set_attribute(
+                        "embedding.rate_limit.reset_requests",
+                        headers["x-ratelimit-reset-requests"],
+                    )
 
                 span.add_event(
                     "rate_limit_error",

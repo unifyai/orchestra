@@ -9,8 +9,8 @@ to their unprefixed equivalents.
 Precedence: ORCHESTRA_FOO > FOO > default
 
 Example:
-    # Returns ORCHESTRA_OPENAI_API_KEY if set, else OPENAI_API_KEY, else None
-    api_key = get_env("ORCHESTRA_OPENAI_API_KEY")
+    # Returns ORCHESTRA_OPENROUTER_API_KEY if set, else OPENROUTER_API_KEY, else None
+    api_key = get_env("ORCHESTRA_OPENROUTER_API_KEY")
 """
 
 import os
@@ -20,8 +20,6 @@ from typing import Optional
 # Only vars with well-known standard names should be listed here.
 # Internal Orchestra config (DB settings, logging, etc.) should NOT have fallbacks.
 STANDARD_FALLBACKS: dict[str, str] = {
-    # OpenAI API key (used for embeddings in log search)
-    "ORCHESTRA_OPENAI_API_KEY": "OPENAI_API_KEY",
     # OpenRouter API key/base URL for OpenAI-compatible model calls
     "ORCHESTRA_OPENROUTER_API_KEY": "OPENROUTER_API_KEY",
     "ORCHESTRA_OPENROUTER_API_BASE": "OPENROUTER_API_BASE",
@@ -43,8 +41,8 @@ def get_env(key: str, default: Optional[str] = None) -> Optional[str]:
         The value of the environment variable, or default if not found.
 
     Examples:
-        >>> get_env("ORCHESTRA_OPENAI_API_KEY")
-        # Returns ORCHESTRA_OPENAI_API_KEY if set, else OPENAI_API_KEY, else None
+        >>> get_env("ORCHESTRA_OPENROUTER_API_KEY")
+        # Returns ORCHESTRA_OPENROUTER_API_KEY if set, else OPENROUTER_API_KEY, else None
 
         >>> get_env("ORCHESTRA_DB_USER", "postgres")
         # Returns ORCHESTRA_DB_USER if set, else "postgres" (no fallback - internal config)

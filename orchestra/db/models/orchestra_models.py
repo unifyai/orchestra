@@ -2590,7 +2590,7 @@ class Voice(Base):
     __table_args__ = (
         sa.PrimaryKeyConstraint("user_id", "voice_id", "provider"),
         sa.CheckConstraint(
-            "provider IN ('cartesia', 'elevenlabs', 'openai')",
+            "provider IN ('cartesia', 'elevenlabs')",
             name="ck_voice_provider",
         ),
     )

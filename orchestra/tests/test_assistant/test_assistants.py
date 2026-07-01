@@ -1844,16 +1844,16 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     assistant_id = create_resp.json()["info"]["agent_id"]
 
     # Pre-register the voices that will be used for updates.
-    voice_openai_payload = {
+    voice_elevenlabs_payload = {
         "voice_id": "v_upd_1",
-        "name": "Update Voice OpenAI",
+        "name": "Update Voice ElevenLabs",
         "description": "...",
         "language": "en",
-        "provider": "openai",
+        "provider": "elevenlabs",
     }
     reg1 = await client.post(
         "/v0/assistant/voice",
-        json=voice_openai_payload,
+        json=voice_elevenlabs_payload,
         headers=HEADERS,
     )
     assert reg1.status_code == 201
@@ -1875,7 +1875,7 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     # 2. Update to add full voice config
     update_full = {
         "voice_id": "v_upd_1",
-        "voice_provider": "openai",
+        "voice_provider": "elevenlabs",
     }
     patch1 = await client.patch(
         f"/v0/assistant/{assistant_id}/config",
@@ -1884,7 +1884,7 @@ async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
     )
     assert patch1.status_code == 200, patch1.text
     d1 = patch1.json()["info"]
-    assert d1["voice_id"] == "v_upd_1" and d1["voice_provider"] == "openai"
+    assert d1["voice_id"] == "v_upd_1" and d1["voice_provider"] == "elevenlabs"
 
     # 3. Update voice to a different provider
     update_partial = {"voice_id": "v_upd_2", "voice_provider": "cartesia"}

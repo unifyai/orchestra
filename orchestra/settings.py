@@ -291,7 +291,6 @@ class Settings(BaseSettings):
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
     elevenlabs_api_key: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
     deepgram_api_key: Optional[str] = os.environ.get("DEEPGRAM_API_KEY")
-    openai_api_key: Optional[str] = get_env("ORCHESTRA_OPENAI_API_KEY")
     openrouter_api_key: Optional[str] = get_env("ORCHESTRA_OPENROUTER_API_KEY")
     openrouter_api_base: str = get_env(
         "ORCHESTRA_OPENROUTER_API_BASE",

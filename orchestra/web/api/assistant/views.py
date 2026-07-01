@@ -5158,7 +5158,6 @@ async def generate_speech(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
-    openai_service: OpenAIService = Depends(),
 ) -> Response:
     user_id = request.state.user_id
     audio_bytes: bytes
@@ -5186,13 +5185,6 @@ async def generate_speech(
                 stability=request_data.elevenlabs_voice_settings_stability,
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
-        elif request_data.provider == "openai":
-            audio_bytes, content_type = openai_service.generate_speech(
-                text=request_data.text,
-                voice_id=request_data.voice_id,
-                model_id=request_data.model_id or "gpt-4o-mini-tts",
-                output_format=request_data.output_format,
-            )
         else:
             # This case should be prevented by Pydantic's Literal validation
             raise HTTPException(
@@ -5202,7 +5194,7 @@ async def generate_speech(
 
         return Response(content=audio_bytes, media_type=content_type)
 
-    except (CartesiaAPIError, ElevenLabsAPIError, OpenAIAPIError) as e:
+    except (CartesiaAPIError, ElevenLabsAPIError) as e:
         logging.error(
             f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}",
         )
@@ -6089,21 +6081,6 @@ async def animate_video_endpoint(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Image moderation failed: The image was flagged as inappropriate. Reason: {image_analysis.reason}",
-                )
-
-            audio_analysis = openai_service.analyze_audio(
-                audio_url=final_audio_url_for_replicate,
-            )
-            # New check for speech content
-            if not audio_analysis.contains_speech:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Audio moderation failed: No speech was detected in the audio file. Reason: {audio_analysis.reason}",
-                )
-            if audio_analysis.is_nsfw:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Audio moderation failed: The audio was flagged as inappropriate. Reason: {audio_analysis.reason}",
                 )
 
         except OpenAIAPIError as e:

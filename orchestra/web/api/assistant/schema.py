@@ -1304,9 +1304,9 @@ class VoiceCreate(BaseModel):
         description="Language code of the voice",
         example="en",
     )
-    provider: Literal["cartesia", "elevenlabs", "openai"] = Field(
+    provider: Literal["cartesia", "elevenlabs"] = Field(
         "cartesia",
-        description="Provider of the voice (cartesia, elevenlabs or openai)",
+        description="Provider of the voice (cartesia or elevenlabs)",
         example="cartesia",
     )
     is_preset: Optional[bool] = Field(
@@ -1361,14 +1361,14 @@ class VoiceCloneRequestData(BaseModel):
 
 class VoiceGenerateRequest(BaseModel):
     text: str = Field(..., description="Text to synthesize.", max_length=5000)
-    provider: Literal["cartesia", "elevenlabs", "openai"] = Field(
+    provider: Literal["cartesia", "elevenlabs"] = Field(
         ...,
         description="TTS provider.",
     )
     voice_id: str = Field(..., description="Provider-specific voice ID for the speech.")
     model_id: Optional[str] = Field(
         None,
-        description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia, 'eleven_multilingual_v2' for ElevenLabs, 'gpt-4o-mini-tts' for OpenAI).",
+        description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia or 'eleven_multilingual_v2' for ElevenLabs).",
     )
 
     output_format: Literal["mp3", "wav", "flac", "pcm_s16le", "pcm_mulaw"] = Field(
@@ -1436,13 +1436,6 @@ class VoiceGenerateRequest(BaseModel):
                 "output_format": "mp3",
                 "elevenlabs_voice_settings_stability": 0.75,
                 "elevenlabs_voice_settings_similarity_boost": 0.75,
-            },
-            "example_openai": {
-                "text": "Hello from OpenAI!",
-                "provider": "openai",
-                "voice_id": "alloy",
-                "model_id": "gpt-4o-mini-tts",
-                "output_format": "mp3",
             },
         }
 
