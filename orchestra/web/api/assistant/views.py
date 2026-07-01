@@ -1689,12 +1689,14 @@ async def emit_onboarding_step_event_endpoint(
         session,
         coordinator=coordinator,
         step_id=body.step_id,
+        chip_id=body.chip_id,
     )
     session.commit()
     return InfoResponse(
         info=OnboardingStepEventResponse(
             coordinator_id=str(coordinator.agent_id),
             step_id=body.step_id,
+            chip_id=body.chip_id,
             emitted=emitted,
         ),
     )

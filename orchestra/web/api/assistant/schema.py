@@ -611,11 +611,17 @@ class OnboardingSessionStartedResponse(BaseModel):
 
 
 class OnboardingStepEventRequest(BaseModel):
-    """Request body for firing the graph-owned event attached to a step."""
+    """Request body for firing the graph-owned event attached to a step.
+
+    ``chip_id`` targets one of a Tasks-phase beat row's example chips: when
+    present the chip's canonical event is published instead of the row's own
+    event (see ``onboarding_graph.chip_event_for``).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     step_id: str = Field(..., min_length=1)
+    chip_id: Optional[str] = Field(default=None, min_length=1)
 
 
 class OnboardingStepEventResponse(BaseModel):
@@ -623,6 +629,7 @@ class OnboardingStepEventResponse(BaseModel):
 
     coordinator_id: str
     step_id: str
+    chip_id: Optional[str] = None
     emitted: bool
 
 

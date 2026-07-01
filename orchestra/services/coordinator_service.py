@@ -1489,6 +1489,18 @@ SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # short summary back as a single unify_message, which is also what proves the
 # step complete (see onboarding_graph.DEMO_TO_OUTBOUND_MEDIUMS).
 SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
+# Fired when the user clicks a Tasks-phase beat row ("Create a scheduled task"
+# / "Create a triggerable task"). The row is the freeform entry point: Twin
+# opens the conversation by asking what standing work the user wants, then sets
+# it up with its own task tools. Completion is derived from the resulting Tasks
+# row (schedule-bearing -> create-scheduled-task, trigger-bearing ->
+# create-triggerable-task), not from the click.
+SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
+# Fired when the user clicks one of a beat row's example chips. The chip is a
+# fully-specified example task, so Twin sets that exact task up straight away
+# rather than asking. The canonical instruction is resolved server-side from
+# the graph presentation (see onboarding_graph.chip_event_for).
+SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1523,6 +1535,8 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_ONBOARDING_STEP_RESET,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_WORKSPACE_DEMO_REQUESTED,
+        SUBTYPE_TASK_BEAT_REQUESTED,
+        SUBTYPE_TASK_CHIP_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1566,8 +1580,8 @@ ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
-ONBOARDING_STEP_LAUNCH_MISSION = "launch-mission"
-ONBOARDING_STEP_ARM_TRIPWIRE = "arm-tripwire"
+ONBOARDING_STEP_CREATE_SCHEDULED_TASK = "create-scheduled-task"
+ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK = "create-triggerable-task"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
 DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_EMAIL_REPLY,
@@ -1583,8 +1597,8 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
-    ONBOARDING_STEP_LAUNCH_MISSION,
-    ONBOARDING_STEP_ARM_TRIPWIRE,
+    ONBOARDING_STEP_CREATE_SCHEDULED_TASK,
+    ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
     *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
@@ -1721,13 +1735,13 @@ def _coordinator_task_rows(
     )
 
 
-def _has_scheduled_mission(session: Session, *, coordinator: Assistant) -> bool:
-    """Launch-a-mission step: a schedule-bearing task exists.
+def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
+    """Create-a-scheduled-task step: a schedule-bearing task exists.
 
     Completion proof for the "boomerang" beat — the user set up a task that
-    reaches back out on its own. Kept distinct from the tripwire beat by
-    matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
-    so arming a tripwire never ticks this row.
+    reaches back out on its own. Kept distinct from the triggerable-task beat
+    by matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
+    so arming a triggerable task never ticks this row.
     """
     return any(
         isinstance(row.data, dict) and row.data.get("schedule")
@@ -1736,11 +1750,11 @@ def _has_scheduled_mission(session: Session, *, coordinator: Assistant) -> bool:
 
 
 def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
-    """Arm-a-tripwire step: a trigger-bearing task exists.
+    """Create-a-triggerable-task step: a trigger-bearing task exists.
 
-    Completion proof for the "tripwire" beat — the user armed a task that
-    fires on an event. Matches only tasks carrying a ``trigger`` so a purely
-    scheduled mission never ticks this row.
+    Completion proof for the "triggerable task" beat — the user armed a task
+    that fires on an event. Matches only tasks carrying a ``trigger`` so a
+    purely scheduled task never ticks this row.
     """
     return any(
         isinstance(row.data, dict) and row.data.get("trigger")
@@ -1966,8 +1980,8 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_app_secret,
-        ONBOARDING_STEP_LAUNCH_MISSION: _has_scheduled_mission,
-        ONBOARDING_STEP_ARM_TRIPWIRE: _has_triggerable_task,
+        ONBOARDING_STEP_CREATE_SCHEDULED_TASK: _has_scheduled_task,
+        ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK: _has_triggerable_task,
     }
     completed: list[str] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:
@@ -2825,6 +2839,7 @@ async def emit_onboarding_step_event(
     *,
     coordinator: Assistant,
     step_id: str,
+    chip_id: str | None = None,
 ) -> bool:
     """Emit the graph-owned event for a user-triggered onboarding row.
 
@@ -2832,20 +2847,43 @@ async def emit_onboarding_step_event(
     graph, not in Console. When a trigger has a paired reply row, mark that
     reply as the active onboarding step before publishing so the attached
     render reflects the user's current state.
+
+    When ``chip_id`` is supplied the click targeted one of a Tasks-phase beat
+    row's example chips: the canonical instruction is resolved from the graph
+    presentation and the chip event is published instead of the row's own
+    event.
     """
     step = onboarding_graph.STEP_BY_ID.get(step_id)
-    if step is None or step.event is None:
-        logger.warning("Ignoring onboarding step event for non-event step: %s", step_id)
+    if step is None:
+        logger.warning("Ignoring onboarding step event for unknown step: %s", step_id)
         return False
+    if chip_id:
+        event = onboarding_graph.chip_event_for(step_id, chip_id)
+        if event is None:
+            logger.warning(
+                "Ignoring onboarding chip event for unknown chip: %s/%s",
+                step_id,
+                chip_id,
+            )
+            return False
+    else:
+        event = step.event
+        if event is None:
+            logger.warning(
+                "Ignoring onboarding step event for non-event step: %s", step_id
+            )
+            return False
     phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
-    if step.paired_reply:
+    # Row triggers with a paired reply advance the active step before
+    # publishing; chip events never carry a paired reply.
+    if not chip_id and step.paired_reply:
         set_coordinator_state(
             session,
             coordinator=coordinator,
             onboarding_step=step.paired_reply,
         )
     details = {
-        **dict(step.event.details),
+        **dict(event.details),
         "step_id": step.id,
         "step_title": step.title,
         "kind": step.kind,
@@ -2858,8 +2896,8 @@ async def emit_onboarding_step_event(
     return await notify_coordinator_onboarding_event(
         session,
         coordinator=coordinator,
-        subtype=step.event.subtype,
-        message=step.event.message,
+        subtype=event.subtype,
+        message=event.message,
         details=details,
     )
 
