@@ -171,10 +171,14 @@ def _create_truthiness_condition_jsonb(expr, session, project_id=None, context_i
 
     Handles subqueries, literals, and JSONB field references.
     """
-    from sqlalchemy.sql.expression import Exists, UnaryExpression
+    from sqlalchemy.sql.expression import BooleanClauseList, Exists, UnaryExpression
 
-    # Handle EXISTS and UnaryExpression directly
-    if isinstance(expr, (Exists, UnaryExpression)):
+    # Expressions that are already boolean predicates are returned unchanged.
+    # BooleanClauseList covers nested and_()/or_() combinations. Wrapping these
+    # in cast(..., Boolean).is_(True) is a semantic no-op, but it hides operators
+    # such as @> from the query planner, which can then no longer match the GIN
+    # index on data and falls back to a full sequential scan.
+    if isinstance(expr, (Exists, UnaryExpression, BooleanClauseList)):
         return expr
 
     # Handle BinaryExpression with boolean operators (comparisons)
