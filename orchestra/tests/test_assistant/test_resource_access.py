@@ -727,7 +727,11 @@ async def test_transfer_personal_to_org(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_transfer_org_to_personal(client: AsyncClient, dbsession):
-    """Test transferring an org assistant to personal workspace."""
+    """Org members cannot transfer an org assistant into a disabled personal workspace.
+
+    Joining/owning an organization disables the member's personal workspace, so
+    transferring an org assistant back into it is forbidden.
+    """
     user = await create_test_user(
         client,
         "transfer_to_personal@test.com",
@@ -753,24 +757,20 @@ async def test_transfer_org_to_personal(client: AsyncClient, dbsession):
     agent_id = int(create_resp.json()["info"]["agent_id"])
     assert create_resp.json()["info"]["organization_id"] == org_id
 
-    # Transfer to personal (using org API key)
+    # Transfer to personal (using org API key) is blocked: the owner's personal
+    # workspace was disabled when the organization was created.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == 200
+    assert transfer_resp.status_code == 403, transfer_resp.json()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
-    transfer_data = transfer_resp.json()["info"]
-    assert transfer_data["agent_id"] == agent_id
-    assert transfer_data["transferred_from"] == "organization"
-    assert transfer_data["transferred_to"] == "personal"
-
-    # Verify assistant is now personal
+    # Assistant stays in the organization.
     assistant_dao = AssistantDAO(dbsession)
     assistant = assistant_dao.get_assistant_by_agent_id(agent_id)
-    assert assistant.organization_id is None
-    assert assistant.user_id == user["id"]
+    assert assistant.organization_id == org_id
 
 
 @pytest.mark.anyio
@@ -1324,28 +1324,22 @@ async def test_transfer_org_to_personal_with_logs_deletion(
     assert logs_before.status_code == 200
     assert logs_before.json()["count"] > 0, "Logs should exist before transfer"
 
-    # Transfer assistant to personal with delete_logs=True
+    # Transfer to personal is blocked (org owner's personal workspace is
+    # disabled), so the org logs are left untouched.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": True},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == 200
-    transfer_data = transfer_resp.json()["info"]
-    # logs_deleted may be True or False depending on context matching
-    assert "logs_deleted" in transfer_data
+    assert transfer_resp.status_code == 403, transfer_resp.json()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
-    # If logs were deleted, verify they're gone
-    if transfer_data["logs_deleted"]:
-        logs_after = await client.get(
-            f"/v0/logs?project_name={project_name}&context={context_name}",
-            headers=org_headers,
-        )
-        # Should either be 404 (context gone) or 200 with count=0
-        if logs_after.status_code == 200:
-            assert (
-                logs_after.json()["count"] == 0
-            ), "Logs should be deleted from org project"
+    logs_after = await client.get(
+        f"/v0/logs?project_name={project_name}&context={context_name}",
+        headers=org_headers,
+    )
+    assert logs_after.status_code == 200
+    assert logs_after.json()["count"] > 0, "Logs must survive the blocked transfer"
 
 
 @pytest.mark.anyio
@@ -2064,14 +2058,15 @@ async def test_transfer_org_to_personal_requires_delete_permission(
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    # Member tries to transfer to personal - should fail (no delete permission)
+    # Member tries to transfer to personal - blocked: joining the org disabled
+    # their personal workspace (the guard precedes the delete-permission check).
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=member_org_headers,
     )
     assert transfer_resp.status_code == 403
-    assert "permission" in transfer_resp.json()["detail"].lower()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
 
 @pytest.mark.anyio
@@ -2164,15 +2159,15 @@ async def test_transfer_response_logs_deleted_flag(client: AsyncClient, dbsessio
     assert create_resp.status_code == 200
     agent_id = int(create_resp.json()["info"]["agent_id"])
 
-    # Transfer with delete_logs=False
+    # Transfer to personal is blocked: the org owner's personal workspace is
+    # disabled, so no transfer (and no log deletion) occurs.
     transfer_resp = await client.post(
         f"/v0/assistant/{agent_id}/transfer/to-personal",
         json={"delete_logs": False},
         headers=org_headers,
     )
-    assert transfer_resp.status_code == 200
-    # logs_deleted should be False when delete_logs=False
-    assert transfer_resp.json()["info"]["logs_deleted"] is False
+    assert transfer_resp.status_code == 403, transfer_resp.json()
+    assert "personal workspace is disabled" in transfer_resp.json()["detail"].lower()
 
 
 @pytest.mark.anyio
