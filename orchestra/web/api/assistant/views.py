@@ -2988,6 +2988,7 @@ async def disconnect_assistant_account(
             "GOOGLE_REFRESH_TOKEN",
             "GOOGLE_TOKEN_EXPIRES_AT",
             "GOOGLE_GRANTED_SCOPES",
+            "GOOGLE_ACCOUNT_EMAIL",
         ):
             secret_dao.delete(assistant_id, key)
 
@@ -3013,6 +3014,7 @@ async def disconnect_assistant_account(
             "MICROSOFT_TOKEN_EXPIRES_AT",
             "MICROSOFT_GRANTED_SCOPES",
             "MICROSOFT_TOKEN_SOURCE",
+            "MICROSOFT_ACCOUNT_EMAIL",
         ):
             secret_dao.delete(assistant_id, key)
 

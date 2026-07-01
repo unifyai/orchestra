@@ -1633,15 +1633,15 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
       and get such a contact row. ``provisioned_by == 'user'`` is what
       distinguishes it from the platform-provisioned universal Unity
       mailbox every Coordinator gets at creation.
-    * A workspace OAuth secret (``GOOGLE_``/``MICROSOFT_``/``AZURE_``).
-      Coordinators keep their own mailbox platform-managed and never get
-      a BYOD contact row, so the OAuth handshake's stored secrets are the
-      only durable proof they connected a workspace. Platform mailboxes
-      use service-account delegation rather than per-assistant OAuth, so
-      these prefixes never appear until the user actually connects — this
-      mirrors the ``_has_app_secret`` classification (the "apps" step
-      excludes exactly these prefixes, so the two stay mutually
-      exclusive).
+    * A workspace OAuth grant, marked by ``GOOGLE_GRANTED_SCOPES`` /
+      ``MICROSOFT_GRANTED_SCOPES``. Coordinators keep their own mailbox
+      platform-managed and never get a BYOD contact row, so the OAuth
+      handshake's stored secrets are the only durable proof they
+      connected a workspace. The granted-scopes secret is the canonical
+      "connected" marker used by ``get_granted_features`` and cleared by
+      the disconnect flow, so it tracks the connection lifecycle exactly
+      — unlike the broad ``GOOGLE_``/``MICROSOFT_`` prefix, it can't be
+      left ticked by a stray secret (e.g. an orphaned ``*_ACCOUNT_EMAIL``).
     """
     contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
         coordinator.agent_id,
@@ -1655,9 +1655,9 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
     ):
         return True
 
-    secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
-    return any(
-        name.upper().startswith(_WORKSPACE_SECRET_PREFIXES) for name in secret_names
+    secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
+    return bool(
+        secrets.get("GOOGLE_GRANTED_SCOPES") or secrets.get("MICROSOFT_GRANTED_SCOPES"),
     )
 
 
