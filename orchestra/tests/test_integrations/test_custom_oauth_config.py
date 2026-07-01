@@ -168,7 +168,14 @@ class _FakeCustomAuthAdapter:
     def delete_auth_config(self, auth_config_id: str) -> None:
         self.deleted.append(auth_config_id)
 
-    def create_auth_link(self, *, user_id, auth_config_id, callback_url=None, alias=None):
+    def create_auth_link(
+        self,
+        *,
+        user_id,
+        auth_config_id,
+        callback_url=None,
+        alias=None,
+    ):
         self.auth_link_calls.append(auth_config_id)
         return (f"https://consent.example/{auth_config_id}", "acct_1", None)
 
@@ -415,18 +422,14 @@ def _http_error(status_code: int, text: str) -> Exception:
 
 
 def test_is_missing_managed_auth_error_detects_default_config() -> None:
-    from orchestra.web.api.integrations.operations import (
-        _is_missing_managed_auth_error,
-    )
+    from orchestra.web.api.integrations.operations import _is_missing_managed_auth_error
 
     exc = _http_error(400, "Default auth config not found for toolkit tiktok.")
     assert _is_missing_managed_auth_error(exc) is True
 
 
 def test_is_missing_managed_auth_error_ignores_unrelated_errors() -> None:
-    from orchestra.web.api.integrations.operations import (
-        _is_missing_managed_auth_error,
-    )
+    from orchestra.web.api.integrations.operations import _is_missing_managed_auth_error
 
     assert _is_missing_managed_auth_error(_http_error(500, "boom")) is False
     assert _is_missing_managed_auth_error(_http_error(400, "bad scopes")) is False
@@ -438,7 +441,14 @@ class _NoManagedAuthAdapter:
     def default_oauth_callback_url(self) -> str:
         return "https://backend.composio.dev/api/v3.1/toolkits/auth/callback"
 
-    def create_auth_link(self, *, user_id, auth_config_id, callback_url=None, alias=None):
+    def create_auth_link(
+        self,
+        *,
+        user_id,
+        auth_config_id,
+        callback_url=None,
+        alias=None,
+    ):
         raise AssertionError("auth link must not be attempted without a config id")
 
     def get_or_create_auth_config(self, toolkit_slug: str) -> str:

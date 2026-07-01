@@ -295,9 +295,11 @@ def app_catalog_row(
         app.get("raw_provider_metadata") or app.get("raw_provider_metadata_json") or {}
     )
     requires_custom_oauth = bool(
-        app.get("requires_custom_oauth")
-        if app.get("requires_custom_oauth") is not None
-        else raw_metadata.get("requires_custom_oauth"),
+        (
+            app.get("requires_custom_oauth")
+            if app.get("requires_custom_oauth") is not None
+            else raw_metadata.get("requires_custom_oauth")
+        ),
     )
     managed_auth = (
         app.get("managed_auth")

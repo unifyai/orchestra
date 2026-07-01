@@ -1211,11 +1211,7 @@ def delete_custom_auth_config(
     IntegrationProviderDAO(session).patch_backend(backend_id, {"config_json": config})
     session.commit()
 
-    if (
-        delete_remote
-        and isinstance(entry, dict)
-        and entry.get("auth_config_id")
-    ):
+    if delete_remote and isinstance(entry, dict) and entry.get("auth_config_id"):
         adapter = get_provider_adapter(
             backend_id,
             backend_config=(backend.config_json or {}),
