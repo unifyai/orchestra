@@ -1624,22 +1624,40 @@ def _onboarding_step_phase(step_id: str) -> str | None:
 
 
 def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
-    """Workspace step: a BYOD email contact with a provider is live.
+    """Workspace step: the user connected a workspace, via either signal.
 
-    ``provisioned_by == 'user'`` is what distinguishes the workspace
-    OAuth handshake's contact row from the platform-provisioned
-    universal Unity mailbox every Coordinator gets at creation — the
-    latter must not count as "the user connected their workspace".
+    Two durable signals mark a connected workspace, and either counts:
+
+    * A BYOD email contact with a provider. Regular (non-coordinator)
+      assistants wire the connected mailbox into the ConversationManager
+      and get such a contact row. ``provisioned_by == 'user'`` is what
+      distinguishes it from the platform-provisioned universal Unity
+      mailbox every Coordinator gets at creation.
+    * A workspace OAuth secret (``GOOGLE_``/``MICROSOFT_``/``AZURE_``).
+      Coordinators keep their own mailbox platform-managed and never get
+      a BYOD contact row, so the OAuth handshake's stored secrets are the
+      only durable proof they connected a workspace. Platform mailboxes
+      use service-account delegation rather than per-assistant OAuth, so
+      these prefixes never appear until the user actually connects — this
+      mirrors the ``_has_app_secret`` classification (the "apps" step
+      excludes exactly these prefixes, so the two stay mutually
+      exclusive).
     """
     contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
         coordinator.agent_id,
     )
-    return any(
+    if any(
         contact.contact_type == "email"
         and contact.provisioned_by == "user"
         and bool(contact.contact_value)
         and bool(contact.provider)
         for contact in contacts
+    ):
+        return True
+
+    secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
+    return any(
+        name.upper().startswith(_WORKSPACE_SECRET_PREFIXES) for name in secret_names
     )
 
 
