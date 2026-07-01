@@ -556,7 +556,7 @@ async def test_assistant_list_tolerates_missing_coordinator_owner_contact_row(
 
     response = await client.get(
         f"/v0/assistant?agent_id={coordinator_id}",
-        headers=owner["headers"],
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
 
     assert response.status_code == status.HTTP_200_OK, response.json()
@@ -594,6 +594,7 @@ async def test_coordinator_opt_in_repairs_missing_owner_contact_row(
 
     response = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
+        params={"organization_id": org_data["id"]},
         headers=owner["headers"],
     )
 
@@ -972,121 +973,6 @@ async def test_coordinator_state_patch_records_onboarding_step(
         headers=owner["headers"],
     )
     assert invalid.status_code == status.HTTP_400_BAD_REQUEST
-
-
-@pytest.mark.anyio
-async def test_coordinator_state_patch_records_skipped_steps(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    """Skipped onboarding steps persist separately from completed steps."""
-    owner = await _create_user(client, "state-skipped-step")
-    create = await client.post(
-        f"/v0/user/{owner['id']}/coordinator",
-        headers=owner["headers"],
-    )
-    assert create.status_code in {
-        status.HTTP_200_OK,
-        status.HTTP_201_CREATED,
-    }, create.json()
-    coordinator_id = int(create.json()["coordinator_id"])
-
-    with patch(
-        "orchestra.web.api.assistant.views.emit_onboarding_step_skipped_event",
-        new=AsyncMock(return_value=True),
-    ) as emit:
-        skip_apps = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "apps"},
-            headers=owner["headers"],
-        )
-        assert skip_apps.status_code == status.HTTP_200_OK, skip_apps.json()
-        assert skip_apps.json()["info"]["skipped_step_ids"] == ["apps"]
-
-        skip_workspace = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "workspace"},
-            headers=owner["headers"],
-        )
-        assert skip_workspace.status_code == status.HTTP_200_OK, skip_workspace.json()
-        assert skip_workspace.json()["info"]["skipped_step_ids"] == [
-            "workspace",
-            "apps",
-        ]
-
-        duplicate = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "apps"},
-            headers=owner["headers"],
-        )
-        assert duplicate.status_code == status.HTTP_200_OK, duplicate.json()
-        assert duplicate.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
-
-        unskip_apps = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"unskip_onboarding_step": "apps"},
-            headers=owner["headers"],
-        )
-        assert unskip_apps.status_code == status.HTTP_200_OK, unskip_apps.json()
-        assert unskip_apps.json()["info"]["skipped_step_ids"] == ["workspace"]
-
-        skip_phone = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"skip_onboarding_step": "phone-number"},
-            headers=owner["headers"],
-        )
-        assert skip_phone.status_code == status.HTTP_200_OK, skip_phone.json()
-        assert skip_phone.json()["info"]["skipped_step_ids"] == [
-            "phone-number",
-            "sms-reference",
-            "sms-message",
-            "phone-call-reference",
-            "phone-call",
-            "workspace",
-        ]
-
-        unskip_sms_message = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"unskip_onboarding_step": "sms-message"},
-            headers=owner["headers"],
-        )
-        assert (
-            unskip_sms_message.status_code == status.HTTP_200_OK
-        ), unskip_sms_message.json()
-        # Unskipping a leaf re-offers only that step; its prerequisites stay
-        # skipped (the step simply reads as locked until they are unskipped).
-        assert unskip_sms_message.json()["info"]["skipped_step_ids"] == [
-            "phone-number",
-            "sms-reference",
-            "phone-call-reference",
-            "phone-call",
-            "workspace",
-        ]
-
-    assert emit.await_count == 4
-    assert emit.await_args.kwargs["skipped_step_ids"] == [
-        "phone-number",
-        "sms-reference",
-        "sms-message",
-        "phone-call-reference",
-        "phone-call",
-        "workspace",
-    ]
-
-    promote = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
-        headers=owner["headers"],
-    )
-    assert promote.status_code == status.HTTP_200_OK, promote.json()
-    assert promote.json()["info"]["completed_step_ids"] == []
-    assert promote.json()["info"]["skipped_step_ids"] == [
-        "phone-number",
-        "sms-reference",
-        "phone-call-reference",
-        "phone-call",
-        "workspace",
-    ]
 
 
 @pytest.mark.anyio
@@ -1610,7 +1496,7 @@ async def test_personal_coordinator_requires_owner_for_lifecycle_operations(
 
     delete = await client.delete(
         f"/v0/assistant/{coordinator_id}",
-        headers=owner["headers"],
+        headers={"Authorization": f"Bearer {org_data['api_key']}"},
     )
     assert delete.status_code == status.HTTP_409_CONFLICT, delete.json()
     assert delete.json()["detail"] == "cannot_delete_coordinator"

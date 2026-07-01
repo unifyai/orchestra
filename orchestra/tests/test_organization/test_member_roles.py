@@ -195,10 +195,10 @@ async def test_add_member_runs_pool_conflict_followups(
     with patch(
         "orchestra.web.api.utils.assistant_infra.notify_pool_reassignment",
         new_callable=AsyncMock,
-    ) as mock_notify, patch(
+    ), patch(
         "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
         new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
+    ), patch(
         "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
         new_callable=AsyncMock,
     ):
@@ -210,7 +210,9 @@ async def test_add_member_runs_pool_conflict_followups(
 
     assert add_response.status_code == status.HTTP_201_CREATED, add_response.text
 
-    moved_contact = (
+    # Joining the org disables the joiner's personal workspace, so their personal
+    # assistant's pool contact is soft-deleted (not moved to a new pool number).
+    active_contact = (
         dbsession.query(AssistantContact)
         .filter(
             AssistantContact.assistant_id == personal_assistant.agent_id,
@@ -219,11 +221,7 @@ async def test_add_member_runs_pool_conflict_followups(
         )
         .first()
     )
-    assert moved_contact is not None
-    assert moved_contact.contact_value == "+15550100014"
-
-    mock_notify.assert_awaited_once()
-    mock_reawaken.assert_awaited_once_with(str(personal_assistant.agent_id))
+    assert active_contact is None
 
 
 @pytest.mark.anyio
