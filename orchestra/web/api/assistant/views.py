@@ -3221,18 +3221,43 @@ async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
         )
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     base = "drive" if provider == "google" else "sharepoint"
-    async with httpx.AsyncClient(timeout=30) as http:
-        resp = await http.get(
-            f"{comms_url}/{base}/{path}",
-            params=params,
-            headers={"Authorization": f"Bearer {admin_key}"},
+    url = f"{comms_url}/{base}/{path}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.get(
+                url,
+                params=params,
+                headers={"Authorization": f"Bearer {admin_key}"},
+            )
+    except httpx.HTTPError as exc:
+        logging.error("Workspace gateway request to %s failed: %s", url, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Workspace gateway is unreachable.",
         )
     if resp.status_code >= 400:
+        logging.error(
+            "Workspace gateway %s returned %s: %s",
+            url,
+            resp.status_code,
+            resp.text[:500],
+        )
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to browse workspace files.",
         )
-    return resp.json()
+    try:
+        return resp.json()
+    except ValueError as exc:
+        logging.error(
+            "Workspace gateway %s returned non-JSON body: %s",
+            url,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Workspace gateway returned an invalid response.",
+        )
 
 
 def _ms_node(raw: dict, drive_id: str) -> WorkspaceFileNode:
