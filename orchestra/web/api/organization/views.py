@@ -32,6 +32,7 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    OrganizationMember,
     Recharge,
     RechargeStatus,
     Team,
@@ -59,6 +60,7 @@ from orchestra.services.org_wide_sharing_service import (
 )
 from orchestra.services.personal_workspace_service import (
     disable_personal_workspace_for_org_member,
+    reenable_personal_workspace_if_no_org,
 )
 from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
 from orchestra.services.team_cleanup_service import (
@@ -690,6 +692,15 @@ async def delete_organization(
 
     cleanup_task_ids: list[int] = []
 
+    # Members lose this org on deletion; capture them now so we can re-enable
+    # their personal workspaces afterwards (membership disablement is reversible).
+    former_member_ids = [
+        row.user_id
+        for row in session.query(OrganizationMember.user_id)
+        .filter(OrganizationMember.organization_id == organization_id)
+        .all()
+    ]
+
     # Delete organization (cascades to related tables)
     try:
         org_team_ids = session.scalars(
@@ -759,6 +770,15 @@ async def delete_organization(
             )
 
         org_dao.delete(organization_id)
+
+        # Re-enable personal workspaces for members who no longer belong to any
+        # (non-Unify) organization now that this org (and its memberships) is
+        # gone. Without this the personal-workspace disabled flag is one-way and
+        # permanently blocks personal-context billing for former members.
+        session.flush()
+        for member_id in former_member_ids:
+            reenable_personal_workspace_if_no_org(session, member_id)
+
         session.commit()
     except Exception as e:
         session.rollback()
@@ -1156,6 +1176,11 @@ async def remove_organization_member(
         # 7. Remove member from organization
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
+
+        # Re-enable the removed member's personal workspace if they no longer
+        # belong to any (non-Unify) organization.
+        session.flush()
+        reenable_personal_workspace_if_no_org(session, user_id)
 
         # 8. Remove the member's org Coordinator from org team memberships.
         org_coordinator = get_workspace_coordinator(

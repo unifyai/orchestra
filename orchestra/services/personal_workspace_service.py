@@ -125,3 +125,29 @@ def disable_personal_workspace_for_org_member(
         cleanup_tasks_queued=len(cleanup_tasks),
         cleanup_task_ids=tuple(int(task.id) for task in cleanup_tasks),
     )
+
+
+def reenable_personal_workspace_if_no_org(session: Session, user_id: str) -> bool:
+    """Re-enable a user's personal workspace once they no longer belong to any
+    (non-Unify) organization.
+
+    ``disable_personal_workspace_for_org_member`` is the counterpart that turns
+    the flag on when a user joins/creates a customer org. Membership is
+    reversible (a user can leave an org, or the org can be deleted), so the flag
+    must be cleared again — otherwise personal-context billing (e.g.
+    ``get_billing_entity``/``credits/deduct``) stays permanently blocked for a
+    user who is no longer an org member. Call this after the membership has been
+    removed. Returns ``True`` if the workspace was re-enabled.
+    """
+
+    if user_has_non_unify_membership(session, user_id):
+        return False
+
+    user = session.query(User).filter(User.id == user_id).first()
+    if user is None or user.personal_workspace_disabled_at is None:
+        return False
+
+    user.personal_workspace_disabled_at = None
+    user.personal_workspace_disabled_reason = None
+    user.personal_workspace_disabled_org_id = None
+    return True
