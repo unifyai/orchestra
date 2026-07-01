@@ -1731,3 +1731,107 @@ async def test_delegate_org_target_requires_org_write_access(
         headers=outsider["headers"],
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN, response.json()
+
+
+@pytest.mark.anyio
+async def test_onboarding_step_event_emits_task_chip_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """A Tasks-phase chip click publishes its canonical task_chip event."""
+    owner = await _create_user(client, "step-event-chip")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    # ``_post_unity_system_event`` is the outbound Adapters HTTP hop — the one
+    # external boundary with no local service. Everything upstream (view,
+    # service gate, graph chip resolution) runs for real.
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={"step_id": "create-scheduled-task", "chip_id": "inbox-sweep-soon"},
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    info = response.json()["info"]
+    assert info["emitted"] is True
+    assert info["chip_id"] == "inbox-sweep-soon"
+    post.assert_awaited_once()
+    extra = post.await_args.kwargs["extra_event_fields"]
+    assert extra["subtype"] == "task_chip_requested"
+    assert extra["details"]["step_id"] == "create-scheduled-task"
+    assert (
+        extra["details"]["instruction"]
+        == "In two minutes, check my inbox and text me anything urgent"
+    )
+
+
+@pytest.mark.anyio
+async def test_onboarding_step_event_unknown_chip_does_not_emit(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """An unknown chip id resolves to nothing, so no event is published."""
+    owner = await _create_user(client, "step-event-bad-chip")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={"step_id": "create-scheduled-task", "chip_id": "no-such-chip"},
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json()["info"]["emitted"] is False
+    post.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_onboarding_step_event_emits_task_beat_row_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """A bare beat-row click (no chip) publishes the freeform task_beat event."""
+    owner = await _create_user(client, "step-event-beat-row")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={"step_id": "create-triggerable-task"},
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    info = response.json()["info"]
+    assert info["emitted"] is True
+    assert info["chip_id"] is None
+    post.assert_awaited_once()
+    extra = post.await_args.kwargs["extra_event_fields"]
+    assert extra["subtype"] == "task_beat_requested"
+    assert extra["details"]["task_kind"] == "triggered"
