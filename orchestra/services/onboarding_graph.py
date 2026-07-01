@@ -148,6 +148,22 @@ WORKSPACE_FRAMING = (
     "says so honestly and moves on rather than inventing content."
 )
 
+TASKS_FRAMING = (
+    "In the Tasks phase T-W1N proves it works on the user's behalf when they "
+    "aren't watching, by setting up real standing work. A 'scheduled task' is "
+    "a time-based task that fires on a schedule — a one-off soon or a recurring "
+    "routine — and reaches back out on a channel the user has connected. A "
+    "'triggerable task' is an event-triggered task that fires when something "
+    "happens in the user's world (an urgent email lands, an after-hours message "
+    "arrives, a calendar invite shows up). T-W1N sets these up from a "
+    "plain-language "
+    "description with its own task tools, asking only for details it genuinely "
+    "needs (what to do, when or on what event, and which channel to reach the "
+    "user on) and filling in sensible defaults otherwise. When it doesn't yet "
+    "know what the user wants it asks in one short message and offers a couple "
+    "of concrete examples; it never nags."
+)
+
 
 @dataclass(frozen=True)
 class OnboardingPhase:
@@ -196,6 +212,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_TASKS,
         title="Tasks",
         description="Set up recurring or event-triggered work.",
+        framing=TASKS_FRAMING,
     ),
     OnboardingPhase(
         id="learning",
@@ -358,6 +375,78 @@ def _demo(
         nudge_chat=nudge_chat,
         nudge_voice=nudge_voice,
         event=event,
+    )
+
+
+# Tasks-phase beats. Clicking a beat row asks Twin to open a freeform
+# conversation for that kind of standing work; clicking one of the row's
+# example chips asks Twin to set up that specific task straight away. Both
+# travel as ``coordinator_onboarding_event`` payloads, mirroring the
+# reference-quiz and workspace-demo triggers. ``create-scheduled-task`` is
+# scheduled (time-based) work; ``create-triggerable-task`` is event-triggered
+# work.
+_TASK_BEAT_KIND: dict[str, str] = {
+    "create-scheduled-task": "scheduled",
+    "create-triggerable-task": "triggered",
+}
+
+
+def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks a Tasks-phase beat row.
+
+    The row is the *freeform* entry point: the click tells Twin the user wants
+    standing work of this kind but hasn't said what yet, so Twin opens the
+    conversation by asking — it must not invent and create a task on its own.
+    Clicking one of the row's example chips is the concrete path and travels as
+    a separate ``task_chip_requested`` event (see :func:`chip_event_for`).
+    """
+    task_kind = _TASK_BEAT_KIND[step_id]
+    if task_kind == "triggered":
+        ask = (
+            "ask them in one short message what should trip it and what you "
+            "should do when it fires (for example: an urgent email arrives, an "
+            "after-hours Slack message lands, a calendar invite shows up)"
+        )
+        after = (
+            "Once they tell you, arm the trigger with your task tools, confirm "
+            "it in one line, and mention they can trip it right away with the "
+            "'Test it' control under the row."
+        )
+    else:
+        ask = (
+            "ask them in one short message what job you should run and when — a "
+            "one-off soon or a recurring routine (for example: sweep the inbox "
+            "in a couple of minutes, a daily calendar rundown, a weekly recap)"
+        )
+        after = (
+            "Once they tell you, schedule it with your task tools on a channel "
+            "they've connected, and confirm it in one line."
+        )
+    interaction = {
+        "type": "task_beat",
+        "trigger_step_id": step_id,
+        "task_kind": task_kind,
+        "instructions": TASKS_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}', so they want to set up standing "
+            f"work of this kind but haven't said what yet — {ask}. Do NOT create "
+            f"a task until they've told you what they want. {after} If this is "
+            "already set up, treat the click as a nudge and just confirm rather "
+            "than duplicating it."
+        ),
+        subtype="task_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "task_kind": task_kind,
+            "framing": TASKS_FRAMING,
+            "phase": PHASE_TASKS,
+            "phase_id": "tasks",
+            "phase_framing": TASKS_FRAMING,
+            "interaction": interaction,
+        },
     )
 
 
@@ -737,34 +826,44 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         ),
     ),
     OnboardingStep(
-        id="launch-mission",
-        title="Launch a mission",
+        id="create-scheduled-task",
+        title="Create a scheduled task",
         phase=PHASE_TASKS,
         kind="schedule",
         depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Launch a mission' row in the Onboarding "
-            "checklist; it opens Tasks so they can schedule a short-fuse task "
-            "and watch me report back on a channel they've connected."
+            "Have them click the 'Create a scheduled task' row in the "
+            "Onboarding checklist; it starts a short back-and-forth where I "
+            "schedule a task for them and report back on a channel they've "
+            "connected. They can also click one of the example chips under the "
+            "row to set that one up directly."
         ),
-        nudge_voice=("clicking the 'Launch a mission' row in the Onboarding checklist"),
+        nudge_voice=(
+            "clicking the 'Create a scheduled task' row in the Onboarding checklist"
+        ),
+        event=_task_beat_event("create-scheduled-task", "Create a scheduled task"),
     ),
     OnboardingStep(
-        id="arm-tripwire",
-        title="Arm a tripwire",
+        id="create-triggerable-task",
+        title="Create a triggerable task",
         phase=PHASE_TASKS,
         kind="schedule",
-        depends_on={"launch-mission": ADDRESSED},
+        depends_on={"create-scheduled-task": ADDRESSED},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Arm a tripwire' row in the Onboarding "
-            "checklist; it opens Tasks so they can set a task that fires on an "
-            "event, then trip it with the Test-it control to watch it run."
+            "Have them click the 'Create a triggerable task' row in the "
+            "Onboarding checklist; it starts a short back-and-forth where I arm "
+            "a task that fires on an event, which they can then trip with the "
+            "Test-it control. They can also click one of the example chips under "
+            "the row to arm that one directly."
         ),
-        nudge_voice=("clicking the 'Arm a tripwire' row in the Onboarding checklist"),
+        nudge_voice=(
+            "clicking the 'Create a triggerable task' row in the Onboarding checklist"
+        ),
+        event=_task_beat_event("create-triggerable-task", "Create a triggerable task"),
     ),
     _coming_soon("learning-coming-soon", PHASE_LEARNING),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
@@ -851,7 +950,7 @@ class StepPresentation:
 # short-fuse "boomerang" the user can watch land live during onboarding and
 # would genuinely keep (real inbox triage, not a test ping); the rest are
 # real recurring routines referencing workspace data they've connected.
-_LAUNCH_MISSION_CHIPS: tuple[OnboardingChip, ...] = (
+_SCHEDULED_TASK_CHIPS: tuple[OnboardingChip, ...] = (
     OnboardingChip(
         "inbox-sweep-soon",
         "In two minutes, check my inbox and text me anything urgent",
@@ -869,7 +968,7 @@ _LAUNCH_MISSION_CHIPS: tuple[OnboardingChip, ...] = (
 # Event-bound work that fires when something happens in the user's world.
 # Each names a trigger on a channel they've connected and a concrete output;
 # the user trips one deterministically with the Test-it control to see it fire.
-_ARM_TRIPWIRE_CHIPS: tuple[OnboardingChip, ...] = (
+_TRIGGERABLE_TASK_CHIPS: tuple[OnboardingChip, ...] = (
     OnboardingChip(
         "urgent-email",
         "When I get an email marked urgent, text me straight away",
@@ -987,17 +1086,17 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~30s",
     ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
-    "launch-mission": StepPresentation(
+    "create-scheduled-task": StepPresentation(
         "Schedule a task and watch me report back on your channel.",
         "~2 min",
-        _LAUNCH_MISSION_CHIPS,
-        _LAUNCH_MISSION_CHIPS,
+        _SCHEDULED_TASK_CHIPS,
+        _SCHEDULED_TASK_CHIPS,
     ),
-    "arm-tripwire": StepPresentation(
+    "create-triggerable-task": StepPresentation(
         "Set a task that fires on an event, then test it live.",
         "~2 min",
-        _ARM_TRIPWIRE_CHIPS,
-        _ARM_TRIPWIRE_CHIPS,
+        _TRIGGERABLE_TASK_CHIPS,
+        _TRIGGERABLE_TASK_CHIPS,
     ),
 }
 
@@ -1112,19 +1211,23 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "Clicking the 'Connect me with your apps' row opens the Integrations "
         "tab; they connect at least one app from the gallery and authorize it."
     ),
-    "launch-mission": (
-        "Clicking the 'Launch a mission' row opens the Tasks tab. The user "
-        "schedules a short-fuse task; it fires on its own and reports back on a "
-        "channel they've connected — the proof is me returning unprompted, not "
-        "the row existing. Read-only suggestion chips render under the row as "
-        "inspiration only."
+    "create-scheduled-task": (
+        "Clicking the 'Create a scheduled task' row asks me to open the "
+        "conversation: I ask what scheduled job they'd like and, once they tell "
+        "me, schedule it with my task tools so it fires on its own and reports "
+        "back on a channel they've connected — the proof is me returning "
+        "unprompted, not the row existing. The suggestion chips under the row "
+        "are clickable: clicking one asks me to set up that specific task "
+        "straight away."
     ),
-    "arm-tripwire": (
-        "Clicking the 'Arm a tripwire' row opens the Tasks tab. The user arms an "
-        "event-triggered task, then trips it deterministically with the Test-it "
-        "control and watches it run; the trigger stays armed for the real event "
-        "afterwards. Read-only suggestion chips render under the row as "
-        "inspiration only."
+    "create-triggerable-task": (
+        "Clicking the 'Create a triggerable task' row asks me to open the "
+        "conversation: I ask what event should trip it and, once they tell me, "
+        "arm the event-triggered task with my task tools. They can then trip it "
+        "deterministically with the Test-it control and watch it run; the "
+        "trigger stays armed for the real event afterwards. The suggestion "
+        "chips under the row are clickable: clicking one asks me to arm that "
+        "specific triggerable task straight away."
     ),
 }
 
@@ -1132,6 +1235,69 @@ STEP_FLOW_NOTES: dict[str, str] = {
 def presentation_for(step_id: str) -> StepPresentation:
     """Presentation copy for a step (empty when none is registered)."""
     return STEP_PRESENTATION.get(step_id, _EMPTY_PRESENTATION)
+
+
+def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
+    """Event fired when the user clicks a Tasks-phase example chip.
+
+    Unlike a beat row (which asks Twin to open a freeform conversation), a chip
+    is a fully-specified example task: the click asks Twin to set that exact
+    task up now. The instruction is resolved from the canonical presentation
+    chips server-side, so the wire payload never carries user-supplied text and
+    an unknown ``step_id``/``chip_id`` pair yields ``None`` (the caller then
+    emits nothing).
+    """
+    step = STEP_BY_ID.get(step_id)
+    presentation = STEP_PRESENTATION.get(step_id)
+    if step is None or presentation is None or step_id not in _TASK_BEAT_KIND:
+        return None
+    chip = next(
+        (
+            candidate
+            for candidate in (*presentation.chips_chat, *presentation.chips_call)
+            if candidate.id == chip_id
+        ),
+        None,
+    )
+    if chip is None:
+        return None
+    task_kind = _TASK_BEAT_KIND[step_id]
+    test_note = (
+        " Then mention they can trip it right away with the 'Test it' control "
+        "under the row."
+        if task_kind == "triggered"
+        else ""
+    )
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f'The user picked the example task "{chip.label}" under '
+            f"'{step.title}', so set that up now with your task tools: treat "
+            "the example as their instruction, fill in sensible defaults, and "
+            "only ask if a genuinely required detail (such as which channel to "
+            f"reach them on) is missing. Confirm it in one short message.{test_note} "
+            "If an equivalent task already exists, treat this as a nudge and "
+            "just confirm rather than creating a duplicate."
+        ),
+        subtype="task_chip_requested",
+        details={
+            "trigger_step_id": step_id,
+            "chip_id": chip_id,
+            "instruction": chip.label,
+            "task_kind": task_kind,
+            "framing": TASKS_FRAMING,
+            "phase": PHASE_TASKS,
+            "phase_id": "tasks",
+            "phase_framing": TASKS_FRAMING,
+            "interaction": {
+                "type": "task_chip",
+                "trigger_step_id": step_id,
+                "task_kind": task_kind,
+                "instruction": chip.label,
+                "instructions": TASKS_FRAMING,
+            },
+        },
+    )
 
 
 def flow_note_for(step_id: str) -> str:
