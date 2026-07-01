@@ -30,7 +30,7 @@ from orchestra.db.models.orchestra_models import (
     Context,
     Project,
 )
-from orchestra.db.scope import OwnerScope, single_owner_key
+from orchestra.db.scope import OwnerScope, owner_from_context_name
 
 logger = logging.getLogger(__name__)
 
@@ -133,18 +133,24 @@ class ContactSyncService:
     def _assistant_contacts_contexts(self, project_id: int) -> List[Context]:
         """All per-assistant Contacts contexts in a project.
 
-        Each is owner-homogeneous (``owner_scope='assistant'``), so updates
-        through them prune to a single owner sub-partition.
+        Ownership is derived from the context name (the convention source of
+        truth) rather than the stored ``owner_scope`` column, which is only
+        backfilled out-of-band and may be unset on freshly created contexts.
+        Each returned context is owner-homogeneous (assistant-owned).
         """
-        return (
+        rows = (
             self.session.query(Context)
             .filter(
                 Context.project_id == project_id,
-                Context.owner_scope == OwnerScope.ASSISTANT.value,
                 Context.name.like(f"%{self.CONTACTS_CONTEXT_SUFFIX}"),
             )
             .all()
         )
+        return [
+            c
+            for c in rows
+            if owner_from_context_name(c.name).scope == OwnerScope.ASSISTANT
+        ]
 
     def _assistant_own_contacts_context(
         self,
@@ -152,16 +158,10 @@ class ContactSyncService:
         agent_id: int,
     ) -> Optional[Context]:
         """The Contacts context owned by a specific assistant in a project."""
-        return (
-            self.session.query(Context)
-            .filter(
-                Context.project_id == project_id,
-                Context.owner_scope == OwnerScope.ASSISTANT.value,
-                Context.owner_id == agent_id,
-                Context.name.like(f"%{self.CONTACTS_CONTEXT_SUFFIX}"),
-            )
-            .first()
-        )
+        for c in self._assistant_contacts_contexts(project_id):
+            if owner_from_context_name(c.name).owner_id == agent_id:
+                return c
+        return None
 
     def _resolve_assistant_self_contact_id(self, agent_id: int) -> Optional[int]:
         """Return the assistant's personal self contact id from membership overlays."""
@@ -209,22 +209,19 @@ class ContactSyncService:
         sub-partitioned, ``owner_key``) are pinned to literals so the scan
         prunes instead of fanning out.
         """
-        owner_key = single_owner_key(context.owner_scope, context.owner_id)
-        owner_outer = "AND owner_key = :owner_key\n" if owner_key is not None else ""
-        owner_inner = "AND le.owner_key = :owner_key\n" if owner_key is not None else ""
         query = text(
             f"""
             UPDATE log_event
             SET data = data || {set_pairs},
                 updated_at = NOW()
             WHERE project_id = :project_id
-              {owner_outer}AND id IN (
+              AND id IN (
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                   AND lec.project_id = le.project_id
                 WHERE le.project_id = :project_id
-                  {owner_inner}AND lec.context_id = :context_id
+                  AND lec.context_id = :context_id
                   {match_clause}
             )
         """,
@@ -234,8 +231,6 @@ class ContactSyncService:
             "context_id": context.id,
             **params,
         }
-        if owner_key is not None:
-            bound["owner_key"] = owner_key
         return self.session.execute(query, bound).rowcount
 
     def _update_user_contact_row(
