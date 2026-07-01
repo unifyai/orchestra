@@ -3107,6 +3107,11 @@ async def get_granted_features(
                 provider="google",
                 features=map_scopes_to_features("google", google_scopes),
                 required_features=REQUIRED_FEATURES["google"],
+                connected_account_email=secret_dao.get(
+                    assistant_id,
+                    "GOOGLE_ACCOUNT_EMAIL",
+                )
+                or None,
             ),
         )
     if ms_scopes:
@@ -3115,6 +3120,11 @@ async def get_granted_features(
                 provider="microsoft",
                 features=map_scopes_to_features("microsoft", ms_scopes),
                 required_features=REQUIRED_FEATURES["microsoft"],
+                connected_account_email=secret_dao.get(
+                    assistant_id,
+                    "MICROSOFT_ACCOUNT_EMAIL",
+                )
+                or None,
             ),
         )
 

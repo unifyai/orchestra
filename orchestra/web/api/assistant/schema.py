@@ -1929,6 +1929,16 @@ class GrantedFeaturesResponse(BaseModel):
         [],
         description="Features that cannot be removed (Console should grey these out).",
     )
+    connected_account_email: Optional[str] = Field(
+        None,
+        description=(
+            "The email address of the connected workspace account (the user's own "
+            "Google/Microsoft mailbox), or null if none. Distinct from the "
+            "assistant's platform-managed mailbox (`assistants.email`): a workspace "
+            "connection lets the assistant act on this account, but the assistant's "
+            "own identity remains its managed mailbox."
+        ),
+    )
 
 
 class WorkspaceFileNode(BaseModel):
