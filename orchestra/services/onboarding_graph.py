@@ -164,6 +164,16 @@ TASKS_FRAMING = (
     "of concrete examples; it never nags."
 )
 
+# Console surfaces T-W1N points the user at during the Tasks phase, so it
+# teaches the UI alongside the capability. The names match the right-pane tabs
+# the user actually sees (mirrored in unity ``console_ui.RIGHT_PANE_TABS``): the
+# 'Tasks' tab lists the task definition once created, and the 'Actions' tab is
+# the live feed of a run in progress.
+_TASKS_TAB_NUDGE = "point them to the Tasks tab, where the new task now shows up"
+_ACTIONS_TAB_NUDGE = (
+    "point them to the Actions tab, which streams my work live while a task runs"
+)
+
 
 @dataclass(frozen=True)
 class OnboardingPhase:
@@ -408,9 +418,10 @@ def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "after-hours Slack message lands, a calendar invite shows up)"
         )
         after = (
-            "Once they tell you, arm the trigger with your task tools, confirm "
-            "it in one line, and mention they can trip it right away with the "
-            "'Test it' control under the row."
+            "Once they tell you, arm the trigger with your task tools and "
+            f"confirm it in one line. Then {_TASKS_TAB_NUDGE}, and mention they "
+            "can trip it right away with the 'Test it' control under the row "
+            f"and {_ACTIONS_TAB_NUDGE}."
         )
     else:
         ask = (
@@ -420,7 +431,8 @@ def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
         )
         after = (
             "Once they tell you, schedule it with your task tools on a channel "
-            "they've connected, and confirm it in one line."
+            f"they've connected and confirm it in one line. Then {_TASKS_TAB_NUDGE}, "
+            f"and — since it can fire soon — {_ACTIONS_TAB_NUDGE}."
         )
     interaction = {
         "type": "task_beat",
@@ -1216,18 +1228,21 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "conversation: I ask what scheduled job they'd like and, once they tell "
         "me, schedule it with my task tools so it fires on its own and reports "
         "back on a channel they've connected — the proof is me returning "
-        "unprompted, not the row existing. The suggestion chips under the row "
-        "are clickable: clicking one asks me to set up that specific task "
-        "straight away."
+        "unprompted, not the row existing. Once it's set up I point them to the "
+        "Tasks tab to see it listed and to the Actions tab to watch it run live "
+        "when it fires. The suggestion chips under the row are clickable: "
+        "clicking one asks me to set up that specific task straight away."
     ),
     "create-triggerable-task": (
         "Clicking the 'Create a triggerable task' row asks me to open the "
         "conversation: I ask what event should trip it and, once they tell me, "
         "arm the event-triggered task with my task tools. They can then trip it "
         "deterministically with the Test-it control and watch it run; the "
-        "trigger stays armed for the real event afterwards. The suggestion "
-        "chips under the row are clickable: clicking one asks me to arm that "
-        "specific triggerable task straight away."
+        "trigger stays armed for the real event afterwards. Once it's armed I "
+        "point them to the Tasks tab to see it listed and to the Actions tab to "
+        "watch it run live when they trip it. The suggestion chips under the row "
+        "are clickable: clicking one asks me to arm that specific triggerable "
+        "task straight away."
     ),
 }
 
@@ -1262,11 +1277,11 @@ def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
     if chip is None:
         return None
     task_kind = _TASK_BEAT_KIND[step_id]
-    test_note = (
-        " Then mention they can trip it right away with the 'Test it' control "
-        "under the row."
+    run_note = (
+        " Mention they can trip it right away with the 'Test it' control under "
+        f"the row, and {_ACTIONS_TAB_NUDGE}."
         if task_kind == "triggered"
-        else ""
+        else f" Since it can fire soon, {_ACTIONS_TAB_NUDGE}."
     )
     return OnboardingEventSpec(
         event_type="coordinator_onboarding_event",
@@ -1275,7 +1290,8 @@ def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
             f"'{step.title}', so set that up now with your task tools: treat "
             "the example as their instruction, fill in sensible defaults, and "
             "only ask if a genuinely required detail (such as which channel to "
-            f"reach them on) is missing. Confirm it in one short message.{test_note} "
+            "reach them on) is missing. Confirm it in one short message, then "
+            f"{_TASKS_TAB_NUDGE}.{run_note} "
             "If an equivalent task already exists, treat this as a nudge and "
             "just confirm rather than creating a duplicate."
         ),
