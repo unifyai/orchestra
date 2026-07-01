@@ -540,6 +540,7 @@ def _get_all_filtered_log_event_ids(
                 .where(
                     and_(
                         log_event_context_join(owner_key=owner_key_filter),
+                        LogEventContext.project_id == project_id,
                         owner_scope_clause(LogEventContext, owner_key_filter),
                         LogEventContext.context_id == ctx_id,
                     ),

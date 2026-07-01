@@ -249,7 +249,10 @@ def bulk_insert_to_embedding_table(
     # so owner_key is resolved from the log here).
     owner_by_ref = dict(
         session.query(LogEvent.id, LogEvent.owner_key)
-        .filter(LogEvent.id.in_([item.ref_id for item in items]))
+        .filter(
+            LogEvent.project_id.in_({item.project_id for item in items}),
+            LogEvent.id.in_([item.ref_id for item in items]),
+        )
         .all(),
     )
 
@@ -420,11 +423,15 @@ def process_ready_embeddings(
     # This is done once here instead of per-chunk to avoid N queries for N chunks
     # Prevents FK violations when log_events are deleted during project deletion
     all_ref_ids = [item.ref_id for item in claimed_items]
+    all_project_ids = list({item.project_id for item in claimed_items})
     existing_ref_ids = set(
         row[0]
         for row in session.execute(
-            text("SELECT id FROM log_event WHERE id = ANY(:ids)"),
-            {"ids": all_ref_ids},
+            text(
+                "SELECT id FROM log_event "
+                "WHERE id = ANY(:ids) AND project_id = ANY(:project_ids)",
+            ),
+            {"ids": all_ref_ids, "project_ids": all_project_ids},
         ).fetchall()
     )
 
