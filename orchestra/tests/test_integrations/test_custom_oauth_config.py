@@ -346,3 +346,137 @@ def test_connect_url_uses_custom_auth_config(
     assert url == "https://consent.example/ac_custom_123"
     assert fake.auth_link_calls == ["ac_custom_123"]
     assert connection.provider_connection_id == "acct_1"
+
+
+# --- Managed-auth availability detection (drives BYO-OAuth prompts) ---------
+
+
+def test_requires_custom_oauth_when_no_managed_oauth_scheme() -> None:
+    from orchestra.integrations.providers.composio import (
+        _composio_requires_custom_oauth,
+    )
+
+    toolkit = {"slug": "TIKTOK", "auth_schemes": ["OAUTH2"]}
+    # Composio reports it manages no OAuth scheme for this toolkit.
+    detail = {"composio_managed_auth_schemes": ["BEARER_TOKEN"]}
+    assert _composio_requires_custom_oauth(toolkit, detail, ["oauth"]) is True
+
+
+def test_managed_oauth_scheme_does_not_require_custom() -> None:
+    from orchestra.integrations.providers.composio import (
+        _composio_requires_custom_oauth,
+    )
+
+    toolkit = {"slug": "GMAIL", "auth_schemes": ["OAUTH2"]}
+    detail = {"composio_managed_auth_schemes": ["OAUTH2"]}
+    assert _composio_requires_custom_oauth(toolkit, detail, ["oauth"]) is False
+
+
+def test_unknown_managed_signal_is_conservative() -> None:
+    from orchestra.integrations.providers.composio import (
+        _composio_requires_custom_oauth,
+    )
+
+    # No managed-auth signal at all -> never mislabel as needing custom OAuth.
+    toolkit = {"slug": "SOMEAPP", "auth_schemes": ["OAUTH2"]}
+    assert _composio_requires_custom_oauth(toolkit, {}, ["oauth"]) is False
+
+
+def test_entry_level_managed_flag_takes_precedence() -> None:
+    from orchestra.integrations.providers.composio import (
+        _composio_requires_custom_oauth,
+    )
+
+    toolkit = {"slug": "TIKTOK", "auth_schemes": ["OAUTH2"]}
+    detail = {"auth_config_details": [{"mode": "OAUTH2", "is_composio_managed": False}]}
+    assert _composio_requires_custom_oauth(toolkit, detail, ["oauth"]) is True
+
+
+def test_non_oauth_toolkit_never_requires_custom_oauth() -> None:
+    from orchestra.integrations.providers.composio import (
+        _composio_requires_custom_oauth,
+    )
+
+    toolkit = {"slug": "STRIPE", "auth_schemes": ["API_KEY"]}
+    detail = {"composio_managed_auth_schemes": []}
+    assert _composio_requires_custom_oauth(toolkit, detail, ["api_key"]) is False
+
+
+# --- Graceful connect failure when managed auth is unavailable -------------
+
+
+def _http_error(status_code: int, text: str) -> Exception:
+    import requests
+
+    error = requests.HTTPError(f"{status_code} Client Error")
+    error.response = _FakeResponse({}, status_code=status_code)  # type: ignore[attr-defined]
+    error.response.text = text  # type: ignore[attr-defined]
+    return error
+
+
+def test_is_missing_managed_auth_error_detects_default_config() -> None:
+    from orchestra.web.api.integrations.operations import (
+        _is_missing_managed_auth_error,
+    )
+
+    exc = _http_error(400, "Default auth config not found for toolkit tiktok.")
+    assert _is_missing_managed_auth_error(exc) is True
+
+
+def test_is_missing_managed_auth_error_ignores_unrelated_errors() -> None:
+    from orchestra.web.api.integrations.operations import (
+        _is_missing_managed_auth_error,
+    )
+
+    assert _is_missing_managed_auth_error(_http_error(500, "boom")) is False
+    assert _is_missing_managed_auth_error(_http_error(400, "bad scopes")) is False
+
+
+class _NoManagedAuthAdapter:
+    """Rejects managed auth-config creation the way Composio does for TikTok."""
+
+    def default_oauth_callback_url(self) -> str:
+        return "https://backend.composio.dev/api/v3.1/toolkits/auth/callback"
+
+    def create_auth_link(self, *, user_id, auth_config_id, callback_url=None, alias=None):
+        raise AssertionError("auth link must not be attempted without a config id")
+
+    def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+        raise _http_error(400, "Default auth config not found for toolkit tiktok.")
+
+
+def test_connect_url_missing_managed_auth_raises_actionable_error(
+    dbsession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_composio(dbsession)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *a, **k: _NoManagedAuthAdapter(),
+    )
+
+    from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
+
+    backend = IntegrationProviderDAO(dbsession).get_backend("composio")
+    connection = IntegrationConnection(
+        connection_id="conn-tiktok-2",
+        owner_scope="assistant",
+        assistant_id=99,
+        canonical_app_slug="tiktok",
+        backend_id="composio",
+        provider_app_id="TIKTOK",
+        status="pending",
+    )
+    owner = OwnerContext(owner_scope="assistant", assistant_id=99)
+
+    with pytest.raises(operations.ProviderConnectError) as excinfo:
+        operations._provider_connect_url(
+            backend=backend,
+            app=None,
+            owner=owner,
+            connection=connection,
+            redirect_url="https://console.example/return",
+        )
+    assert excinfo.value.code == "custom_oauth_required"
+    assert excinfo.value.status_code == 409

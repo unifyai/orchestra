@@ -18,6 +18,7 @@ from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.integrations.operations import (
     OwnerContext,
+    ProviderConnectError,
     approve_tool_execution,
     cancel_connection,
     complete_connection,
@@ -576,6 +577,11 @@ def start_integration_connect(
             redirect_url=body.redirect_url,
             account_label=body.account_label,
         )
+    except ProviderConnectError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.message,
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

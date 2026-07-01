@@ -289,6 +289,12 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             )
             detail = details.get(toolkit_slug) or {}
             auth_modes = _composio_auth_modes(toolkit, detail)
+            requires_custom_oauth = _composio_requires_custom_oauth(
+                toolkit,
+                detail,
+                auth_modes,
+            )
+            managed_auth = not requires_custom_oauth
             auth_config_id = None
             if should_create_auth_configs and "oauth" in auth_modes:
                 try:
@@ -310,7 +316,8 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 "source": "composio_live_sync",
                 "toolkit_slug": toolkit_slug,
                 "toolkit_version": toolkit.get("version"),
-                "managed_auth": True,
+                "managed_auth": managed_auth,
+                "requires_custom_oauth": requires_custom_oauth,
                 "raw_toolkit": toolkit,
             }
             if detail:
@@ -331,6 +338,8 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 "recommended_scopes": _composio_oauth_scopes(detail),
                 "api_key_schema": _composio_api_key_schema(detail),
                 "tool_count": _composio_tool_count(detail),
+                "managed_auth": managed_auth,
+                "requires_custom_oauth": requires_custom_oauth,
                 "raw_provider_metadata": raw_provider_metadata,
             }
             entries.append(entry)
@@ -872,6 +881,54 @@ def _composio_auth_modes(
         if mode not in modes:
             modes.append(mode)
     return modes or ["oauth"]
+
+
+def _composio_managed_auth_schemes(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> list[str] | None:
+    """Auth schemes Composio provides managed credentials for.
+
+    Returns ``None`` when the payload gives no signal (older responses), so
+    callers can distinguish "unknown" from "definitely none".
+    """
+
+    for source in (detail, toolkit):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("composio_managed_auth_schemes") or source.get(
+            "composioManagedAuthSchemes",
+        )
+        if isinstance(raw, list):
+            return [str(item).upper() for item in raw]
+    return None
+
+
+def _composio_requires_custom_oauth(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None,
+    auth_modes: list[str],
+) -> bool:
+    """True when an OAuth toolkit lacks Composio-managed credentials.
+
+    Such toolkits (e.g. TikTok) can only be connected once an operator supplies
+    their own OAuth app ("bring your own OAuth"). Conservative by design: when
+    Composio gives no managed-auth signal we return ``False`` so managed apps are
+    never mislabelled — the connect flow still surfaces a clear error if a
+    managed config turns out to be unavailable.
+    """
+
+    if "oauth" not in auth_modes:
+        return False
+    for entry in _auth_config_details(detail):
+        if "OAUTH" not in str(entry.get("mode") or "").upper():
+            continue
+        if "is_composio_managed" in entry:
+            return not bool(entry.get("is_composio_managed"))
+    managed_schemes = _composio_managed_auth_schemes(toolkit, detail)
+    if managed_schemes is None:
+        return False
+    return not any("OAUTH" in scheme for scheme in managed_schemes)
 
 
 def _composio_icon_url(toolkit: dict[str, Any]) -> str | None:

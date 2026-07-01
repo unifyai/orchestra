@@ -32,6 +32,11 @@ class ProviderAppEntry(TypedDict, total=False):
     tool_count: int
     source_type: str
     supported: bool
+    # Whether the provider supplies managed OAuth credentials for this app.
+    managed_auth: bool
+    # OAuth-capable app with no managed credentials -> needs an operator-supplied
+    # ("bring your own") OAuth app before it can be connected (e.g. TikTok).
+    requires_custom_oauth: bool
     raw_provider_metadata: dict[str, Any]
 
 

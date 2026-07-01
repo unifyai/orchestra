@@ -47,6 +47,7 @@ from orchestra.integrations.providers.composio import (  # noqa: F401
     _composio_behavior_hints,
     _composio_canonical_app_slug,
     _composio_icon_url,
+    _composio_requires_custom_oauth,
     _composio_tool_input_schema,
     _composio_tool_name,
     _composio_tool_output_schema,
@@ -88,6 +89,51 @@ from orchestra.web.api.integrations.schema import (
 READY_STATUSES = {"connected"}
 EXPIRED_STATUSES = {"expired", "revoked", "error"}
 logger = logging.getLogger(__name__)
+
+
+class ProviderConnectError(Exception):
+    """A connect attempt failed for a reason worth surfacing to the caller.
+
+    Carries an HTTP status + user-facing message so route handlers can return an
+    actionable error instead of a bare 500 (e.g. a toolkit that needs a custom
+    OAuth app before it can be connected).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 409,
+        code: str = "provider_connect_failed",
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.code = code
+
+
+def _is_missing_managed_auth_error(exc: Exception) -> bool:
+    """True when Composio rejected auth-config creation for lack of managed creds.
+
+    These toolkits (e.g. TikTok) have no Composio-managed OAuth credentials, so
+    the operator must supply their own OAuth app. Composio answers the managed
+    ``POST /auth_configs`` with a 400 whose body mentions the missing default
+    auth config.
+    """
+
+    status_code, response_text = _provider_exception_details(exc)
+    if status_code not in (400, 404):
+        return False
+    haystack = f"{response_text} {exc}".lower()
+    needles = (
+        "default auth config not found",
+        "defaultauthconfignotfound",
+        "does not have managed",
+        "no managed",
+        "managed credentials",
+        "no default auth config",
+    )
+    return any(needle in haystack for needle in needles)
 
 
 @dataclass(frozen=True)
@@ -365,11 +411,18 @@ def _composio_live_catalog_handler(
         # the only workable path for toolkits Composio has no managed
         # credentials for (e.g. TikTok).
         auth_config_id = _custom_auth_config_id(config, toolkit_slug)
-        managed_auth = auth_config_id is None
+        toolkit_auth_modes = _composio_auth_modes(toolkit)
+        requires_custom_oauth = _composio_requires_custom_oauth(
+            toolkit,
+            None,
+            toolkit_auth_modes,
+        )
+        managed_auth = not requires_custom_oauth
+        custom_auth_configured = auth_config_id is not None
         if (
             not auth_config_id
             and should_create_auth_configs
-            and "oauth" in _composio_auth_modes(toolkit)
+            and "oauth" in toolkit_auth_modes
         ):
             try:
                 auth_config_id = adapter.get_or_create_auth_config(toolkit_slug)
@@ -391,6 +444,8 @@ def _composio_live_catalog_handler(
             "toolkit_slug": toolkit_slug,
             "toolkit_version": toolkit.get("version"),
             "managed_auth": managed_auth,
+            "requires_custom_oauth": requires_custom_oauth,
+            "custom_auth_configured": custom_auth_configured,
             "raw_toolkit": toolkit,
         }
         if auth_config_id:
@@ -404,8 +459,10 @@ def _composio_live_catalog_handler(
                 "description": toolkit.get("description"),
                 "category": toolkit.get("category"),
                 "icon_url": _composio_icon_url(toolkit),
-                "auth_modes": _composio_auth_modes(toolkit),
+                "auth_modes": toolkit_auth_modes,
                 "available_scopes": [],
+                "managed_auth": managed_auth,
+                "requires_custom_oauth": requires_custom_oauth,
                 "raw_provider_metadata": raw_provider_metadata,
             },
         )
@@ -1230,7 +1287,26 @@ def _provider_connect_url(
                         app=app,
                         exc=exc,
                     )
-                    raise
+                    app_label = (
+                        app.display_name
+                        if app and getattr(app, "display_name", None)
+                        else connection.provider_app_id
+                    )
+                    if _is_missing_managed_auth_error(exc):
+                        raise ProviderConnectError(
+                            f"{app_label} has no managed OAuth credentials. An admin "
+                            "must add a custom OAuth app for it in integration "
+                            "settings before it can be connected.",
+                            status_code=409,
+                            code="custom_oauth_required",
+                        ) from exc
+                    raise ProviderConnectError(
+                        f"Could not start the {app_label} connection: the provider "
+                        "rejected the authorization request. Check the integration's "
+                        "OAuth configuration and try again.",
+                        status_code=502,
+                        code="provider_auth_config_failed",
+                    ) from exc
                 if not auth_config_id:
                     logger.warning(
                         "Composio auth config creation returned no id backend_id=%s "
@@ -1246,8 +1322,12 @@ def _provider_connect_url(
                         connection.connection_id,
                         owner.owner_scope,
                     )
-                    raise ValueError(
-                        f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
+                    raise ProviderConnectError(
+                        f"Could not start the {connection.provider_app_id} connection: "
+                        "no OAuth configuration is available. An admin may need to add "
+                        "a custom OAuth app for it in integration settings.",
+                        status_code=409,
+                        code="custom_oauth_required",
                     )
                 if app:
                     app.raw_provider_metadata_json = {
