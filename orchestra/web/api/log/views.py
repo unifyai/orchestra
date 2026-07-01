@@ -5897,10 +5897,13 @@ def update_active_derived_logs(
                                 LogEvent,
                                 session,
                                 log_event_ids=q.subquery(),
+                                project_id=template.project_id,
+                                context_id=template.context_id,
                             )
 
                             if isinstance(condition, Subquery):
                                 q = session.query(LogEvent.id).filter(
+                                    LogEvent.project_id == template.project_id,
                                     LogEvent.id.in_(
                                         select(q.subquery().c.id),
                                     ),
