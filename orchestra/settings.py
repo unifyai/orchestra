@@ -88,6 +88,20 @@ class Settings(BaseSettings):
         return self.is_staging
 
     @property
+    def account_reset(self) -> bool:
+        """Whether the staging-only "reset my account" tool is available.
+
+        The tool rewinds a user's personal workspace to its fresh-signup state,
+        so it is confined to staging. An explicit ``ACCOUNT_RESET`` override
+        enables it in local/CI stacks where ``DEPLOY_ENV`` is not ``staging`` so
+        the flow is reproducible and E2E-testable.
+        """
+        override = os.environ.get("ACCOUNT_RESET")
+        if override is not None:
+            return override == "1"
+        return self.is_staging
+
+    @property
     def charges_billing(self) -> bool:
         """Whether credit pre-checks and deductions run for billable actions.
 

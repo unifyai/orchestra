@@ -36,6 +36,7 @@ from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.lib.referrals import ReferralError, attribute_referral
+from orchestra.services.account_reset_service import reset_personal_account
 from orchestra.services.coordinator_service import (
     ensure_coordinator_intro_watched,
     ensure_personal_coordinator_provisioned,
@@ -777,6 +778,51 @@ def delete_user(
         runtime_cleanup_complete=result.runtime_cleanup_complete,
         runtime_cleanup_summary=result.runtime_cleanup_summary,
     )
+
+
+@admin_router.post("/user/{user_id}/reset")
+async def reset_user_account(
+    user_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db_session),
+):
+    """Rewind a user's personal workspace to its fresh-signup state.
+
+    Deletes every personal assistant (hired teammates and the Coordinator),
+    clears the user's contact details beyond their email, re-provisions a
+    pristine Coordinator through the signup path, and rewinds onboarding.
+    Organization memberships, org-scoped Coordinators, and billing are left
+    untouched.
+
+    Restricted to the staging deployment (``settings.account_reset``): it is a
+    destructive internal tool and has no place in production.
+    """
+    if not settings.account_reset:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account_reset_disabled",
+        )
+
+    if not UserDAO(session).filter(id=user_id):
+        raise not_found("User ID")
+
+    result = await reset_personal_account(session, user_id=user_id)
+
+    if result.cleanup_task_ids:
+        background_tasks.add_task(
+            run_user_runtime_cleanup_tasks,
+            request.app.state.db_session_factory,
+            cleanup_task_ids=result.cleanup_task_ids,
+            user_id=user_id,
+        )
+
+    return {
+        "success": True,
+        "deleted_assistant_ids": result.deleted_assistant_ids,
+        "new_coordinator_id": result.new_coordinator_id,
+        "cleanup_errors": result.cleanup_errors,
+    }
 
 
 ### Not related to next-auth

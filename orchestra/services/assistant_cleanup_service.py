@@ -39,6 +39,7 @@ ASSISTANTS_PROJECT_NAME = "Assistants"
 class CleanupSource(StrEnum):
     """Stable identifiers for the workflows that enqueue cleanup tasks."""
 
+    ACCOUNT_RESET = "account_reset"
     ASSISTANT_DELETE = "assistant_delete"
     ORGANIZATION_DELETE = "organization_delete"
     ORGANIZATION_MEMBER_REMOVAL = "organization_member_removal"
