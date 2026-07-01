@@ -1475,6 +1475,14 @@ SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
 SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
 SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
+# Fired when the user resets a completed step from the Console checklist.
+# The derivation already excludes evidence older than the reset cutoff, but
+# the brain caches the rendered progress between TTL fetches — without this
+# event the reset only self-corrects on the next backstop fetch (up to 30s),
+# so a nudge in that window can still claim the step is done. The event
+# pushes the freshly-derived render immediately and tells the brain the step
+# is no longer complete.
+SUBTYPE_ONBOARDING_STEP_RESET = "onboarding_step_reset"
 SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # Fired when the user clicks a workspace demo row (mailbox / Drive /
 # calendar). Twin reads that area of the connected workspace and delivers a
@@ -1512,6 +1520,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_INTEGRATION_CONNECTED,
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
+        SUBTYPE_ONBOARDING_STEP_RESET,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_WORKSPACE_DEMO_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
@@ -1527,6 +1536,18 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
 # ``WORKSPACE_MANAGED_SECRET_PREFIXES``
 # (src/hooks/Assistants/useAssistantIntegrations.ts) — keep in sync.
 _WORKSPACE_SECRET_PREFIXES: tuple[str, ...] = ("GOOGLE_", "MICROSOFT_", "AZURE_")
+
+# A single workspace connection writes a whole bundle of secrets (access +
+# refresh token, expiry, granted scopes, account email, ...) and the
+# token-refresh cron overwrites the access token on a schedule. To narrate
+# "workspace connected" exactly once per connection — and never on a refresh —
+# we only emit when the *created* secret is the provider's access-token row:
+# it is written on every connect path (BYOD and enterprise, Google and
+# Microsoft) and is only ever created (not updated) at first connect, since
+# refresh does an update and disconnect deletes it before a reconnect.
+_WORKSPACE_CONNECTED_MARKERS: frozenset[str] = frozenset(
+    {"GOOGLE_ACCESS_TOKEN", "MICROSOFT_ACCESS_TOKEN"},
+)
 
 # Onboarding checklist step ids derivable from durable domain state.
 # ``meet`` (picker resolution) is deliberately absent because it is
@@ -2621,6 +2642,7 @@ async def emit_secret_landed_event(
     *,
     assistant: Assistant,
     secret_name: str,
+    is_create: bool,
 ) -> None:
     """Fire the onboarding narration for one secret write.
 
@@ -2630,8 +2652,19 @@ async def emit_secret_landed_event(
     it's the Coordinator, otherwise the workspace's), gates on
     onboarding mode, and swallows transport errors so a transient
     adapters outage can't fail the surrounding request.
+
+    ``is_create`` is ``True`` for a POST (row created) and ``False``
+    for a PUT (row updated). The workspace-connected narration is
+    de-duped to the single create of the provider's access-token
+    marker (see :data:`_WORKSPACE_CONNECTED_MARKERS`) so a bundle of
+    OAuth secrets — and every scheduled token refresh — narrate the
+    connection exactly once instead of once per secret write.
     """
     subtype, message = _classify_secret_for_onboarding(secret_name)
+    if subtype == SUBTYPE_WORKSPACE_CONNECTED and not (
+        is_create and secret_name.upper() in _WORKSPACE_CONNECTED_MARKERS
+    ):
+        return
     await maybe_notify_for_assistant_async(
         session,
         assistant=assistant,
@@ -2699,6 +2732,52 @@ async def emit_onboarding_step_skipped_event(
         message=f"User skipped the '{step_id}' onboarding step.",
         details={
             "step_id": step_id,
+            "completed_step_ids": completed,
+            "skipped_step_ids": skipped,
+        },
+    )
+
+
+async def emit_onboarding_step_reset_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    reset_step_ids: Sequence[str] | None = None,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that the user reset a completed onboarding step.
+
+    Carries the recomputed progress (the reset step is no longer among
+    ``completed_step_ids``) so the brain's standing render corrects the
+    instant this lands, rather than waiting for the TTL backstop fetch.
+    """
+    completed = list(
+        (
+            completed_step_ids
+            if completed_step_ids is not None
+            else derive_onboarding_progress(session, coordinator=coordinator)
+        ),
+    )
+    skipped = normalize_onboarding_step_ids(
+        (
+            skipped_step_ids
+            if skipped_step_ids is not None
+            else get_coordinator_state(session, coordinator=coordinator).get(
+                "skipped_step_ids",
+            )
+        ),
+    )
+    reset_ids = list(reset_step_ids) if reset_step_ids is not None else [step_id]
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_RESET,
+        message=f"User reset the '{step_id}' onboarding step.",
+        details={
+            "step_id": step_id,
+            "reset_step_ids": reset_ids,
             "completed_step_ids": completed,
             "skipped_step_ids": skipped,
         },

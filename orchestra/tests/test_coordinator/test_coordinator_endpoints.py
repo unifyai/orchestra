@@ -958,6 +958,200 @@ async def test_coordinator_state_seed_is_idempotent_on_repair(
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_patch_records_onboarding_step(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Recording an onboarding step persists on the row for resumption."""
+    owner = await _create_user(client, "state-step")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.emit_onboarding_step_started_event",
+        new=AsyncMock(return_value=True),
+    ) as emit:
+        patch_response = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"onboarding_step": "email-reply"},
+            headers=owner["headers"],
+        )
+    assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["step_id"] == "email-reply"
+    info = patch_response.json()["info"]
+    assert info["mode"] == "onboarding"
+    assert info["onboarding_step"] == "email-reply"
+
+    follow_up = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
+    assert follow_up.json()["info"]["onboarding_step"] == "email-reply"
+
+    invalid = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_step": "briefing"},
+        headers=owner["headers"],
+    )
+    assert invalid.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_records_skipped_steps(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Skipped onboarding steps persist separately from completed steps."""
+    owner = await _create_user(client, "state-skipped-step")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.emit_onboarding_step_skipped_event",
+        new=AsyncMock(return_value=True),
+    ) as emit:
+        skip_apps = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "apps"},
+            headers=owner["headers"],
+        )
+        assert skip_apps.status_code == status.HTTP_200_OK, skip_apps.json()
+        assert skip_apps.json()["info"]["skipped_step_ids"] == ["apps"]
+
+        skip_workspace = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "workspace"},
+            headers=owner["headers"],
+        )
+        assert skip_workspace.status_code == status.HTTP_200_OK, skip_workspace.json()
+        assert skip_workspace.json()["info"]["skipped_step_ids"] == [
+            "workspace",
+            "apps",
+        ]
+
+        duplicate = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "apps"},
+            headers=owner["headers"],
+        )
+        assert duplicate.status_code == status.HTTP_200_OK, duplicate.json()
+        assert duplicate.json()["info"]["skipped_step_ids"] == ["workspace", "apps"]
+
+        unskip_apps = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"unskip_onboarding_step": "apps"},
+            headers=owner["headers"],
+        )
+        assert unskip_apps.status_code == status.HTTP_200_OK, unskip_apps.json()
+        assert unskip_apps.json()["info"]["skipped_step_ids"] == ["workspace"]
+
+        skip_phone = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"skip_onboarding_step": "phone-number"},
+            headers=owner["headers"],
+        )
+        assert skip_phone.status_code == status.HTTP_200_OK, skip_phone.json()
+        assert skip_phone.json()["info"]["skipped_step_ids"] == [
+            "phone-number",
+            "sms-reference",
+            "sms-message",
+            "phone-call-reference",
+            "phone-call",
+            "workspace",
+        ]
+
+        unskip_sms_message = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"unskip_onboarding_step": "sms-message"},
+            headers=owner["headers"],
+        )
+        assert (
+            unskip_sms_message.status_code == status.HTTP_200_OK
+        ), unskip_sms_message.json()
+        # Unskipping a leaf re-offers only that step; its prerequisites stay
+        # skipped (the step simply reads as locked until they are unskipped).
+        assert unskip_sms_message.json()["info"]["skipped_step_ids"] == [
+            "phone-number",
+            "sms-reference",
+            "phone-call-reference",
+            "phone-call",
+            "workspace",
+        ]
+
+    assert emit.await_count == 4
+    assert emit.await_args.kwargs["skipped_step_ids"] == [
+        "phone-number",
+        "sms-reference",
+        "sms-message",
+        "phone-call-reference",
+        "phone-call",
+        "workspace",
+    ]
+
+    promote = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"mode": "working", "clear_onboarding_step": True},
+        headers=owner["headers"],
+    )
+    assert promote.status_code == status.HTTP_200_OK, promote.json()
+    assert promote.json()["info"]["completed_step_ids"] == []
+    assert promote.json()["info"]["skipped_step_ids"] == [
+        "phone-number",
+        "sms-reference",
+        "phone-call-reference",
+        "phone-call",
+        "workspace",
+    ]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_reset_emits_reset_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Resetting a step emits the reset narration so the brain de-sticks it."""
+    owner = await _create_user(client, "state-reset-step")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.emit_onboarding_step_reset_event",
+        new=AsyncMock(return_value=True),
+    ) as emit:
+        reset = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={"reset_onboarding_step": "workspace"},
+            headers=owner["headers"],
+        )
+        assert reset.status_code == status.HTTP_200_OK, reset.json()
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["step_id"] == "workspace"
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_intro_watched_is_one_way_sticky(
     client: AsyncClient,
     dbsession: Session,

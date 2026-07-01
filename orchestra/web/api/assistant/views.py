@@ -94,6 +94,7 @@ from orchestra.services.coordinator_service import (
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
     emit_onboarding_step_event,
+    emit_onboarding_step_reset_event,
     emit_onboarding_step_skipped_event,
     emit_onboarding_step_started_event,
     emit_secret_landed_event,
@@ -1641,6 +1642,19 @@ async def update_coordinator_state_endpoint(
             session,
             coordinator=coordinator,
             step_id=update.skip_onboarding_step,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
+    if update.reset_onboarding_step:
+        completed_step_ids = (
+            derive_onboarding_progress(session, coordinator=coordinator)
+            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+            else []
+        )
+        await emit_onboarding_step_reset_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.reset_onboarding_step,
             completed_step_ids=completed_step_ids,
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
@@ -3516,6 +3530,7 @@ async def create_assistant_secret(
         session,
         assistant=assistant,
         secret_name=body.secret_name,
+        is_create=True,
     )
     return InfoResponse(info={"secret_name": body.secret_name, "status": "created"})
 
@@ -3579,12 +3594,14 @@ async def update_assistant_secret(
     )
     session.commit()
     # See sibling note on the POST handler — same narration emit, same
-    # gating semantics. Updates also count because the workspace OAuth
-    # refresh path overwrites the existing token row.
+    # gating semantics. Updates pass ``is_create=False`` so the workspace
+    # OAuth refresh path (which overwrites the token row on a schedule) does
+    # not re-narrate the connection; only the first-connect create does.
     await emit_secret_landed_event(
         session,
         assistant=assistant,
         secret_name=secret_name,
+        is_create=False,
     )
     return InfoResponse(info={"secret_name": secret_name, "status": "updated"})
 
