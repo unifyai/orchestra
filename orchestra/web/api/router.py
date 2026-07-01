@@ -371,6 +371,7 @@ async def get_features() -> dict[str, bool]:
         # without Stripe configured, since credits are replenished for free.
         "billing": settings.billing_enabled or settings.manual_topup,
         "manual_topup": settings.manual_topup,
+        "account_reset": settings.account_reset,
         "workspace_google": settings.workspace_google_enabled,
         "workspace_microsoft": settings.workspace_microsoft_enabled,
         # Contact channels (probed from the communication gateway). Absent keys
