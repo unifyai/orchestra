@@ -87,6 +87,11 @@ def _infer_type_from_value(value) -> str:
 # OpenAI API key for embeddings
 # Uses get_env for fallback: ORCHESTRA_OPENAI_API_KEY -> OPENAI_API_KEY
 OPENAI_API_KEY = get_env("ORCHESTRA_OPENAI_API_KEY")
+OPENROUTER_API_KEY = get_env("ORCHESTRA_OPENROUTER_API_KEY")
+OPENROUTER_API_BASE = get_env(
+    "ORCHESTRA_OPENROUTER_API_BASE",
+    "https://openrouter.ai/api/v1",
+)
 
 # Global sync OpenAI client. Thread-safe via httpx.Client's connection pooling.
 _openai_client: OpenAI | None = None
@@ -101,17 +106,21 @@ def _get_openai_client() -> OpenAI | None:
     The sync httpx.Client connection pool is thread-safe without event loop issues.
 
     Returns:
-        OpenAI client, or None if no API key configured.
+        OpenAI-compatible client, or None if no API key configured.
     """
     global _openai_client
 
-    if not OPENAI_API_KEY:
+    api_key = OPENROUTER_API_KEY or OPENAI_API_KEY
+    if not api_key:
         return None
 
     if _openai_client is None:
         with _openai_client_lock:
             if _openai_client is None:
-                _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+                kwargs = {"api_key": api_key}
+                if OPENROUTER_API_KEY:
+                    kwargs["base_url"] = OPENROUTER_API_BASE
+                _openai_client = OpenAI(**kwargs)
 
     return _openai_client
 
@@ -228,6 +237,12 @@ def _get_embedding(
     return result
 
 
+def _embedding_model_for_api(model: str) -> str:
+    if OPENROUTER_API_KEY and not model.startswith("openai/"):
+        return f"openai/{model}"
+    return model
+
+
 def _get_embeddings_batch(
     texts: list[str],
     model: str | None = None,
@@ -264,12 +279,13 @@ def _get_embeddings_batch(
     import openai
     from opentelemetry import trace
 
-    if not OPENAI_API_KEY:
+    if not (OPENROUTER_API_KEY or OPENAI_API_KEY):
         raise ValueError(
-            "OPENAI_API_KEY or ORCHESTRA_OPENAI_API_KEY environment variable must be set to use embed()",
+            "OPENROUTER_API_KEY/ORCHESTRA_OPENROUTER_API_KEY or OPENAI_API_KEY/ORCHESTRA_OPENAI_API_KEY must be set to use embed()",
         )
 
     model = model or DEFAULT_EMBEDDING_MODEL
+    api_model = _embedding_model_for_api(model)
     tracer = trace.get_tracer(__name__)
 
     if not texts:
@@ -308,7 +324,7 @@ def _get_embeddings_batch(
         depth: int = 0,
     ) -> list[list[float]]:
         """Try to embed the given batch; on token-limit error, split and retry."""
-        kwargs = {"model": model, "input": batch_texts}
+        kwargs = {"model": api_model, "input": batch_texts}
         if dimensions is not None:
             kwargs["dimensions"] = dimensions
 

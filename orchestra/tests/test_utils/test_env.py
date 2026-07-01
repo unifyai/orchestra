@@ -109,9 +109,11 @@ class TestStandardFallbacks:
     """Tests for the STANDARD_FALLBACKS mapping."""
 
     def test_api_key_fallbacks_exist(self):
-        """OpenAI API key (used for embeddings) should have fallback defined."""
+        """Provider API keys should have fallbacks defined."""
         expected_keys = [
             "ORCHESTRA_OPENAI_API_KEY",
+            "ORCHESTRA_OPENROUTER_API_KEY",
+            "ORCHESTRA_OPENROUTER_API_BASE",
         ]
         for key in expected_keys:
             assert key in STANDARD_FALLBACKS, f"Missing fallback for {key}"
@@ -119,6 +121,12 @@ class TestStandardFallbacks:
     def test_fallback_values_are_standard_names(self):
         """Fallback values should be the standard (unprefixed) names."""
         assert STANDARD_FALLBACKS["ORCHESTRA_OPENAI_API_KEY"] == "OPENAI_API_KEY"
+        assert (
+            STANDARD_FALLBACKS["ORCHESTRA_OPENROUTER_API_KEY"] == "OPENROUTER_API_KEY"
+        )
+        assert (
+            STANDARD_FALLBACKS["ORCHESTRA_OPENROUTER_API_BASE"] == "OPENROUTER_API_BASE"
+        )
 
 
 class TestAllProviderApiKeys:
@@ -128,6 +136,8 @@ class TestAllProviderApiKeys:
         "orchestra_key,standard_key",
         [
             ("ORCHESTRA_OPENAI_API_KEY", "OPENAI_API_KEY"),
+            ("ORCHESTRA_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+            ("ORCHESTRA_OPENROUTER_API_BASE", "OPENROUTER_API_BASE"),
         ],
     )
     def test_api_key_fallback(self, orchestra_key: str, standard_key: str):

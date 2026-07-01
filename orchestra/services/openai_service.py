@@ -58,14 +58,39 @@ class OpenAIService:
     """
 
     def __init__(self):
-        if not settings.openai_api_key:
-            raise ValueError("openai_api_key is not set in settings.")
-        self.client = OpenAI(api_key=settings.openai_api_key)
+        if not (settings.openrouter_api_key or settings.openai_api_key):
+            raise ValueError(
+                "openrouter_api_key or openai_api_key is not set in settings.",
+            )
+        if settings.openrouter_api_key:
+            self.client = OpenAI(
+                api_key=settings.openrouter_api_key,
+                base_url=settings.openrouter_api_base,
+            )
+        else:
+            self.client = OpenAI(api_key=settings.openai_api_key)
+        self._direct_openai_client = (
+            OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
+        )
         transport = httpx.HTTPTransport(retries=3)
         self._http_client = httpx.Client(
             transport=transport,
             timeout=httpx.Timeout(30.0),
         )
+
+    @staticmethod
+    def _chat_model(model: str) -> str:
+        if settings.openrouter_api_key and not model.startswith("openai/"):
+            return f"openai/{model}"
+        return model
+
+    def _require_direct_openai_client(self) -> OpenAI:
+        if self._direct_openai_client is None:
+            raise OpenAIAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="A direct OpenAI API key is required for OpenAI audio endpoints.",
+            )
+        return self._direct_openai_client
 
     def analyze_image(self, image_url: str) -> ImageAnalysisResponse:
         """
@@ -83,7 +108,7 @@ class OpenAIService:
         """
         try:
             response = self.client.beta.chat.completions.parse(
-                model="gpt-4o",
+                model=self._chat_model("gpt-4o"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {
@@ -158,9 +183,11 @@ class OpenAIService:
 
         # 2. Transcribe audio
         try:
-            transcription = self.client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
+            transcription = (
+                self._require_direct_openai_client().audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                )
             )
             transcript_text = transcription.text
         except Exception as e:
@@ -189,7 +216,7 @@ class OpenAIService:
 
         try:
             response = self.client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
+                model=self._chat_model("gpt-4o-mini"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {
@@ -235,7 +262,7 @@ class OpenAIService:
         """
         try:
             response = self.client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
+                model=self._chat_model("gpt-4o-mini"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text},
@@ -333,7 +360,7 @@ class OpenAIService:
         """
         try:
             response = self.client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
+                model=self._chat_model("gpt-4o-mini"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text},
@@ -407,7 +434,7 @@ class OpenAIService:
 
         try:
             response = self.client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
+                model=self._chat_model("gpt-4o-mini"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
@@ -495,7 +522,7 @@ class OpenAIService:
         openai_format, content_type = supported_formats[output_format]
 
         try:
-            response = self.client.audio.speech.create(
+            response = self._require_direct_openai_client().audio.speech.create(
                 model=model_id or "gpt-4o-mini-tts",
                 voice=voice_id,
                 input=text,

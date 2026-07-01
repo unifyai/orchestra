@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from yarl import URL
 
+from orchestra.env import get_env
 from orchestra.lib.deploy_env import resolve_deploy_env
 
 TEMP_DIR = Path(gettempdir())
@@ -290,7 +291,12 @@ class Settings(BaseSettings):
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
     elevenlabs_api_key: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
     deepgram_api_key: Optional[str] = os.environ.get("DEEPGRAM_API_KEY")
-    openai_api_key: Optional[str] = None  # Populated by model_config below
+    openai_api_key: Optional[str] = get_env("ORCHESTRA_OPENAI_API_KEY")
+    openrouter_api_key: Optional[str] = get_env("ORCHESTRA_OPENROUTER_API_KEY")
+    openrouter_api_base: str = get_env(
+        "ORCHESTRA_OPENROUTER_API_BASE",
+        "https://openrouter.ai/api/v1",
+    )
 
     # Cloudflare Turnstile CAPTCHA
     turnstile_secret_key: Optional[str] = os.environ.get("TURNSTILE_SECRET_KEY")

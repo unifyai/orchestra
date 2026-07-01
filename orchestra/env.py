@@ -22,6 +22,9 @@ from typing import Optional
 STANDARD_FALLBACKS: dict[str, str] = {
     # OpenAI API key (used for embeddings in log search)
     "ORCHESTRA_OPENAI_API_KEY": "OPENAI_API_KEY",
+    # OpenRouter API key/base URL for OpenAI-compatible model calls
+    "ORCHESTRA_OPENROUTER_API_KEY": "OPENROUTER_API_KEY",
+    "ORCHESTRA_OPENROUTER_API_BASE": "OPENROUTER_API_BASE",
 }
 
 
