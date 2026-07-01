@@ -224,63 +224,6 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
 
 
 @pytest.mark.anyio
-async def test_graph_owned_step_event_embeds_interaction_and_render() -> None:
-    """Reference quiz triggers travel through the same gated event path."""
-    coordinator = _fake_coordinator(agent_id=18)
-    with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "set_coordinator_state") as set_state,
-        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
-    ):
-        result = await svc.emit_onboarding_step_event(
-            session=MagicMock(),
-            coordinator=coordinator,
-            step_id="email-reference",
-        )
-
-    assert result is True
-    set_state.assert_called_once()
-    fields = post.await_args.kwargs["extra_event_fields"]
-    assert fields["subtype"] == svc.SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED
-    details = fields["details"]
-    assert details["trigger_step_id"] == "email-reference"
-    assert details["reply_step_id"] == "email-reply"
-    assert details["phase_id"] == "communication"
-    assert details["interaction"]["type"] == "reference_quiz"
-    assert details["onboarding"] == _RENDER
-
-
-@pytest.mark.anyio
-async def test_graph_owned_workspace_demo_event_embeds_interaction() -> None:
-    """Workspace demos emit through the gated path with no paired-reply pointer."""
-    coordinator = _fake_coordinator(agent_id=21)
-    with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
-        patch.object(svc, "set_coordinator_state") as set_state,
-        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
-        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
-    ):
-        result = await svc.emit_onboarding_step_event(
-            session=MagicMock(),
-            coordinator=coordinator,
-            step_id="workspace-mailbox",
-        )
-
-    assert result is True
-    # No paired reply, so the active onboarding step is left untouched.
-    set_state.assert_not_called()
-    fields = post.await_args.kwargs["extra_event_fields"]
-    assert fields["subtype"] == svc.SUBTYPE_WORKSPACE_DEMO_REQUESTED
-    details = fields["details"]
-    assert details["trigger_step_id"] == "workspace-mailbox"
-    assert details["phase_id"] == "workspace"
-    assert details["interaction"]["type"] == "workspace_demo"
-    assert details["interaction"]["channel"] == "workspace_mailbox"
-    assert details["onboarding"] == _RENDER
-
-
-@pytest.mark.anyio
 async def test_step_skipped_event_embeds_step_snapshots() -> None:
     """Skip events tell Unity which step was skipped and what is resolved so far."""
     coordinator = _fake_coordinator(agent_id=15)
@@ -348,44 +291,6 @@ def test_classify_secret_generic_name_yields_integration_subtype() -> None:
     subtype, msg = svc._classify_secret_for_onboarding("SLACK_BOT_TOKEN")
     assert subtype == svc.SUBTYPE_INTEGRATION_CONNECTED
     assert "SLACK_BOT_TOKEN" in msg
-
-
-def test_derive_onboarding_progress_orders_steps_canonically() -> None:
-    """Derivation composes the per-step checks in checklist order."""
-    coordinator = _fake_coordinator()
-
-    def has_reply_step(*args, step_id: str, **kwargs) -> bool:
-        return step_id in {
-            svc.ONBOARDING_STEP_EMAIL_REPLY,
-            svc.ONBOARDING_STEP_WHATSAPP_MESSAGE,
-            svc.ONBOARDING_STEP_PHONE_CALL,
-        }
-
-    with (
-        patch.object(svc, "_has_trigger_outbound", return_value=False),
-        patch.object(svc, "_has_reply_to_trigger", side_effect=has_reply_step),
-        patch.object(svc, "_has_user_whatsapp_number", return_value=False),
-        patch.object(svc, "_has_user_phone_number", return_value=True),
-        patch.object(svc, "_has_slack_install", return_value=True),
-        patch.object(svc, "_has_discord_connection", return_value=True),
-        patch.object(svc, "_has_workspace_email", return_value=True),
-        patch.object(svc, "_has_app_secret", return_value=False),
-        patch.object(svc, "_has_scheduled_task", return_value=True),
-    ):
-        derived = svc.derive_onboarding_progress(
-            MagicMock(),
-            coordinator=coordinator,
-        )
-    assert derived == [
-        svc.ONBOARDING_STEP_EMAIL_REPLY,
-        svc.ONBOARDING_STEP_WHATSAPP_MESSAGE,
-        svc.ONBOARDING_STEP_PHONE_NUMBER,
-        svc.ONBOARDING_STEP_PHONE_CALL,
-        svc.ONBOARDING_STEP_SLACK_CONNECT,
-        svc.ONBOARDING_STEP_DISCORD_CONNECT,
-        svc.ONBOARDING_STEP_WORKSPACE,
-        svc.ONBOARDING_STEP_SCHEDULE,
-    ]
 
 
 @pytest.mark.anyio

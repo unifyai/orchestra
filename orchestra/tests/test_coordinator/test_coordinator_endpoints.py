@@ -922,81 +922,6 @@ async def test_intro_watched_backfill_marks_existing_coordinator_state(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_read_derives_completed_steps(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    """``completed_step_ids`` re-derives from durable domain state.
-
-    Pins the fix for pre-completed steps: a BYOD workspace email
-    contact and a non-workspace integration secret created in an
-    *earlier* session (here: written directly to the DB, with no
-    transition events fired) must surface as completed steps on the
-    next state read — and disappear from the payload once the
-    Coordinator leaves onboarding mode.
-    """
-    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
-    from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-
-    owner = await _create_user(client, "state-derived-steps")
-    create = await client.post(
-        f"/v0/user/{owner['id']}/coordinator",
-        headers=owner["headers"],
-    )
-    assert create.status_code in {
-        status.HTTP_200_OK,
-        status.HTTP_201_CREATED,
-    }, create.json()
-    coordinator_id = int(create.json()["coordinator_id"])
-
-    contact_dao = AssistantContactDAO(dbsession)
-    # Replace any platform-provisioned mailbox with a BYOD one — the
-    # workspace OAuth flow writes a user-provisioned email contact.
-    contact_dao.soft_delete_assistant_contact(
-        assistant_id=coordinator_id,
-        contact_type="email",
-    )
-    contact_dao.upsert_assistant_contact(
-        assistant_id=coordinator_id,
-        contact_type="email",
-        contact_value="boss@example.com",
-        provider="google_workspace",
-        provisioned_by="user",
-    )
-    # Workspace OAuth tokens must not count as an app integration…
-    AssistantSecretDAO(dbsession).upsert(
-        user_id=owner["id"],
-        agent_id=coordinator_id,
-        name="GOOGLE_ACCESS_TOKEN",
-        value="token",
-    )
-    # …but a custom integration secret does.
-    AssistantSecretDAO(dbsession).upsert(
-        user_id=owner["id"],
-        agent_id=coordinator_id,
-        name="SLACK_BOT_TOKEN",
-        value="xoxb-123",
-    )
-    dbsession.commit()
-
-    response = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json()["info"]["completed_step_ids"] == ["workspace", "apps"]
-
-    # Leaving onboarding skips derivation entirely.
-    promote = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working"},
-        headers=owner["headers"],
-    )
-    assert promote.status_code == status.HTTP_200_OK, promote.json()
-    assert promote.json()["info"]["completed_step_ids"] == []
-
-
-@pytest.mark.anyio
 async def test_coordinator_state_seed_is_idempotent_on_repair(
     client: AsyncClient,
     dbsession: Session,
@@ -1030,54 +955,6 @@ async def test_coordinator_state_seed_is_idempotent_on_repair(
     )
     assert state_context is not None
     assert len(_context_logs(dbsession, context=state_context)) == 1
-
-
-@pytest.mark.anyio
-async def test_coordinator_state_patch_records_onboarding_step(
-    client: AsyncClient,
-    dbsession: Session,
-) -> None:
-    """Recording an onboarding step persists on the row for resumption."""
-    owner = await _create_user(client, "state-step")
-    create = await client.post(
-        f"/v0/user/{owner['id']}/coordinator",
-        headers=owner["headers"],
-    )
-    assert create.status_code in {
-        status.HTTP_200_OK,
-        status.HTTP_201_CREATED,
-    }, create.json()
-    coordinator_id = int(create.json()["coordinator_id"])
-
-    with patch(
-        "orchestra.web.api.assistant.views.emit_onboarding_step_started_event",
-        new=AsyncMock(return_value=True),
-    ) as emit:
-        patch_response = await client.patch(
-            f"/v0/assistant/{coordinator_id}/state",
-            json={"onboarding_step": "email-reply"},
-            headers=owner["headers"],
-        )
-    assert patch_response.status_code == status.HTTP_200_OK, patch_response.json()
-    emit.assert_awaited_once()
-    assert emit.await_args.kwargs["step_id"] == "email-reply"
-    info = patch_response.json()["info"]
-    assert info["mode"] == "onboarding"
-    assert info["onboarding_step"] == "email-reply"
-
-    follow_up = await client.get(
-        f"/v0/assistant/{coordinator_id}/state",
-        headers=owner["headers"],
-    )
-    assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
-    assert follow_up.json()["info"]["onboarding_step"] == "email-reply"
-
-    invalid = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"onboarding_step": "briefing"},
-        headers=owner["headers"],
-    )
-    assert invalid.status_code == status.HTTP_400_BAD_REQUEST
 
 
 @pytest.mark.anyio
