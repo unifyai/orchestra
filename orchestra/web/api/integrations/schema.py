@@ -97,6 +97,41 @@ class IntegrationBackendPatchRequest(BaseModel):
     config_json: Optional[dict[str, Any]] = None
 
 
+class IntegrationCustomAuthConfigRequest(BaseModel):
+    """Register a bring-your-own OAuth app for a provider toolkit.
+
+    The client id/secret are forwarded to the provider (which vaults them) and
+    are never persisted by Orchestra; only the returned ``auth_config_id`` and
+    non-secret metadata are stored on the backend config.
+    """
+
+    toolkit_slug: str
+    client_id: str
+    client_secret: str
+    auth_scheme: str = "OAUTH2"
+    scopes: list[str] = Field(default_factory=list)
+    display_name: Optional[str] = None
+    oauth_redirect_uri: Optional[str] = None
+
+
+class IntegrationCustomAuthConfigResponse(BaseModel):
+    backend_id: str
+    toolkit_slug: str
+    auth_config_id: str
+    auth_scheme: str = "OAUTH2"
+    scopes: list[str] = Field(default_factory=list)
+    managed: bool = False
+    oauth_redirect_uri: Optional[str] = None
+    display_name: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class IntegrationCustomAuthConfigListResponse(BaseModel):
+    backend_id: str
+    configs: list[IntegrationCustomAuthConfigResponse] = Field(default_factory=list)
+
+
 class IntegrationBootstrapStateRequest(BaseModel):
     """Deployment bootstrap state written after cloud provider sync decisions."""
 

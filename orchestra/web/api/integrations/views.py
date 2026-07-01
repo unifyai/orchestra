@@ -22,14 +22,17 @@ from orchestra.web.api.integrations.operations import (
     cancel_connection,
     complete_connection,
     complete_connection_by_provider_connection_id,
+    delete_custom_auth_config,
     deny_tool_execution,
     disconnect_connection,
     get_connection_tool_policy,
     list_connections,
+    list_custom_auth_configs,
     patch_connection_tool_policy,
     reconnect_connection,
     run_tool,
     seed_default_provider_catalog,
+    set_custom_auth_config,
     start_connection,
     test_connection,
     update_connection,
@@ -45,6 +48,9 @@ from orchestra.web.api.integrations.schema import (
     IntegrationBootstrapStateResponse,
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
+    IntegrationCustomAuthConfigListResponse,
+    IntegrationCustomAuthConfigRequest,
+    IntegrationCustomAuthConfigResponse,
     IntegrationConnectCompleteByProviderRequest,
     IntegrationConnectCompleteRequest,
     IntegrationConnectionPatchRequest,
@@ -264,6 +270,85 @@ def patch_integration_backend(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
+
+
+@admin_router.get("/backends/{backend_id}/custom-auth")
+def list_integration_custom_auth_configs(
+    backend_id: str,
+    session: Session = Depends(get_db_session),
+) -> IntegrationCustomAuthConfigListResponse:
+    """List operator-configured bring-your-own OAuth apps for a backend."""
+
+    try:
+        configs = list_custom_auth_configs(session, backend_id=backend_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    return IntegrationCustomAuthConfigListResponse(
+        backend_id=backend_id,
+        configs=[IntegrationCustomAuthConfigResponse(**config) for config in configs],
+    )
+
+
+@admin_router.put("/backends/{backend_id}/custom-auth")
+def put_integration_custom_auth_config(
+    backend_id: str,
+    body: IntegrationCustomAuthConfigRequest,
+    session: Session = Depends(get_db_session),
+) -> IntegrationCustomAuthConfigResponse:
+    """Register/replace a bring-your-own OAuth app for a toolkit.
+
+    Client credentials are forwarded to the provider vault and never persisted
+    by Orchestra.
+    """
+
+    try:
+        entry = set_custom_auth_config(
+            session,
+            backend_id=backend_id,
+            toolkit_slug=body.toolkit_slug,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            auth_scheme=body.auth_scheme,
+            scopes=body.scopes,
+            display_name=body.display_name,
+            oauth_redirect_uri=body.oauth_redirect_uri,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — surface provider errors to admin
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Provider rejected the custom OAuth config: {exc}",
+        ) from exc
+    return IntegrationCustomAuthConfigResponse(**entry)
+
+
+@admin_router.delete("/backends/{backend_id}/custom-auth/{toolkit_slug}")
+def delete_integration_custom_auth_config(
+    backend_id: str,
+    toolkit_slug: str,
+    session: Session = Depends(get_db_session),
+) -> Response:
+    """Remove a bring-your-own OAuth app for a toolkit."""
+
+    try:
+        delete_custom_auth_config(
+            session,
+            backend_id=backend_id,
+            toolkit_slug=toolkit_slug,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @admin_router.get("/bootstrap-state")

@@ -419,6 +419,26 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                     )
         return details
 
+    @staticmethod
+    def _extract_auth_config_id(payload: Any) -> str | None:
+        """Pull an auth-config id out of a create/list response envelope."""
+
+        if not isinstance(payload, dict):
+            return None
+        auth_config = payload.get("auth_config") if isinstance(payload, dict) else None
+        auth_config_id = (
+            (auth_config or {}).get("id")
+            or (auth_config or {}).get("auth_config_id")
+            or payload.get("id")
+            or payload.get("auth_config_id")
+        )
+        return str(auth_config_id) if auth_config_id else None
+
+    def default_oauth_callback_url(self) -> str:
+        """Composio's OAuth callback that a bring-your-own OAuth app must allow."""
+
+        return f"{self.base_url}/toolkits/auth/callback"
+
     def get_or_create_auth_config(self, toolkit_slug: str) -> str | None:
         """Reuse or create a Composio-managed auth config for a toolkit."""
 
@@ -443,15 +463,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         response.raise_for_status()
         data = response.json()
         for item in data.get("items") or data.get("data") or []:
-            auth_config = item.get("auth_config") if isinstance(item, dict) else None
-            auth_config_id = (
-                (auth_config or {}).get("id")
-                or (auth_config or {}).get("auth_config_id")
-                or (item or {}).get("id")
-                or (item or {}).get("auth_config_id")
-            )
+            auth_config_id = self._extract_auth_config_id(item)
             if auth_config_id:
-                return str(auth_config_id)
+                return auth_config_id
 
         create_response = requests.post(
             f"{self.base_url}/auth_configs",
@@ -468,15 +482,92 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         )
         create_response.raise_for_status()
         created = create_response.json()
-        auth_config = created.get("auth_config") if isinstance(created, dict) else None
-        auth_config_id = (
-            (auth_config or {}).get("id")
-            or (auth_config or {}).get("auth_config_id")
-            or created.get("id")
-            or created.get("auth_config_id")
-        )
+        auth_config_id = self._extract_auth_config_id(created)
         self.last_auth_config_was_created = bool(auth_config_id)
-        return str(auth_config_id) if auth_config_id else None
+        return auth_config_id
+
+    def create_custom_auth_config(
+        self,
+        toolkit_slug: str,
+        *,
+        client_id: str,
+        client_secret: str,
+        auth_scheme: str = "OAUTH2",
+        scopes: list[str] | None = None,
+        name: str | None = None,
+        oauth_redirect_uri: str | None = None,
+    ) -> str:
+        """Create a Composio bring-your-own-OAuth (``use_custom_auth``) config.
+
+        Used for toolkits that Composio does not offer managed credentials for
+        (e.g. TikTok) or when the operator wants their own branding/scopes. The
+        client id/secret are handed to Composio, which vaults them; only the
+        returned ``auth_config_id`` should be persisted by Orchestra. Returns the
+        new ``auth_config_id`` (raises on transport/provider error).
+        """
+
+        if not self.api_key:
+            raise ValueError(
+                "COMPOSIO_API_KEY is required for Composio auth config setup.",
+            )
+        if not client_id or not client_secret:
+            raise ValueError(
+                "client_id and client_secret are required for custom OAuth auth configs.",
+            )
+
+        import requests
+
+        self.last_auth_config_was_created = False
+        credentials: dict[str, Any] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "oauth_redirect_uri": (
+                oauth_redirect_uri or self.default_oauth_callback_url()
+            ),
+        }
+        if scopes:
+            credentials["scopes"] = list(scopes)
+        create_response = requests.post(
+            f"{self.base_url}/auth_configs",
+            headers=self._api_key_headers(),
+            json={
+                "toolkit": {"slug": toolkit_slug},
+                "auth_config": {
+                    "name": name or f"{toolkit_slug} (custom OAuth)",
+                    "type": "use_custom_auth",
+                    "auth_scheme": auth_scheme,
+                    "credentials": credentials,
+                    "restrict_to_following_tools": [],
+                },
+            },
+            timeout=self.timeout_seconds,
+        )
+        create_response.raise_for_status()
+        created = create_response.json()
+        auth_config_id = self._extract_auth_config_id(created)
+        if not auth_config_id:
+            raise ValueError(
+                "Composio did not return an auth_config_id for the custom OAuth config.",
+            )
+        self.last_auth_config_was_created = True
+        return auth_config_id
+
+    def delete_auth_config(self, auth_config_id: str) -> None:
+        """Best-effort delete of a Composio auth config by id."""
+
+        if not self.api_key or not auth_config_id:
+            return
+
+        import requests
+
+        response = requests.delete(
+            f"{self.base_url}/auth_configs/{auth_config_id}",
+            headers=self._api_key_headers(),
+            timeout=self.timeout_seconds,
+        )
+        # Treat an already-removed config as success.
+        if response.status_code not in (200, 202, 204, 404):
+            response.raise_for_status()
 
     def create_auth_link(
         self,
