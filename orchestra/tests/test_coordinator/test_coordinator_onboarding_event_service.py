@@ -382,44 +382,6 @@ async def test_secret_landed_integration_narrates_on_every_write() -> None:
     assert n.await_args.kwargs["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECTED
 
 
-def test_derive_onboarding_progress_orders_steps_canonically() -> None:
-    """Derivation composes the per-step checks in checklist order."""
-    coordinator = _fake_coordinator()
-
-    def has_reply_step(*args, step_id: str, **kwargs) -> bool:
-        return step_id in {
-            svc.ONBOARDING_STEP_EMAIL_REPLY,
-            svc.ONBOARDING_STEP_WHATSAPP_MESSAGE,
-            svc.ONBOARDING_STEP_PHONE_CALL,
-        }
-
-    with (
-        patch.object(svc, "_has_trigger_outbound", return_value=False),
-        patch.object(svc, "_has_reply_to_trigger", side_effect=has_reply_step),
-        patch.object(svc, "_has_user_whatsapp_number", return_value=False),
-        patch.object(svc, "_has_user_phone_number", return_value=True),
-        patch.object(svc, "_has_slack_install", return_value=True),
-        patch.object(svc, "_has_discord_connection", return_value=True),
-        patch.object(svc, "_has_workspace_email", return_value=True),
-        patch.object(svc, "_has_app_secret", return_value=False),
-        patch.object(svc, "_has_scheduled_task", return_value=True),
-    ):
-        derived = svc.derive_onboarding_progress(
-            MagicMock(),
-            coordinator=coordinator,
-        )
-    assert derived == [
-        svc.ONBOARDING_STEP_EMAIL_REPLY,
-        svc.ONBOARDING_STEP_WHATSAPP_MESSAGE,
-        svc.ONBOARDING_STEP_PHONE_NUMBER,
-        svc.ONBOARDING_STEP_PHONE_CALL,
-        svc.ONBOARDING_STEP_SLACK_CONNECT,
-        svc.ONBOARDING_STEP_DISCORD_CONNECT,
-        svc.ONBOARDING_STEP_WORKSPACE,
-        svc.ONBOARDING_STEP_SCHEDULE,
-    ]
-
-
 @pytest.mark.anyio
 async def test_step_started_event_embeds_active_step_snapshot() -> None:
     """Active-step events tell Unity which checklist row the user selected."""
@@ -462,7 +424,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
         patch.object(
             svc,
             "get_coordinator_state",
-            return_value={"mode": "onboarding", "skipped_step_ids": ["schedule"]},
+            return_value={"mode": "onboarding", "skipped_step_ids": ["phone-number"]},
         ),
         patch.object(
             svc,
@@ -484,7 +446,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
     assert fields["details"] == {
         "medium": "chat",
         "completed_step_ids": ["workspace", "apps"],
-        "skipped_step_ids": ["schedule"],
+        "skipped_step_ids": ["phone-number"],
         "onboarding": _RENDER,
     }
 

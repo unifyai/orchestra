@@ -1232,6 +1232,7 @@ def get_latest_task_run_for_task(
     )
     filters = [
         LogEvent.project_id == project_id,
+        LogEventContext.project_id == project_id,
         owner_scope_clause(LogEvent, owner_key_filter),
         owner_scope_clause(LogEventContext, owner_key_filter),
         LogEventContext.context_id == context_ids.runs_context_id,
@@ -1403,6 +1404,7 @@ def get_task_ids_for_log_ids(
         .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(
             LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
             owner_scope_clause(LogEvent, owner_key_filter),
             owner_scope_clause(LogEventContext, owner_key_filter),
             LogEvent.id.in_(ids),
@@ -1773,6 +1775,7 @@ def _load_task_rows(
         .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(
             LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
             owner_scope_clause(LogEvent, owner_key_filter),
             owner_scope_clause(LogEventContext, owner_key_filter),
             LogEventContext.context_id == context_id,
@@ -1835,6 +1838,8 @@ def _delete_activation_rows_by_task_destination(
         .join(LogEventContext, log_event_context_join())
         .join(Context, Context.id == LogEventContext.context_id)
         .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
             Context.project_id == project_id,
             Context.name.like(f"%/{TASK_ACTIVATIONS_CONTEXT_NAME}"),
             LogEvent.data.has_key("task_id"),
@@ -2127,6 +2132,7 @@ def _get_machine_row_by_unique_field(
         .join(LogEventContext, log_event_context_join(owner_key=owner_key_filter))
         .filter(
             LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
             owner_scope_clause(LogEvent, owner_key_filter),
             owner_scope_clause(LogEventContext, owner_key_filter),
             LogEventContext.context_id == context_id,

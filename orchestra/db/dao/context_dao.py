@@ -3540,7 +3540,8 @@ class ContextDAO:
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id AND le.id != :log_event_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id AND le.id != :log_event_id
         ),
         potential_duplicates AS (
             SELECT
@@ -3568,9 +3569,14 @@ class ContextDAO:
             WHERE mp.matching_count = pd.pair_count
         ) as has_duplicate
         """
+        project_id = self._project_id_for_context(context_id)
         result = self.session.execute(
             text(query),
-            {"context_id": context_id, "log_event_id": log_event_id},
+            {
+                "context_id": context_id,
+                "log_event_id": log_event_id,
+                "project_id": project_id,
+            },
         )
         return result.scalar()
 
@@ -3604,7 +3610,8 @@ class ContextDAO:
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
-            WHERE lec.context_id = :context_id AND le.id != :log_event_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id AND le.id != :log_event_id
         ),
         matching_other AS (
             SELECT cle.id, COUNT(*) AS match_count
@@ -3619,6 +3626,7 @@ class ContextDAO:
             SELECT 1 FROM matching_other WHERE match_count = :num_keys
         ) AS has_duplicate
         """
+        project_id = self._project_id_for_context(context_id)
         result = self.session.execute(
             text(query),
             {
@@ -3626,6 +3634,7 @@ class ContextDAO:
                 "log_event_id": log_event_id,
                 "keys": keys_to_check,
                 "num_keys": len(keys_to_check),
+                "project_id": project_id,
             },
         )
         return result.scalar()

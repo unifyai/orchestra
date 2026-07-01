@@ -1560,6 +1560,26 @@ def admin_rate_limit_cleanup(
     }
 
 
+@router.post(
+    "/partition-prune-monitor",
+    summary="Scan for unpruned partitioned-table queries",
+    description=(
+        "Read-only scan of pg_stat_statements for queries against the "
+        "LIST(project_id)-partitioned tables (log_event, log_event_context, "
+        "embedding, embedding_queue) that lack a project_id predicate and thus "
+        "fan out across every tenant's partition."
+    ),
+    tags=["Monitoring"],
+)
+def admin_partition_prune_monitor(
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Report partitioned-table queries not pruned by project_id (read-only)."""
+    from orchestra.routines.partition_prune_monitor import run_partition_prune_monitor
+
+    return run_partition_prune_monitor(session)
+
+
 @router.get(
     "/rate-limits/stats",
     summary="Get rate limit statistics",

@@ -519,6 +519,68 @@ async def test_team_task_projects_activation_into_executor_context(
 
 
 @pytest.mark.anyio
+async def test_deleting_team_task_removes_executor_activation_by_destination(
+    client: AsyncClient,
+    dbsession,
+    materialization_calls,
+):
+    """Deleting a shared team task removes its executor-owned activation rows.
+
+    Drives ``_delete_activation_rows_by_task_destination`` (the team-surface
+    resync-delete path), so the partition-prune guard verifies its log_event
+    scan stays pruned to the owning project.
+    """
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    team = _make_team_member(dbsession, assistant=assistant)
+    team_tasks_context = f"Teams/{team.id}/Tasks"
+    executor_activation_context = (
+        task_machine_state_service.build_task_activation_context_name(
+            _assistant_tasks_context(
+                user_id=PRIMARY_USER_ID,
+                assistant_id=assistant.agent_id,
+            ),
+        )
+    )
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=131,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+
+    create = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=team_tasks_context,
+        entries=entries,
+    )
+    assert create.status_code == 200, create.json()
+    team_task_log_id = create.json()["log_event_ids"][0]
+
+    activations = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    assert any(log["entries"]["task_id"] == 131 for log in activations)
+
+    delete = await _delete_logs(
+        client,
+        [(team_task_log_id, None)],
+        project_name=TASK_MACHINE_PROJECT_NAME,
+        context=team_tasks_context,
+    )
+    assert delete.status_code == 200, delete.json()
+
+    activations_after = await _get_context_logs(
+        client,
+        context_name=executor_activation_context,
+    )
+    assert all(log["entries"]["task_id"] != 131 for log in activations_after)
+
+
+@pytest.mark.anyio
 async def test_team_task_membership_mismatch_does_not_project_activation(
     client: AsyncClient,
     dbsession,

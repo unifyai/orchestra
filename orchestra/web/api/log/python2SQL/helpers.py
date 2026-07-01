@@ -2230,6 +2230,7 @@ async def _get_or_generate_embedding(
     text: str,
     key: str,
     model: str,
+    project_id: int,
     dimensions: Optional[int] = None,
 ) -> Optional[list]:
     """
@@ -2258,7 +2259,10 @@ async def _get_or_generate_embedding(
             key=key,
             model=model,
         )
-        .filter(Embedding.is_deleted == False)  # noqa: E712
+        .filter(
+            Embedding.project_id == project_id,
+            Embedding.is_deleted == False,  # noqa: E712
+        )
         .first()
     )
 
@@ -2283,7 +2287,7 @@ async def _get_or_generate_embedding(
 
         embedding_project_id, embedding_owner_key = (
             session.query(LogEvent.project_id, LogEvent.owner_key)
-            .filter(LogEvent.id == log_event_id)
+            .filter(LogEvent.project_id == project_id, LogEvent.id == log_event_id)
             .one()
         )
         stmt = insert(Embedding).values(

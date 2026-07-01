@@ -1,0 +1,35 @@
+name: Partition Prune Monitor
+
+on:
+  schedule:
+    # Every 6 hours (offset from the 3am cleanup jobs).
+  - cron: '30 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  partition_prune_monitor:
+    name: Scan for unpruned partitioned-table queries
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Call monitor endpoint
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/partition-prune-monitor" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Partition-prune monitor failed with status $http_code"
+          exit 1
+        fi
+
+        count=$(echo "$body" | python3 -c "import json,sys; print(json.load(sys.stdin).get('unpruned_count', 0))")
+        if [ "$count" != "0" ]; then
+          echo "::warning::$count unpruned partitioned-table queries detected in production. Review the offenders in the response above and add a project_id predicate (orchestra/db/log_queries.py) or allowlist genuinely-global scans."
+        fi
