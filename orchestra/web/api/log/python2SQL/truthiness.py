@@ -86,6 +86,68 @@ def build_truthiness_sql(val_col, val_type):
         return val_col.isnot(None)
 
 
+_BOOLEAN_OPERATOR_NAMES = frozenset(
+    {
+        "eq",
+        "ne",
+        "lt",
+        "le",
+        "gt",
+        "ge",
+        "is_",
+        "isnot",
+        "like_op",
+        "notlike_op",
+        "ilike_op",
+        "notilike_op",
+        "contains_op",
+        "not_contains_op",
+        "startswith_op",
+        "not_startswith_op",
+        "endswith_op",
+        "not_endswith_op",
+    },
+)
+
+_BOOLEAN_OPERATOR_STRINGS = frozenset(
+    {"?", "@>", "<@", "LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE"},
+)
+
+
+def is_boolean_predicate(expr) -> bool:
+    """
+    Return True when ``expr`` already evaluates to a SQL boolean and can be
+    used directly as a WHERE predicate.
+
+    Wrapping such expressions in ``cast(..., Boolean).is_(True)`` is a semantic
+    no-op, but it hides indexable operators (``@>``, ``?``, comparisons) from
+    the query planner. On the partitioned ``log_event.data`` column that
+    prevents the GIN index from being used and forces a full sequential scan,
+    so both truthiness builders must leave these expressions untouched.
+
+    ``BooleanClauseList`` covers nested ``and_()``/``or_()`` combinations, which
+    is the common shape of multi-predicate JSONB containment filters.
+    """
+    from sqlalchemy.sql.expression import (
+        BinaryExpression,
+        BooleanClauseList,
+        Exists,
+        UnaryExpression,
+    )
+
+    if isinstance(expr, (Exists, UnaryExpression, BooleanClauseList)):
+        return True
+
+    if isinstance(expr, BinaryExpression):
+        if getattr(expr.operator, "__name__", None) in _BOOLEAN_OPERATOR_NAMES:
+            return True
+        op_str = getattr(expr.operator, "opstring", str(expr.operator))
+        if op_str in _BOOLEAN_OPERATOR_STRINGS:
+            return True
+
+    return False
+
+
 def get_or_list_fallback(node_dict):
     """
     Check if a node represents the pattern (expr or <list>).

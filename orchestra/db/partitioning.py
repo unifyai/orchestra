@@ -833,6 +833,35 @@ PARTITION_AUTOVACUUM_RELOPTIONS: dict[str, str] = {
     "autovacuum_vacuum_cost_delay": "0",
 }
 
+# ``embedding_queue`` is not a growing store but a high-churn work queue: rows are
+# inserted, claimed, and deleted, so it should stay near-empty. The 50k fixed
+# thresholds above are sized for the multi-million-row log/embedding partitions
+# and are far too high here -- the queue accumulates tens of thousands of dead
+# tuples before autovacuum fires, bloating a table that holds ~a thousand live
+# rows. Small thresholds (plus a tiny scale factor) keep it lean; cost_delay=0
+# matches the other kernel leaves so claim/insert latency is never throttled.
+QUEUE_AUTOVACUUM_RELOPTIONS: dict[str, str] = {
+    "autovacuum_vacuum_scale_factor": "0.02",
+    "autovacuum_vacuum_threshold": "1000",
+    "autovacuum_vacuum_insert_scale_factor": "0.02",
+    "autovacuum_vacuum_insert_threshold": "1000",
+    "autovacuum_analyze_scale_factor": "0.02",
+    "autovacuum_analyze_threshold": "1000",
+    "autovacuum_vacuum_cost_delay": "0",
+}
+
+# Tables whose leaves get the high-churn queue tuning instead of the default
+# large-partition tuning.
+_QUEUE_TUNED_TABLES: frozenset[str] = frozenset({"embedding_queue"})
+
+
+def autovacuum_reloptions_for(table: str) -> dict[str, str]:
+    """Storage-parameter tuning appropriate for ``table``'s leaves."""
+    if table in _QUEUE_TUNED_TABLES:
+        return QUEUE_AUTOVACUUM_RELOPTIONS
+    return PARTITION_AUTOVACUUM_RELOPTIONS
+
+
 # Postgres keeps no per-key statistics for a JSONB column, so the planner
 # estimates predicates over ``log_event.data`` (``data @> ...``, ``data ? ...``)
 # from the column's whole-document sample. A higher statistics target makes
@@ -868,11 +897,11 @@ def tune_partition_storage(conn: Connection) -> list[str]:
     without threading a call through every partition-creation site. Returns the
     leaf relations that were tuned.
     """
-    reloptions = ", ".join(
-        f"{k} = {v}" for k, v in PARTITION_AUTOVACUUM_RELOPTIONS.items()
-    )
     tuned: list[str] = []
     for table in PARTITIONED_TABLES:
+        reloptions = ", ".join(
+            f"{k} = {v}" for k, v in autovacuum_reloptions_for(table).items()
+        )
         for leaf in partition_leaves(conn, table):
             conn.execute(text(f"ALTER TABLE {leaf} SET ({reloptions})"))
             tuned.append(leaf)

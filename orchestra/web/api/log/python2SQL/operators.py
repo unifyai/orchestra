@@ -30,7 +30,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.sql.elements import ClauseElement
-from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import CTE, Subquery
 
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -252,7 +251,10 @@ def _create_truthiness_condition(subq_or_literal, session):
     Takes a subquery or a literal and returns an SQL condition that
     evaluates its "truthiness" in the same way Python does.
     """
-    if isinstance(subq_or_literal, (Exists, UnaryExpression)):
+    # Already-boolean predicates (comparisons, @>/?, nested and_/or_) must be
+    # returned untouched: wrapping them in cast(..., Boolean).is_(True) hides
+    # indexable operators from the planner and defeats the GIN index on data.
+    if is_boolean_predicate(subq_or_literal):
         return subq_or_literal
 
     # If it's a subquery, build the condition based on its value and type.
@@ -285,6 +287,7 @@ def _create_truthiness_condition(subq_or_literal, session):
 # Import shared truthiness logic
 from .truthiness import build_truthiness_sql as _build_truthiness_sql
 from .truthiness import get_or_list_fallback as _get_or_list_fallback
+from .truthiness import is_boolean_predicate
 
 
 def _handle_logical_operator(

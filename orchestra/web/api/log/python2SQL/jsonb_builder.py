@@ -171,41 +171,14 @@ def _create_truthiness_condition_jsonb(expr, session, project_id=None, context_i
 
     Handles subqueries, literals, and JSONB field references.
     """
-    from sqlalchemy.sql.expression import Exists, UnaryExpression
+    from .truthiness import is_boolean_predicate
 
-    # Handle EXISTS and UnaryExpression directly
-    if isinstance(expr, (Exists, UnaryExpression)):
+    # Expressions that already evaluate to a SQL boolean are returned unchanged.
+    # Wrapping them in cast(..., Boolean).is_(True) is a no-op that hides
+    # indexable operators (@>, ?, comparisons) from the planner, defeating the
+    # GIN index on data. See is_boolean_predicate for the full rationale.
+    if is_boolean_predicate(expr):
         return expr
-
-    # Handle BinaryExpression with boolean operators (comparisons)
-    if isinstance(expr, BinaryExpression):
-        # Check if operator is a comparison
-        if hasattr(expr.operator, "__name__") and expr.operator.__name__ in (
-            "eq",
-            "ne",
-            "lt",
-            "le",
-            "gt",
-            "ge",
-            "is_",
-            "isnot",
-            "like_op",
-            "notlike_op",
-            "ilike_op",
-            "notilike_op",
-            "contains_op",
-            "not_contains_op",
-            "startswith_op",
-            "not_startswith_op",
-            "endswith_op",
-            "not_endswith_op",
-        ):
-            return expr
-        # Check for JSONB existence operator (?) and containment (@>) which return boolean
-        op_str = getattr(expr.operator, "opstring", str(expr.operator))
-        if op_str in ("?", "@>", "<@", "LIKE", "ILIKE", "NOT LIKE", "NOT ILIKE"):
-            return expr
-        # Also check custom ops if needed, but usually comparisons are standard
 
     # Handle BindParameter (literal values)
     if isinstance(expr, BindParameter):
