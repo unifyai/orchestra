@@ -23,6 +23,11 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.slack_dao import SlackDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.log_queries import project_scoped_log_events
+from orchestra.db.models.coordinator_voice import (
+    COORDINATOR_DEFAULT_VOICE_ID,
+    COORDINATOR_DEFAULT_VOICE_PROVIDER,
+    ensure_coordinator_voice_row,
+)
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -174,6 +179,7 @@ def create_coordinator_assistant(
     timezone: str | None = None,
 ) -> Assistant:
     """Create a Coordinator assistant row for one workspace scope."""
+    ensure_coordinator_voice_row(session.connection(), owner_user_id)
     assistant = AssistantDAO(session).create_assistant(
         user_id=owner_user_id,
         first_name=COORDINATOR_DEFAULT_FIRST_NAME,
@@ -186,8 +192,8 @@ def create_coordinator_assistant(
         about="",
         weekly_limit=None,
         max_parallel=None,
-        voice_id=None,
-        voice_provider=None,
+        voice_id=COORDINATOR_DEFAULT_VOICE_ID,
+        voice_provider=COORDINATOR_DEFAULT_VOICE_PROVIDER,
         timezone=timezone,
         organization_id=organization_id,
         is_local=False,

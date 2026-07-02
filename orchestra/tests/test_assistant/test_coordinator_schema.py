@@ -20,6 +20,7 @@ from orchestra.db.models.orchestra_models import (
     User,
     Voice,
 )
+from orchestra.services.coordinator_service import create_coordinator_assistant
 from orchestra.web.api.assistant.views import _build_assistant_read
 
 
@@ -238,6 +239,18 @@ def test_coordinator_voice_can_be_updated_after_insert(dbsession: Session) -> No
 
     assert assistant.voice_id == custom_voice.voice_id
     assert assistant.voice_provider == custom_voice.provider
+
+
+def test_create_coordinator_assistant_stamps_default_voice(dbsession: Session) -> None:
+    """Coordinator creation sets Field Signal even without relying on ORM hooks."""
+    owner = _make_user(dbsession, "create-coordinator-voice")
+    assistant = create_coordinator_assistant(
+        session=dbsession,
+        owner_user_id=owner.id,
+        organization_id=None,
+    )
+    assert assistant.voice_id == COORDINATOR_DEFAULT_VOICE_ID
+    assert assistant.voice_provider == COORDINATOR_DEFAULT_VOICE_PROVIDER
 
 
 def test_assistant_read_projects_coordinator_flag(dbsession: Session) -> None:
