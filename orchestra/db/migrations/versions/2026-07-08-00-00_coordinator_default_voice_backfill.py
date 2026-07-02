@@ -4,7 +4,7 @@ The ``before_insert`` listener stamps Field Signal on new Coordinators, but
 rows created while that module was not imported at runtime can remain with a
 NULL voice. This heals every Coordinator that still has no ``voice_id``.
 
-Revision ID: coordinator_default_voice_backfill
+Revision ID: coord_default_voice_backfill
 Revises: tune_embedding_queue_autovacuum
 Create Date: 2026-07-08 00:00:00.000000
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "coordinator_default_voice_backfill"
+revision = "coord_default_voice_backfill"
 down_revision = "tune_embedding_queue_autovacuum"
 branch_labels = None
 depends_on = None
