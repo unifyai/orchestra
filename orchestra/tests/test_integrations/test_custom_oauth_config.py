@@ -73,13 +73,13 @@ def test_create_custom_auth_config_builds_use_custom_auth_payload(
     assert auth_config_id == "ac_custom_1"
     assert adapter.last_auth_config_was_created is True
     body = captured["json"]
-    assert body["toolkit"] == {"slug": "tiktok"}
+    assert body["toolkit"] == {"slug": "TIKTOK"}
     assert body["auth_config"]["type"] == "use_custom_auth"
     assert body["auth_config"]["auth_scheme"] == "OAUTH2"
     creds = body["auth_config"]["credentials"]
     assert creds["client_id"] == "cid"
     assert creds["client_secret"] == "csecret"
-    assert creds["scopes"] == ["user.info.basic", "video.publish"]
+    assert creds["scopes"] == "user.info.basic,video.publish"
     # Defaults to Composio's documented callback when none is supplied.
     assert creds["oauth_redirect_uri"] == adapter.default_oauth_callback_url()
 
@@ -103,6 +103,49 @@ def test_create_custom_auth_config_raises_when_no_id_returned(
     adapter = ComposioProviderAdapter(api_key="test-key")
     with pytest.raises(ValueError):
         adapter.create_custom_auth_config("tiktok", client_id="c", client_secret="s")
+
+
+def test_create_custom_auth_config_surfaces_provider_error_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import requests
+
+    def fake_post(url: str, headers=None, json=None, timeout=None):  # noqa: A002
+        response = _FakeResponse(
+            {
+                "error": {
+                    "message": "Invalid scopes for toolkit TIKTOK",
+                    "code": 400,
+                },
+            },
+            status_code=400,
+        )
+        error = requests.HTTPError("400 Client Error")
+        error.response = response  # type: ignore[attr-defined]
+        raise error
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    adapter = ComposioProviderAdapter(api_key="test-key")
+    with pytest.raises(ValueError, match="Invalid scopes for toolkit TIKTOK"):
+        adapter.create_custom_auth_config("tiktok", client_id="c", client_secret="s")
+
+
+def test_create_custom_auth_config_omits_empty_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import requests
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, headers=None, json=None, timeout=None):  # noqa: A002
+        captured["json"] = json
+        return _FakeResponse({"auth_config": {"id": "ac_custom_2"}})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    adapter = ComposioProviderAdapter(api_key="test-key")
+    adapter.create_custom_auth_config("TIKTOK", client_id="c", client_secret="s", scopes=[])
+    creds = captured["json"]["auth_config"]["credentials"]
+    assert "scopes" not in creds
 
 
 def test_extract_auth_config_id_handles_envelopes() -> None:

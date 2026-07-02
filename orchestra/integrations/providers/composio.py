@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -448,6 +449,49 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
 
         return f"{self.base_url}/toolkits/auth/callback"
 
+    @staticmethod
+    def _provider_toolkit_slug(toolkit_slug: str) -> str:
+        """Normalize a toolkit slug to Composio's provider spelling (e.g. ``TIKTOK``)."""
+
+        return str(toolkit_slug or "").strip().upper()
+
+    @staticmethod
+    def _format_custom_oauth_scopes(scopes: list[str] | None) -> str | None:
+        """Format OAuth scopes the way Composio's REST API expects (CSV string)."""
+
+        cleaned = [scope.strip() for scope in (scopes or []) if scope and scope.strip()]
+        return ",".join(cleaned) if cleaned else None
+
+    @staticmethod
+    def _http_error_message(exc: Exception) -> str:
+        """Extract a user-facing message from a Composio HTTP error response."""
+
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        response_text = getattr(response, "text", "") if response is not None else ""
+        message = None
+        if response_text:
+            try:
+                payload = json.loads(response_text)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    message = error.get("message") or error.get("suggested_fix")
+                    errors = error.get("errors")
+                    if not message and isinstance(errors, list) and errors:
+                        message = "; ".join(str(item) for item in errors[:3])
+                elif isinstance(error, str):
+                    message = error
+                message = message or payload.get("message")
+        prefix = f"Composio rejected the request ({status_code})" if status_code else "Composio rejected the request"
+        if message:
+            return f"{prefix}: {message}"
+        if response_text:
+            return f"{prefix}: {response_text[:300]}"
+        return prefix
+
     def get_or_create_auth_config(self, toolkit_slug: str) -> str | None:
         """Reuse or create a Composio-managed auth config for a toolkit."""
 
@@ -527,6 +571,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         import requests
 
         self.last_auth_config_was_created = False
+        provider_slug = self._provider_toolkit_slug(toolkit_slug)
         credentials: dict[str, Any] = {
             "client_id": client_id,
             "client_secret": client_secret,
@@ -534,24 +579,34 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 oauth_redirect_uri or self.default_oauth_callback_url()
             ),
         }
-        if scopes:
-            credentials["scopes"] = list(scopes)
-        create_response = requests.post(
-            f"{self.base_url}/auth_configs",
-            headers=self._api_key_headers(),
-            json={
-                "toolkit": {"slug": toolkit_slug},
-                "auth_config": {
-                    "name": name or f"{toolkit_slug} (custom OAuth)",
-                    "type": "use_custom_auth",
-                    "auth_scheme": auth_scheme,
-                    "credentials": credentials,
-                    "restrict_to_following_tools": [],
-                },
+        scope_csv = self._format_custom_oauth_scopes(scopes)
+        if scope_csv:
+            credentials["scopes"] = scope_csv
+        payload = {
+            "toolkit": {"slug": provider_slug},
+            "auth_config": {
+                "name": name or f"{provider_slug} (custom OAuth)",
+                "type": "use_custom_auth",
+                "auth_scheme": auth_scheme,
+                "credentials": credentials,
+                "restrict_to_following_tools": [],
             },
-            timeout=self.timeout_seconds,
-        )
-        create_response.raise_for_status()
+        }
+        try:
+            create_response = requests.post(
+                f"{self.base_url}/auth_configs",
+                headers=self._api_key_headers(),
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+            create_response.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "Composio custom OAuth auth config create failed toolkit=%s status=%s",
+                provider_slug,
+                getattr(getattr(exc, "response", None), "status_code", None),
+            )
+            raise ValueError(self._http_error_message(exc)) from exc
         created = create_response.json()
         auth_config_id = self._extract_auth_config_id(created)
         if not auth_config_id:

@@ -1112,7 +1112,7 @@ def set_custom_auth_config(
         raise ValueError(
             "Custom OAuth configs are currently only supported for Composio backends.",
         )
-    slug = (toolkit_slug or "").strip()
+    slug = (toolkit_slug or "").strip().upper()
     if not slug:
         raise ValueError("toolkit_slug is required.")
     if not client_id or not client_secret:
