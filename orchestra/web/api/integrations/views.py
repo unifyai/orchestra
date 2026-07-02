@@ -11,7 +11,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -33,6 +33,7 @@ from orchestra.web.api.integrations.operations import (
     reconnect_connection,
     run_tool,
     seed_default_provider_catalog,
+    stage_composio_file,
     set_custom_auth_config,
     start_connection,
     test_connection,
@@ -58,6 +59,7 @@ from orchestra.web.api.integrations.schema import (
     IntegrationConnectionResponse,
     IntegrationConnectStartRequest,
     IntegrationConnectStartResponse,
+    IntegrationComposioStageFileResponse,
     IntegrationHealthResponse,
     IntegrationToolExecutionApprovalRequest,
     IntegrationToolExecutionApprovalResponse,
@@ -878,6 +880,39 @@ def deny_integration_tool_execution(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
+
+
+@router.post(
+    "/composio/stage-file",
+    response_model=IntegrationComposioStageFileResponse,
+)
+async def stage_provider_file(
+    file: UploadFile = File(...),
+    toolkit_slug: str = Form(...),
+    tool_slug: str = Form(...),
+) -> IntegrationComposioStageFileResponse:
+    """Stage a local file in Composio storage for FileUploadable tool args."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+    filename = file.filename or "upload.bin"
+    mimetype = file.content_type or "application/octet-stream"
+    result = stage_composio_file(
+        content=content,
+        filename=filename,
+        mimetype=mimetype,
+        toolkit_slug=toolkit_slug,
+        tool_slug=tool_slug,
+    )
+    if result.get("status") != "ok":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(result.get("error") or {}).get("message") or "file staging failed",
+        )
+    return IntegrationComposioStageFileResponse(status="ok", file=result.get("file"))
 
 
 @router.post("/tools/{tool_id}/run")

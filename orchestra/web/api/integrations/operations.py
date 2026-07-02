@@ -2446,3 +2446,33 @@ def run_tool(
         audit_id=audit.id,
         confirmation=confirmation,
     )
+
+
+def stage_composio_file(
+    *,
+    content: bytes,
+    filename: str,
+    mimetype: str,
+    toolkit_slug: str,
+    tool_slug: str,
+) -> dict[str, Any]:
+    """Stage a file in Composio storage for FileUploadable tool parameters."""
+    from orchestra.integrations.providers.composio import ComposioProviderAdapter
+    from orchestra.integrations.providers.registry import get_provider_adapter
+
+    adapter = get_provider_adapter("composio")
+    if not isinstance(adapter, ComposioProviderAdapter):
+        return {
+            "status": "error",
+            "error": {
+                "code": "provider_not_configured",
+                "message": "Composio backend is not configured for file staging.",
+            },
+        }
+    return adapter.stage_file(
+        content=content,
+        filename=filename,
+        mimetype=mimetype,
+        toolkit_slug=toolkit_slug.strip().lower(),
+        tool_slug=tool_slug.strip().upper(),
+    )
