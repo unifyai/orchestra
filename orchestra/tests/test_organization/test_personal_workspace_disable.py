@@ -6,6 +6,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantCleanupTask,
     AssistantContact,
     OrganizationMember,
+    Role,
 )
 from orchestra.services.assistant_cleanup_service import CleanupSource
 from orchestra.services.personal_workspace_service import (
@@ -19,6 +20,22 @@ from orchestra.tests.test_billing.conftest import (
     make_org,
     make_user,
 )
+
+
+def _add_org_member(dbsession: Session, org, user) -> None:
+    member_role = (
+        dbsession.query(Role)
+        .filter(Role.name == "Member", Role.organization_id.is_(None))
+        .first()
+    )
+    dbsession.add(
+        OrganizationMember(
+            organization_id=org.id,
+            user_id=user.id,
+            role_id=member_role.id,
+        ),
+    )
+    dbsession.flush()
 
 
 def test_disable_personal_workspace_soft_deletes_contacts_and_queues_cleanup(
@@ -84,6 +101,7 @@ def test_reenable_personal_workspace_after_leaving_last_org(dbsession: Session):
     user = make_user(dbsession, "reenable_personal_u1", user_ba)
     org_ba = make_billing_account(dbsession, credits=100)
     org = make_org(dbsession, user, org_ba, name="Reenable Personal Org")
+    _add_org_member(dbsession, org, user)
     dbsession.flush()
 
     disable_personal_workspace_for_org_member(dbsession, user.id, org.id)
@@ -116,6 +134,8 @@ def test_reenable_is_noop_while_still_in_another_org(dbsession: Session):
     org_a = make_org(dbsession, user, org_a_ba, name="Reenable Org A")
     org_b_ba = make_billing_account(dbsession, credits=100)
     org_b = make_org(dbsession, user, org_b_ba, name="Reenable Org B")
+    _add_org_member(dbsession, org_a, user)
+    _add_org_member(dbsession, org_b, user)
     dbsession.flush()
 
     disable_personal_workspace_for_org_member(dbsession, user.id, org_a.id)

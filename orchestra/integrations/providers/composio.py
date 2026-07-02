@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -289,6 +290,12 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             )
             detail = details.get(toolkit_slug) or {}
             auth_modes = _composio_auth_modes(toolkit, detail)
+            requires_custom_oauth = _composio_requires_custom_oauth(
+                toolkit,
+                detail,
+                auth_modes,
+            )
+            managed_auth = not requires_custom_oauth
             auth_config_id = None
             if should_create_auth_configs and "oauth" in auth_modes:
                 try:
@@ -310,7 +317,8 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 "source": "composio_live_sync",
                 "toolkit_slug": toolkit_slug,
                 "toolkit_version": toolkit.get("version"),
-                "managed_auth": True,
+                "managed_auth": managed_auth,
+                "requires_custom_oauth": requires_custom_oauth,
                 "raw_toolkit": toolkit,
             }
             if detail:
@@ -331,6 +339,8 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 "recommended_scopes": _composio_oauth_scopes(detail),
                 "api_key_schema": _composio_api_key_schema(detail),
                 "tool_count": _composio_tool_count(detail),
+                "managed_auth": managed_auth,
+                "requires_custom_oauth": requires_custom_oauth,
                 "raw_provider_metadata": raw_provider_metadata,
             }
             entries.append(entry)
@@ -419,6 +429,83 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                     )
         return details
 
+    @staticmethod
+    def _extract_auth_config_id(payload: Any) -> str | None:
+        """Pull an auth-config id out of a create/list response envelope."""
+
+        if not isinstance(payload, dict):
+            return None
+        auth_config = payload.get("auth_config") if isinstance(payload, dict) else None
+        auth_config_id = (
+            (auth_config or {}).get("id")
+            or (auth_config or {}).get("auth_config_id")
+            or payload.get("id")
+            or payload.get("auth_config_id")
+        )
+        return str(auth_config_id) if auth_config_id else None
+
+    def default_oauth_callback_url(self) -> str:
+        """Composio's OAuth callback that a bring-your-own OAuth app must allow."""
+
+        return f"{self.base_url}/toolkits/auth/callback"
+
+    @staticmethod
+    def _provider_toolkit_slug(toolkit_slug: str) -> str:
+        """Normalize a toolkit slug to Composio's provider spelling (e.g. ``TIKTOK``)."""
+
+        return str(toolkit_slug or "").strip().upper()
+
+    @staticmethod
+    def _format_custom_oauth_scopes(scopes: list[str] | None) -> str | None:
+        """Format OAuth scopes the way Composio's REST API expects (CSV string)."""
+
+        cleaned = [scope.strip() for scope in (scopes or []) if scope and scope.strip()]
+        return ",".join(cleaned) if cleaned else None
+
+    @staticmethod
+    def _http_error_message(exc: Exception) -> str:
+        """Extract a user-facing message from a Composio HTTP error response."""
+
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        response_text = getattr(response, "text", "") if response is not None else ""
+        message = None
+        detail_parts: list[str] = []
+        if response_text:
+            try:
+                payload = json.loads(response_text)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    message = error.get("message") or error.get("suggested_fix")
+                    # The generic "Validation error while processing request"
+                    # wrapper hides the useful field-level detail, which lives in
+                    # ``errors``; always fold those in so the operator can act.
+                    for item in _flatten_validation_errors(error.get("errors")):
+                        if item and item not in detail_parts:
+                            detail_parts.append(item)
+                    fix = error.get("suggested_fix")
+                    if fix and fix != message and fix not in detail_parts:
+                        detail_parts.append(str(fix))
+                elif isinstance(error, str):
+                    message = error
+                message = message or payload.get("message")
+        prefix = (
+            f"Composio rejected the request ({status_code})"
+            if status_code
+            else "Composio rejected the request"
+        )
+        combined = ": ".join(
+            part for part in (message, "; ".join(detail_parts)) if part
+        )
+        if combined:
+            return f"{prefix}: {combined}"
+        if response_text:
+            return f"{prefix}: {response_text[:300]}"
+        return prefix
+
     def get_or_create_auth_config(self, toolkit_slug: str) -> str | None:
         """Reuse or create a Composio-managed auth config for a toolkit."""
 
@@ -443,15 +530,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         response.raise_for_status()
         data = response.json()
         for item in data.get("items") or data.get("data") or []:
-            auth_config = item.get("auth_config") if isinstance(item, dict) else None
-            auth_config_id = (
-                (auth_config or {}).get("id")
-                or (auth_config or {}).get("auth_config_id")
-                or (item or {}).get("id")
-                or (item or {}).get("auth_config_id")
-            )
+            auth_config_id = self._extract_auth_config_id(item)
             if auth_config_id:
-                return str(auth_config_id)
+                return auth_config_id
 
         create_response = requests.post(
             f"{self.base_url}/auth_configs",
@@ -468,15 +549,114 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         )
         create_response.raise_for_status()
         created = create_response.json()
-        auth_config = created.get("auth_config") if isinstance(created, dict) else None
-        auth_config_id = (
-            (auth_config or {}).get("id")
-            or (auth_config or {}).get("auth_config_id")
-            or created.get("id")
-            or created.get("auth_config_id")
-        )
+        auth_config_id = self._extract_auth_config_id(created)
         self.last_auth_config_was_created = bool(auth_config_id)
-        return str(auth_config_id) if auth_config_id else None
+        return auth_config_id
+
+    def create_custom_auth_config(
+        self,
+        toolkit_slug: str,
+        *,
+        client_id: str,
+        client_secret: str,
+        auth_scheme: str = "OAUTH2",
+        scopes: list[str] | None = None,
+        name: str | None = None,
+        oauth_redirect_uri: str | None = None,
+    ) -> str:
+        """Create a Composio bring-your-own-OAuth (``use_custom_auth``) config.
+
+        Used for toolkits that Composio does not offer managed credentials for
+        (e.g. TikTok) or when the operator wants their own branding/scopes. The
+        client id/secret are handed to Composio, which vaults them; only the
+        returned ``auth_config_id`` should be persisted by Orchestra. Returns the
+        new ``auth_config_id`` (raises on transport/provider error).
+        """
+
+        if not self.api_key:
+            raise ValueError(
+                "COMPOSIO_API_KEY is required for Composio auth config setup.",
+            )
+        if not client_id or not client_secret:
+            raise ValueError(
+                "client_id and client_secret are required for custom OAuth auth configs.",
+            )
+
+        import requests
+
+        self.last_auth_config_was_created = False
+        provider_slug = self._provider_toolkit_slug(toolkit_slug)
+        credentials: dict[str, Any] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "oauth_redirect_uri": (
+                oauth_redirect_uri or self.default_oauth_callback_url()
+            ),
+        }
+        scope_csv = self._format_custom_oauth_scopes(scopes)
+        if scope_csv:
+            credentials["scopes"] = scope_csv
+        payload = {
+            "toolkit": {"slug": provider_slug},
+            "auth_config": {
+                "name": name or f"{provider_slug} (custom OAuth)",
+                "type": "use_custom_auth",
+                "auth_scheme": auth_scheme,
+                "credentials": credentials,
+                "restrict_to_following_tools": [],
+            },
+        }
+        try:
+            create_response = requests.post(
+                f"{self.base_url}/auth_configs",
+                headers=self._api_key_headers(),
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+            create_response.raise_for_status()
+        except Exception as exc:
+            response = getattr(exc, "response", None)
+            # Keep the granular provider detail (parsed message, field-level
+            # validation errors, raw body, status) in the logs for gcloud
+            # debugging only — never leak it through the API response.
+            logger.warning(
+                "Composio custom OAuth auth config create failed toolkit=%s "
+                "auth_scheme=%s status=%s detail=%s body=%s",
+                provider_slug,
+                auth_scheme,
+                getattr(response, "status_code", None),
+                self._http_error_message(exc),
+                (getattr(response, "text", "") or "")[:1000],
+            )
+            raise ValueError(
+                "Composio rejected the custom OAuth configuration. Check the "
+                "client ID, secret, redirect URI, and scopes, then try again.",
+            ) from exc
+        created = create_response.json()
+        auth_config_id = self._extract_auth_config_id(created)
+        if not auth_config_id:
+            raise ValueError(
+                "Composio did not return an auth_config_id for the custom OAuth config.",
+            )
+        self.last_auth_config_was_created = True
+        return auth_config_id
+
+    def delete_auth_config(self, auth_config_id: str) -> None:
+        """Best-effort delete of a Composio auth config by id."""
+
+        if not self.api_key or not auth_config_id:
+            return
+
+        import requests
+
+        response = requests.delete(
+            f"{self.base_url}/auth_configs/{auth_config_id}",
+            headers=self._api_key_headers(),
+            timeout=self.timeout_seconds,
+        )
+        # Treat an already-removed config as success.
+        if response.status_code not in (200, 202, 204, 404):
+            response.raise_for_status()
 
     def create_auth_link(
         self,
@@ -781,6 +961,86 @@ def _composio_auth_modes(
         if mode not in modes:
             modes.append(mode)
     return modes or ["oauth"]
+
+
+def _flatten_validation_errors(errors: Any) -> list[str]:
+    """Render Composio/Zod-style validation error entries as readable strings.
+
+    Composio wraps field errors under ``error.errors`` as a list of dicts (often
+    Zod issues with ``path`` + ``message``). Flatten them to ``path: message`` so
+    the operator sees which field failed instead of a generic wrapper.
+    """
+
+    if not isinstance(errors, list):
+        return []
+    rendered: list[str] = []
+    for entry in errors:
+        if isinstance(entry, str):
+            rendered.append(entry)
+            continue
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message") or entry.get("msg")
+        path = entry.get("path") or entry.get("loc")
+        if isinstance(path, list):
+            path_str = ".".join(str(part) for part in path if part not in (None, ""))
+        else:
+            path_str = str(path) if path else ""
+        if message and path_str:
+            rendered.append(f"{path_str}: {message}")
+        elif message:
+            rendered.append(str(message))
+        elif path_str:
+            rendered.append(path_str)
+    return rendered
+
+
+def _composio_managed_auth_schemes(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> list[str] | None:
+    """Auth schemes Composio provides managed credentials for.
+
+    Returns ``None`` when the payload gives no signal (older responses), so
+    callers can distinguish "unknown" from "definitely none".
+    """
+
+    for source in (detail, toolkit):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("composio_managed_auth_schemes") or source.get(
+            "composioManagedAuthSchemes",
+        )
+        if isinstance(raw, list):
+            return [str(item).upper() for item in raw]
+    return None
+
+
+def _composio_requires_custom_oauth(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None,
+    auth_modes: list[str],
+) -> bool:
+    """True when an OAuth toolkit lacks Composio-managed credentials.
+
+    Such toolkits (e.g. TikTok) can only be connected once an operator supplies
+    their own OAuth app ("bring your own OAuth"). Conservative by design: when
+    Composio gives no managed-auth signal we return ``False`` so managed apps are
+    never mislabelled — the connect flow still surfaces a clear error if a
+    managed config turns out to be unavailable.
+    """
+
+    if "oauth" not in auth_modes:
+        return False
+    for entry in _auth_config_details(detail):
+        if "OAUTH" not in str(entry.get("mode") or "").upper():
+            continue
+        if "is_composio_managed" in entry:
+            return not bool(entry.get("is_composio_managed"))
+    managed_schemes = _composio_managed_auth_schemes(toolkit, detail)
+    if managed_schemes is None:
+        return False
+    return not any("OAUTH" in scheme for scheme in managed_schemes)
 
 
 def _composio_icon_url(toolkit: dict[str, Any]) -> str | None:

@@ -752,6 +752,73 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert payload["completed_step_ids"] == []
 
 
+def _render_step_ids(render: dict) -> set[str]:
+    return {step["id"] for step in render["steps"]}
+
+
+def _render_step(render: dict, step_id: str) -> dict:
+    return next(step for step in render["steps"] if step["id"] == step_id)
+
+
+@pytest.mark.anyio
+async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Provider-exclusive steps + provider-aware copy follow the connected workspace.
+
+    The Microsoft-only Teams demo renders only once a Microsoft workspace is
+    connected, is hidden for Google (and before any connection), and the shared
+    files demo's description specialises to the connected provider.
+    """
+    owner = await _create_user(client, "provider-gated-onboarding")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    dao = svc.AssistantSecretDAO(dbsession)
+
+    # No workspace connected: Teams is hidden, files copy stays neutral, and
+    # the provider-agnostic catalog never lists a provider-exclusive step.
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    assert "workspace-teams" not in _render_step_ids(render)
+    assert "Drive or OneDrive" in _render_step(render, "workspace-drive")["description"]
+    catalog = svc.build_onboarding_catalog()
+    assert "workspace-teams" not in {step["id"] for step in catalog["steps"]}
+
+    # Google workspace: still no Teams, and the files copy names Google Drive.
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive.readonly",
+    )
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    assert "workspace-teams" not in _render_step_ids(render)
+    assert "Google Drive" in _render_step(render, "workspace-drive")["description"]
+
+    # Microsoft workspace: Teams surfaces as an available demo (workspace is
+    # connected), and the files copy names OneDrive/SharePoint.
+    dao.delete(coordinator.agent_id, "GOOGLE_GRANTED_SCOPES")
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "MICROSOFT_GRANTED_SCOPES",
+        "Files.Read.All ChannelMessage.Read.All",
+    )
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    assert "workspace-teams" in _render_step_ids(render)
+    assert _render_step(render, "workspace-teams")["status"] == "available"
+    assert "workspace-teams" in {t["id"] for t in render["next_targets"]}
+    assert "OneDrive" in _render_step(render, "workspace-drive")["description"]
+
+
 @pytest.mark.anyio
 async def test_assistant_list_does_not_bootstrap_coordinator_owner_contact_row(
     client: AsyncClient,

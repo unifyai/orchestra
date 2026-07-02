@@ -47,6 +47,7 @@ from orchestra.integrations.providers.composio import (  # noqa: F401
     _composio_behavior_hints,
     _composio_canonical_app_slug,
     _composio_icon_url,
+    _composio_requires_custom_oauth,
     _composio_tool_input_schema,
     _composio_tool_name,
     _composio_tool_output_schema,
@@ -88,6 +89,51 @@ from orchestra.web.api.integrations.schema import (
 READY_STATUSES = {"connected"}
 EXPIRED_STATUSES = {"expired", "revoked", "error"}
 logger = logging.getLogger(__name__)
+
+
+class ProviderConnectError(Exception):
+    """A connect attempt failed for a reason worth surfacing to the caller.
+
+    Carries an HTTP status + user-facing message so route handlers can return an
+    actionable error instead of a bare 500 (e.g. a toolkit that needs a custom
+    OAuth app before it can be connected).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 409,
+        code: str = "provider_connect_failed",
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.code = code
+
+
+def _is_missing_managed_auth_error(exc: Exception) -> bool:
+    """True when Composio rejected auth-config creation for lack of managed creds.
+
+    These toolkits (e.g. TikTok) have no Composio-managed OAuth credentials, so
+    the operator must supply their own OAuth app. Composio answers the managed
+    ``POST /auth_configs`` with a 400 whose body mentions the missing default
+    auth config.
+    """
+
+    status_code, response_text = _provider_exception_details(exc)
+    if status_code not in (400, 404):
+        return False
+    haystack = f"{response_text} {exc}".lower()
+    needles = (
+        "default auth config not found",
+        "defaultauthconfignotfound",
+        "does not have managed",
+        "no managed",
+        "managed credentials",
+        "no default auth config",
+    )
+    return any(needle in haystack for needle in needles)
 
 
 @dataclass(frozen=True)
@@ -360,8 +406,24 @@ def _composio_live_catalog_handler(
             toolkit_slug,
             toolkit.get("name"),
         )
-        auth_config_id = None
-        if should_create_auth_configs and "oauth" in _composio_auth_modes(toolkit):
+        # A bring-your-own OAuth config (operator-supplied client credentials,
+        # stored in the backend config) wins over Composio-managed auth and is
+        # the only workable path for toolkits Composio has no managed
+        # credentials for (e.g. TikTok).
+        auth_config_id = _custom_auth_config_id(config, toolkit_slug)
+        toolkit_auth_modes = _composio_auth_modes(toolkit)
+        requires_custom_oauth = _composio_requires_custom_oauth(
+            toolkit,
+            None,
+            toolkit_auth_modes,
+        )
+        managed_auth = not requires_custom_oauth
+        custom_auth_configured = auth_config_id is not None
+        if (
+            not auth_config_id
+            and should_create_auth_configs
+            and "oauth" in toolkit_auth_modes
+        ):
             try:
                 auth_config_id = adapter.get_or_create_auth_config(toolkit_slug)
             except Exception as exc:
@@ -381,7 +443,9 @@ def _composio_live_catalog_handler(
             "source": "composio_live_sync",
             "toolkit_slug": toolkit_slug,
             "toolkit_version": toolkit.get("version"),
-            "managed_auth": True,
+            "managed_auth": managed_auth,
+            "requires_custom_oauth": requires_custom_oauth,
+            "custom_auth_configured": custom_auth_configured,
             "raw_toolkit": toolkit,
         }
         if auth_config_id:
@@ -395,8 +459,10 @@ def _composio_live_catalog_handler(
                 "description": toolkit.get("description"),
                 "category": toolkit.get("category"),
                 "icon_url": _composio_icon_url(toolkit),
-                "auth_modes": _composio_auth_modes(toolkit),
+                "auth_modes": toolkit_auth_modes,
                 "available_scopes": [],
+                "managed_auth": managed_auth,
+                "requires_custom_oauth": requires_custom_oauth,
                 "raw_provider_metadata": raw_provider_metadata,
             },
         )
@@ -969,6 +1035,201 @@ def _log_composio_connect_failure(
     )
 
 
+CUSTOM_AUTH_CONFIG_KEY = "auth_config_overrides"
+
+
+def _custom_auth_overrides(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the backend's bring-your-own-OAuth override map (slug -> config)."""
+
+    overrides = (config or {}).get(CUSTOM_AUTH_CONFIG_KEY)
+    return overrides if isinstance(overrides, dict) else {}
+
+
+def _custom_auth_config_id(
+    config: dict[str, Any] | None,
+    toolkit_slug: str,
+) -> str | None:
+    """Resolve an operator-provided (custom OAuth) auth_config_id for a toolkit."""
+
+    entry = _custom_auth_overrides(config).get(toolkit_slug)
+    if isinstance(entry, dict):
+        auth_config_id = entry.get("auth_config_id")
+        return str(auth_config_id) if auth_config_id else None
+    return None
+
+
+def _require_backend(session: Session, backend_id: str) -> IntegrationBackend:
+    seed_default_provider_catalog(session)
+    backend = IntegrationProviderDAO(session).get_backend(backend_id)
+    if not backend:
+        raise ValueError(f"Unknown integration backend: {backend_id}")
+    return backend
+
+
+def list_custom_auth_configs(
+    session: Session,
+    *,
+    backend_id: str,
+) -> list[dict[str, Any]]:
+    """Return operator-configured bring-your-own OAuth configs for a backend.
+
+    Only non-secret metadata is stored/returned: the client id/secret live in
+    the provider's vault, never in Orchestra.
+    """
+
+    backend = _require_backend(session, backend_id)
+    overrides = _custom_auth_overrides(backend.config_json)
+    return [
+        {"backend_id": backend_id, "toolkit_slug": slug, **entry}
+        for slug, entry in sorted(overrides.items())
+        if isinstance(entry, dict)
+    ]
+
+
+def set_custom_auth_config(
+    session: Session,
+    *,
+    backend_id: str,
+    toolkit_slug: str,
+    client_id: str,
+    client_secret: str,
+    auth_scheme: str = "OAUTH2",
+    scopes: Optional[list[str]] = None,
+    display_name: Optional[str] = None,
+    oauth_redirect_uri: Optional[str] = None,
+) -> dict[str, Any]:
+    """Register a bring-your-own OAuth app for a toolkit on ``backend_id``.
+
+    The client id/secret are handed to the provider (Composio), which vaults
+    them and returns an ``auth_config_id``. Orchestra persists only that id plus
+    non-secret metadata in the backend config, so subsequent connect flows use
+    the operator's OAuth app instead of provider-managed credentials. Returns
+    the stored (non-secret) config entry.
+    """
+
+    backend = _require_backend(session, backend_id)
+    if backend.kind != "composio":
+        raise ValueError(
+            "Custom OAuth configs are currently only supported for Composio backends.",
+        )
+    slug = (toolkit_slug or "").strip().upper()
+    if not slug:
+        raise ValueError("toolkit_slug is required.")
+    if not client_id or not client_secret:
+        raise ValueError("client_id and client_secret are required.")
+
+    adapter = get_provider_adapter(
+        backend_id,
+        backend_config=(backend.config_json or {}),
+        backend_status=backend.status,
+        require_live=True,
+    )
+    if not hasattr(adapter, "create_custom_auth_config"):
+        raise ValueError(
+            f"Backend {backend_id} does not support custom OAuth configs.",
+        )
+    scope_list = [s.strip() for s in (scopes or []) if s and s.strip()]
+    auth_config_id = adapter.create_custom_auth_config(
+        slug,
+        client_id=client_id,
+        client_secret=client_secret,
+        auth_scheme=auth_scheme,
+        scopes=scope_list or None,
+        name=display_name,
+        oauth_redirect_uri=oauth_redirect_uri,
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    config = dict(backend.config_json or {})
+    overrides = dict(config.get(CUSTOM_AUTH_CONFIG_KEY) or {})
+    key = slug.upper()
+    previous = overrides.get(key)
+    previous = previous if isinstance(previous, dict) else {}
+    old_auth_config_id = previous.get("auth_config_id")
+    resolved_redirect_uri = oauth_redirect_uri or (
+        adapter.default_oauth_callback_url()
+        if hasattr(adapter, "default_oauth_callback_url")
+        else None
+    )
+    entry = {
+        "auth_config_id": auth_config_id,
+        "auth_scheme": auth_scheme,
+        "scopes": scope_list,
+        "managed": False,
+        "oauth_redirect_uri": resolved_redirect_uri,
+        "display_name": display_name,
+        "created_at": previous.get("created_at") or now,
+        "updated_at": now,
+    }
+    overrides[key] = entry
+    config[CUSTOM_AUTH_CONFIG_KEY] = overrides
+    IntegrationProviderDAO(session).patch_backend(backend_id, {"config_json": config})
+    session.commit()
+
+    # Best-effort cleanup of a superseded custom config in the provider.
+    if (
+        old_auth_config_id
+        and old_auth_config_id != auth_config_id
+        and hasattr(adapter, "delete_auth_config")
+    ):
+        try:
+            adapter.delete_auth_config(str(old_auth_config_id))
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to delete superseded Composio auth config %s for %s/%s",
+                old_auth_config_id,
+                backend_id,
+                key,
+            )
+    return {"backend_id": backend_id, "toolkit_slug": key, **entry}
+
+
+def delete_custom_auth_config(
+    session: Session,
+    *,
+    backend_id: str,
+    toolkit_slug: str,
+    delete_remote: bool = True,
+) -> None:
+    """Remove an operator's bring-your-own OAuth config for a toolkit.
+
+    Connect flows for the toolkit fall back to provider-managed auth afterwards
+    (where available). Also deletes the config in the provider unless
+    ``delete_remote`` is false.
+    """
+
+    backend = _require_backend(session, backend_id)
+    config = dict(backend.config_json or {})
+    overrides = dict(config.get(CUSTOM_AUTH_CONFIG_KEY) or {})
+    key = (toolkit_slug or "").strip().upper()
+    entry = overrides.pop(key, None)
+    if entry is None:
+        raise ValueError(
+            f"No custom OAuth config for {toolkit_slug} on backend {backend_id}.",
+        )
+    config[CUSTOM_AUTH_CONFIG_KEY] = overrides
+    IntegrationProviderDAO(session).patch_backend(backend_id, {"config_json": config})
+    session.commit()
+
+    if delete_remote and isinstance(entry, dict) and entry.get("auth_config_id"):
+        adapter = get_provider_adapter(
+            backend_id,
+            backend_config=(backend.config_json or {}),
+            backend_status=backend.status,
+            require_live=True,
+        )
+        if hasattr(adapter, "delete_auth_config"):
+            try:
+                adapter.delete_auth_config(str(entry["auth_config_id"]))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to delete Composio auth config %s for %s/%s",
+                    entry.get("auth_config_id"),
+                    backend_id,
+                    key,
+                )
+
+
 def _provider_connect_url(
     *,
     backend: IntegrationBackend | None,
@@ -997,6 +1258,14 @@ def _provider_connect_url(
             auth_config_id = (
                 (app.raw_provider_metadata_json if app else {}) or {}
             ).get("auth_config_id")
+            # An operator-configured bring-your-own OAuth config takes precedence
+            # over Composio-managed auth (and is the only option for toolkits
+            # Composio has no managed credentials for, e.g. TikTok).
+            if not auth_config_id:
+                auth_config_id = _custom_auth_config_id(
+                    config,
+                    connection.provider_app_id,
+                )
             if not auth_config_id:
                 if not hasattr(adapter, "get_or_create_auth_config"):
                     raise ValueError(
@@ -1014,7 +1283,26 @@ def _provider_connect_url(
                         app=app,
                         exc=exc,
                     )
-                    raise
+                    app_label = (
+                        app.display_name
+                        if app and getattr(app, "display_name", None)
+                        else connection.provider_app_id
+                    )
+                    if _is_missing_managed_auth_error(exc):
+                        raise ProviderConnectError(
+                            f"{app_label} has no managed OAuth credentials. An admin "
+                            "must add a custom OAuth app for it in integration "
+                            "settings before it can be connected.",
+                            status_code=409,
+                            code="custom_oauth_required",
+                        ) from exc
+                    raise ProviderConnectError(
+                        f"Could not start the {app_label} connection: the provider "
+                        "rejected the authorization request. Check the integration's "
+                        "OAuth configuration and try again.",
+                        status_code=502,
+                        code="provider_auth_config_failed",
+                    ) from exc
                 if not auth_config_id:
                     logger.warning(
                         "Composio auth config creation returned no id backend_id=%s "
@@ -1030,8 +1318,12 @@ def _provider_connect_url(
                         connection.connection_id,
                         owner.owner_scope,
                     )
-                    raise ValueError(
-                        f"Composio auth_config_id is required to connect {connection.provider_app_id}.",
+                    raise ProviderConnectError(
+                        f"Could not start the {connection.provider_app_id} connection: "
+                        "no OAuth configuration is available. An admin may need to add "
+                        "a custom OAuth app for it in integration settings.",
+                        status_code=409,
+                        code="custom_oauth_required",
                     )
                 if app:
                     app.raw_provider_metadata_json = {

@@ -1314,7 +1314,7 @@ def test_composio_connect_logs_auth_config_creation_failure(
     )
     caplog.set_level(logging.ERROR, logger=operations.__name__)
 
-    with pytest.raises(RuntimeError, match="provider rejected DISCORD"):
+    with pytest.raises(operations.ProviderConnectError) as excinfo:
         operations._provider_connect_url(
             backend=FakeBackend(),
             app=FakeApp(),
@@ -1322,6 +1322,9 @@ def test_composio_connect_logs_auth_config_creation_failure(
             connection=FakeConnection(),
             redirect_url="https://console.example/callback",
         )
+
+    assert excinfo.value.code == "provider_auth_config_failed"
+    assert "Could not start the" in str(excinfo.value)
 
     assert "Composio connect failure stage=auth_config_create" in caplog.text
     assert "backend_id=composio" in caplog.text

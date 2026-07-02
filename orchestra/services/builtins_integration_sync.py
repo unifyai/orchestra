@@ -294,6 +294,18 @@ def app_catalog_row(
     raw_metadata = (
         app.get("raw_provider_metadata") or app.get("raw_provider_metadata_json") or {}
     )
+    requires_custom_oauth = bool(
+        (
+            app.get("requires_custom_oauth")
+            if app.get("requires_custom_oauth") is not None
+            else raw_metadata.get("requires_custom_oauth")
+        ),
+    )
+    managed_auth = (
+        app.get("managed_auth")
+        if app.get("managed_auth") is not None
+        else raw_metadata.get("managed_auth")
+    )
     categories_text = ", ".join(
         _harvest_category_names(category=category, raw_metadata=raw_metadata),
     )
@@ -319,6 +331,8 @@ def app_catalog_row(
         "available_scopes": available_scopes,
         "recommended_scopes": recommended_scopes,
         "api_key_schema": api_key_schema,
+        "requires_custom_oauth": requires_custom_oauth,
+        "managed_auth": bool(managed_auth) if managed_auth is not None else None,
         "tool_count": int(app.get("tool_count") or 0),
         "source_type": source_type,
         "source_label": app.get("source_label")
