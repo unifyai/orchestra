@@ -345,6 +345,8 @@ api_router.include_router(
 # NO AUTH
 
 api_router.include_router(stripe_webhooks.router)
+# White-label OAuth redirect proxy (provider browsers hit this with no auth).
+api_router.include_router(integrations.public_router)
 
 
 # Simple system endpoints (no auth required)

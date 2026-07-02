@@ -23,6 +23,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -82,6 +83,10 @@ from orchestra.web.api.integrations.schema import (
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 admin_router = APIRouter(prefix="/integrations", tags=["Integration Admin"])
+# Unauthenticated router for OAuth provider browser redirects (white-labeling).
+# Mounted without auth dependencies because the provider (e.g. TikTok) redirects
+# the end user's browser here with no Orchestra credentials attached.
+public_router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
 
 def _owner_from_query(
@@ -939,3 +944,45 @@ def run_provider_tool(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
+
+
+def _composio_oauth_callback_url() -> str:
+    """Composio's real OAuth callback that the white-label proxy forwards to.
+
+    Mirrors ``ComposioProvider.default_oauth_callback_url`` so both the auth
+    config we register with Composio and this proxy agree on the destination.
+    """
+
+    base_url = (
+        os.getenv("COMPOSIO_BASE_URL") or "https://backend.composio.dev/api/v3.1"
+    ).rstrip("/")
+    return f"{base_url}/toolkits/auth/callback"
+
+
+@public_router.get(
+    "/composio/oauth/callback",
+    include_in_schema=False,
+)
+@public_router.get(
+    "/composio/oauth/callback/",
+    include_in_schema=False,
+)
+def composio_oauth_redirect(request: Request) -> RedirectResponse:
+    """White-label proxy for Composio's OAuth callback.
+
+    A provider's OAuth app (e.g. TikTok) is configured with this Orchestra URL
+    as its redirect URI so the OAuth flow only ever exposes a first-party
+    ``unify.ai`` domain (which we can verify) instead of ``backend.composio.dev``.
+    On the provider redirect we forward every query parameter unchanged to
+    Composio's real callback via a 302, which then completes the token exchange
+    and continues to the app's final callback URL.
+
+    The destination host is hardcoded to Composio, so only the opaque OAuth query
+    string (``code``/``state``/etc.) is forwarded — this is not an open redirect.
+    """
+
+    target = _composio_oauth_callback_url()
+    query = request.url.query
+    if query:
+        target = f"{target}?{query}"
+    return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
