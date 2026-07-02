@@ -294,7 +294,7 @@ async def test_onboarding_reply_requires_stamped_outbound_before_user_reply(
         return svc.derive_onboarding_progress(
             dbsession,
             coordinator=coordinator,
-            state={"mode": svc.COORDINATOR_MODE_ONBOARDING},
+            state={"onboarding_active": True},
         )
 
     def insert_message(
@@ -665,7 +665,7 @@ async def test_reset_clears_only_coordinator_contexts(
     coordinator = dbsession.get(Assistant, coordinator_id)
     project = _assistants_project(dbsession, coordinator=coordinator)
     for suffix, data in (
-        ("Coordinator/State", {"mode": "working"}),
+        ("Coordinator/State", {"onboarding_active": False}),
         ("Coordinator/Checklist", {}),
         ("Transcripts", {"role": "assistant", "content": "Welcome."}),
         ("Exchanges", {"value": "exchange"}),
@@ -721,7 +721,7 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Newly-provisioned Coordinators land in ``onboarding`` mode."""
+    """Newly-provisioned Coordinators start with onboarding active."""
     owner = await _create_user(client, "state-seed-personal")
 
     create = await client.post(
@@ -741,7 +741,7 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert response.status_code == status.HTTP_200_OK, response.json()
     payload = response.json()["info"]
     assert payload["coordinator_id"] == coordinator_id
-    assert payload["mode"] == "onboarding"
+    assert payload["onboarding_active"] is True
     assert payload["onboarding_step"] is None
     assert payload["started_at"] is not None
     assert payload["ended_at"] is None
@@ -950,7 +950,7 @@ async def test_workspace_coordinator_backfill_marks_existing_user_intro_watched(
         headers=owner["headers"],
     )
     assert state.status_code == status.HTTP_200_OK, state.json()
-    assert state.json()["info"]["mode"] == "onboarding"
+    assert state.json()["info"]["onboarding_active"] is True
     assert state.json()["info"]["intro_watched"] is True
 
 
@@ -991,7 +991,7 @@ async def test_intro_watched_backfill_marks_existing_coordinator_state(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Existing Coordinator state is marked watched without changing mode."""
+    """Existing Coordinator state is marked watched without changing onboarding_active."""
     owner = await _create_user(client, "intro-state-backfill")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -1022,7 +1022,7 @@ async def test_intro_watched_backfill_marks_existing_coordinator_state(
         headers=owner["headers"],
     )
     assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
-    assert follow_up.json()["info"]["mode"] == "onboarding"
+    assert follow_up.json()["info"]["onboarding_active"] is True
     assert follow_up.json()["info"]["intro_watched"] is True
 
 
@@ -1092,7 +1092,7 @@ async def test_coordinator_state_patch_records_onboarding_step(
     emit.assert_awaited_once()
     assert emit.await_args.kwargs["step_id"] == "email-reply"
     info = patch_response.json()["info"]
-    assert info["mode"] == "onboarding"
+    assert info["onboarding_active"] is True
     assert info["onboarding_step"] == "email-reply"
 
     follow_up = await client.get(
@@ -1199,11 +1199,11 @@ async def test_coordinator_state_intro_watched_is_one_way_sticky(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
+async def test_coordinator_state_patch_deactivates_onboarding_and_stamps_ended_at(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Promoting to ``working`` stamps ``ended_at`` exactly once."""
+    """Deactivating onboarding stamps ``ended_at`` exactly once."""
     owner = await _create_user(client, "state-working")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -1217,12 +1217,12 @@ async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
 
     promote = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
+        json={"onboarding_active": False, "clear_onboarding_step": True},
         headers=owner["headers"],
     )
     assert promote.status_code == status.HTTP_200_OK, promote.json()
     info = promote.json()["info"]
-    assert info["mode"] == "working"
+    assert info["onboarding_active"] is False
     assert info["onboarding_step"] is None
     assert info["started_at"] is not None
     first_ended_at = info["ended_at"]
@@ -1231,7 +1231,7 @@ async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
     # A no-op write should preserve ``ended_at`` rather than re-stamp it.
     noop = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working"},
+        json={"onboarding_active": False},
         headers=owner["headers"],
     )
     assert noop.status_code == status.HTTP_200_OK, noop.json()
@@ -1243,12 +1243,11 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Resuming onboarding (working → onboarding) clears ``ended_at``.
+    """Resuming onboarding clears ``ended_at``.
 
-    A row in ``onboarding`` mode with a stamped ``ended_at`` is
-    semantically incoherent ("onboarding finished on X, currently
-    onboarding"). The resume path must wipe the timestamp; a
-    subsequent skip / completion re-stamps it from scratch.
+    A row with ``onboarding_active=True`` and a stamped ``ended_at`` is
+    semantically incoherent. The resume path must wipe the timestamp; a
+    subsequent deactivation re-stamps it from scratch.
     """
     owner = await _create_user(client, "state-resume")
     create = await client.post(
@@ -1264,7 +1263,7 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     # Skip → working, ``ended_at`` is stamped.
     skip = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
+        json={"onboarding_active": False, "clear_onboarding_step": True},
         headers=owner["headers"],
     )
     assert skip.status_code == status.HTTP_200_OK, skip.json()
@@ -1274,12 +1273,12 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     # Resume → onboarding clears it.
     resume = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "onboarding"},
+        json={"onboarding_active": True},
         headers=owner["headers"],
     )
     assert resume.status_code == status.HTTP_200_OK, resume.json()
     resumed = resume.json()["info"]
-    assert resumed["mode"] == "onboarding"
+    assert resumed["onboarding_active"] is True
     assert resumed["ended_at"] is None
     # ``started_at`` is sticky across the round-trip so we still
     # know when the lifecycle began.
@@ -1290,7 +1289,7 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     # between).
     re_skip = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
+        json={"onboarding_active": False, "clear_onboarding_step": True},
         headers=owner["headers"],
     )
     assert re_skip.status_code == status.HTTP_200_OK, re_skip.json()
@@ -1304,7 +1303,7 @@ async def test_coordinator_state_patch_rejects_invalid_values(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Unknown modes and empty step strings fail validation up front."""
+    """Empty step strings and unknown skip ids fail validation up front."""
     owner = await _create_user(client, "state-invalid")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -1315,21 +1314,6 @@ async def test_coordinator_state_patch_rejects_invalid_values(
         status.HTTP_201_CREATED,
     }, create.json()
     coordinator_id = int(create.json()["coordinator_id"])
-
-    # ``ready_to_go`` is not a valid Coordinator/State mode.
-    bad_mode = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "ready_to_go"},
-        headers=owner["headers"],
-    )
-    assert bad_mode.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
-    legacy_mode = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "active"},
-        headers=owner["headers"],
-    )
-    assert legacy_mode.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     empty_step = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
@@ -1372,7 +1356,7 @@ async def test_coordinator_state_forbidden_for_non_owner(
 
     write = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working"},
+        json={"onboarding_active": False},
         headers=intruder["headers"],
     )
     assert write.status_code == status.HTTP_403_FORBIDDEN

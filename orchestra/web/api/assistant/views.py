@@ -88,7 +88,6 @@ from orchestra.services.contact_membership_service import (
     ensure_team_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
-    COORDINATOR_MODE_ONBOARDING,
     build_onboarding_catalog,
     compose_voice_intro_briefing,
     compute_onboarding_render,
@@ -1555,15 +1554,11 @@ def _coordinator_state_response(
     every read (see ``derive_onboarding_progress``) so the console
     checklist and Unity's openers agree on what is already done even
     when the completing action happened in an earlier session. The
-    derivation queries are skipped outside onboarding mode, where the
+    derivation queries are skipped when onboarding is inactive, where the
     checklist no longer renders.
     """
     state = get_coordinator_state(session, coordinator=coordinator)
-    actively_onboarding = state[
-        "mode"
-    ] == COORDINATOR_MODE_ONBOARDING and not state.get(
-        "onboarding_deferred",
-    )
+    actively_onboarding = bool(state.get("onboarding_active"))
     completed_step_ids = (
         derive_onboarding_progress(session, coordinator=coordinator, state=state)
         if actively_onboarding
@@ -1639,13 +1634,12 @@ async def update_coordinator_state_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[CoordinatorStateResponse]:
-    """Transition the Coordinator between ``onboarding`` and ``working``.
+    """Update the Coordinator's onboarding state.
 
-    Used by the assistants page when the user finishes or skips
-    onboarding (writes ``mode='working'``), when the user re-enters
-    the guided view from a menu (writes ``mode='onboarding'``), and
-    when the coordinator-driven conversation advances to a new step
-    (writes ``onboarding_step``).
+    Used by the assistants page when the user pauses or resumes
+    onboarding (writes ``onboarding_active``), and when the user
+    advances, skips, or resets checklist steps (writes ``onboarding_step``
+    and related fields).
     """
     coordinator = require_authorized_coordinator(
         session,
@@ -1656,7 +1650,7 @@ async def update_coordinator_state_endpoint(
     next_state = set_coordinator_state(
         session,
         coordinator=coordinator,
-        mode=update.mode,
+        onboarding_active=update.onboarding_active,
         onboarding_step=update.onboarding_step,
         clear_onboarding_step=update.clear_onboarding_step,
         skip_onboarding_step=update.skip_onboarding_step,
@@ -1665,11 +1659,10 @@ async def update_coordinator_state_endpoint(
         skip_onboarding_phase=update.skip_onboarding_phase,
         unskip_onboarding_phase=update.unskip_onboarding_phase,
         intro_watched=update.intro_watched,
-        onboarding_deferred=update.onboarding_deferred,
     )
     if (
         update.onboarding_step
-        and next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+        and next_state.get("onboarding_active")
         and previous_state.get("onboarding_step") != update.onboarding_step
     ):
         completed_step_ids = derive_onboarding_progress(
@@ -1686,7 +1679,7 @@ async def update_coordinator_state_endpoint(
     if update.skip_onboarding_step:
         completed_step_ids = (
             derive_onboarding_progress(session, coordinator=coordinator)
-            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+            if next_state.get("onboarding_active")
             else []
         )
         await emit_onboarding_step_skipped_event(
@@ -1699,7 +1692,7 @@ async def update_coordinator_state_endpoint(
     if update.reset_onboarding_step:
         completed_step_ids = (
             derive_onboarding_progress(session, coordinator=coordinator)
-            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+            if next_state.get("onboarding_active")
             else []
         )
         await emit_onboarding_step_reset_event(
@@ -1767,7 +1760,7 @@ async def notify_onboarding_session_started_endpoint(
     """Fire the picker-resolution event so Unity opens the session.
 
     Best-effort: the emission is gated server-side on
-    ``Coordinator/State.mode == 'onboarding'``, so a stale picker
+    ``Coordinator/State.onboarding_active``, so a stale picker
     submit (e.g. the user already skipped onboarding in another
     tab) silently no-ops. The endpoint always returns 200; the
     response body carries an ``emitted`` flag the client can use

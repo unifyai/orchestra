@@ -701,34 +701,32 @@ class CoordinatorResetResponse(BaseModel):
 class CoordinatorStateUpdate(BaseModel):
     """Request body for transitioning a Coordinator's onboarding state.
 
-    All fields are optional: a request specifying only ``mode`` flips
-    the lifecycle without touching the current step; specifying only
-    ``onboarding_step`` advances the in-flight step marker without
-    leaving ``onboarding``. Passing ``clear_onboarding_step=True``
-    resets the step (used when moving to ``working`` so a future
-    re-entry doesn't carry stale step state). ``skip_onboarding_step``
-    records an intentional user skip separately from real completion;
-    ``unskip_onboarding_step`` returns that step to the active checklist.
-    ``skip_onboarding_phase`` records a section-level defer without
-    expanding it into per-step skips; ``unskip_onboarding_phase`` resumes
-    that section while preserving any per-step skips inside it.
+    All fields are optional: a request specifying only ``onboarding_active``
+    toggles whether onboarding scaffolding is live without touching the
+    current step; specifying only ``onboarding_step`` advances the in-flight
+    step marker while onboarding remains active. Passing
+    ``clear_onboarding_step=True`` resets the step (used when deactivating
+    onboarding so a future re-entry doesn't carry stale step state).
+    ``skip_onboarding_step`` records an intentional user skip separately from
+    real completion; ``unskip_onboarding_step`` returns that step to the
+    active checklist. ``skip_onboarding_phase`` records a section-level defer
+    without expanding it into per-step skips; ``unskip_onboarding_phase``
+    resumes that section while preserving any per-step skips inside it.
 
     ``intro_watched`` records that the user has resolved the opening
     picker (started the call or chose chat) so the ringing picker and
     auto-playing intro never re-appear on a later page load. It is
     one-way sticky: once ``True`` it cannot be reset to ``False``.
 
-    ``onboarding_deferred`` is the global "do onboarding later" switch.
-    Setting it ``True`` suppresses every onboarding narration/opener
-    event and the server-side step derivation exactly as if onboarding
-    were complete, without touching ``mode`` or any per-step state, so
-    the user can start using the platform first. It is freely
-    reversible: setting it back to ``False`` resumes the flow untouched.
+    ``onboarding_active`` is the single gate for onboarding scaffolding.
+    When ``False``, milestone events, the server-side step derivation,
+    and the onboarding render are suppressed without touching per-step
+    state, so the user can pause or finish onboarding and return later.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Optional[Literal["onboarding", "working"]] = Field(None)
+    onboarding_active: Optional[bool] = Field(None)
     onboarding_step: Optional[str] = Field(None, min_length=1)
     clear_onboarding_step: bool = Field(False)
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
@@ -737,7 +735,6 @@ class CoordinatorStateUpdate(BaseModel):
     skip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
-    onboarding_deferred: Optional[bool] = Field(None)
 
 
 class OnboardingChip(BaseModel):
@@ -886,11 +883,11 @@ class CoordinatorStateResponse(BaseModel):
     profile contact fields, Slack/Discord setup, workspace email contact,
     integration secrets, action history, Tasks rows) so consumers see steps
     completed in earlier sessions without any transition event. Always ``[]``
-    outside onboarding mode, where derivation is skipped.
+    when ``onboarding_active`` is ``False``, where derivation is skipped.
     """
 
     coordinator_id: int
-    mode: Literal["onboarding", "working"]
+    onboarding_active: bool = True
     onboarding_step: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
@@ -898,14 +895,13 @@ class CoordinatorStateResponse(BaseModel):
     skipped_step_ids: List[str] = Field(default_factory=list)
     skipped_phase_ids: List[str] = Field(default_factory=list)
     intro_watched: bool = False
-    onboarding_deferred: bool = False
     # Precomputed depends_on-aware rendering (steps + statuses + valid
-    # next targets with nudge copy). Present only while actively
-    # onboarding; ``None`` once complete, working, or deferred.
+    # next targets with nudge copy). Present only while
+    # ``onboarding_active``; ``None`` when inactive.
     onboarding: Optional[OnboardingRender] = None
     # Self-contained orientation briefing for a fresh onboarding voice call,
     # derived from the graph so the call initiator can pass it straight to the
-    # voice agent as a ``briefed`` opening. Empty outside active onboarding.
+    # voice agent as a ``briefed`` opening. Empty when onboarding is inactive.
     voice_intro_briefing: str = ""
 
 

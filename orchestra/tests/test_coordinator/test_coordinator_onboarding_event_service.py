@@ -6,8 +6,8 @@ trip and orchestra-side state read are both already covered by
 upstream integration tests. The point of these tests is to pin down
 the **contract** between trigger sites and Unity:
 
-* the helper stays silent unless ``Coordinator/State.mode ==
-  'onboarding'``;
+* the helper stays silent unless ``Coordinator/State.onboarding_active``
+  is ``True``;
 * it refuses unknown subtypes;
 * the wire payload matches what the adapters webhook expects;
 * the sibling-assistant resolver lands on the right Coordinator;
@@ -27,8 +27,8 @@ import pytest
 
 from orchestra.services import coordinator_service as svc
 
-ONBOARDING_STATE = {"mode": "onboarding", "onboarding_step": None}
-WORKING_STATE = {"mode": "working", "onboarding_step": None}
+ACTIVE_STATE = {"onboarding_active": True, "onboarding_step": None}
+INACTIVE_STATE = {"onboarding_active": False, "onboarding_step": None}
 
 # Sentinel onboarding render attached to every emitted event by
 # ``_with_onboarding_render``. Patched in so payload assertions stay
@@ -73,11 +73,11 @@ def _fake_specialist(agent_id: int = 2) -> SimpleNamespace:
 
 
 @pytest.mark.anyio
-async def test_async_notify_skips_when_mode_is_working() -> None:
-    """Working-mode Coordinators must stay silent — that's the point of the gate."""
+async def test_async_notify_skips_when_onboarding_inactive() -> None:
+    """Inactive Coordinators must stay silent — that's the point of the gate."""
     coordinator = _fake_coordinator()
     with (
-        patch.object(svc, "get_coordinator_state", return_value=WORKING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=INACTIVE_STATE),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.notify_coordinator_onboarding_event(
@@ -91,11 +91,11 @@ async def test_async_notify_skips_when_mode_is_working() -> None:
 
 
 @pytest.mark.anyio
-async def test_async_notify_emits_when_mode_is_onboarding() -> None:
-    """Onboarding-mode Coordinators get the event with the canonical payload shape."""
+async def test_async_notify_emits_when_onboarding_active() -> None:
+    """Active Coordinators get the event with the canonical payload shape."""
     coordinator = _fake_coordinator(agent_id=42)
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
@@ -126,7 +126,7 @@ async def test_async_notify_rejects_unknown_subtype() -> None:
     """The subtype taxonomy is closed — anything else short-circuits."""
     coordinator = _fake_coordinator()
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.notify_coordinator_onboarding_event(
@@ -145,7 +145,7 @@ async def test_async_notify_swallows_transport_failures() -> None:
     coordinator = _fake_coordinator()
     failing_post = AsyncMock(side_effect=RuntimeError("adapters down"))
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "_post_unity_system_event", new=failing_post),
     ):
         result = await svc.notify_coordinator_onboarding_event(
@@ -169,7 +169,7 @@ async def test_async_notify_for_assistant_resolves_workspace_coordinator() -> No
             "get_workspace_coordinator",
             return_value=coordinator,
         ) as resolve,
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.maybe_notify_for_assistant_async(
@@ -207,7 +207,7 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
     """Sync wrapper must spawn a thread instead of blocking on httpx."""
     coordinator = _fake_coordinator()
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "_fire_and_forget_onboarding_event") as fire,
     ):
         result = svc.notify_coordinator_onboarding_event_safe_sync(
@@ -228,7 +228,7 @@ async def test_step_skipped_event_embeds_step_snapshots() -> None:
     """Skip events tell Unity which step was skipped and what is resolved so far."""
     coordinator = _fake_coordinator(agent_id=15)
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
@@ -257,7 +257,7 @@ async def test_step_reset_event_embeds_step_snapshots() -> None:
     """Reset events tell Unity which step reverted and carry the fresh render."""
     coordinator = _fake_coordinator(agent_id=16)
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
@@ -283,11 +283,11 @@ async def test_step_reset_event_embeds_step_snapshots() -> None:
     }
 
 
-def test_sync_notify_silent_when_mode_is_working() -> None:
+def test_sync_notify_silent_when_onboarding_inactive() -> None:
     """Gate applies symmetrically across sync + async variants."""
     coordinator = _fake_coordinator()
     with (
-        patch.object(svc, "get_coordinator_state", return_value=WORKING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=INACTIVE_STATE),
         patch.object(svc, "_fire_and_forget_onboarding_event") as fire,
     ):
         result = svc.notify_coordinator_onboarding_event_safe_sync(
@@ -387,7 +387,7 @@ async def test_step_started_event_embeds_active_step_snapshot() -> None:
     """Active-step events tell Unity which checklist row the user selected."""
     coordinator = _fake_coordinator(agent_id=16)
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
@@ -424,7 +424,10 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
         patch.object(
             svc,
             "get_coordinator_state",
-            return_value={"mode": "onboarding", "skipped_step_ids": ["phone-number"]},
+            return_value={
+                "onboarding_active": True,
+                "skipped_step_ids": ["phone-number"],
+            },
         ),
         patch.object(
             svc,
@@ -456,7 +459,7 @@ async def test_session_started_event_omits_empty_step_snapshot() -> None:
     """A fresh workspace produces a compact payload without an empty list."""
     coordinator = _fake_coordinator(agent_id=12)
     with (
-        patch.object(svc, "get_coordinator_state", return_value=ONBOARDING_STATE),
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "derive_onboarding_progress", return_value=[]),
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,

@@ -88,19 +88,11 @@ COORDINATOR_EXCHANGES_CONTEXT = "Exchanges"
 COORDINATOR_CHAT_MEDIUM = "unify_message"
 COORDINATOR_OPENER_SOURCE = "coordinator_opener"
 
-# Coordinator state machine on the ``Coordinator/State`` context: a
-# freshly-provisioned Coordinator starts in ``onboarding`` and the
-# assistants surface renders the guided call-or-chat view until it
-# transitions to ``working`` (either by the user clicking
-# "Skip onboarding" or by the conversation completing in some other
-# backend-driven way).
-#
-# We deliberately avoid the word ``active`` here because other
-# coordinator-facing surfaces use ``active`` with a different meaning.
-# ``Coordinator/State`` owns the onboarding lifecycle vocabulary.
-COORDINATOR_MODE_ONBOARDING = "onboarding"
-COORDINATOR_MODE_WORKING = "working"
-COORDINATOR_MODES = frozenset({COORDINATOR_MODE_ONBOARDING, COORDINATOR_MODE_WORKING})
+# Coordinator onboarding gate on the ``Coordinator/State`` context: a
+# freshly-provisioned Coordinator starts with ``onboarding_active=True``
+# and the assistants surface renders the guided call-or-chat view until
+# onboarding is paused or finished (``onboarding_active=False``).
+TRANSCRIPTS_UNIQUE_KEYS = {"message_id": "int"}
 TRANSCRIPTS_UNIQUE_KEYS = {"message_id": "int"}
 EXCHANGES_UNIQUE_KEYS = {"exchange_id": "int"}
 TRANSCRIPTS_AUTO_COUNTING = {"message_id": None}
@@ -986,42 +978,34 @@ def _latest_coordinator_state_row(
 
 def _coordinator_state_entry(
     *,
-    mode: str,
+    onboarding_active: bool,
     onboarding_step: str | None,
     skipped_step_ids: Sequence[str],
     skipped_phase_ids: Sequence[str],
     onboarding_reset_at: dict[str, str] | None,
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
-    onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
 
     ``started_at`` is sticky across transitions (captured the first
-    time we ever write a row, regardless of mode, so we always know
-    when the lifecycle began).
+    time we ever write a row, regardless of onboarding activity, so we
+    always know when the lifecycle began).
 
-    ``ended_at`` tracks the *current* working-mode entry: it's
-    stamped the moment we cross into ``working`` (and stays put
-    while we remain there), but cleared the moment a Resume flips
-    the row back to ``onboarding`` — otherwise an
-    ``onboarding``-mode row would carry a stale "ended" timestamp,
-    which is semantically nonsense. A subsequent skip / completion
-    re-stamps ``ended_at`` to the new transition time, so the
-    frontend always sees a coherent (started, ended) pair while in
-    ``working``.
+    ``ended_at`` tracks the current inactive stretch: it is stamped when
+    ``onboarding_active`` becomes ``False`` (and stays put while
+    inactive), but cleared when onboarding resumes — otherwise an active
+    row would carry a stale "ended" timestamp. A subsequent deactivation
+    re-stamps ``ended_at`` to the new transition time.
     """
     now = datetime.now(timezone.utc).isoformat()
     started_at = (previous or {}).get("started_at") if previous else None
     if not started_at:
         started_at = now
     previous_ended_at = (previous or {}).get("ended_at") if previous else None
-    if mode == COORDINATOR_MODE_WORKING:
+    if not onboarding_active:
         ended_at = previous_ended_at or now
     else:
-        # Resume / initial-seed paths both land here; either way the
-        # row is currently in onboarding so ``ended_at`` has no
-        # meaning until we transition out again.
         ended_at = None
     # ``intro_watched`` is one-way sticky: once the user has resolved the
     # opening picker we never want the ringing picker / auto-playing intro
@@ -1029,19 +1013,8 @@ def _coordinator_state_entry(
     next_intro_watched = bool((previous or {}).get("intro_watched")) or bool(
         intro_watched,
     )
-    # ``onboarding_deferred`` is the global "do onboarding later" switch.
-    # Unlike ``intro_watched`` it is freely reversible — the user can defer
-    # the whole onboarding phase to start using the platform, then resume
-    # it later — so we carry the previous value forward only when the
-    # current write doesn't explicitly set it.
-    if onboarding_deferred is None:
-        next_onboarding_deferred = bool(
-            (previous or {}).get("onboarding_deferred", False),
-        )
-    else:
-        next_onboarding_deferred = bool(onboarding_deferred)
     return {
-        "mode": mode,
+        "onboarding_active": onboarding_active,
         "onboarding_step": onboarding_step,
         "skipped_step_ids": list(skipped_step_ids),
         "skipped_phase_ids": list(skipped_phase_ids),
@@ -1049,7 +1022,6 @@ def _coordinator_state_entry(
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
-        "onboarding_deferred": next_onboarding_deferred,
         "timestamp": now,
     }
 
@@ -1088,7 +1060,7 @@ def get_coordinator_state(
 ) -> dict[str, Any]:
     """Return the latest ``Coordinator/State`` row, normalised.
 
-    Falls back to a synthetic ``onboarding`` snapshot when no row has
+    Falls back to a synthetic active snapshot when no row has
     been written yet — the create/repair paths seed an initial row,
     but the endpoint stays well-behaved even if a Coordinator slipped
     through without one (e.g. inserted directly via seed scripts).
@@ -1105,7 +1077,7 @@ def get_coordinator_state(
     )
     if row is None:
         return {
-            "mode": COORDINATOR_MODE_ONBOARDING,
+            "onboarding_active": True,
             "onboarding_step": None,
             "skipped_step_ids": [],
             "skipped_phase_ids": [],
@@ -1113,16 +1085,12 @@ def get_coordinator_state(
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
-            "onboarding_deferred": False,
         }
-    mode = row.get("mode")
-    if mode not in COORDINATOR_MODES:
-        mode = COORDINATOR_MODE_ONBOARDING
     onboarding_step = row.get("onboarding_step")
     if onboarding_step is not None and not isinstance(onboarding_step, str):
         onboarding_step = None
     return {
-        "mode": mode,
+        "onboarding_active": bool(row.get("onboarding_active", False)),
         "onboarding_step": onboarding_step,
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "skipped_phase_ids": normalize_onboarding_phase_ids(
@@ -1134,7 +1102,6 @@ def get_coordinator_state(
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
-        "onboarding_deferred": bool(row.get("onboarding_deferred", False)),
     }
 
 
@@ -1168,7 +1135,7 @@ def seed_initial_coordinator_state(
     if existing is not None:
         return None
     entry = _coordinator_state_entry(
-        mode=COORDINATOR_MODE_ONBOARDING,
+        onboarding_active=True,
         onboarding_step=None,
         skipped_step_ids=[],
         skipped_phase_ids=[],
@@ -1189,7 +1156,7 @@ def set_coordinator_state(
     session: Session,
     *,
     coordinator: Assistant,
-    mode: str | None = None,
+    onboarding_active: bool | None = None,
     onboarding_step: str | None = None,
     clear_onboarding_step: bool = False,
     skip_onboarding_step: str | None = None,
@@ -1198,7 +1165,6 @@ def set_coordinator_state(
     skip_onboarding_phase: str | None = None,
     unskip_onboarding_phase: str | None = None,
     intro_watched: bool | None = None,
-    onboarding_deferred: bool | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1207,7 +1173,7 @@ def set_coordinator_state(
     on a single read returning the full picture.
 
     ``clear_onboarding_step=True`` resets the step back to ``None``
-    (used when transitioning to ``working`` — the in-flight step no
+    (used when deactivating onboarding — the in-flight step no
     longer applies). Callers should not pass both ``onboarding_step``
     and ``clear_onboarding_step``; the explicit value wins if they do.
 
@@ -1217,11 +1183,6 @@ def set_coordinator_state(
     re-appear on a later page load; the user replays the intro on
     demand from the onboarding pane instead.
     """
-    if mode is not None and mode not in COORDINATOR_MODES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"invalid_coordinator_mode: {mode}",
-        )
     if onboarding_step is not None and (
         not isinstance(onboarding_step, str)
         or not onboarding_step.strip()
@@ -1303,7 +1264,11 @@ def set_coordinator_state(
                 user.whatsapp_number = None
             if ONBOARDING_STEP_PHONE_NUMBER in reset_step_ids:
                 user.phone_number = None
-    next_mode = mode or (previous or {}).get("mode") or COORDINATOR_MODE_ONBOARDING
+    next_onboarding_active = (
+        bool(onboarding_active)
+        if onboarding_active is not None
+        else bool((previous or {}).get("onboarding_active", True))
+    )
     if onboarding_step is not None:
         next_step: str | None = onboarding_step
     elif clear_onboarding_step:
@@ -1372,14 +1337,13 @@ def set_coordinator_state(
     if next_step in reset_step_ids:
         next_step = None
     entry = _coordinator_state_entry(
-        mode=next_mode,
+        onboarding_active=next_onboarding_active,
         onboarding_step=next_step,
         skipped_step_ids=next_skipped_step_ids,
         skipped_phase_ids=next_skipped_phase_ids,
         onboarding_reset_at=reset_at,
         previous=previous,
         intro_watched=intro_watched,
-        onboarding_deferred=onboarding_deferred,
     )
     _write_coordinator_state_row(
         session,
@@ -1440,8 +1404,8 @@ def list_coordinators_missing_intro_watched(
 #
 # Two design choices baked in here:
 #
-# * **Gated on mode**: every emission first checks
-#   ``Coordinator/State.mode == 'onboarding'`` so day-to-day work
+# * **Gated on onboarding_active**: every emission first checks
+#   ``Coordinator/State.onboarding_active`` so day-to-day work
 #   (post-onboarding integration tweaks, ongoing task creation,
 #   etc.) stays silent. The same trigger sites are still useful
 #   then but the narration becomes noise, so the helper is the
@@ -1571,8 +1535,8 @@ _WORKSPACE_CONNECTED_MARKERS: frozenset[str] = frozenset(
 
 # Onboarding checklist step ids derivable from durable domain state.
 # ``meet`` (picker resolution) is deliberately absent because it is
-# session-local to Console. ``hire-specialist`` ends onboarding by
-# flipping ``mode`` to ``working`` so derivation never runs for it.
+# session-local to Console. ``hire-specialist`` completion should
+# PATCH ``onboarding_active=False`` so derivation never runs for it.
 ONBOARDING_STEP_EMAIL_REPLY = "email-reply"
 ONBOARDING_STEP_WHATSAPP_NUMBER = "whatsapp-number"
 ONBOARDING_STEP_WHATSAPP_MESSAGE = "whatsapp-message"
@@ -2412,13 +2376,10 @@ def _is_coordinator_in_onboarding(
     silent than crash the user-facing endpoint that wrapped the
     call.
 
-    A Coordinator counts as onboarding only when it is in
-    ``onboarding`` mode *and* the user has not deferred the whole
-    onboarding phase. The reversible ``onboarding_deferred`` switch
-    lets the user start using the platform without ever finishing
-    onboarding: while it's set we suppress every onboarding narration
-    event exactly as if onboarding were complete, without touching
-    per-step state, so flipping it back resumes the flow untouched.
+    A Coordinator counts as actively onboarding only when
+    ``onboarding_active`` is ``True``. While inactive we suppress every
+    onboarding narration event without touching per-step state, so
+    flipping it back resumes the flow untouched.
     """
     try:
         state = get_coordinator_state(session, coordinator=coordinator)
@@ -2429,9 +2390,7 @@ def _is_coordinator_in_onboarding(
             exc,
         )
         return False
-    if state.get("onboarding_deferred"):
-        return False
-    return state.get("mode") == COORDINATOR_MODE_ONBOARDING
+    return bool(state.get("onboarding_active"))
 
 
 def _resolve_target_coordinator(
@@ -2981,8 +2940,8 @@ async def emit_onboarding_session_started_event(
     steps completed in earlier sessions — which never produce
     transition events — are still visible to Unity's opening turn.
 
-    Gated on ``Coordinator/State.mode == 'onboarding'`` like the
-    other onboarding events; emissions outside onboarding are
+    Gated on ``Coordinator/State.onboarding_active`` like the
+    other onboarding events; emissions while inactive are
     silently dropped (returns ``False``).
     """
     if medium not in ONBOARDING_SESSION_MEDIUMS:
