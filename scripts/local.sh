@@ -860,6 +860,11 @@ start_orchestra_server() {
 
   cd "$repo_path"
 
+  # Local Orchestra is a dev/test harness only. Self-host billing semantics
+  # (charges_billing=false) keep /v0/credits/deduct as a no-op so UniLLM
+  # metering never fails auth against the seeded test user.
+  export SELF_HOST=1
+
   # Set environment variables
   # Self-host desktop containers reach Orchestra via host.docker.internal.
   if [[ "${SELF_HOST:-0}" == "1" ]]; then
