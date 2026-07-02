@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
@@ -50,6 +52,36 @@ def find_owned_shared_coordinators(
     return [row[0] for row in rows]
 
 
+def _pick_most_recently_active_coordinator(
+    session: Session,
+    candidate_ids: list[int],
+) -> int | None:
+    """Return the candidate with the latest ``last_correspondence_at``.
+
+    When activity timestamps tie, the highest ``agent_id`` wins so routing
+    stays deterministic (typically the most recently provisioned Coordinator).
+    """
+    rows = (
+        session.query(Assistant.agent_id, Assistant.last_correspondence_at)
+        .filter(Assistant.agent_id.in_(candidate_ids))
+        .all()
+    )
+    if len(rows) != len(candidate_ids):
+        return None
+
+    def activity_rank(row: tuple[int, datetime | None]) -> tuple[datetime, int]:
+        agent_id, last_at = row
+        if last_at is None:
+            active_at = datetime.min.replace(tzinfo=timezone.utc)
+        elif last_at.tzinfo is None:
+            active_at = last_at.replace(tzinfo=timezone.utc)
+        else:
+            active_at = last_at
+        return (active_at, agent_id)
+
+    return max(rows, key=activity_rank)[0]
+
+
 def resolve_shared_coordinator_owner(
     session: Session,
     *,
@@ -71,5 +103,8 @@ def resolve_shared_coordinator_owner(
     if len(candidates) == 1:
         return {"assistant_id": candidates[0], "role": "owner"}
     if len(candidates) > 1:
+        winner = _pick_most_recently_active_coordinator(session, candidates)
+        if winner is not None:
+            return {"assistant_id": winner, "role": "owner"}
         return {"action": "reject_ambiguous"}
     return {"action": "reject_cold"}
