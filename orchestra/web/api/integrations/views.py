@@ -11,7 +11,18 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
@@ -33,8 +44,8 @@ from orchestra.web.api.integrations.operations import (
     reconnect_connection,
     run_tool,
     seed_default_provider_catalog,
-    stage_composio_file,
     set_custom_auth_config,
+    stage_composio_file,
     start_connection,
     test_connection,
     update_connection,
@@ -50,16 +61,16 @@ from orchestra.web.api.integrations.schema import (
     IntegrationBootstrapStateResponse,
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
-    IntegrationCustomAuthConfigListResponse,
-    IntegrationCustomAuthConfigRequest,
-    IntegrationCustomAuthConfigResponse,
+    IntegrationComposioStageFileResponse,
     IntegrationConnectCompleteByProviderRequest,
     IntegrationConnectCompleteRequest,
     IntegrationConnectionPatchRequest,
     IntegrationConnectionResponse,
     IntegrationConnectStartRequest,
     IntegrationConnectStartResponse,
-    IntegrationComposioStageFileResponse,
+    IntegrationCustomAuthConfigListResponse,
+    IntegrationCustomAuthConfigRequest,
+    IntegrationCustomAuthConfigResponse,
     IntegrationHealthResponse,
     IntegrationToolExecutionApprovalRequest,
     IntegrationToolExecutionApprovalResponse,
