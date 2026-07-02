@@ -470,6 +470,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         status_code = getattr(response, "status_code", None)
         response_text = getattr(response, "text", "") if response is not None else ""
         message = None
+        detail_parts: list[str] = []
         if response_text:
             try:
                 payload = json.loads(response_text)
@@ -479,15 +480,28 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 error = payload.get("error")
                 if isinstance(error, dict):
                     message = error.get("message") or error.get("suggested_fix")
-                    errors = error.get("errors")
-                    if not message and isinstance(errors, list) and errors:
-                        message = "; ".join(str(item) for item in errors[:3])
+                    # The generic "Validation error while processing request"
+                    # wrapper hides the useful field-level detail, which lives in
+                    # ``errors``; always fold those in so the operator can act.
+                    for item in _flatten_validation_errors(error.get("errors")):
+                        if item and item not in detail_parts:
+                            detail_parts.append(item)
+                    fix = error.get("suggested_fix")
+                    if fix and fix != message and fix not in detail_parts:
+                        detail_parts.append(str(fix))
                 elif isinstance(error, str):
                     message = error
                 message = message or payload.get("message")
-        prefix = f"Composio rejected the request ({status_code})" if status_code else "Composio rejected the request"
-        if message:
-            return f"{prefix}: {message}"
+        prefix = (
+            f"Composio rejected the request ({status_code})"
+            if status_code
+            else "Composio rejected the request"
+        )
+        combined = ": ".join(
+            part for part in (message, "; ".join(detail_parts)) if part
+        )
+        if combined:
+            return f"{prefix}: {combined}"
         if response_text:
             return f"{prefix}: {response_text[:300]}"
         return prefix
@@ -601,12 +615,23 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             )
             create_response.raise_for_status()
         except Exception as exc:
+            response = getattr(exc, "response", None)
+            # Keep the granular provider detail (parsed message, field-level
+            # validation errors, raw body, status) in the logs for gcloud
+            # debugging only — never leak it through the API response.
             logger.warning(
-                "Composio custom OAuth auth config create failed toolkit=%s status=%s",
+                "Composio custom OAuth auth config create failed toolkit=%s "
+                "auth_scheme=%s status=%s detail=%s body=%s",
                 provider_slug,
-                getattr(getattr(exc, "response", None), "status_code", None),
+                auth_scheme,
+                getattr(response, "status_code", None),
+                self._http_error_message(exc),
+                (getattr(response, "text", "") or "")[:1000],
             )
-            raise ValueError(self._http_error_message(exc)) from exc
+            raise ValueError(
+                "Composio rejected the custom OAuth configuration. Check the "
+                "client ID, secret, redirect URI, and scopes, then try again.",
+            ) from exc
         created = create_response.json()
         auth_config_id = self._extract_auth_config_id(created)
         if not auth_config_id:
@@ -936,6 +961,38 @@ def _composio_auth_modes(
         if mode not in modes:
             modes.append(mode)
     return modes or ["oauth"]
+
+
+def _flatten_validation_errors(errors: Any) -> list[str]:
+    """Render Composio/Zod-style validation error entries as readable strings.
+
+    Composio wraps field errors under ``error.errors`` as a list of dicts (often
+    Zod issues with ``path`` + ``message``). Flatten them to ``path: message`` so
+    the operator sees which field failed instead of a generic wrapper.
+    """
+
+    if not isinstance(errors, list):
+        return []
+    rendered: list[str] = []
+    for entry in errors:
+        if isinstance(entry, str):
+            rendered.append(entry)
+            continue
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message") or entry.get("msg")
+        path = entry.get("path") or entry.get("loc")
+        if isinstance(path, list):
+            path_str = ".".join(str(part) for part in path if part not in (None, ""))
+        else:
+            path_str = str(path) if path else ""
+        if message and path_str:
+            rendered.append(f"{path_str}: {message}")
+        elif message:
+            rendered.append(str(message))
+        elif path_str:
+            rendered.append(path_str)
+    return rendered
 
 
 def _composio_managed_auth_schemes(

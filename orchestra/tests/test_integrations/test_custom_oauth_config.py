@@ -105,17 +105,28 @@ def test_create_custom_auth_config_raises_when_no_id_returned(
         adapter.create_custom_auth_config("tiktok", client_id="c", client_secret="s")
 
 
-def test_create_custom_auth_config_surfaces_provider_error_message(
+def test_create_custom_auth_config_raises_generic_error_and_logs_detail(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Provider detail is logged for gcloud debugging, not leaked to the caller."""
+
+    import logging
+
     import requests
 
     def fake_post(url: str, headers=None, json=None, timeout=None):  # noqa: A002
         response = _FakeResponse(
             {
                 "error": {
-                    "message": "Invalid scopes for toolkit TIKTOK",
+                    "message": "Validation error while processing request",
                     "code": 400,
+                    "errors": [
+                        {
+                            "path": ["auth_config", "credentials", "client_id"],
+                            "message": "Required",
+                        },
+                    ],
                 },
             },
             status_code=400,
@@ -126,8 +137,27 @@ def test_create_custom_auth_config_surfaces_provider_error_message(
 
     monkeypatch.setattr(requests, "post", fake_post)
     adapter = ComposioProviderAdapter(api_key="test-key")
-    with pytest.raises(ValueError, match="Invalid scopes for toolkit TIKTOK"):
-        adapter.create_custom_auth_config("tiktok", client_id="c", client_secret="s")
+    with caplog.at_level(
+        logging.WARNING,
+        logger="orchestra.integrations.providers.composio",
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            adapter.create_custom_auth_config(
+                "tiktok",
+                client_id="c",
+                client_secret="s",
+            )
+
+    # Caller-facing message is generic and free of raw provider detail.
+    message = str(excinfo.value)
+    assert "Composio rejected the custom OAuth configuration" in message
+    assert "Validation error while processing request" not in message
+    assert "auth_config.credentials.client_id" not in message
+
+    # The granular detail is retained in logs for gcloud debugging.
+    logged = caplog.text
+    assert "Validation error while processing request" in logged
+    assert "auth_config.credentials.client_id: Required" in logged
 
 
 def test_create_custom_auth_config_omits_empty_scopes(
