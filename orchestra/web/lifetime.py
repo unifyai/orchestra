@@ -8,6 +8,7 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import orchestra.db.models.coordinator_voice  # noqa: F401 — register ORM listeners
 from orchestra.db.dependencies import register_db_listeners
 from orchestra.observability import otel_setup
 from orchestra.observability.inactivity_shutdown import (
