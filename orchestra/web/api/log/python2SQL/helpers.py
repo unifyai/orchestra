@@ -1718,6 +1718,20 @@ def _infer_expression_type(
         if expr.name.lower() == "jsonb_array_length":
             return "int"
 
+    # Resolve JSONB extraction operators before FieldType registry lookup.
+    # Nested paths like data->'metadata'->'integration'->'app_slug' end with `->`
+    # and must compare via JSONB semantics (strip JSON string quotes). A stale
+    # top-level FieldType for the leaf key name must not override that.
+    if isinstance(expr, BinaryExpression):
+        op_str = str(expr.operator)
+        op_s = getattr(expr.operator, "opstring", "")
+
+        if op_str == "->" or op_s == "->":
+            return "jsonb"
+
+        if op_str == "->>" or op_s == "->>":
+            return "str"
+
     field_name = _extract_field_name_from_jsonb_expr(expr)
     if field_name and project_id is not None:
         ft = _get_field_type_from_db(field_name, session, project_id, context_id)
@@ -1728,14 +1742,10 @@ def _infer_expression_type(
             normalized = get_sql_casting_type(ft)
             return normalized if normalized else ft
 
-    # Check for JSONB operators (-> returns jsonb, ->> returns text)
+    # Check for other JSONB operator expressions
     if isinstance(expr, BinaryExpression):
-        # Check if operator is "->" (string) or has string representation "->"
         op_str = str(expr.operator)
         op_s = getattr(expr.operator, "opstring", "")
-
-        if op_str == "->" or op_s == "->":
-            return "jsonb"
 
         # Check for boolean comparison operators
         if op_str in (
