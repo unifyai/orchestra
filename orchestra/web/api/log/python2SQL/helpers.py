@@ -1635,6 +1635,58 @@ def _extract_field_name_from_jsonb_expr(expr) -> Optional[str]:
     return None
 
 
+def _jsonb_operator(expr) -> Optional[str]:
+    """Return ``->`` or ``->>`` when *expr* is a JSONB extraction, else None."""
+    if not isinstance(expr, BinaryExpression):
+        return None
+    op_str = str(expr.operator)
+    op_s = getattr(expr.operator, "opstring", "")
+    if op_str in ("->", "->>") or op_s in ("->", "->>"):
+        return op_s or op_str
+    return None
+
+
+def _unwrap_sql_expr(expr):
+    """Unwrap Grouping/Cast wrappers so JSONB chains can be walked."""
+    from sqlalchemy.sql.elements import Grouping
+
+    current = expr
+    while True:
+        if isinstance(current, Cast):
+            current = current.clause
+            continue
+        if isinstance(current, Grouping):
+            current = current.element
+            continue
+        return current
+
+
+def _jsonb_extraction_depth(expr) -> int:
+    """Count chained ``->`` / ``->>`` hops rooted at ``LogEvent.data``.
+
+    ``data->'my'`` has depth 1; ``data->'metadata'->'integration'->'app_slug'``
+    has depth 3. Used to avoid applying flat top-level FieldType names to nested
+    JSON paths whose leaf key collides with an unrelated registry entry.
+    """
+    depth = 0
+    current = expr
+    while True:
+        if isinstance(current, Cast):
+            current = current.clause
+            continue
+        from sqlalchemy.sql.elements import Grouping
+
+        if isinstance(current, Grouping):
+            current = current.element
+            continue
+        op = _jsonb_operator(current)
+        if op is None:
+            break
+        depth += 1
+        current = _unwrap_sql_expr(current.left)
+    return depth
+
+
 def _infer_expression_type(
     expr,
     session,
@@ -1718,10 +1770,24 @@ def _infer_expression_type(
         if expr.name.lower() == "jsonb_array_length":
             return "int"
 
-    # Resolve JSONB extraction operators before FieldType registry lookup.
-    # Nested paths like data->'metadata'->'integration'->'app_slug' end with `->`
-    # and must compare via JSONB semantics (strip JSON string quotes). A stale
-    # top-level FieldType for the leaf key name must not override that.
+    jsonb_depth = _jsonb_extraction_depth(expr)
+    field_name = _extract_field_name_from_jsonb_expr(expr)
+
+    # Flat FieldType registry keys are not path-qualified. Only apply them for
+    # direct single-hop access (data->'field'). Nested paths like
+    # data->'metadata'->'integration'->'app_slug' must use JSONB operator types
+    # so comparisons strip JSON string quotes instead of trusting a colliding
+    # top-level field name such as legacy ``app_slug``.
+    if field_name and project_id is not None and jsonb_depth <= 1:
+        ft = _get_field_type_from_db(field_name, session, project_id, context_id)
+        if ft:
+            # Normalize to SQL-compatible type (handles Pydantic schemas, Optional[T], etc.)
+            from orchestra.web.api.log.utils.type_utils import get_sql_casting_type
+
+            normalized = get_sql_casting_type(ft)
+            return normalized if normalized else ft
+
+    # Check for JSONB operators (-> returns jsonb, ->> returns text)
     if isinstance(expr, BinaryExpression):
         op_str = str(expr.operator)
         op_s = getattr(expr.operator, "opstring", "")
@@ -1731,21 +1797,6 @@ def _infer_expression_type(
 
         if op_str == "->>" or op_s == "->>":
             return "str"
-
-    field_name = _extract_field_name_from_jsonb_expr(expr)
-    if field_name and project_id is not None:
-        ft = _get_field_type_from_db(field_name, session, project_id, context_id)
-        if ft:
-            # Normalize to SQL-compatible type (handles Pydantic schemas, Optional[T], etc.)
-            from orchestra.web.api.log.utils.type_utils import get_sql_casting_type
-
-            normalized = get_sql_casting_type(ft)
-            return normalized if normalized else ft
-
-    # Check for other JSONB operator expressions
-    if isinstance(expr, BinaryExpression):
-        op_str = str(expr.operator)
-        op_s = getattr(expr.operator, "opstring", "")
 
         # Check for boolean comparison operators
         if op_str in (
