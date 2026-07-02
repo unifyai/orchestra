@@ -493,9 +493,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                     message = error
                 message = message or payload.get("message")
         prefix = (
-            f"Composio rejected the request ({status_code})"
+            f"Request rejected ({status_code})"
             if status_code
-            else "Composio rejected the request"
+            else "Request rejected"
         )
         combined = ": ".join(
             part for part in (message, "; ".join(detail_parts)) if part
@@ -596,12 +596,16 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         scope_csv = self._format_custom_oauth_scopes(scopes)
         if scope_csv:
             credentials["scopes"] = scope_csv
+        # Composio's v3.1 REST endpoint expects the OAuth scheme as camelCase
+        # ``authScheme`` (the Python SDK accepts ``auth_scheme`` and serializes
+        # it for you; the raw HTTP API does not). Sending snake_case yields a
+        # 400 "payload.auth_config.authScheme: Required".
         payload = {
             "toolkit": {"slug": provider_slug},
             "auth_config": {
                 "name": name or f"{provider_slug} (custom OAuth)",
                 "type": "use_custom_auth",
-                "auth_scheme": auth_scheme,
+                "authScheme": auth_scheme,
                 "credentials": credentials,
                 "restrict_to_following_tools": [],
             },
@@ -629,7 +633,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 (getattr(response, "text", "") or "")[:1000],
             )
             raise ValueError(
-                "Composio rejected the custom OAuth configuration. Check the "
+                "Custom OAuth configuration rejected. Check the "
                 "client ID, secret, redirect URI, and scopes, then try again.",
             ) from exc
         created = create_response.json()
