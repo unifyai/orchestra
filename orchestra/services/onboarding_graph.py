@@ -668,7 +668,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         channel="slack",
         nudge_chat=(
             "Have them click the 'Connect Slack' row in the Onboarding checklist; "
-            "it opens the Slack setup path for the Unify Slack app."
+            "it opens the Slack setup path for the Unify app. Heads up that many "
+            "workspaces need an admin to approve the app, so if they're not an "
+            "admin the install can sit pending until an admin connects it."
         ),
         nudge_voice="clicking the 'Connect Slack' row in the Onboarding checklist",
     ),
@@ -709,8 +711,9 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         channel="discord",
         nudge_chat=(
             "Have them click the 'Connect Discord' row in the Onboarding checklist; "
-            "it opens the Discord setup path for adding their Discord ID and "
-            "installing the public bot."
+            "it walks them through copying their Discord user ID (Developer Mode) "
+            "and adding my public bot. Remind them the bot can only DM them once "
+            "they share a server with it."
         ),
         nudge_voice="clicking the 'Connect Discord' row in the Onboarding checklist",
     ),
@@ -1070,7 +1073,8 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "slack-connect": StepPresentation(
-        "Connect T-W1N through the Unify Slack app.",
+        "Install the Unify Slack app to your workspace so T-W1N can message "
+        "you there.",
         "~1 min",
     ),
     "slack-reference": StepPresentation(
@@ -1082,7 +1086,8 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "discord-connect": StepPresentation(
-        "Connect T-W1N through the public Discord bot.",
+        "Add T-W1N's public Discord bot and share your Discord user ID so it "
+        "can DM you.",
         "~1 min",
     ),
     "discord-reference": StepPresentation(
@@ -1191,7 +1196,13 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "phone-call": "The user guesses during the phone call.",
     "slack-connect": (
         "Clicking the 'Connect Slack' row opens the Slack setup path for the "
-        "Unify Slack app."
+        "Unify Slack app. Walk them through installing it to their workspace and "
+        "choosing where I should reach them. The usual snag is workspace "
+        "permissions: many Slack workspaces require an admin to approve new apps, "
+        "so if they aren't an admin the install can sit in a 'pending approval' "
+        "state and the row won't complete until the app is actually connected. "
+        "Say that plainly, and if they can't approve it themselves the cleanest "
+        "path is to have a workspace owner or admin do the connect."
     ),
     "slack-reference": (
         "Clicking the 'Trigger Slack message from T-W1N' row tells me the user "
@@ -1200,8 +1211,14 @@ STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "slack-message": "The user guesses the Slack clue.",
     "discord-connect": (
-        "Clicking the 'Connect Discord' row opens the Discord setup path for "
-        "adding their Discord ID and installing the public Discord bot."
+        "Clicking the 'Connect Discord' row opens the Discord setup path. Walk "
+        "them through it: in Discord, turn on Settings -> Advanced -> Developer "
+        "Mode, then right-click their own name and 'Copy User ID' and paste that "
+        "into the setup dialog; then add T-W1N's public Discord bot from the "
+        "link in the same dialog. The thing that trips people up: the bot can "
+        "only DM them once they share a server with it, so if my first Discord "
+        "message never arrives that is almost always why -- have them add the "
+        "bot to a server they're in and try the clue again."
     ),
     "discord-reference": (
         "Clicking the 'Trigger Discord message from T-W1N' row tells me the "

@@ -9,7 +9,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    AssistantContact,
+    AssistantSecret,
+    User,
+)
 
 
 @dataclass
@@ -743,6 +748,9 @@ class AssistantDAO:
         assistant_whatsapp_number: Optional[str] = None,
         email: Optional[str] = None,
         agent_id: Optional[int] = None,
+        require_secret_names: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> List[Assistant]:
         """
         List all Assistants across all users with optional filtering.
@@ -751,9 +759,25 @@ class AssistantDAO:
         ``assistant_contacts`` table rather than the legacy columns on
         the ``assistants`` table.
 
+        ``require_secret_names`` restricts results to assistants that have at
+        least one stored secret whose name is in the list (e.g.
+        ``["MICROSOFT_REFRESH_TOKEN"]`` for the token-refresh cron) so callers
+        that only care about one provider do not pay to enumerate every
+        assistant. ``limit``/``offset`` paginate over a stable ``agent_id``
+        ordering.
+
         This is an admin-level function that returns all assistants.
         """
         stmt = select(Assistant)
+        if require_secret_names:
+            stmt = stmt.where(
+                exists().where(
+                    and_(
+                        AssistantSecret.agent_id == Assistant.agent_id,
+                        AssistantSecret.secret_name.in_(require_secret_names),
+                    ),
+                ),
+            )
         if phone is not None:
             stmt = stmt.where(
                 exists().where(
@@ -807,6 +831,9 @@ class AssistantDAO:
             )
         if agent_id is not None:
             stmt = stmt.where(Assistant.agent_id == agent_id)
+        if limit is not None:
+            # Stable ordering so offset pagination is deterministic.
+            stmt = stmt.order_by(Assistant.agent_id).limit(limit).offset(offset)
         result = self.session.execute(stmt).scalars().all()
         return result
 

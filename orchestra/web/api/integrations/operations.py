@@ -113,7 +113,7 @@ class ProviderConnectError(Exception):
 
 
 def _is_missing_managed_auth_error(exc: Exception) -> bool:
-    """True when Composio rejected auth-config creation for lack of managed creds.
+    """True when Auth-config creation rejected for lack of managed creds.
 
     These toolkits (e.g. TikTok) have no Composio-managed OAuth credentials, so
     the operator must supply their own OAuth app. Composio answers the managed

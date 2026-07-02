@@ -75,7 +75,8 @@ def test_create_custom_auth_config_builds_use_custom_auth_payload(
     body = captured["json"]
     assert body["toolkit"] == {"slug": "TIKTOK"}
     assert body["auth_config"]["type"] == "use_custom_auth"
-    assert body["auth_config"]["auth_scheme"] == "OAUTH2"
+    # Composio's REST API expects camelCase ``authScheme`` (not snake_case).
+    assert body["auth_config"]["authScheme"] == "OAUTH2"
     creds = body["auth_config"]["credentials"]
     assert creds["client_id"] == "cid"
     assert creds["client_secret"] == "csecret"
@@ -150,7 +151,7 @@ def test_create_custom_auth_config_raises_generic_error_and_logs_detail(
 
     # Caller-facing message is generic and free of raw provider detail.
     message = str(excinfo.value)
-    assert "Composio rejected the custom OAuth configuration" in message
+    assert "Custom OAuth configuration rejected" in message
     assert "Validation error while processing request" not in message
     assert "auth_config.credentials.client_id" not in message
 

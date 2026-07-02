@@ -1093,7 +1093,7 @@ class TestUniversalUnityWhatsApp:
 
         assert result == {"action": "reject_cold"}
 
-    def test_multiple_owned_unities_fail_closed(
+    def test_multiple_owned_unities_routes_to_most_recently_active(
         self,
         dbsession: Session,
         dao: SharedPoolDAO,
@@ -1123,9 +1123,17 @@ class TestUniversalUnityWhatsApp:
         _enable_whatsapp(dbsession, personal, pool_numbers[0])
         _enable_whatsapp(dbsession, org_coordinator, pool_numbers[0])
 
+        now = datetime.now(timezone.utc)
+        personal.last_correspondence_at = now - timedelta(hours=2)
+        org_coordinator.last_correspondence_at = now - timedelta(minutes=5)
+        dbsession.flush()
+
         result = dao.resolve_inbound(pool_numbers[0].number, user.whatsapp_number)
 
-        assert result == {"action": "reject_ambiguous"}
+        assert result == {
+            "assistant_id": org_coordinator.agent_id,
+            "role": "owner",
+        }
 
     def test_universal_pool_is_excluded_from_generic_assignment(
         self,
@@ -3839,7 +3847,7 @@ class TestSharedCoordinatorEmailRouting:
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["action"] == "reject_cold"
 
-    async def test_email_resolve_rejects_ambiguous_owned_coordinators(
+    async def test_email_resolve_routes_ambiguous_owned_coordinators_by_activity(
         self,
         client: AsyncClient,
         dbsession: Session,
@@ -3862,6 +3870,10 @@ class TestSharedCoordinatorEmailRouting:
         )
         _enable_shared_email(dbsession, personal, email_address)
         _enable_shared_email(dbsession, org_scoped, email_address)
+
+        now = datetime.now(timezone.utc)
+        org_scoped.last_correspondence_at = now - timedelta(hours=3)
+        personal.last_correspondence_at = now - timedelta(minutes=1)
         dbsession.commit()
 
         response = await client.get(
@@ -3871,7 +3883,11 @@ class TestSharedCoordinatorEmailRouting:
         )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json()["action"] == "reject_ambiguous"
+        assert response.json() == {
+            "assistant_id": personal.agent_id,
+            "role": "owner",
+            "action": None,
+        }
 
     async def test_email_resolve_404_for_non_shared_mailbox(
         self,

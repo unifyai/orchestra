@@ -563,6 +563,25 @@ def _contact_id_pair(
         )
 
 
+def _derive_workspace_provider(
+    secrets: Optional[dict[str, str]],
+) -> Optional[str]:
+    """Resolve the OAuth-connected workspace provider from granted-scopes.
+
+    Uses the same Google-first precedence as ``get_granted_features`` so the
+    profile card and the workspace dialog can never disagree. Reflects the
+    workspace the user OAuth-connected, which for a Coordinator is distinct
+    from its platform mailbox tenant (``email_provider``).
+    """
+    if not secrets:
+        return None
+    if secrets.get("GOOGLE_GRANTED_SCOPES"):
+        return "google"
+    if secrets.get("MICROSOFT_GRANTED_SCOPES"):
+        return "microsoft"
+    return None
+
+
 def _build_assistant_read(
     a: Assistant,
     session: Session,
@@ -580,6 +599,8 @@ def _build_assistant_read(
     contact_identity_roots: Optional[list[AssistantContactIdentityRoot]] = None,
     contacts: Optional[list] = None,
     secrets: Optional[dict] = None,
+    workspace_secrets: Optional[dict] = None,
+    resolve_workspace_secrets: bool = True,
     include_internal: bool = False,
     requesting_user_id: Optional[str] = None,
 ) -> AssistantRead:
@@ -687,6 +708,33 @@ def _build_assistant_read(
         user_whatsapp_number = user_obj.whatsapp_number if user_obj else None
     user_discord_id = user_obj.discord_id if user_obj else None
 
+    # The connected-workspace provider is derived from the granted-scopes
+    # secrets. Precedence for the source dict:
+    #   1. ``workspace_secrets`` — a caller-batched two-key map, used by list
+    #      endpoints that do NOT expose the full ``secrets`` field (avoids both
+    #      an N+1 and leaking scope strings into the response).
+    #   2. ``secrets`` — the full dict, when the caller already batched it and
+    #      exposes it (admin list path).
+    #   3. A targeted two-key DAO lookup for single-assistant reads (one
+    #      assistant — negligible).
+    # Narrow-field list callers that deliberately skip secrets pass
+    # ``resolve_workspace_secrets=False`` to suppress the fallback for a field
+    # they didn't request.
+    ws_source = workspace_secrets if workspace_secrets is not None else secrets
+    if ws_source is None and resolve_workspace_secrets:
+        _secret_dao = AssistantSecretDAO(session)
+        ws_source = {
+            "GOOGLE_GRANTED_SCOPES": _secret_dao.get(
+                a.agent_id,
+                "GOOGLE_GRANTED_SCOPES",
+            ),
+            "MICROSOFT_GRANTED_SCOPES": _secret_dao.get(
+                a.agent_id,
+                "MICROSOFT_GRANTED_SCOPES",
+            ),
+        }
+    workspace_provider = _derive_workspace_provider(ws_source)
+
     return AssistantRead(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
@@ -713,6 +761,7 @@ def _build_assistant_read(
         phone=(phone_contact.contact_value if phone_contact else None),
         email=(email_contact.contact_value if email_contact else None),
         email_provider=(email_contact.provider if email_contact else None),
+        workspace_provider=workspace_provider,
         user_phone=user_phone_number,
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=(
@@ -1945,6 +1994,30 @@ def list_assistants(
         for c in all_contacts:
             contacts_by_assistant.setdefault(c.assistant_id, []).append(c)
 
+        # Batch-fetch only the workspace granted-scope secrets so each read can
+        # report the OAuth-connected workspace provider without an N+1 — and
+        # without exposing the full secrets set (this endpoint doesn't return
+        # ``secrets``).
+        from orchestra.db.models.orchestra_models import AssistantSecret
+
+        workspace_secrets_by_assistant: dict[int, dict[str, str]] = {}
+        _scope_agent_ids = [a.agent_id for a in assistants]
+        if _scope_agent_ids:
+            _scope_rows = (
+                session.query(AssistantSecret)
+                .filter(
+                    AssistantSecret.agent_id.in_(_scope_agent_ids),
+                    AssistantSecret.secret_name.in_(
+                        ["GOOGLE_GRANTED_SCOPES", "MICROSOFT_GRANTED_SCOPES"],
+                    ),
+                )
+                .all()
+            )
+            for s in _scope_rows:
+                workspace_secrets_by_assistant.setdefault(s.agent_id, {})[
+                    s.secret_name
+                ] = s.secret_value
+
         # Backfill any missing platform-managed Coordinator contacts on read so
         # Coordinators predating the universal-contact rollout self-heal on the
         # owner's next visit. Mutates ``contacts_by_assistant`` in place. Also
@@ -2017,6 +2090,10 @@ def list_assistants(
                     contact_identity_roots=contact_identity_roots_by_assistant.get(
                         a.agent_id,
                         [],
+                    ),
+                    workspace_secrets=workspace_secrets_by_assistant.get(
+                        a.agent_id,
+                        {},
                     ),
                     requesting_user_id=user_id,
                 )
@@ -6826,6 +6903,31 @@ def admin_list_all_assistants(
         None,
         description="Only return assistants whose agent_id matches this value.",
     ),
+    require_secret_names: Optional[str] = Query(
+        None,
+        description="Comma-separated secret names; only return assistants that have at "
+        "least one of these secrets stored (e.g. 'MICROSOFT_REFRESH_TOKEN'). Lets "
+        "provider-scoped callers (token-refresh cron) skip enumerating every assistant.",
+        example="MICROSOFT_REFRESH_TOKEN",
+    ),
+    secret_names: Optional[str] = Query(
+        None,
+        description="Comma-separated secret names to include in the returned 'secrets' "
+        "map; other secrets are omitted. Shrinks the payload for scoped callers.",
+        example="MICROSOFT_ACCESS_TOKEN,MICROSOFT_REFRESH_TOKEN",
+    ),
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=1000,
+        description="Maximum number of assistants to return (pagination over a stable "
+        "agent_id ordering). Combine with 'offset' to page through results.",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Pagination offset; use together with 'limit'.",
+    ),
     from_fields: Optional[str] = Query(
         None,
         description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
@@ -6876,6 +6978,17 @@ def admin_list_all_assistants(
 
         requested_fields = set(raw_fields)
 
+    require_secret_names_list: Optional[list[str]] = None
+    if require_secret_names and require_secret_names.strip():
+        require_secret_names_list = [
+            s.strip() for s in require_secret_names.split(",") if s.strip()
+        ] or None
+    secret_names_list: Optional[list[str]] = None
+    if secret_names and secret_names.strip():
+        secret_names_list = [
+            s.strip() for s in secret_names.split(",") if s.strip()
+        ] or None
+
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -6884,6 +6997,9 @@ def admin_list_all_assistants(
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
             agent_id=agent_id,
+            require_secret_names=require_secret_names_list,
+            limit=limit,
+            offset=offset,
         )
 
         # Get API key based on assistant type (personal vs organizational)
@@ -6952,11 +7068,16 @@ def admin_list_all_assistants(
         if not skip_secrets:
             agent_ids = [a.agent_id for a in assistants]
             if agent_ids:
-                all_secret_rows = (
-                    session.query(AssistantSecret)
-                    .filter(AssistantSecret.agent_id.in_(agent_ids))
-                    .all()
+                secret_query = session.query(AssistantSecret).filter(
+                    AssistantSecret.agent_id.in_(agent_ids),
                 )
+                # Scoped callers only need a few secret keys; filtering here
+                # shrinks both the query result and the serialized payload.
+                if secret_names_list:
+                    secret_query = secret_query.filter(
+                        AssistantSecret.secret_name.in_(secret_names_list),
+                    )
+                all_secret_rows = secret_query.all()
                 for s in all_secret_rows:
                     secrets_by_assistant.setdefault(s.agent_id, {})[
                         s.secret_name
@@ -7043,6 +7164,7 @@ def admin_list_all_assistants(
                     if not skip_secrets
                     else None
                 ),
+                resolve_workspace_secrets=not skip_secrets,
                 include_internal=True,
             )
             for i, a in enumerate(assistants)
@@ -7294,6 +7416,7 @@ def admin_list_assistants_for_user(
                         a.agent_id,
                         [],
                     ),
+                    resolve_workspace_secrets=False,
                     include_internal=True,
                 )
                 for i, a in enumerate(assistants)

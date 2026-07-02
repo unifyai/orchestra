@@ -189,7 +189,7 @@ class FakeComposioCatalogAdapterWithAuthConfigFailure(FakeComposioCatalogAdapter
 
     def get_or_create_auth_config(self, toolkit_slug: str) -> str:
         if toolkit_slug == "BROKEN":
-            raise ValueError("Composio rejected managed auth config")
+            raise ValueError("Managed auth config rejected")
         return super().get_or_create_auth_config(toolkit_slug)
 
 
