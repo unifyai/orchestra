@@ -173,7 +173,12 @@ def test_create_custom_auth_config_omits_empty_scopes(
 
     monkeypatch.setattr(requests, "post", fake_post)
     adapter = ComposioProviderAdapter(api_key="test-key")
-    adapter.create_custom_auth_config("TIKTOK", client_id="c", client_secret="s", scopes=[])
+    adapter.create_custom_auth_config(
+        "TIKTOK",
+        client_id="c",
+        client_secret="s",
+        scopes=[],
+    )
     creds = captured["json"]["auth_config"]["credentials"]
     assert "scopes" not in creds
 
