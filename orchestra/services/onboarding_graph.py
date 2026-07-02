@@ -137,7 +137,7 @@ WORKSPACE_FRAMING = (
     "proves the connection is real and immediately useful by actually reading "
     "from it and reporting back — never by asking the user to do the work. For "
     "each workspace demo T-W1N reads the relevant area with its own tools "
-    "(recent mailbox, Drive/OneDrive files, or the upcoming calendar), then "
+    "(recent mailbox, Drive/OneDrive files, or the upcoming week's calendar), then "
     "delivers one short, plain-spoken summary to the user as a single "
     "unify_message. That delivered message is the proof the demo worked, so it "
     "must be sent as an assistant message back to the user — not merely spoken "
@@ -780,16 +780,18 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _demo(
         "workspace-calendar",
-        "Check my calendar",
+        "Check my upcoming calendar events within a week",
         channel="workspace_calendar",
         depends_on={"workspace": COMPLETED},
         nudge_chat=(
-            "Invite them to click the 'Check my calendar' row in the Onboarding "
-            "checklist; I read their upcoming calendar and send back a short "
-            "summary, flagging any conflicts or gaps."
+            "Invite them to click the 'Check my upcoming calendar events within "
+            "a week' row in the Onboarding checklist; I read their calendar for "
+            "the next week and send back a short summary, flagging any conflicts "
+            "or gaps."
         ),
         nudge_voice=(
-            "clicking the 'Check my calendar' row in the Onboarding checklist"
+            "clicking the 'Check my upcoming calendar events within a week' row "
+            "in the Onboarding checklist"
         ),
     ),
     _demo(
@@ -808,16 +810,16 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _demo(
         "workspace-tasks",
-        "Check my workspace tasks",
+        "Check my tasks due within a week",
         channel="workspace_tasks",
         depends_on={"workspace": COMPLETED},
         nudge_chat=(
-            "Invite them to click the 'Check my workspace tasks' row in the "
-            "Onboarding checklist; I read their connected workspace tasks and "
-            "send back a short summary of what's open and due."
+            "Invite them to click the 'Check my tasks due within a week' row in "
+            "the Onboarding checklist; I read their connected workspace tasks and "
+            "send back a short summary of what's open and due in the next week."
         ),
         nudge_voice=(
-            "clicking the 'Check my workspace tasks' row in the Onboarding checklist"
+            "clicking the 'Check my tasks due within a week' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -1083,8 +1085,8 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~30s",
     ),
     "workspace-calendar": StepPresentation(
-        "T-W1N reviews your upcoming calendar and sends back a short summary, "
-        "flagging any conflicts or gaps.",
+        "T-W1N reviews your calendar for the next week and sends back a short "
+        "summary, flagging any conflicts or gaps.",
         "~30s",
     ),
     "workspace-contacts": StepPresentation(
@@ -1094,7 +1096,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
     ),
     "workspace-tasks": StepPresentation(
         "T-W1N reads your connected workspace tasks and sends back a short "
-        "summary of what's open and due.",
+        "summary of what's open and due in the next week.",
         "~30s",
     ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
@@ -1201,10 +1203,10 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "reorganise anything if they say yes."
     ),
     "workspace-calendar": (
-        "Clicking the 'Check my calendar' row tells me the user wants a demo of "
-        "their connected calendar: I read their upcoming events and send one "
-        "short summary back as a single unify_message, flagging any conflicts "
-        "or gaps."
+        "Clicking the 'Check my upcoming calendar events within a week' row "
+        "tells me the user wants a demo of their connected calendar: I read "
+        "their events for the next week and send one short summary back as a "
+        "single unify_message, flagging any conflicts or gaps."
     ),
     "workspace-contacts": (
         "Clicking the 'Check my workspace contacts' row tells me the user wants "
@@ -1213,11 +1215,11 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "delivered the summary I just confirm it rather than sending another."
     ),
     "workspace-tasks": (
-        "Clicking the 'Check my workspace tasks' row tells me the user wants a "
-        "demo of their connected workspace tasks: I read what's open and due and "
-        "send one short summary back as a single unify_message. If I have "
-        "already delivered the summary I just confirm it rather than sending "
-        "another."
+        "Clicking the 'Check my tasks due within a week' row tells me the user "
+        "wants a demo of their connected workspace tasks: I read what's open and "
+        "due in the next week and send one short summary back as a single "
+        "unify_message. If I have already delivered the summary I just confirm "
+        "it rather than sending another."
     ),
     "apps": (
         "Clicking the 'Connect me with your apps' row opens the Integrations "
