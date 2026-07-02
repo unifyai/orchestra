@@ -493,9 +493,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                     message = error
                 message = message or payload.get("message")
         prefix = (
-            f"Request rejected ({status_code})"
-            if status_code
-            else "Request rejected"
+            f"Request rejected ({status_code})" if status_code else "Request rejected"
         )
         combined = ": ".join(
             part for part in (message, "; ".join(detail_parts)) if part
