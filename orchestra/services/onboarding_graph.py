@@ -66,6 +66,11 @@ class OnboardingStep:
     nudge_chat: str = ""
     nudge_voice: str = ""
     event: OnboardingEventSpec | None = None
+    # Workspace providers this step applies to. Empty means every provider
+    # (the common case). A non-empty tuple marks a provider-exclusive step
+    # (e.g. Microsoft-only Teams) that is only rendered once the connected
+    # workspace matches; it is omitted from the provider-agnostic catalog.
+    providers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -336,6 +341,7 @@ def _demo(
     depends_on: dict[str, int],
     nudge_chat: str,
     nudge_voice: str,
+    providers: tuple[str, ...] = (),
 ) -> OnboardingStep:
     """A workspace demo trigger row.
 
@@ -385,6 +391,7 @@ def _demo(
         nudge_chat=nudge_chat,
         nudge_voice=nudge_voice,
         event=event,
+        providers=providers,
     )
 
 
@@ -822,6 +829,21 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "clicking the 'Check my tasks due within a week' row in the Onboarding checklist"
         ),
     ),
+    _demo(
+        "workspace-teams",
+        "Summarise my Teams messages",
+        channel="workspace_teams",
+        depends_on={"workspace": COMPLETED},
+        providers=("microsoft",),
+        nudge_chat=(
+            "Invite them to click the 'Summarise my Teams messages' row in the "
+            "Onboarding checklist; I read their recent Microsoft Teams chats and "
+            "channels and send back a short summary of what needs their attention."
+        ),
+        nudge_voice=(
+            "clicking the 'Summarise my Teams messages' row in the Onboarding checklist"
+        ),
+    ),
     OnboardingStep(
         id="apps",
         title="Connect me with your apps",
@@ -934,6 +956,7 @@ DEMO_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "workspace-calendar": ("unify_message",),
     "workspace-contacts": ("unify_message",),
     "workspace-tasks": ("unify_message",),
+    "workspace-teams": ("unify_message",),
 }
 TRIGGER_TO_OUTBOUND_MEDIUMS.update(DEMO_TO_OUTBOUND_MEDIUMS)
 
@@ -1099,6 +1122,11 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "summary of what's open and due in the next week.",
         "~30s",
     ),
+    "workspace-teams": StepPresentation(
+        "T-W1N reads your recent Microsoft Teams chats and channels and sends "
+        "back a short summary of what needs your attention.",
+        "~30s",
+    ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
     "create-scheduled-task": StepPresentation(
         "Schedule a task and watch me report back on your channel.",
@@ -1221,6 +1249,14 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "unify_message. If I have already delivered the summary I just confirm "
         "it rather than sending another."
     ),
+    "workspace-teams": (
+        "Clicking the 'Summarise my Teams messages' row tells me the user wants "
+        "a demo of their Microsoft Teams messages: I read their recent Teams "
+        "chats and channels and send one short summary of what needs their "
+        "attention back as a single unify_message. If I have already delivered "
+        "the summary I just confirm it rather than sending another. This row "
+        "only appears for a connected Microsoft workspace."
+    ),
     "apps": (
         "Clicking the 'Connect me with your apps' row opens the Integrations "
         "tab; they connect at least one app from the gallery and authorize it."
@@ -1252,6 +1288,51 @@ STEP_FLOW_NOTES: dict[str, str] = {
 def presentation_for(step_id: str) -> StepPresentation:
     """Presentation copy for a step (empty when none is registered)."""
     return STEP_PRESENTATION.get(step_id, _EMPTY_PRESENTATION)
+
+
+# Per-provider description overrides applied at render time once the connected
+# workspace provider is known. Only steps whose wording genuinely diverges by
+# provider need an entry; the neutral ``STEP_PRESENTATION`` copy is the
+# fallback for an unknown provider (and for the provider-agnostic catalog).
+PROVIDER_PRESENTATION_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "workspace-drive": {
+        "google": (
+            "T-W1N scans your Google Drive and sends back a short summary, with "
+            "an optional tidy-up suggestion if it looks messy."
+        ),
+        "microsoft": (
+            "T-W1N scans your OneDrive and SharePoint files and sends back a "
+            "short summary, with an optional tidy-up suggestion if it looks messy."
+        ),
+    },
+}
+
+
+def presentation_description_for(step_id: str, *, provider: str | None = None) -> str:
+    """Presentation description, specialised to the connected provider.
+
+    Falls back to the neutral ``STEP_PRESENTATION`` copy when the provider is
+    unknown or the step has no provider-specific variant.
+    """
+    variants = PROVIDER_PRESENTATION_DESCRIPTIONS.get(step_id)
+    if provider and variants and provider in variants:
+        return variants[provider]
+    return presentation_for(step_id).description
+
+
+def step_visible_for_provider(
+    step: OnboardingStep,
+    provider: str | None,
+) -> bool:
+    """Whether a step renders for the connected workspace provider.
+
+    Provider-agnostic steps (``providers == ()``) always render. A
+    provider-exclusive step (e.g. Microsoft-only Teams) renders only when the
+    connected workspace matches; with no connected provider it stays hidden.
+    """
+    if not step.providers:
+        return True
+    return provider is not None and provider in step.providers
 
 
 def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:

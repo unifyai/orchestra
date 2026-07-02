@@ -1698,6 +1698,27 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
     )
 
 
+def _connected_workspace_provider(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> str | None:
+    """Which workspace provider the Coordinator connected, if any.
+
+    Returns ``"google"`` or ``"microsoft"`` from the canonical
+    granted-scopes secret the OAuth handshake writes (and the disconnect
+    flow clears), or ``None`` when no workspace is connected. This drives
+    which provider-exclusive onboarding steps render (e.g. the
+    Microsoft-only Teams demo) and specialises provider-aware copy.
+    """
+    secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
+    if secrets.get("GOOGLE_GRANTED_SCOPES"):
+        return "google"
+    if secrets.get("MICROSOFT_GRANTED_SCOPES"):
+        return "microsoft"
+    return None
+
+
 def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
     """Apps step: any owned secret that is NOT a workspace OAuth token."""
     secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
@@ -2050,12 +2071,24 @@ def _serialize_onboarding_event(
     }
 
 
-def _step_presentation_fields(step_id: str) -> dict[str, Any]:
+def _step_presentation_fields(
+    step_id: str,
+    *,
+    provider: str | None = None,
+) -> dict[str, Any]:
     """The presentation copy a step carries to consumers (tooltip
-    description, time estimate, and suggestion chips)."""
+    description, time estimate, and suggestion chips).
+
+    When ``provider`` is set, the description is specialised to the
+    connected workspace (e.g. Google Drive vs OneDrive/SharePoint); it
+    falls back to the neutral copy otherwise.
+    """
     presentation = onboarding_graph.presentation_for(step_id)
     return {
-        "description": presentation.description,
+        "description": onboarding_graph.presentation_description_for(
+            step_id,
+            provider=provider,
+        ),
         "estimated_time": presentation.estimated_time,
         "chips_chat": [_serialize_chip(c) for c in presentation.chips_chat],
         "chips_call": [_serialize_chip(c) for c in presentation.chips_call],
@@ -2106,6 +2139,11 @@ def build_onboarding_catalog(local_mode: bool | None = None) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:
         if not onboarding_graph.phase_is_visible(step.phase, local_mode=local_mode):
+            continue
+        # Provider-exclusive steps (e.g. Microsoft-only Teams) depend on the
+        # connected workspace, which the assistant-independent catalog can't
+        # know; they surface only in the per-assistant render.
+        if step.providers:
             continue
         steps.append(
             {
@@ -2163,6 +2201,7 @@ def compute_onboarding_render(
     """
     if local_mode is None:
         local_mode = onboarding_local_mode()
+    provider = _connected_workspace_provider(session, coordinator=coordinator)
     state = get_coordinator_state(session, coordinator=coordinator)
     completed: set[str] = set(
         derive_onboarding_progress(session, coordinator=coordinator, state=state),
@@ -2191,6 +2230,11 @@ def compute_onboarding_render(
     for step in onboarding_graph.ONBOARDING_GRAPH:
         if not onboarding_graph.phase_is_visible(step.phase, local_mode=local_mode):
             continue
+        # Provider-exclusive steps render only for the matching connected
+        # workspace; a Google workspace never sees the Microsoft-only Teams
+        # demo (and vice versa), and nothing shows before a workspace connects.
+        if not onboarding_graph.step_visible_for_provider(step, provider):
+            continue
         if step.kind == "coming_soon":
             status = "coming_soon"
         elif step.id in completed:
@@ -2209,6 +2253,8 @@ def compute_onboarding_render(
         for dep_id, level in step.depends_on.items():
             dep = onboarding_graph.STEP_BY_ID[dep_id]
             if not onboarding_graph.phase_is_visible(dep.phase, local_mode=local_mode):
+                continue
+            if not onboarding_graph.step_visible_for_provider(dep, provider):
                 continue
             satisfied = (
                 dep_id in completed
@@ -2238,7 +2284,7 @@ def compute_onboarding_render(
                 "can_skip": step.can_skip,
                 "dependencies": dependencies,
                 **_step_contract_fields(step),
-                **_step_presentation_fields(step.id),
+                **_step_presentation_fields(step.id, provider=provider),
             },
         )
         if status == "available" and step.phase not in skipped_phases:
@@ -2870,7 +2916,8 @@ async def emit_onboarding_step_event(
         event = step.event
         if event is None:
             logger.warning(
-                "Ignoring onboarding step event for non-event step: %s", step_id
+                "Ignoring onboarding step event for non-event step: %s",
+                step_id,
             )
             return False
     phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
