@@ -3886,6 +3886,7 @@ class TestSharedCoordinatorEmailRouting:
         assert response.json() == {
             "assistant_id": personal.agent_id,
             "role": "owner",
+            "action": None,
         }
 
     async def test_email_resolve_404_for_non_shared_mailbox(
