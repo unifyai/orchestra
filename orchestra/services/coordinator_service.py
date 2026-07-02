@@ -2351,9 +2351,10 @@ def compose_voice_intro_briefing(render: dict[str, Any]) -> str:
             )
 
     lines.append(
-        "If they would rather pause onboarding, reassure them they can just "
-        "start asking for help or sharing documents; onboarding can be resumed "
-        "later.",
+        "If they would rather pause onboarding, reassure them they can say so "
+        "and you will pause after confirming; they can also start asking for "
+        "help or sharing documents right away once paused. Onboarding can be "
+        "resumed later from the checklist or by asking you to continue setup.",
     )
     lines.append(
         "The user may interrupt at any point — if they do, respond to what "

@@ -722,6 +722,8 @@ class CoordinatorStateUpdate(BaseModel):
     When ``False``, milestone events, the server-side step derivation,
     and the onboarding render are suppressed without touching per-step
     state, so the user can pause or finish onboarding and return later.
+    May be toggled by the Console UI or by the Coordinator slow-brain
+    after the user verbally confirms pause or resume.
     """
 
     model_config = ConfigDict(extra="forbid")

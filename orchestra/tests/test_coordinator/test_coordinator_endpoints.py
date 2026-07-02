@@ -1239,6 +1239,46 @@ async def test_coordinator_state_patch_deactivates_onboarding_and_stamps_ended_a
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_patch_onboarding_active_with_assistant_api_key(
+    client: AsyncClient,
+) -> None:
+    """The coordinator runtime API key can toggle ``onboarding_active``."""
+    owner = await _create_user(client, "state-runtime-key")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    admin = await client.get(
+        f"/v0/admin/assistant?agent_id={coordinator_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin.status_code == status.HTTP_200_OK, admin.json()
+    runtime_key = admin.json()["info"][0]["api_key"]
+    runtime_headers = {"Authorization": f"Bearer {runtime_key}"}
+
+    deactivate = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_active": False, "clear_onboarding_step": True},
+        headers=runtime_headers,
+    )
+    assert deactivate.status_code == status.HTTP_200_OK, deactivate.json()
+    assert deactivate.json()["info"]["onboarding_active"] is False
+
+    activate = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_active": True},
+        headers=runtime_headers,
+    )
+    assert activate.status_code == status.HTTP_200_OK, activate.json()
+    assert activate.json()["info"]["onboarding_active"] is True
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_resume_clears_ended_at(
     client: AsyncClient,
     dbsession: Session,
