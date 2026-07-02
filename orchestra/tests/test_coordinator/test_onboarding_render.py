@@ -30,3 +30,12 @@ def test_dependencies_satisfied_levels() -> None:
     assert graph.dependencies_satisfied({"a": graph.ADDRESSED}, set(), set()) is False
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, {"a"}, set()) is True
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, set(), {"a"}) is False
+
+
+def test_manual_completion_block_reason() -> None:
+    """Communication and auto-triggered rows reject manual completion."""
+    assert graph.manual_completion_block_reason("email-reference") is not None
+    assert graph.manual_completion_block_reason("email-reply") is not None
+    assert graph.manual_completion_block_reason("workspace-mailbox") is not None
+    assert graph.manual_completion_block_reason("apps") is None
+    assert graph.manual_completion_block_reason("create-scheduled-task") is None

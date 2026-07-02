@@ -698,6 +698,13 @@ class CoordinatorResetResponse(BaseModel):
     coordinator_id: str
 
 
+class OnboardingStepCompletionUpdate(BaseModel):
+    """Manual completion toggle for one onboarding checklist step."""
+
+    step_id: str = Field(..., min_length=1)
+    completed: bool
+
+
 class CoordinatorStateUpdate(BaseModel):
     """Request body for transitioning a Coordinator's onboarding state.
 
@@ -712,6 +719,8 @@ class CoordinatorStateUpdate(BaseModel):
     active checklist. ``skip_onboarding_phase`` records a section-level defer
     without expanding it into per-step skips; ``unskip_onboarding_phase``
     resumes that section while preserving any per-step skips inside it.
+    ``onboarding_step_completion`` records a Coordinator slow-brain manual
+    complete/uncomplete for steps outside auto-triggered Communication rows.
 
     ``intro_watched`` records that the user has resolved the opening
     picker (started the call or chose chat) so the ringing picker and
@@ -737,6 +746,9 @@ class CoordinatorStateUpdate(BaseModel):
     skip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
+    onboarding_step_completion: Optional[OnboardingStepCompletionUpdate] = Field(
+        None,
+    )
 
 
 class OnboardingChip(BaseModel):
@@ -802,6 +814,7 @@ class OnboardingStepStatus(BaseModel):
     nudge_voice: str = ""
     phase_id: Optional[str] = None
     can_skip: bool = False
+    manually_completed: bool = False
     dependencies: List[OnboardingStepDependency] = Field(default_factory=list)
     description: str = ""
     estimated_time: str = ""

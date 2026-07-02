@@ -1659,6 +1659,14 @@ async def update_coordinator_state_endpoint(
         skip_onboarding_phase=update.skip_onboarding_phase,
         unskip_onboarding_phase=update.unskip_onboarding_phase,
         intro_watched=update.intro_watched,
+        onboarding_step_completion=(
+            (
+                update.onboarding_step_completion.step_id,
+                update.onboarding_step_completion.completed,
+            )
+            if update.onboarding_step_completion is not None
+            else None
+        ),
     )
     if (
         update.onboarding_step

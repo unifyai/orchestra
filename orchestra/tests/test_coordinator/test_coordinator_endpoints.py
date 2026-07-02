@@ -1279,6 +1279,164 @@ async def test_coordinator_state_patch_onboarding_active_with_assistant_api_key(
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion(
+    client: AsyncClient,
+) -> None:
+    """The slow brain can manually complete settable onboarding steps."""
+    owner = await _create_user(client, "state-manual-complete")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    complete = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "create-scheduled-task",
+                "completed": True,
+            },
+        },
+        headers=owner["headers"],
+    )
+    assert complete.status_code == status.HTTP_200_OK, complete.json()
+    info = complete.json()["info"]
+    assert "create-scheduled-task" in info["completed_step_ids"]
+    steps = {step["id"]: step for step in info["onboarding"]["steps"]}
+    assert steps["create-scheduled-task"]["status"] == "done"
+    assert steps["create-scheduled-task"]["manually_completed"] is True
+
+    uncomplete = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "create-scheduled-task",
+                "completed": False,
+            },
+        },
+        headers=owner["headers"],
+    )
+    assert uncomplete.status_code == status.HTTP_200_OK, uncomplete.json()
+    info = uncomplete.json()["info"]
+    assert "create-scheduled-task" not in info["completed_step_ids"]
+    assert info["onboarding"]["steps"]
+    steps = {step["id"]: step for step in info["onboarding"]["steps"]}
+    assert steps["create-scheduled-task"]["status"] != "done"
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion_rejects_auto_steps(
+    client: AsyncClient,
+) -> None:
+    """Auto-triggered Communication rows return an explanatory 400."""
+    owner = await _create_user(client, "state-manual-reject")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    blocked = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "email-reference",
+                "completed": True,
+            },
+        },
+        headers=owner["headers"],
+    )
+    assert blocked.status_code == status.HTTP_400_BAD_REQUEST, blocked.json()
+    detail = blocked.json()["detail"]
+    assert detail["code"] == "onboarding_step_not_manually_settable"
+    assert "Communication" in detail["message"]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion_with_assistant_api_key(
+    client: AsyncClient,
+) -> None:
+    """The coordinator runtime API key can toggle manual step completion."""
+    owner = await _create_user(client, "state-manual-runtime-key")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    admin = await client.get(
+        f"/v0/admin/assistant?agent_id={coordinator_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin.status_code == status.HTTP_200_OK, admin.json()
+    runtime_key = admin.json()["info"][0]["api_key"]
+    runtime_headers = {"Authorization": f"Bearer {runtime_key}"}
+
+    complete = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "apps",
+                "completed": True,
+            },
+        },
+        headers=runtime_headers,
+    )
+    assert complete.status_code == status.HTTP_200_OK, complete.json()
+    assert "apps" in complete.json()["info"]["completed_step_ids"]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_reset_clears_manual_completion(
+    client: AsyncClient,
+) -> None:
+    """Resetting a step clears any manual completion flag for it."""
+    owner = await _create_user(client, "state-manual-reset")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "create-scheduled-task",
+                "completed": True,
+            },
+        },
+        headers=owner["headers"],
+    )
+    reset = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "create-scheduled-task"},
+        headers=owner["headers"],
+    )
+    assert reset.status_code == status.HTTP_200_OK, reset.json()
+    info = reset.json()["info"]
+    assert "create-scheduled-task" not in info["completed_step_ids"]
+    steps = {step["id"]: step for step in info["onboarding"]["steps"]}
+    assert steps["create-scheduled-task"]["manually_completed"] is False
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_resume_clears_ended_at(
     client: AsyncClient,
     dbsession: Session,

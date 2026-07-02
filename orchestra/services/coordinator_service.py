@@ -982,6 +982,7 @@ def _coordinator_state_entry(
     onboarding_step: str | None,
     skipped_step_ids: Sequence[str],
     skipped_phase_ids: Sequence[str],
+    manually_completed_step_ids: Sequence[str],
     onboarding_reset_at: dict[str, str] | None,
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
@@ -1018,6 +1019,7 @@ def _coordinator_state_entry(
         "onboarding_step": onboarding_step,
         "skipped_step_ids": list(skipped_step_ids),
         "skipped_phase_ids": list(skipped_phase_ids),
+        "manually_completed_step_ids": list(manually_completed_step_ids),
         "onboarding_reset_at": dict(onboarding_reset_at or {}),
         "started_at": started_at,
         "ended_at": ended_at,
@@ -1081,6 +1083,7 @@ def get_coordinator_state(
             "onboarding_step": None,
             "skipped_step_ids": [],
             "skipped_phase_ids": [],
+            "manually_completed_step_ids": [],
             "onboarding_reset_at": {},
             "started_at": None,
             "ended_at": None,
@@ -1095,6 +1098,9 @@ def get_coordinator_state(
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "skipped_phase_ids": normalize_onboarding_phase_ids(
             row.get("skipped_phase_ids"),
+        ),
+        "manually_completed_step_ids": normalize_onboarding_step_ids(
+            row.get("manually_completed_step_ids"),
         ),
         "onboarding_reset_at": normalize_onboarding_reset_at(
             row.get("onboarding_reset_at"),
@@ -1139,6 +1145,7 @@ def seed_initial_coordinator_state(
         onboarding_step=None,
         skipped_step_ids=[],
         skipped_phase_ids=[],
+        manually_completed_step_ids=[],
         onboarding_reset_at={},
         previous=None,
         intro_watched=intro_watched,
@@ -1165,6 +1172,7 @@ def set_coordinator_state(
     skip_onboarding_phase: str | None = None,
     unskip_onboarding_phase: str | None = None,
     intro_watched: bool | None = None,
+    onboarding_step_completion: tuple[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1232,6 +1240,17 @@ def set_coordinator_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_unskip_onboarding_phase",
         )
+    if onboarding_step_completion is not None:
+        step_id, _completed = onboarding_step_completion
+        if (
+            not isinstance(step_id, str)
+            or not step_id.strip()
+            or step_id not in onboarding_graph.STEP_BY_ID
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_onboarding_step_completion",
+            )
     _lock_coordinator_context(
         session,
         coordinator=coordinator,
@@ -1311,6 +1330,69 @@ def set_coordinator_state(
             for step_id in next_skipped_step_ids
             if step_id not in reset_step_set
         ]
+    next_manually_completed_step_ids = normalize_onboarding_step_ids(
+        (previous or {}).get("manually_completed_step_ids"),
+    )
+    if reset_step_ids:
+        reset_step_set = set(reset_step_ids)
+        next_manually_completed_step_ids = [
+            step_id
+            for step_id in next_manually_completed_step_ids
+            if step_id not in reset_step_set
+        ]
+    if onboarding_step_completion is not None:
+        completion_step_id, completion_completed = onboarding_step_completion
+        if not next_onboarding_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "onboarding_inactive",
+                    "message": (
+                        "Onboarding is not active — I cannot change checklist "
+                        "step completion while setup is paused."
+                    ),
+                    "step_id": completion_step_id,
+                },
+            )
+        skipped_step_set = set(next_skipped_step_ids)
+        if completion_step_id in skipped_step_set:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "onboarding_step_skipped",
+                    "message": (
+                        f"The '{completion_step_id}' onboarding step is skipped — "
+                        "unskip it from the checklist before changing completion."
+                    ),
+                    "step_id": completion_step_id,
+                },
+            )
+        if completion_completed:
+            block_reason = onboarding_graph.manual_completion_block_reason(
+                completion_step_id,
+            )
+            if block_reason is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "onboarding_step_not_manually_settable",
+                        "message": block_reason,
+                        "step_id": completion_step_id,
+                    },
+                )
+            manual_set = set(next_manually_completed_step_ids)
+            manual_set.add(completion_step_id)
+            next_manually_completed_step_ids = [
+                step.id
+                for step in onboarding_graph.ONBOARDING_GRAPH
+                if step.id in manual_set
+            ]
+        else:
+            next_manually_completed_step_ids = [
+                step_id
+                for step_id in next_manually_completed_step_ids
+                if step_id != completion_step_id
+            ]
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
     )
@@ -1341,6 +1423,7 @@ def set_coordinator_state(
         onboarding_step=next_step,
         skipped_step_ids=next_skipped_step_ids,
         skipped_phase_ids=next_skipped_phase_ids,
+        manually_completed_step_ids=next_manually_completed_step_ids,
         onboarding_reset_at=reset_at,
         previous=previous,
         intro_watched=intro_watched,
@@ -2002,7 +2085,8 @@ def derive_onboarding_progress(
         check = durable_checks.get(step_id)
         if check is not None and check(session, coordinator=coordinator):
             completed.append(step_id)
-    return completed
+    manual = normalize_onboarding_step_ids(state.get("manually_completed_step_ids"))
+    return sorted(set(completed) | set(manual))
 
 
 _HOSTED_ENVIRONMENTS = ("staging", "production")
@@ -2182,6 +2266,9 @@ def compute_onboarding_render(
     skipped_phases: set[str] = set(
         normalize_onboarding_phase_ids(state.get("skipped_phase_ids")),
     )
+    manually_completed: set[str] = set(
+        normalize_onboarding_step_ids(state.get("manually_completed_step_ids")),
+    )
     active = state.get("onboarding_step")
     active_id = active if isinstance(active, str) else None
     if active_id and _onboarding_step_phase(active_id) in skipped_phases:
@@ -2252,6 +2339,7 @@ def compute_onboarding_render(
                 "phase": step.phase,
                 "status": status,
                 "can_skip": step.can_skip,
+                "manually_completed": step.id in manually_completed,
                 "dependencies": dependencies,
                 **_step_contract_fields(step),
                 **_step_presentation_fields(step.id, provider=provider),

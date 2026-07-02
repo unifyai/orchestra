@@ -1512,6 +1512,37 @@ def completion_coupled_steps(step_id: str) -> tuple[str, ...]:
     return tuple(step.id for step in ONBOARDING_GRAPH if step.id in coupled)
 
 
+def manual_completion_block_reason(step_id: str) -> str | None:
+    """Return a user-facing reason when Twin must not manually set this step.
+
+    ``None`` means manual completion is allowed. Callers surface the reason
+    on attempted PATCH rather than documenting settable steps upfront.
+    """
+    step = STEP_BY_ID.get(step_id)
+    if step is None:
+        return "That onboarding step does not exist."
+    if step.kind == "coming_soon":
+        return "That onboarding step is not available yet."
+    if step.phase == PHASE_COMMUNICATION:
+        return (
+            "Communication checklist steps complete automatically when messages "
+            "are sent and received on each channel — I cannot mark them done "
+            "manually."
+        )
+    if step.kind == "trigger":
+        return (
+            "This step starts from the onboarding checklist (or when the user "
+            "asks me to begin it) and completes when I perform the action — "
+            "I cannot mark it done without doing the work."
+        )
+    if step.kind == "reply":
+        return (
+            "This step completes when the user replies on the channel — "
+            "I cannot mark it done manually."
+        )
+    return None
+
+
 def _assert_graph_integrity() -> None:
     """Fail loudly on a malformed hand-authored graph.
 
