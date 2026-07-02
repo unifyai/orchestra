@@ -410,6 +410,19 @@ class AssistantRead(AssistantCreate):
         "None when no email contact is provisioned.",
         example="google_workspace",
     )
+    workspace_provider: Optional[Literal["google", "microsoft"]] = Field(
+        None,
+        description=(
+            "The OAuth-connected workspace provider, derived from the granted-"
+            "scopes secrets (GOOGLE_GRANTED_SCOPES / MICROSOFT_GRANTED_SCOPES) "
+            "with Google-first precedence, mirroring the granted-features "
+            "endpoint. Distinct from ``email_provider``, which reflects the "
+            "mailbox's own tenant: a Coordinator keeps a platform Google "
+            "mailbox while connecting a Microsoft workspace. None when no "
+            "workspace OAuth grant is present."
+        ),
+        example="microsoft",
+    )
     user_phone: Optional[str] = Field(
         None,
         description="User's personal phone number",

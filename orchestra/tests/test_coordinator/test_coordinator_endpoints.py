@@ -820,6 +820,74 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
 
 
 @pytest.mark.anyio
+async def test_assistant_read_workspace_provider_tracks_oauth_grant_not_mailbox(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """``workspace_provider`` mirrors the OAuth grant, not the mailbox tenant.
+
+    A Coordinator keeps a platform Google mailbox (``email_provider``) while its
+    connected workspace is whatever the owner OAuth-linked. The profile card
+    reads ``workspace_provider``, so it must follow the granted-scopes secret
+    (Google-first precedence) and never conflate it with the mailbox provider.
+    """
+    owner = await _create_user(client, "workspace-provider-tracks-grant")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    dao = svc.AssistantSecretDAO(dbsession)
+
+    async def _read_coordinator() -> dict:
+        resp = await client.get("/v0/assistant?demo=true", headers=owner["headers"])
+        assert resp.status_code == status.HTTP_200_OK, resp.json()
+        return next(
+            a for a in resp.json()["info"] if str(a["agent_id"]) == str(coordinator_id)
+        )
+
+    # No OAuth grant yet: no connected workspace, regardless of mailbox tenant.
+    entry = await _read_coordinator()
+    assert entry["workspace_provider"] is None
+    mailbox_provider = entry["email_provider"]
+
+    # Microsoft connected; the mailbox tenant is unchanged.
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "MICROSOFT_GRANTED_SCOPES",
+        "Files.Read.All ChannelMessage.Read.All",
+    )
+    dbsession.commit()
+    entry = await _read_coordinator()
+    assert entry["workspace_provider"] == "microsoft"
+    assert entry["email_provider"] == mailbox_provider
+
+    # Switching to a Google grant flips the connected provider.
+    dao.delete(coordinator.agent_id, "MICROSOFT_GRANTED_SCOPES")
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive.readonly",
+    )
+    dbsession.commit()
+    entry = await _read_coordinator()
+    assert entry["workspace_provider"] == "google"
+
+    # Disconnecting all grants clears the connected-workspace provider.
+    dao.delete(coordinator.agent_id, "GOOGLE_GRANTED_SCOPES")
+    dbsession.commit()
+    entry = await _read_coordinator()
+    assert entry["workspace_provider"] is None
+
+
+@pytest.mark.anyio
 async def test_assistant_list_does_not_bootstrap_coordinator_owner_contact_row(
     client: AsyncClient,
 ) -> None:
