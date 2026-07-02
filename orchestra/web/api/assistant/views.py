@@ -6903,6 +6903,31 @@ def admin_list_all_assistants(
         None,
         description="Only return assistants whose agent_id matches this value.",
     ),
+    require_secret_names: Optional[str] = Query(
+        None,
+        description="Comma-separated secret names; only return assistants that have at "
+        "least one of these secrets stored (e.g. 'MICROSOFT_REFRESH_TOKEN'). Lets "
+        "provider-scoped callers (token-refresh cron) skip enumerating every assistant.",
+        example="MICROSOFT_REFRESH_TOKEN",
+    ),
+    secret_names: Optional[str] = Query(
+        None,
+        description="Comma-separated secret names to include in the returned 'secrets' "
+        "map; other secrets are omitted. Shrinks the payload for scoped callers.",
+        example="MICROSOFT_ACCESS_TOKEN,MICROSOFT_REFRESH_TOKEN",
+    ),
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=1000,
+        description="Maximum number of assistants to return (pagination over a stable "
+        "agent_id ordering). Combine with 'offset' to page through results.",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Pagination offset; use together with 'limit'.",
+    ),
     from_fields: Optional[str] = Query(
         None,
         description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
@@ -6953,6 +6978,17 @@ def admin_list_all_assistants(
 
         requested_fields = set(raw_fields)
 
+    require_secret_names_list: Optional[list[str]] = None
+    if require_secret_names and require_secret_names.strip():
+        require_secret_names_list = [
+            s.strip() for s in require_secret_names.split(",") if s.strip()
+        ] or None
+    secret_names_list: Optional[list[str]] = None
+    if secret_names and secret_names.strip():
+        secret_names_list = [
+            s.strip() for s in secret_names.split(",") if s.strip()
+        ] or None
+
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -6961,6 +6997,9 @@ def admin_list_all_assistants(
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
             agent_id=agent_id,
+            require_secret_names=require_secret_names_list,
+            limit=limit,
+            offset=offset,
         )
 
         # Get API key based on assistant type (personal vs organizational)
@@ -7029,11 +7068,16 @@ def admin_list_all_assistants(
         if not skip_secrets:
             agent_ids = [a.agent_id for a in assistants]
             if agent_ids:
-                all_secret_rows = (
-                    session.query(AssistantSecret)
-                    .filter(AssistantSecret.agent_id.in_(agent_ids))
-                    .all()
+                secret_query = session.query(AssistantSecret).filter(
+                    AssistantSecret.agent_id.in_(agent_ids),
                 )
+                # Scoped callers only need a few secret keys; filtering here
+                # shrinks both the query result and the serialized payload.
+                if secret_names_list:
+                    secret_query = secret_query.filter(
+                        AssistantSecret.secret_name.in_(secret_names_list),
+                    )
+                all_secret_rows = secret_query.all()
                 for s in all_secret_rows:
                     secrets_by_assistant.setdefault(s.agent_id, {})[
                         s.secret_name

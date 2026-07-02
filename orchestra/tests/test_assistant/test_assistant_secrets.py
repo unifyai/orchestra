@@ -152,6 +152,17 @@ async def _create_assistant(client: AsyncClient) -> int:
     return int(resp.json()["info"]["agent_id"])
 
 
+async def _create_named_assistant(client: AsyncClient, name: str) -> int:
+    """Create a uniquely-named assistant (avoids the per-scope name conflict)."""
+    resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": name, "surname": "Test", "create_infra": False},
+        headers=HEADERS,
+    )
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
+    return int(resp.json()["info"]["agent_id"])
+
+
 # ============================================================================
 # 1. Model Constraint Tests
 # ============================================================================
@@ -714,6 +725,95 @@ class TestAdminSecretsInResponse:
         target = next(i for i in items if int(i["agent_id"]) == agent_id)
         assert set(target.keys()) == {"agent_id", "secrets"}
         assert target["secrets"] == {"KEY": "val"}
+
+    @pytest.mark.anyio
+    async def test_admin_require_secret_names_filters_by_provider(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        with_token = await _create_named_assistant(client, "ReqWith")
+        without_token = await _create_named_assistant(client, "ReqWithout")
+        await client.post(
+            f"/v0/assistant/{with_token}/secret",
+            json={"secret_name": "MICROSOFT_REFRESH_TOKEN", "secret_value": "rt"},
+            headers=HEADERS,
+        )
+
+        resp = await client.get(
+            "/v0/admin/assistant",
+            params={
+                "require_secret_names": "MICROSOFT_REFRESH_TOKEN",
+                "from_fields": "agent_id",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        ids = {int(i["agent_id"]) for i in resp.json()["info"]}
+        assert with_token in ids
+        assert without_token not in ids
+
+    @pytest.mark.anyio
+    async def test_admin_secret_names_scopes_returned_secrets(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        agent_id = await _create_named_assistant(client, "ScopeSecrets")
+        for name, value in (("KEEP1", "v1"), ("KEEP2", "v2"), ("DROP", "v3")):
+            await client.post(
+                f"/v0/assistant/{agent_id}/secret",
+                json={"secret_name": name, "secret_value": value},
+                headers=HEADERS,
+            )
+
+        resp = await client.get(
+            "/v0/admin/assistant",
+            params={
+                "agent_id": agent_id,
+                "from_fields": "agent_id,secrets",
+                "secret_names": "KEEP1,KEEP2",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        target = next(i for i in resp.json()["info"] if int(i["agent_id"]) == agent_id)
+        assert target["secrets"] == {"KEEP1": "v1", "KEEP2": "v2"}
+
+    @pytest.mark.anyio
+    async def test_admin_pagination_limit_and_offset(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        for i in range(3):
+            await _create_named_assistant(client, f"Page{i}")
+
+        full = await client.get(
+            "/v0/admin/assistant",
+            params={"from_fields": "agent_id"},
+            headers=ADMIN_HEADERS,
+        )
+        assert full.status_code == status.HTTP_200_OK
+        # limit/offset order deterministically by agent_id.
+        expected = sorted(int(i["agent_id"]) for i in full.json()["info"])
+        assert len(expected) >= 3
+
+        page1 = await client.get(
+            "/v0/admin/assistant",
+            params={"from_fields": "agent_id", "limit": 2, "offset": 0},
+            headers=ADMIN_HEADERS,
+        )
+        page2 = await client.get(
+            "/v0/admin/assistant",
+            params={"from_fields": "agent_id", "limit": 2, "offset": 2},
+            headers=ADMIN_HEADERS,
+        )
+        assert [int(i["agent_id"]) for i in page1.json()["info"]] == expected[:2]
+        assert [int(i["agent_id"]) for i in page2.json()["info"]] == expected[2:4]
 
     @pytest.mark.anyio
     async def test_non_admin_response_excludes_secrets(
