@@ -93,6 +93,33 @@ def _is_universal_managed_contact(contact: object) -> bool:
     return bool(metadata.get("universal_unity"))
 
 
+AMBIGUOUS_UNIVERSAL_ADMIN_LOOKUP_DETAIL = (
+    "Ambiguous universal contact lookup; pass agent_id or use inbound route "
+    "resolution."
+)
+
+
+def is_ambiguous_universal_admin_contact_lookup(
+    *,
+    agent_id: int | None,
+    email: str | None,
+    phone: str | None,
+    assistant_whatsapp_number: str | None,
+) -> bool:
+    """Return True when an admin list filter targets a shared universal pool value."""
+    if agent_id is not None:
+        return False
+    if email is not None and is_universal_unity_email_address(email):
+        return True
+    if phone is not None and is_universal_unity_phone_number(phone):
+        return True
+    if assistant_whatsapp_number is not None and is_universal_unity_whatsapp_number(
+        assistant_whatsapp_number,
+    ):
+        return True
+    return False
+
+
 def drifted_universal_coordinator_contact_types(
     present_contacts: Iterable[object],
 ) -> list[str]:

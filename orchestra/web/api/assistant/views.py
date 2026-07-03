@@ -121,8 +121,10 @@ from orchestra.services.team_membership_refresh_service import (
     publish_membership_refreshes_best_effort,
 )
 from orchestra.services.universal_unity_contacts import (
+    AMBIGUOUS_UNIVERSAL_ADMIN_LOOKUP_DETAIL,
     UNIVERSAL_CONTACT_TYPES,
     drifted_universal_coordinator_contact_types,
+    is_ambiguous_universal_admin_contact_lookup,
     missing_universal_coordinator_contact_types,
 )
 from orchestra.services.universal_unity_discord import (
@@ -6908,6 +6910,58 @@ def admin_update_assistant(
     )
 
 
+def _admin_list_has_contact_filter(
+    *,
+    phone: Optional[str],
+    user_phone: Optional[str],
+    email: Optional[str],
+    user_whatsapp_number: Optional[str],
+    assistant_whatsapp_number: Optional[str],
+) -> bool:
+    return any(
+        value is not None
+        for value in (
+            phone,
+            user_phone,
+            email,
+            user_whatsapp_number,
+            assistant_whatsapp_number,
+        )
+    )
+
+
+def _raise_if_ambiguous_universal_admin_contact_lookup(
+    *,
+    agent_id: Optional[int],
+    phone: Optional[str],
+    email: Optional[str],
+    assistant_whatsapp_number: Optional[str],
+) -> None:
+    if is_ambiguous_universal_admin_contact_lookup(
+        agent_id=agent_id,
+        email=email,
+        phone=phone,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=AMBIGUOUS_UNIVERSAL_ADMIN_LOOKUP_DETAIL,
+        )
+
+
+def _admin_list_uses_slim_hydration(
+    *,
+    requested_fields: Optional[set[str]],
+    has_contact_filter: bool,
+) -> bool:
+    """Skip expensive per-assistant hydration unless a full fleet read was requested."""
+    if has_contact_filter:
+        return True
+    if requested_fields is not None:
+        return True
+    return False
+
+
 @admin_router.get(
     "/assistant",
     summary="Admin: list all assistants",
@@ -7026,6 +7080,24 @@ def admin_list_all_assistants(
             s.strip() for s in secret_names.split(",") if s.strip()
         ] or None
 
+    has_contact_filter = _admin_list_has_contact_filter(
+        phone=phone,
+        user_phone=user_phone,
+        email=email,
+        user_whatsapp_number=user_whatsapp_number,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    )
+    _raise_if_ambiguous_universal_admin_contact_lookup(
+        agent_id=agent_id,
+        phone=phone,
+        email=email,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    )
+    use_slim_hydration = _admin_list_uses_slim_hydration(
+        requested_fields=requested_fields,
+        has_contact_filter=has_contact_filter,
+    )
+
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -7077,14 +7149,25 @@ def admin_list_all_assistants(
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
         skip_team_summaries = (
             requested_fields is not None and "team_summaries" not in requested_fields
-        )
+        ) or use_slim_hydration
         skip_contact_ids = requested_fields is not None and not (
             {"self_contact_id", "boss_contact_id"} & requested_fields
         )
         skip_contact_identity_roots = (
             requested_fields is not None
             and "contact_identity_roots" not in requested_fields
+        ) or use_slim_hydration
+        resolve_slack_install = not use_slim_hydration or (
+            requested_fields is not None
+            and "assistant_slack_bot_user_id" in requested_fields
         )
+        include_internal = not use_slim_hydration or (
+            requested_fields is not None
+            and ({"user_desktops", "user_desktop_filesync_keys"} & requested_fields)
+        )
+        if has_contact_filter and requested_fields is None:
+            skip_contact_ids = False
+            skip_teams = False
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -7202,8 +7285,8 @@ def admin_list_all_assistants(
                     else None
                 ),
                 resolve_workspace_secrets=not skip_secrets,
-                resolve_slack_install=True,
-                include_internal=True,
+                resolve_slack_install=resolve_slack_install,
+                include_internal=include_internal,
             )
             for i, a in enumerate(assistants)
         ]
@@ -7276,6 +7359,13 @@ def admin_update_assistant_by_filter(
     )
     new_user_whatsapp_number = normalize_phone_parameter(
         new_user_whatsapp_number,
+    )
+
+    _raise_if_ambiguous_universal_admin_contact_lookup(
+        agent_id=None,
+        phone=phone,
+        email=email,
+        assistant_whatsapp_number=assistant_whatsapp_number,
     )
 
     # Find the assistant to update
