@@ -2466,6 +2466,49 @@ class TestAdminEndpoints:
         assert get_by_org.status_code == status.HTTP_200_OK
         assert get_by_org.json()["slack_team_id"] == "T_HTTP"
 
+    async def test_installs_list_returns_all_without_tokens(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        owner = _make_user(dbsession, "http-list")
+        org = _make_org(dbsession, owner, "http-list")
+        personal = _make_user(dbsession, "http-list-personal")
+        dbsession.commit()
+
+        await client.post(
+            "/v0/admin/slack/install",
+            json={
+                "organization_id": org.id,
+                "slack_team_id": "T_LIST_ORG",
+                "slack_app_id": "A_LIST",
+                "bot_user_id": "U_LIST_ORG",
+                "bot_access_token": "xoxb-list-org",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        await client.post(
+            "/v0/admin/slack/install",
+            json={
+                "user_id": personal.id,
+                "slack_team_id": "T_LIST_USER",
+                "slack_app_id": "A_LIST",
+                "bot_user_id": "U_LIST_USER",
+                "bot_access_token": "xoxb-list-user",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+        resp = await client.get("/v0/admin/slack/installs", headers=ADMIN_HEADERS)
+        assert resp.status_code == status.HTTP_200_OK
+        rows = resp.json()
+        by_team = {row["slack_team_id"]: row for row in rows}
+        assert {"T_LIST_ORG", "T_LIST_USER"} <= set(by_team)
+        assert by_team["T_LIST_ORG"]["organization_id"] == org.id
+        assert by_team["T_LIST_USER"]["user_id"] == personal.id
+        # List never leaks bot tokens.
+        assert all(row["bot_access_token"] is None for row in rows)
+
     async def test_install_get_404_when_missing(
         self,
         client: AsyncClient,

@@ -225,6 +225,19 @@ def _require_owner_xor(
 # ---------------------------------------------------------------------------
 
 
+@admin_router.get("/slack/installs")
+def list_installs(
+    session: Session = Depends(get_db_session),
+) -> list[InstallResponse]:
+    """List every Slack install known to Orchestra (debug / health check).
+
+    Bot tokens are never included. Callers that need a token read a single
+    install via ``GET /slack/install`` with ``include_token=true``.
+    """
+    installs = SlackDAO(session).list_installs()
+    return [_install_to_response(install) for install in installs]
+
+
 @admin_router.post("/slack/install")
 def upsert_install(
     body: InstallUpsertRequest,
