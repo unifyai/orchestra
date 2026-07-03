@@ -1374,6 +1374,35 @@ async def test_coordinator_state_patch_manual_step_completion(
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion_allows_workspace_demos(
+    client: AsyncClient,
+) -> None:
+    """Workspace demos are settable: the assistant finishes the multi-part task,
+    then marks the step done explicitly (they never auto-complete)."""
+    owner = await _create_user(client, "state-manual-demo")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    for step_id in ("workspace-mailbox", "workspace-drive", "workspace-calendar"):
+        complete = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={
+                "onboarding_step_completion": {"step_id": step_id, "completed": True},
+            },
+            headers=owner["headers"],
+        )
+        assert complete.status_code == status.HTTP_200_OK, complete.json()
+        assert step_id in complete.json()["info"]["completed_step_ids"]
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_manual_step_completion_rejects_auto_steps(
     client: AsyncClient,
 ) -> None:

@@ -94,6 +94,7 @@ from orchestra.services.coordinator_service import (
     compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
+    emit_onboarding_step_completed_event,
     emit_onboarding_step_event,
     emit_onboarding_step_reset_event,
     emit_onboarding_step_skipped_event,
@@ -1728,6 +1729,21 @@ async def update_coordinator_state_endpoint(
             coordinator=coordinator,
             step_id=update.reset_onboarding_step,
             completed_step_ids=completed_step_ids,
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
+    if (
+        update.onboarding_step_completion is not None
+        and update.onboarding_step_completion.completed
+        and next_state.get("onboarding_active")
+    ):
+        await emit_onboarding_step_completed_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.onboarding_step_completion.step_id,
+            completed_step_ids=derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+            ),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     session.commit()
