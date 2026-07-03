@@ -1090,10 +1090,14 @@ def default_composio_oauth_redirect_uri() -> str:
     """White-label Composio OAuth callback on Orchestra's public API host."""
 
     raw = (
-        os.getenv("ORCHESTRA_PUBLIC_URL")
-        or os.getenv("ORCHESTRA_URL")
-        or "https://api.unify.ai"
-    ).strip().rstrip("/")
+        (
+            os.getenv("ORCHESTRA_PUBLIC_URL")
+            or os.getenv("ORCHESTRA_URL")
+            or "https://api.unify.ai"
+        )
+        .strip()
+        .rstrip("/")
+    )
     base_v0 = raw if raw.endswith("/v0") else f"{raw}/v0"
     return f"{base_v0}/integrations/composio/oauth/callback"
 
