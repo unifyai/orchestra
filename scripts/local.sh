@@ -55,7 +55,8 @@ ORCHESTRA_PREFIX="${ORCHESTRA_PREFIX:-orchestra}"
 
 # Ports
 ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
-ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
+_ORCHESTRA_DB_PORT_FROM_ENV="${ORCHESTRA_DB_PORT:-}"
+unset ORCHESTRA_DB_PORT
 
 # Inactivity timeout (seconds) - server shuts down after this period of no requests
 ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-600}"
@@ -69,6 +70,50 @@ ORCHESTRA_DB_VOLUME="${ORCHESTRA_PREFIX}-local-db-data"
 ORCHESTRA_SERVER_PIDFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.pid"
 ORCHESTRA_SERVER_LOGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.log"
 ORCHESTRA_SERVER_CONFIGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.config"
+
+_db_container_host_port() {
+  local container="${1:-$ORCHESTRA_DB_CONTAINER}"
+  local mapped=""
+  mapped="$(docker port "$container" 5432/tcp 2>/dev/null | head -1 | sed 's/.*://')"
+  if [[ -z "$mapped" ]]; then
+    mapped="$(docker inspect -f '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' "$container" 2>/dev/null || true)"
+  fi
+  printf '%s' "$mapped"
+}
+
+read_orchestra_db_port_from_config() {
+  if [[ ! -f "$ORCHESTRA_SERVER_CONFIGFILE" ]]; then
+    return 1
+  fi
+  grep "^ORCHESTRA_DB_PORT=" "$ORCHESTRA_SERVER_CONFIGFILE" 2>/dev/null | cut -d= -f2- | head -1
+}
+
+resolve_orchestra_db_port() {
+  if [[ -n "${_ORCHESTRA_DB_PORT_FROM_ENV:-}" ]]; then
+    printf '%s' "$_ORCHESTRA_DB_PORT_FROM_ENV"
+    return 0
+  fi
+
+  local from_config mapped=""
+  from_config="$(read_orchestra_db_port_from_config 2>/dev/null || true)"
+  if [[ -n "$from_config" ]]; then
+    printf '%s' "$from_config"
+    return 0
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    mapped="$(_db_container_host_port "$ORCHESTRA_DB_CONTAINER")"
+    if [[ -n "$mapped" ]]; then
+      printf '%s' "$mapped"
+      return 0
+    fi
+  fi
+
+  printf '5432'
+}
+
+ORCHESTRA_DB_PORT="$(resolve_orchestra_db_port)"
+unset _ORCHESTRA_DB_PORT_FROM_ENV
 
 # URLs
 LOCAL_ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0"
@@ -436,11 +481,6 @@ remove_db_container() {
   return 0
 }
 
-_db_container_host_port() {
-  local container="${1:-$ORCHESTRA_DB_CONTAINER}"
-  docker port "$container" 5432/tcp 2>/dev/null | head -1 | sed 's/.*://'
-}
-
 db_container_has_orchestra_database() {
   local container="${1:-$ORCHESTRA_DB_CONTAINER}"
   local result=""
@@ -457,6 +497,17 @@ ensure_orchestra_database_present() {
 
   log_error "PostgreSQL is running, but database 'orchestra' is missing"
   log_info "Run a destructive local reset: $0 purge && $0 start"
+  return 1
+}
+
+_ensure_db_container_port_matches() {
+  local mapped_port
+  mapped_port="$(_db_container_host_port "$ORCHESTRA_DB_CONTAINER")"
+  if [[ -n "$mapped_port" && "$mapped_port" == "$ORCHESTRA_DB_PORT" ]]; then
+    return 0
+  fi
+  log_error "PostgreSQL container '$ORCHESTRA_DB_CONTAINER' is mapped to port ${mapped_port:-unknown}, but ORCHESTRA_DB_PORT=$ORCHESTRA_DB_PORT"
+  log_info "Re-run with ORCHESTRA_DB_PORT=${mapped_port:-5432}, or stop the container and re-run setup"
   return 1
 }
 
@@ -491,6 +542,9 @@ start_db_container() {
     if ! docker start "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1; then
       log_error "Failed to start existing container '$ORCHESTRA_DB_CONTAINER'"
       log_info "If the container is in a bad state, run: $0 purge && $0 start"
+      return 1
+    fi
+    if ! _ensure_db_container_port_matches; then
       return 1
     fi
   else
@@ -953,10 +1007,11 @@ start_orchestra_server() {
   disown $pid 2>/dev/null || true
   echo "$pid" > "$ORCHESTRA_SERVER_PIDFILE"
 
-  # Write config file with logging directories for external tools to check
+  # Write config file for external tools (parallel_run, worktrees) to discover settings.
   {
     echo "ORCHESTRA_LOG_DIR=${ORCHESTRA_LOG_DIR:-}"
     echo "ORCHESTRA_OTEL_LOG_DIR=${ORCHESTRA_OTEL_LOG_DIR:-}"
+    echo "ORCHESTRA_DB_PORT=${ORCHESTRA_DB_PORT}"
   } > "$ORCHESTRA_SERVER_CONFIGFILE"
 
   log_info "Orchestra server started with PID $pid"
