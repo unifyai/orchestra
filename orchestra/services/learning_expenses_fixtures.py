@@ -34,6 +34,28 @@ def learning_expenses_storage_check_nudge() -> str:
     )
 
 
+def learning_expenses_user_facing_voice() -> str:
+    """Plain-language rules for Learning demo chat messages (non-technical audience)."""
+    return (
+        "User-facing voice: the audience is non-technical. Keep every learning-demo "
+        "chat message short and scannable — a headline dollar total plus one or two "
+        "plain sentences. Do NOT send markdown tables, line-by-line row breakdowns, "
+        "disposition/contribution columns, or accounting jargon (gross outflows, "
+        "netted, phantom spending, rule 1/rule 2). The CSVs are attachments for "
+        "anyone curious; do not recite every row in chat. "
+        "Opening arc: at most five short bullets; casual tone, not a compliance brief. "
+        "Attachment captions: one sentence each (what the file is; mention the "
+        "checking↔card transfer trap in plain English). "
+        "First-attempt deliverable: state the naive total, then one sentence on "
+        "the mistake (double-counted the internal transfer between checking and "
+        "card), then the exact correction text to paste — nothing else. "
+        "Improved deliverable: state the corrected total, one sentence on what "
+        "changed (skipped transfers, counted refunds), optionally one contrast "
+        "vs the naive total — then Brain/StorageCheck nudge and invite February. "
+        "Replay deliverable: corrected total for the new month in one line."
+    )
+
+
 LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION = (
     "sum every outflow as spend, add abs(Amount) again for each INTERNAL XFER "
     "row on either file (including card-side credits) so the transfer is "
@@ -71,14 +93,11 @@ def learning_expenses_deliverable_handoff_rule() -> str:
 def learning_expenses_intro_arc_lines() -> tuple[str, ...]:
     """High-level arc to preview before sending any files."""
     return (
-        "Share the January bank exports (one CSV per message) so they can see the data.",
-        "Run a deliberately naive first pass that double-counts the internal transfer.",
-        "Wait for them to send the correction in their own words (suggest exact text).",
-        "Revise with the corrected algorithm; interject into the running persist "
-        "act with an explicit StorageCheck memoization request (Guidance + Function).",
-        "Point them to the Brain rail Guidance and Functions sections themselves.",
-        f"Wait until they ask for February; replay on month-N+1 ({LEARNING_EXPENSES_MONTH_N_PLUS_1}) "
-        "to prove the learning stuck.",
+        "Share two January bank CSVs (checking + card).",
+        "Run a naive pass that double-counts the internal transfer.",
+        "You send a short correction (I'll suggest exact text).",
+        "I revise; Brain saves your rule and a reusable pipeline.",
+        "Ask for February when ready — I'll replay using what we learned.",
     )
 
 
@@ -95,11 +114,8 @@ def learning_expenses_checking_attachment_description() -> str:
     """What to tell the user when sending the checking CSV."""
     checking = _checking_month_n_path()
     return (
-        f"When sending `{checking}` (January checking account): say it is five "
-        "rows — grocery (Whole Foods), payroll deposit (a credit), an INTERNAL "
-        "XFER TO VISA that moves money to the card, a utilities bill, and an "
-        "AMZN REFUND (positive amount). The transfer pair with the card file "
-        "is what makes the naive pass go wrong."
+        f"When sending `{checking}`: one sentence — January checking export; "
+        "includes a transfer to the card that sets up the double-count demo."
     )
 
 
@@ -107,10 +123,8 @@ def learning_expenses_card_attachment_description() -> str:
     """What to tell the user when sending the card CSV."""
     card = _card_month_n_path()
     return (
-        f"When sending `{card}` (January card statement): say it is four rows — "
-        "an Amazon purchase, INTERNAL XFER FROM CHK (the matching credit from "
-        "checking), gas, and a cryptic coffee-shop merchant string. Mention "
-        "the internal transfer shows up on both files."
+        f"When sending `{card}`: one sentence — January card export; the matching "
+        "transfer from checking appears here too (that is the trap)."
     )
 
 
@@ -118,10 +132,9 @@ def learning_expenses_opening_script_guidance() -> str:
     """Conversational opening tone for the first message after the row click."""
     arc = " → ".join(learning_expenses_intro_arc_lines())
     return (
-        "Open like a person walking them through the demo, not a compliance "
-        "brief — casual and direct (for example: ok so this is the learning "
-        "demo; here is what we are going to do). Preview the full arc before "
-        "any attachments: "
+        "Open casually (for example: ok, this is the learning demo — here is the "
+        "plan). Preview the arc in at most five short bullets before attachments: "
         f"{arc}. "
-        f"{learning_expenses_contrivance_acknowledgment()}"
+        f"{learning_expenses_contrivance_acknowledgment()} "
+        f"{learning_expenses_user_facing_voice()}"
     )

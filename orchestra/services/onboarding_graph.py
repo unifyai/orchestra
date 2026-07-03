@@ -42,6 +42,7 @@ from orchestra.services.learning_expenses_fixtures import (
     learning_expenses_intro_arc_lines,
     learning_expenses_opening_script_guidance,
     learning_expenses_storage_check_nudge,
+    learning_expenses_user_facing_voice,
 )
 
 ADDRESSED = 0
@@ -232,6 +233,8 @@ LEARNING_FRAMING = (
     f"{learning_expenses_deliverable_handoff_rule()} "
     "Rule 2 — Opening voice: "
     f"{learning_expenses_opening_script_guidance()} "
+    "Rule 2b — User-facing deliverables: "
+    f"{learning_expenses_user_facing_voice()} "
     "Rule 3 — Attachments: before the first attempt, send the month-N bank "
     "export CSVs as unify_message attachments (one attachment per message). "
     f"{learning_expenses_checking_attachment_description()} "
@@ -241,8 +244,10 @@ LEARNING_FRAMING = (
     f"{LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION} "
     "from the fixtures; numbers are genuinely computed, never asserted. "
     "Rule 5 — After the first act completes, send the naive result as a "
-    "unify_message tagged onboarding_learning_phase=first_attempt (see Rule 1), "
-    "surface the mistake with real numbers, suggest this exact correction text "
+    "unify_message tagged onboarding_learning_phase=first_attempt (see Rule 1). "
+    "State the naive total and explain the mistake in plain language (Rule 2b) — "
+    "never forward act tables or row-by-row math. Suggest this exact correction "
+    "text "
     f'for the user to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}" — '
     "then WAIT; never send the correction or proceed on their behalf. "
     "Rule 6 — After their correction: interject into the running persist act "
