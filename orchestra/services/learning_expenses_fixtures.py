@@ -57,7 +57,8 @@ def learning_expenses_intro_arc_lines() -> tuple[str, ...]:
         "Share the January bank exports (one CSV per message) so they can see the data.",
         "Run a deliberately naive first pass that double-counts the internal transfer.",
         "Wait for them to send the correction in their own words (suggest exact text).",
-        "Revise, store the rule as Guidance and the pipeline as a Function.",
+        "Revise with the corrected algorithm; StorageCheck stores Guidance and a "
+        "Function after the act completes.",
         "Point them to the Brain rail Guidance and Functions sections themselves.",
         f"Wait until they ask for February; replay on month-N+1 ({LEARNING_EXPENSES_MONTH_N_PLUS_1}) "
         "to prove the learning stuck.",
