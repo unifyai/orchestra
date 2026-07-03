@@ -1751,25 +1751,34 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
     )
 
 
-def _connected_workspace_provider(
+def _connected_workspace(
     session: Session,
     *,
     coordinator: Assistant,
-) -> str | None:
-    """Which workspace provider the Coordinator connected, if any.
+) -> tuple[str | None, frozenset[str]]:
+    """The connected workspace provider and the features the user granted.
 
-    Returns ``"google"`` or ``"microsoft"`` from the canonical
-    granted-scopes secret the OAuth handshake writes (and the disconnect
-    flow clears), or ``None`` when no workspace is connected. This drives
-    which provider-exclusive onboarding steps render (e.g. the
-    Microsoft-only Teams demo) and specialises provider-aware copy.
+    Reads the canonical granted-scopes secret the OAuth handshake writes
+    (and the disconnect flow clears). Returns ``("google" | "microsoft",
+    {features})`` — the provider drives which provider-exclusive onboarding
+    steps render (e.g. the Microsoft-only Teams demo) and specialises
+    provider-aware copy, while the granted features gate scope-dependent
+    steps (e.g. the calendar demo only shows once calendar was granted).
+    Returns ``(None, frozenset())`` when no workspace is connected.
     """
+    from orchestra.web.api.assistant.scopes import map_scopes_to_features
+
     secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
-    if secrets.get("GOOGLE_GRANTED_SCOPES"):
-        return "google"
-    if secrets.get("MICROSOFT_GRANTED_SCOPES"):
-        return "microsoft"
-    return None
+    for provider, secret_name in (
+        ("google", "GOOGLE_GRANTED_SCOPES"),
+        ("microsoft", "MICROSOFT_GRANTED_SCOPES"),
+    ):
+        granted_scopes = secrets.get(secret_name)
+        if granted_scopes:
+            return provider, frozenset(
+                map_scopes_to_features(provider, granted_scopes),
+            )
+    return None, frozenset()
 
 
 def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
@@ -2255,7 +2264,10 @@ def compute_onboarding_render(
     """
     if local_mode is None:
         local_mode = onboarding_local_mode()
-    provider = _connected_workspace_provider(session, coordinator=coordinator)
+    provider, granted_features = _connected_workspace(
+        session,
+        coordinator=coordinator,
+    )
     state = get_coordinator_state(session, coordinator=coordinator)
     completed: set[str] = set(
         derive_onboarding_progress(session, coordinator=coordinator, state=state),
@@ -2292,6 +2304,11 @@ def compute_onboarding_render(
         # demo (and vice versa), and nothing shows before a workspace connects.
         if not onboarding_graph.step_visible_for_provider(step, provider):
             continue
+        # Feature-gated steps (e.g. the calendar demo) render only once the
+        # user granted that workspace scope; a workspace connected without
+        # calendar access never surfaces the calendar demo.
+        if not onboarding_graph.step_visible_for_features(step, granted_features):
+            continue
         if step.kind == "coming_soon":
             status = "coming_soon"
         elif step.id in completed:
@@ -2312,6 +2329,8 @@ def compute_onboarding_render(
             if not onboarding_graph.phase_is_visible(dep.phase, local_mode=local_mode):
                 continue
             if not onboarding_graph.step_visible_for_provider(dep, provider):
+                continue
+            if not onboarding_graph.step_visible_for_features(dep, granted_features):
                 continue
             satisfied = (
                 dep_id in completed

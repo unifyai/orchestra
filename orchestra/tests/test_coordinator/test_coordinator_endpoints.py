@@ -811,6 +811,59 @@ async def test_onboarding_render_specialises_workspace_copy_by_provider(
 
 
 @pytest.mark.anyio
+async def test_onboarding_render_gates_calendar_demo_on_calendar_scope(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """The calendar demo renders only once the calendar scope is granted.
+
+    A workspace connected without calendar access still surfaces the
+    (ungated) drive demo but omits the calendar demo entirely; granting the
+    calendar bundle reveals it.
+    """
+    owner = await _create_user(client, "calendar-gated-onboarding")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    dao = svc.AssistantSecretDAO(dbsession)
+
+    # Google workspace connected with drive + email but NOT calendar: the
+    # ungated drive demo shows while the calendar demo is gated out.
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive "
+        "https://www.googleapis.com/auth/gmail.send "
+        "https://www.googleapis.com/auth/gmail.readonly "
+        "https://www.googleapis.com/auth/gmail.modify",
+    )
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    step_ids = _render_step_ids(render)
+    assert "workspace-drive" in step_ids
+    assert "workspace-calendar" not in step_ids
+
+    # Granting the full calendar bundle reveals the calendar demo.
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive "
+        "https://www.googleapis.com/auth/calendar "
+        "https://www.googleapis.com/auth/calendar.events",
+    )
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    assert "workspace-calendar" in _render_step_ids(render)
+
+
+@pytest.mark.anyio
 async def test_assistant_read_workspace_provider_tracks_oauth_grant_not_mailbox(
     client: AsyncClient,
     dbsession: Session,

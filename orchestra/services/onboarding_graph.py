@@ -71,6 +71,12 @@ class OnboardingStep:
     # (e.g. Microsoft-only Teams) that is only rendered once the connected
     # workspace matches; it is omitted from the provider-agnostic catalog.
     providers: tuple[str, ...] = ()
+    # Workspace feature (scope bundle) this step needs the user to have
+    # granted. ``None`` means the step is always eligible; a value (e.g.
+    # ``"calendar"``) hides the step until that feature's scopes appear in
+    # the connected workspace's granted-scopes secret. Feature names mirror
+    # the bundles in ``assistant.scopes`` (email, calendar, drive, ...).
+    requires_feature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +348,7 @@ def _demo(
     nudge_chat: str,
     nudge_voice: str,
     providers: tuple[str, ...] = (),
+    requires_feature: str | None = None,
 ) -> OnboardingStep:
     """A workspace demo trigger row.
 
@@ -392,6 +399,7 @@ def _demo(
         nudge_voice=nudge_voice,
         event=event,
         providers=providers,
+        requires_feature=requires_feature,
     )
 
 
@@ -803,6 +811,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "clicking the 'Check my upcoming calendar events within a week' row "
             "in the Onboarding checklist"
         ),
+        requires_feature="calendar",
     ),
     OnboardingStep(
         id="apps",
@@ -1268,6 +1277,23 @@ def step_visible_for_provider(
     if not step.providers:
         return True
     return provider is not None and provider in step.providers
+
+
+def step_visible_for_features(
+    step: OnboardingStep,
+    granted_features: frozenset[str],
+) -> bool:
+    """Whether a step renders given the workspace features the user granted.
+
+    Feature-agnostic steps (``requires_feature is None``) always render. A
+    feature-gated step (e.g. the calendar demo) renders only once that
+    feature's scopes appear in the connected workspace's granted-scopes
+    secret; before then — or if the user declined the scope at connect — it
+    stays hidden.
+    """
+    if step.requires_feature is None:
+        return True
+    return step.requires_feature in granted_features
 
 
 def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
