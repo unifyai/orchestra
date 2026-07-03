@@ -509,7 +509,7 @@ async def update_user(
 
     coordinator = get_workspace_coordinator(
         session,
-        user_id=user.user_id,
+        user_id=user.id,
         organization_id=None,
     )
     baseline_completed_step_ids: list[str] | None = None
