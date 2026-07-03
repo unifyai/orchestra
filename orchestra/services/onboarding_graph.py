@@ -41,6 +41,7 @@ from orchestra.services.learning_expenses_fixtures import (
     learning_expenses_deliverable_handoff_rule,
     learning_expenses_intro_arc_lines,
     learning_expenses_opening_script_guidance,
+    learning_expenses_storage_check_nudge,
 )
 
 ADDRESSED = 0
@@ -244,12 +245,14 @@ LEARNING_FRAMING = (
     "surface the mistake with real numbers, suggest this exact correction text "
     f'for the user to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}" — '
     "then WAIT; never send the correction or proceed on their behalf. "
-    "Rule 6 — After their correction: run act(persist=True) to recompute with the "
-    "corrected algorithm and send the improved deliverable tagged "
-    f"onboarding_learning_phase=improved. Do not store Guidance or Functions "
-    "inside the act — StorageCheck persists them from the trajectory after the "
-    "act completes; after StorageCheck finishes, cite the stored ids from its "
-    f"summary when nudging the user, then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
+    "Rule 6 — After their correction: interject into the running persist act "
+    "with the corrected algorithm and include this StorageCheck memoization "
+    f"request verbatim: {learning_expenses_storage_check_nudge()} "
+    "Send the improved deliverable tagged "
+    f"onboarding_learning_phase=improved. The doing loop must not call store "
+    "tools — StorageCheck persists after the act completes; after StorageCheck "
+    f"finishes, cite the stored ids from its summary when nudging the user, then "
+    f"{_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
     "Rule 7 — Invite them to ask for next month's report and WAIT; replay only "
     f"once they ask ({LEARNING_EXPENSES_REPLAY_HINT}). "
     "Rule 8 — Replay: second act(persist=True) over month-N+1 files; send the "

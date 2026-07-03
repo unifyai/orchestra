@@ -17,6 +17,23 @@ LEARNING_EXPENSES_USER_CORRECTION_TEXT = (
     "monthly spend."
 )
 
+LEARNING_EXPENSES_GUIDANCE_TITLE = "Monthly bank export spend rules"
+LEARNING_EXPENSES_FUNCTION_NAME = "compute_monthly_spend_from_bank_exports"
+
+
+def learning_expenses_storage_check_nudge() -> str:
+    """Explicit StorageCheck mandate for the learning correction interjection."""
+    return (
+        "StorageCheck memoization (for the post-act review loop — do NOT call "
+        "GuidanceManager or FunctionManager store tools in the doing loop): "
+        f"persist Guidance titled {LEARNING_EXPENSES_GUIDANCE_TITLE!r} with the "
+        "user's correction rule (skip INTERNAL XFER rows; sum remaining "
+        "outflows; net REFUND rows against spend) and Function "
+        f"{LEARNING_EXPENSES_FUNCTION_NAME!r} for the corrected monthly spend "
+        "pipeline from checking+card CSV exports."
+    )
+
+
 LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION = (
     "sum every outflow as spend, add abs(Amount) again for each INTERNAL XFER "
     "row on either file (including card-side credits) so the transfer is "
@@ -57,8 +74,8 @@ def learning_expenses_intro_arc_lines() -> tuple[str, ...]:
         "Share the January bank exports (one CSV per message) so they can see the data.",
         "Run a deliberately naive first pass that double-counts the internal transfer.",
         "Wait for them to send the correction in their own words (suggest exact text).",
-        "Revise with the corrected algorithm; StorageCheck stores Guidance and a "
-        "Function after the act completes.",
+        "Revise with the corrected algorithm; interject into the running persist "
+        "act with an explicit StorageCheck memoization request (Guidance + Function).",
         "Point them to the Brain rail Guidance and Functions sections themselves.",
         f"Wait until they ask for February; replay on month-N+1 ({LEARNING_EXPENSES_MONTH_N_PLUS_1}) "
         "to prove the learning stuck.",
