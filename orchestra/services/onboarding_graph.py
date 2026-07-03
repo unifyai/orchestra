@@ -182,8 +182,59 @@ TASKS_FRAMING = (
 # the live feed of a run in progress.
 _TASKS_TAB_NUDGE = "point them to the Tasks tab, where the new task now shows up"
 _ACTIONS_TAB_NUDGE = (
-    "point them to the Actions tab, which streams my work live while a task runs"
+    "tell the user to open the Actions tab themselves so they can watch my work "
+    "live while a run is in progress — I have no tool to navigate the Console "
+    "for them"
 )
+
+# Brain rail sections T-W1N tells the user to open after storing learning.
+_BRAIN_GUIDANCE_NUDGE = (
+    "tell the user to open the Guidance section in the Brain rail themselves, "
+    "where the new rules now live — I have no tool to navigate the Console "
+    "for them"
+)
+_BRAIN_FUNCTIONS_NUDGE = (
+    "tell the user to open the Functions section in the Brain rail themselves, "
+    "where the reusable procedure now lives — I have no tool to navigate the "
+    "Console for them"
+)
+
+# The Learning beat is one openly-narrated tutorial (scripted narrative, real
+# mechanics) over the seeded Expenses ETL example. One constant so the phase
+# framing and the beat event tell the same story.
+LEARNING_FRAMING = (
+    "The Learning phase demonstrates active learning: one user correction "
+    "becomes durable Guidance (a rule that changes behavior permanently) and "
+    "a reusable Function (a stored pipeline), and the replay on fresh month-N+1 "
+    "data proves it stuck — one correction, permanent behavior change. "
+    "In this guided tutorial over seeded bank exports, T-W1N says up front "
+    "this is a demo of how the user corrects it. Before the first attempt it "
+    "sends the month-N bank export CSVs to the user as unify_message attachments "
+    "(one attachment per message) so they can inspect the data. It then runs a "
+    "deliberately naive first pass over the month-N files via act(persist=True) "
+    "— sum every outflow as spend, add abs(Amount) again for each INTERNAL XFER "
+    "row on either file (including card-side credits) so the transfer is "
+    "double-counted, and ignore refunds; the numbers are genuinely computed, "
+    "never asserted — then surfaces its "
+    "own mistake with the real numbers, suggests the exact correction text for "
+    "the user to send, and WAITS; it never sends the correction or proceeds on "
+    "the user's behalf. After the user's correction it revises, stores the "
+    "stated rule as Guidance AND the pipeline as a Function, then "
+    f"{_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. It then "
+    "invites the user to ask for next month's report and WAITS again; the "
+    "replay only runs once the user asks. The replay is a second "
+    "act(persist=True) over the reserved month-N+1 files, proving the "
+    "stored learning on a fresh instance. "
+    "Each phase deliverable — first attempt, improved version, replay — "
+    "must be sent as a unify_message tagged with onboarding_learning_phase "
+    "(first_attempt, improved, replay). Brain nudges and the attachment "
+    "intro messages are not phase deliverables. Before and during each act "
+    f"run, {_ACTIONS_TAB_NUDGE}."
+)
+
+# Interaction channel for Learning beat outbound tagging (mirrors workspace_demo
+# channel ids consumed by Unity ``consume_pending_onboarding_outbound``).
+LEARNING_BEAT_CHANNEL = "learning_beat"
 
 
 @dataclass(frozen=True)
@@ -239,7 +290,8 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         id="learning",
         label=PHASE_LEARNING,
         title="Learning",
-        description="Teach me the background I should remember.",
+        description="Correct me once — I'll remember how you want it done.",
+        framing=LEARNING_FRAMING,
     ),
     OnboardingPhase(
         id="canvas",
@@ -415,6 +467,14 @@ _TASK_BEAT_KIND: dict[str, str] = {
     "create-triggerable-task": "triggered",
 }
 
+# Learning-phase beat: one row, no chips. The row click starts the openly
+# scripted expenses-etl tutorial directly (see LEARNING_FRAMING).
+_LEARNING_SCENARIO_ID = "expenses-etl"
+_LEARNING_REPLAY_HINT = (
+    "Run the stored pipeline on the next month's bank exports "
+    "(onboarding/learning/expenses month N+1 files) once the user asks."
+)
+
 
 def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     """Event fired when the user clicks a Tasks-phase beat row.
@@ -472,6 +532,55 @@ def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "phase": PHASE_TASKS,
             "phase_id": "tasks",
             "phase_framing": TASKS_FRAMING,
+            "interaction": interaction,
+        },
+    )
+
+
+def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks the Learning beat row.
+
+    The click starts the guided expenses-etl tutorial directly — an openly
+    narrated correction loop over seeded bank exports, scripted end to end by
+    ``LEARNING_FRAMING``. There is no freeform mode and there are no chips.
+    """
+    interaction = {
+        "type": "learning_beat",
+        "trigger_step_id": step_id,
+        "channel": LEARNING_BEAT_CHANNEL,
+        "scenario_id": _LEARNING_SCENARIO_ID,
+        "instructions": LEARNING_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}', so run the guided tutorial "
+            "now: tell them openly this is a demo of how they correct me, "
+            "send them the month-N bank export CSVs as unify_message "
+            "attachments so they can inspect the data, then run a "
+            "deliberately naive first pass over those files via "
+            "act(persist=True): sum every outflow, add abs(Amount) again for each "
+            "INTERNAL XFER row on either file (including card-side credits), "
+            "ignore refunds — all with real computed numbers. Surface my own "
+            "mistake with those numbers, suggest the exact correction text, "
+            "and WAIT for them to send it — never proceed on their behalf. "
+            "After their correction, revise, store the rule as Guidance AND "
+            f"the pipeline as a Function, then {_BRAIN_GUIDANCE_NUDGE} and "
+            f"{_BRAIN_FUNCTIONS_NUDGE}. Invite them to ask for next month's "
+            f"report and WAIT. Replay: {_LEARNING_REPLAY_HINT} "
+            f"{_ACTIONS_TAB_NUDGE} before and during each act run. "
+            f"Full contract: {LEARNING_FRAMING}"
+        ),
+        subtype="learning_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "channel": LEARNING_BEAT_CHANNEL,
+            "scenario_id": _LEARNING_SCENARIO_ID,
+            "replay_hint": _LEARNING_REPLAY_HINT,
+            "framing": LEARNING_FRAMING,
+            "phase": PHASE_LEARNING,
+            "phase_id": "learning",
+            "phase_framing": LEARNING_FRAMING,
             "interaction": interaction,
         },
     )
@@ -870,7 +979,29 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         ),
         event=_task_beat_event("create-triggerable-task", "Create a triggerable task"),
     ),
-    _coming_soon("learning-coming-soon", PHASE_LEARNING),
+    OnboardingStep(
+        id="learn-from-correction",
+        title="Teach me by correcting me",
+        phase=PHASE_LEARNING,
+        kind="schedule",
+        depends_on={},
+        can_skip=True,
+        derivable=True,
+        nudge_chat=(
+            "Have them click the 'Teach me by correcting me' row in the "
+            "Onboarding checklist. It starts a guided tutorial where I make "
+            "a deliberate mistake on seeded bank exports, they correct me, "
+            "I store the learning in Brain, and they prove it by asking me "
+            "to run next month's report."
+        ),
+        nudge_voice=(
+            "clicking the 'Teach me by correcting me' row in the Onboarding checklist"
+        ),
+        event=_learning_beat_event(
+            "learn-from-correction",
+            "Teach me by correcting me",
+        ),
+    ),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
     _coming_soon("my-computer-coming-soon", PHASE_MY_COMPUTER),
     _coming_soon("your-computer-coming-soon", PHASE_YOUR_COMPUTER),
@@ -925,6 +1056,14 @@ DEMO_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "workspace-calendar": ("unify_message",),
 }
 TRIGGER_TO_OUTBOUND_MEDIUMS.update(DEMO_TO_OUTBOUND_MEDIUMS)
+
+# Channel → accepted outbound mediums for non-quiz onboarding beats. Unity
+# mirrors this map as a golden constant in
+# ``tests/conversation_manager/core/test_onboarding_outbound_media.py`` — a
+# change here must be applied there too, or the beat silently stops tagging.
+BEAT_CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
+    LEARNING_BEAT_CHANNEL: ("unify_message",),
+}
 
 # Steps whose completion Orchestra derives from durable domain state.
 DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
@@ -1093,6 +1232,11 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         _TRIGGERABLE_TASK_CHIPS,
         _TRIGGERABLE_TASK_CHIPS,
     ),
+    "learn-from-correction": StepPresentation(
+        "A guided demo: correct my first attempt and I'll store how you "
+        "want it done, then prove it on the next one.",
+        "~5 min",
+    ),
 }
 
 _EMPTY_PRESENTATION = StepPresentation()
@@ -1225,6 +1369,17 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "watch it run live when they trip it. The suggestion chips under the row "
         "are clickable: clicking one asks me to arm that specific triggerable "
         "task straight away."
+    ),
+    "learn-from-correction": (
+        "Clicking the 'Teach me by correcting me' row starts an openly "
+        "narrated tutorial: I send the seeded month-N bank exports as chat "
+        "attachments, make a deliberately naive pass over them, point out my "
+        "own mistake, suggest the correction for the user to send, and wait. "
+        "After they send it I revise, store the learning in Brain (Guidance "
+        "and Functions), and invite them to ask me for next month's report — "
+        "the replay runs only when they ask. Completion is derived from the "
+        "tagged chat deliverables plus the stored learning and the replay — "
+        "not from the click alone."
     ),
 }
 
@@ -1483,6 +1638,13 @@ def manual_completion_block_reason(step_id: str) -> str | None:
         return (
             "This step completes when the user replies on the channel — "
             "I cannot mark it done manually."
+        )
+    if step.id == "learn-from-correction":
+        return (
+            "The Learning tutorial completes on its own once the correction "
+            "loop actually happens — first attempt, the user's correction, "
+            "the improved version, stored learning, and the replay — I "
+            "cannot mark it done without doing the work."
         )
     return None
 
