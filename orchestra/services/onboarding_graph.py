@@ -804,49 +804,6 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "in the Onboarding checklist"
         ),
     ),
-    _demo(
-        "workspace-contacts",
-        "Check my workspace contacts",
-        channel="workspace_contacts",
-        depends_on={"workspace": COMPLETED},
-        nudge_chat=(
-            "Invite them to click the 'Check my workspace contacts' row in the "
-            "Onboarding checklist; I read their connected workspace contacts and "
-            "send back a short summary of who's there."
-        ),
-        nudge_voice=(
-            "clicking the 'Check my workspace contacts' row in the Onboarding checklist"
-        ),
-    ),
-    _demo(
-        "workspace-tasks",
-        "Check my tasks due within a week",
-        channel="workspace_tasks",
-        depends_on={"workspace": COMPLETED},
-        nudge_chat=(
-            "Invite them to click the 'Check my tasks due within a week' row in "
-            "the Onboarding checklist; I read their connected workspace tasks and "
-            "send back a short summary of what's open and due in the next week."
-        ),
-        nudge_voice=(
-            "clicking the 'Check my tasks due within a week' row in the Onboarding checklist"
-        ),
-    ),
-    _demo(
-        "workspace-teams",
-        "Summarise my Teams messages",
-        channel="workspace_teams",
-        depends_on={"workspace": COMPLETED},
-        providers=("microsoft",),
-        nudge_chat=(
-            "Invite them to click the 'Summarise my Teams messages' row in the "
-            "Onboarding checklist; I read their recent Microsoft Teams chats and "
-            "channels and send back a short summary of what needs their attention."
-        ),
-        nudge_voice=(
-            "clicking the 'Summarise my Teams messages' row in the Onboarding checklist"
-        ),
-    ),
     OnboardingStep(
         id="apps",
         title="Connect me with your apps",
@@ -957,9 +914,6 @@ DEMO_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "workspace-mailbox": ("unify_message",),
     "workspace-drive": ("unify_message",),
     "workspace-calendar": ("unify_message",),
-    "workspace-contacts": ("unify_message",),
-    "workspace-tasks": ("unify_message",),
-    "workspace-teams": ("unify_message",),
 }
 TRIGGER_TO_OUTBOUND_MEDIUMS.update(DEMO_TO_OUTBOUND_MEDIUMS)
 
@@ -1117,21 +1071,6 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "summary, flagging any conflicts or gaps.",
         "~30s",
     ),
-    "workspace-contacts": StepPresentation(
-        "T-W1N reads your connected workspace contacts and sends back a short "
-        "summary of who's there.",
-        "~30s",
-    ),
-    "workspace-tasks": StepPresentation(
-        "T-W1N reads your connected workspace tasks and sends back a short "
-        "summary of what's open and due in the next week.",
-        "~30s",
-    ),
-    "workspace-teams": StepPresentation(
-        "T-W1N reads your recent Microsoft Teams chats and channels and sends "
-        "back a short summary of what needs your attention.",
-        "~30s",
-    ),
     "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
     "create-scheduled-task": StepPresentation(
         "Schedule a task and watch me report back on your channel.",
@@ -1252,27 +1191,6 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "tells me the user wants a demo of their connected calendar: I read "
         "their events for the next week and send one short summary back as a "
         "single unify_message, flagging any conflicts or gaps."
-    ),
-    "workspace-contacts": (
-        "Clicking the 'Check my workspace contacts' row tells me the user wants "
-        "a demo of their connected workspace contacts: I read them and send one "
-        "short summary back as a single unify_message. If I have already "
-        "delivered the summary I just confirm it rather than sending another."
-    ),
-    "workspace-tasks": (
-        "Clicking the 'Check my tasks due within a week' row tells me the user "
-        "wants a demo of their connected workspace tasks: I read what's open and "
-        "due in the next week and send one short summary back as a single "
-        "unify_message. If I have already delivered the summary I just confirm "
-        "it rather than sending another."
-    ),
-    "workspace-teams": (
-        "Clicking the 'Summarise my Teams messages' row tells me the user wants "
-        "a demo of their Microsoft Teams messages: I read their recent Teams "
-        "chats and channels and send one short summary of what needs their "
-        "attention back as a single unify_message. If I have already delivered "
-        "the summary I just confirm it rather than sending another. This row "
-        "only appears for a connected Microsoft workspace."
     ),
     "apps": (
         "Clicking the 'Connect me with your apps' row opens the Integrations "

@@ -761,15 +761,15 @@ def _render_step(render: dict, step_id: str) -> dict:
 
 
 @pytest.mark.anyio
-async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
+async def test_onboarding_render_specialises_workspace_copy_by_provider(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Provider-exclusive steps + provider-aware copy follow the connected workspace.
+    """The shared files demo's copy specialises to the connected workspace.
 
-    The Microsoft-only Teams demo renders only once a Microsoft workspace is
-    connected, is hidden for Google (and before any connection), and the shared
-    files demo's description specialises to the connected provider.
+    The files demo's description stays neutral before any connection and names
+    the provider's own product (Google Drive vs OneDrive/SharePoint) once a
+    workspace is connected.
     """
     owner = await _create_user(client, "provider-gated-onboarding")
     create = await client.post(
@@ -784,15 +784,11 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
     coordinator = dbsession.get(Assistant, coordinator_id)
     dao = svc.AssistantSecretDAO(dbsession)
 
-    # No workspace connected: Teams is hidden, files copy stays neutral, and
-    # the provider-agnostic catalog never lists a provider-exclusive step.
+    # No workspace connected: files copy stays neutral.
     render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
-    assert "workspace-teams" not in _render_step_ids(render)
     assert "Drive or OneDrive" in _render_step(render, "workspace-drive")["description"]
-    catalog = svc.build_onboarding_catalog()
-    assert "workspace-teams" not in {step["id"] for step in catalog["steps"]}
 
-    # Google workspace: still no Teams, and the files copy names Google Drive.
+    # Google workspace: the files copy names Google Drive.
     dao.upsert(
         coordinator.user_id,
         coordinator.agent_id,
@@ -800,11 +796,9 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
         "https://www.googleapis.com/auth/drive.readonly",
     )
     render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
-    assert "workspace-teams" not in _render_step_ids(render)
     assert "Google Drive" in _render_step(render, "workspace-drive")["description"]
 
-    # Microsoft workspace: Teams surfaces as an available demo (workspace is
-    # connected), and the files copy names OneDrive/SharePoint.
+    # Microsoft workspace: the files copy names OneDrive/SharePoint.
     dao.delete(coordinator.agent_id, "GOOGLE_GRANTED_SCOPES")
     dao.upsert(
         coordinator.user_id,
@@ -813,9 +807,6 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
         "Files.Read.All ChannelMessage.Read.All",
     )
     render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
-    assert "workspace-teams" in _render_step_ids(render)
-    assert _render_step(render, "workspace-teams")["status"] == "available"
-    assert "workspace-teams" in {t["id"] for t in render["next_targets"]}
     assert "OneDrive" in _render_step(render, "workspace-drive")["description"]
 
 
