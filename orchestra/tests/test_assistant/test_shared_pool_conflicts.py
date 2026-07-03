@@ -1135,6 +1135,53 @@ class TestUniversalUnityWhatsApp:
             "role": "owner",
         }
 
+    def test_multiple_owned_unities_outbound_binds_to_sender(
+        self,
+        dbsession: Session,
+        dao: SharedPoolDAO,
+        pool_numbers,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_whatsapp_number",
+            pool_numbers[0].number,
+        )
+        user = _make_user(dbsession, "unity-outbound@test.com", "+15550631001")
+        org = _make_org(dbsession, user, "UnityOutbound")
+        personal = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            is_coordinator=True,
+        )
+        org_coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org.id,
+            is_coordinator=True,
+        )
+        _enable_whatsapp(dbsession, personal, pool_numbers[0])
+        _enable_whatsapp(dbsession, org_coordinator, pool_numbers[0])
+
+        # A user owning several coordinators on the shared bot no longer trips an
+        # ambiguity failure: either coordinator can open the owner channel, and
+        # the route binds to whichever one sends.
+        personal_route, personal_res = dao.get_or_create_route(
+            personal.agent_id,
+            user.whatsapp_number,
+        )
+        assert personal_res is None
+        assert personal_route.assistant_id == personal.agent_id
+
+        org_route, org_res = dao.get_or_create_route(
+            org_coordinator.agent_id,
+            user.whatsapp_number,
+        )
+        assert org_res is None
+        assert org_route.assistant_id == org_coordinator.agent_id
+
     def test_universal_pool_is_excluded_from_generic_assignment(
         self,
         dbsession: Session,
@@ -4249,6 +4296,132 @@ class TestDiscordConflicts:
         )
         assert result is not None
         assert result["action"] == "reject_cold"
+
+
+class TestUniversalUnityDiscord:
+    def test_multiple_owned_coordinators_outbound_binds_to_sender(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_discord_id",
+            discord_pool[0].number,
+        )
+        user = _make_user(dbsession, "dc-outbound@test.com", discord_id=DISCORD_USER_A)
+        org = _make_org(dbsession, user, "DCOutboundOrg")
+        personal = _make_assistant(dbsession, user, "Unity", is_coordinator=True)
+        org_coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org.id,
+            is_coordinator=True,
+        )
+        _enable_discord(dbsession, personal, discord_pool[0])
+        _enable_discord(dbsession, org_coordinator, discord_pool[0])
+
+        # Two owned coordinators on the shared universal bot no longer raise
+        # "unambiguous contact"; each outbound send binds the route to its sender.
+        personal_route, personal_res = discord_dao.get_or_create_route(
+            personal.agent_id,
+            DISCORD_USER_A,
+        )
+        assert personal_res is None
+        assert personal_route.assistant_id == personal.agent_id
+
+        org_route, org_res = discord_dao.get_or_create_route(
+            org_coordinator.agent_id,
+            DISCORD_USER_A,
+        )
+        assert org_res is None
+        assert org_route.assistant_id == org_coordinator.agent_id
+
+    def test_existing_owner_route_rebinds_to_sending_coordinator(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_discord_id",
+            discord_pool[0].number,
+        )
+        user = _make_user(dbsession, "dc-rebind@test.com", discord_id=DISCORD_USER_A)
+        org = _make_org(dbsession, user, "DCRebindOrg")
+        personal = _make_assistant(dbsession, user, "Unity", is_coordinator=True)
+        org_coordinator = _make_assistant(
+            dbsession,
+            user,
+            "Unity",
+            org.id,
+            is_coordinator=True,
+        )
+        _enable_discord(dbsession, personal, discord_pool[0])
+        _enable_discord(dbsession, org_coordinator, discord_pool[0])
+
+        # personal is most-recently-active, so an inbound touch persists a route
+        # to it (opening the free-form window).
+        now = datetime.now(timezone.utc)
+        personal.last_correspondence_at = now - timedelta(minutes=1)
+        org_coordinator.last_correspondence_at = now - timedelta(hours=2)
+        dbsession.flush()
+
+        inbound = discord_dao.resolve_inbound(discord_pool[0].number, DISCORD_USER_A)
+        assert inbound["assistant_id"] == personal.agent_id
+        persisted = (
+            dbsession.query(SharedPlatformRoute)
+            .filter(
+                SharedPlatformRoute.pool_number_id == discord_pool[0].id,
+                SharedPlatformRoute.contact_number == DISCORD_USER_A,
+            )
+            .first()
+        )
+        assert persisted is not None
+        assert persisted.assistant_id == personal.agent_id
+        inbound_at = persisted.last_inbound_at
+        assert inbound_at is not None
+
+        # The org coordinator sends: the shared route rebinds to it while the
+        # free-form window (last_inbound_at) is preserved.
+        route, resolution = discord_dao.get_or_create_route(
+            org_coordinator.agent_id,
+            DISCORD_USER_A,
+        )
+        assert resolution is None
+        assert route.assistant_id == org_coordinator.agent_id
+        assert route.last_inbound_at == inbound_at
+
+    def test_universal_route_rejects_non_owner_target(
+        self,
+        dbsession: Session,
+        discord_dao: SharedPoolDAO,
+        discord_pool,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setattr(
+            settings,
+            "unity_coordinator_discord_id",
+            discord_pool[0].number,
+        )
+        owner = _make_user(
+            dbsession,
+            "dc-guard-owner@test.com",
+            discord_id=DISCORD_USER_A,
+        )
+        _make_user(dbsession, "dc-guard-stranger@test.com", discord_id=DISCORD_USER_B)
+        coordinator = _make_assistant(dbsession, owner, "Unity", is_coordinator=True)
+        _enable_discord(dbsession, coordinator, discord_pool[0])
+
+        # The coordinator's owner is DISCORD_USER_A; the universal bot must not be
+        # used to DM a different verified platform user.
+        with pytest.raises(ValueError, match="verified owners"):
+            discord_dao.get_or_create_route(coordinator.agent_id, DISCORD_USER_B)
 
 
 # ============================================================================
