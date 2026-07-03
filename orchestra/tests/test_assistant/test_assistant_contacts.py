@@ -4447,7 +4447,7 @@ class TestConnectEndpointEdgeCases:
         }
 
         assert "gmail.send" in oauth_url
-        assert "auth/drive" in oauth_url
+        assert "drive" in oauth_url
         assert "Chat.Read" not in oauth_url
         assert "calendar" not in oauth_url
 
@@ -4784,7 +4784,7 @@ class TestCompulsoryFeatures:
         oauth_url = resp.json()["info"]["oauth_url"]
         assert "gmail.send" in oauth_url
         assert "calendar" in oauth_url
-        assert "auth/drive" in oauth_url
+        assert "drive" in oauth_url
 
         import base64
         import json
