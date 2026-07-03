@@ -166,11 +166,16 @@ class TestMapScopesToFeatures:
 
 
 class TestRequiredFeatures:
-    def test_google_requires_email(self):
-        assert REQUIRED_FEATURES["google"] == ["email"]
+    def test_google_requires_email_and_drive(self):
+        assert sorted(REQUIRED_FEATURES["google"]) == ["drive", "email"]
 
-    def test_microsoft_requires_email_and_teams(self):
-        assert sorted(REQUIRED_FEATURES["microsoft"]) == ["email", "teams"]
+    def test_microsoft_requires_email_teams_and_drive_options(self):
+        assert sorted(REQUIRED_FEATURES["microsoft"]) == [
+            "drive",
+            "email",
+            "sharepoint",
+            "teams",
+        ]
 
     def test_required_features_are_valid(self):
         for provider, required in REQUIRED_FEATURES.items():
