@@ -58,8 +58,10 @@ ORCHESTRA_PORT="${ORCHESTRA_PORT:-8000}"
 _ORCHESTRA_DB_PORT_FROM_ENV="${ORCHESTRA_DB_PORT:-}"
 unset ORCHESTRA_DB_PORT
 
-# Inactivity timeout (seconds) - server shuts down after this period of no requests
-ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-600}"
+# Inactivity timeout (seconds) - server shuts down after this period of no requests.
+# Default 24h: long LLM/pytest suites have multi-minute gaps between Orchestra calls
+# (UniLLM credits/deduct only); the old 600s default caused mid-run shutdowns.
+ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-86400}"
 
 # Local development seeds a test account unless a caller explicitly opts out.
 ORCHESTRA_SKIP_TEST_USER="${ORCHESTRA_SKIP_TEST_USER:-0}"
@@ -896,6 +898,13 @@ start_orchestra_server() {
     if wait_for_server; then
       log_success "Orchestra server already running"
       return 0
+    elif lsof -i ":${ORCHESTRA_PORT}" -sTCP:LISTEN &>/dev/null \
+        && [[ "${ORCHESTRA_FORCE_RESTART:-0}" != "1" ]]; then
+      # Under load (parallel pytest session init, builtins seeding) health probes
+      # can time out while the server is still healthy. Do not SIGKILL a live
+      # listener unless the caller explicitly opts into ORCHESTRA_FORCE_RESTART=1.
+      log_warn "Orchestra server slow to respond but still listening on port ${ORCHESTRA_PORT}; leaving it running"
+      return 0
     else
       log_warn "Server process exists but not responsive, restarting..."
       stop_orchestra_server
@@ -933,7 +942,6 @@ start_orchestra_server() {
   export ORCHESTRA_DB_PASS=orchestra
   export ORCHESTRA_DB_BASE=orchestra
   export ORCHESTRA_RELOAD=false
-  export ORCHESTRA_WORKERS_COUNT=1
   export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="$ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS"
 
   # API keys for embedding and LLM operations
@@ -972,7 +980,9 @@ start_orchestra_server() {
   else
     num_cores=$(nproc 2>/dev/null || echo 4)
   fi
-  local workers="${ORCHESTRA_WORKERS:-$num_cores}"
+  # Default 1 worker for local dev/tests. Multi-worker uvicorn multiplies memory
+  # and startup time (~14 processes on this machine) without helping single-user runs.
+  local workers="${ORCHESTRA_WORKERS:-1}"
   log_info "Starting Orchestra with $workers workers"
 
   # Get virtualenv python path - use in-project .venv to avoid poetry picking
