@@ -38,12 +38,15 @@ from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.lib.referrals import ReferralError, attribute_referral
 from orchestra.services.account_reset_service import reset_personal_account
 from orchestra.services.coordinator_service import (
+    derive_onboarding_progress,
     ensure_coordinator_intro_watched,
     ensure_personal_coordinator_provisioned,
     ensure_workspace_coordinator_provisioned,
+    get_coordinator_state,
     get_workspace_coordinator,
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
+    notify_onboarding_render_if_changed,
 )
 from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.services.universal_unity_whatsapp import (
@@ -504,12 +507,34 @@ async def update_user(
         for field in ("phone_number", "whatsapp_number", "discord_id")
     )
 
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user.user_id,
+        organization_id=None,
+    )
+    baseline_completed_step_ids: list[str] | None = None
+    if coordinator is not None:
+        coordinator_state = get_coordinator_state(session, coordinator=coordinator)
+        if coordinator_state.get("onboarding_active"):
+            baseline_completed_step_ids = derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+                state=coordinator_state,
+            )
+
     user_dao.update(**update_kwargs)
 
     user_dao.cleanup_phone_verifications(updated_user.user_id)
 
     if contact_identity_submitted:
         await _reawaken_user_assistants(session, updated_user.user_id)
+        if coordinator is not None and baseline_completed_step_ids is not None:
+            await notify_onboarding_render_if_changed(
+                session,
+                coordinator=coordinator,
+                baseline_completed_step_ids=baseline_completed_step_ids,
+                reason="contact_identity_updated",
+            )
 
     return "User information updated successfully!"
 

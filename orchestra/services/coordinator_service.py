@@ -1558,6 +1558,11 @@ SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 # task and set it done. Carries the freshly-derived render so Console reflects
 # the assistant-driven completion without waiting for a poll.
 SUBTYPE_ONBOARDING_STEP_COMPLETED = "onboarding_step_completed"
+# Fired when durable domain state changes the derived onboarding picture
+# without an explicit checklist interaction (e.g. verified phone/WhatsApp on
+# the Account page). Carries the fresh render for Unity + Console but must
+# not trigger a narration turn or checklist acknowledgement.
+SUBTYPE_ONBOARDING_RENDER_UPDATED = "onboarding_render_updated"
 # Fired when the user clicks a Tasks-phase beat row ("Create a scheduled task"
 # / "Create a triggerable task"). The row is the freeform entry point: Twin
 # opens the conversation by asking what standing work the user wants, then sets
@@ -1608,6 +1613,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_ONBOARDING_STEP_STARTED,
         SUBTYPE_ONBOARDING_STEP_RESET,
         SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        SUBTYPE_ONBOARDING_RENDER_UPDATED,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_WORKSPACE_DEMO_REQUESTED,
         SUBTYPE_TASK_BEAT_REQUESTED,
@@ -3218,6 +3224,83 @@ async def emit_onboarding_step_reset_event(
             "completed_step_ids": completed,
             "skipped_step_ids": skipped,
         },
+    )
+
+
+async def notify_onboarding_render_if_changed(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    baseline_completed_step_ids: Sequence[str],
+    reason: str = "",
+    details: dict[str, Any] | None = None,
+) -> bool:
+    """Emit a silent onboarding render refresh when derived progress moved.
+
+    Compares the current :func:`derive_onboarding_progress` snapshot against
+    ``baseline_completed_step_ids`` captured before a durable-state mutation.
+    When onboarding is active and the completed set changed, publishes
+    ``onboarding_render_updated`` with the attached render so Unity's prompt
+    and Console's checklist can catch up without a poll.
+    """
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        return False
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_now = derive_onboarding_progress(
+        session,
+        coordinator=coordinator,
+        state=state,
+    )
+    if set(completed_now) == set(baseline_completed_step_ids):
+        return False
+    merged_details = dict(details or {})
+    if reason:
+        merged_details["reason"] = reason
+    merged_details["completed_step_ids"] = completed_now
+    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
+        state.get("skipped_step_ids"),
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_RENDER_UPDATED,
+        message="Onboarding progress updated.",
+        details=merged_details,
+    )
+
+
+def notify_onboarding_render_if_changed_sync(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    baseline_completed_step_ids: Sequence[str],
+    reason: str = "",
+    details: dict[str, Any] | None = None,
+) -> bool:
+    """Sync wrapper for :func:`notify_onboarding_render_if_changed`."""
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        return False
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_now = derive_onboarding_progress(
+        session,
+        coordinator=coordinator,
+        state=state,
+    )
+    if set(completed_now) == set(baseline_completed_step_ids):
+        return False
+    merged_details = dict(details or {})
+    if reason:
+        merged_details["reason"] = reason
+    merged_details["completed_step_ids"] = completed_now
+    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
+        state.get("skipped_step_ids"),
+    )
+    return notify_coordinator_onboarding_event_safe_sync(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_RENDER_UPDATED,
+        message="Onboarding progress updated.",
+        details=merged_details,
     )
 
 
