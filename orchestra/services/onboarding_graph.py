@@ -30,6 +30,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from orchestra.services.learning_expenses_fixtures import (
+    LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION,
+    LEARNING_EXPENSES_REPLAY_HINT,
+    LEARNING_EXPENSES_SCENARIO_ID,
+    LEARNING_EXPENSES_USER_CORRECTION_TEXT,
+    learning_expenses_card_attachment_description,
+    learning_expenses_checking_attachment_description,
+    learning_expenses_contrivance_acknowledgment,
+    learning_expenses_deliverable_handoff_rule,
+    learning_expenses_intro_arc_lines,
+    learning_expenses_opening_script_guidance,
+)
+
 ADDRESSED = 0
 COMPLETED = 1
 
@@ -205,34 +218,42 @@ _BRAIN_FUNCTIONS_NUDGE = (
 # The Learning beat is one openly-narrated tutorial (scripted narrative, real
 # mechanics) over the seeded Expenses ETL example. One constant so the phase
 # framing and the beat event tell the same story.
+_LEARNING_ARC_PREVIEW = "; ".join(learning_expenses_intro_arc_lines())
 LEARNING_FRAMING = (
-    "The Learning phase demonstrates active learning: one user correction "
-    "becomes durable Guidance (a rule that changes behavior permanently) and "
-    "a reusable Function (a stored pipeline), and the replay on fresh month-N+1 "
-    "data proves it stuck — one correction, permanent behavior change. "
-    "In this guided tutorial over seeded bank exports, T-W1N says up front "
-    "this is a demo of how the user corrects it. Before the first attempt it "
-    "sends the month-N bank export CSVs to the user as unify_message attachments "
-    "(one attachment per message) so they can inspect the data. It then runs a "
-    "deliberately naive first pass over the month-N files via act(persist=True) "
-    "— sum every outflow as spend, add abs(Amount) again for each INTERNAL XFER "
-    "row on either file (including card-side credits) so the transfer is "
-    "double-counted, and ignore refunds; the numbers are genuinely computed, "
-    "never asserted — then surfaces its "
-    "own mistake with the real numbers, suggests the exact correction text for "
-    "the user to send, and WAITS; it never sends the correction or proceeds on "
-    "the user's behalf. After the user's correction it revises, stores the "
-    "stated rule as Guidance AND the pipeline as a Function, then "
-    f"{_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. It then "
-    "invites the user to ask for next month's report and WAITS again; the "
-    "replay only runs once the user asks. The replay is a second "
-    "act(persist=True) over the reserved month-N+1 files, proving the "
-    "stored learning on a fresh instance. "
-    "Each phase deliverable — first attempt, improved version, replay — "
-    "must be sent as a unify_message tagged with onboarding_learning_phase "
-    "(first_attempt, improved, replay). Brain nudges and the attachment "
-    "intro messages are not phase deliverables. Before and during each act "
-    f"run, {_ACTIONS_TAB_NUDGE}."
+    "The Learning phase is an openly narrated tutorial over seeded bank exports. "
+    "One user correction becomes durable Guidance (a rule that changes behavior "
+    "permanently) and a reusable Function (a stored pipeline); replay on "
+    "fresh month-N+1 data proves it stuck. "
+    f"{learning_expenses_contrivance_acknowledgment()} "
+    "Before any attachments, preview the full arc up front: "
+    f"{_LEARNING_ARC_PREVIEW}. "
+    "Rule 1 — "
+    f"{learning_expenses_deliverable_handoff_rule()} "
+    "Rule 2 — Opening voice: "
+    f"{learning_expenses_opening_script_guidance()} "
+    "Rule 3 — Attachments: before the first attempt, send the month-N bank "
+    "export CSVs as unify_message attachments (one attachment per message). "
+    f"{learning_expenses_checking_attachment_description()} "
+    f"{learning_expenses_card_attachment_description()} "
+    "Rule 4 — First act: run a deliberately naive first pass over the month-N "
+    "files via act(persist=True) — "
+    f"{LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION} "
+    "from the fixtures; numbers are genuinely computed, never asserted. "
+    "Rule 5 — After the first act completes, send the naive result as a "
+    "unify_message tagged onboarding_learning_phase=first_attempt (see Rule 1), "
+    "surface the mistake with real numbers, suggest this exact correction text "
+    f'for the user to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}" — '
+    "then WAIT; never send the correction or proceed on their behalf. "
+    "Rule 6 — After their correction: revise, store the rule as Guidance AND "
+    f"the pipeline as a Function, send the improved deliverable tagged "
+    f"onboarding_learning_phase=improved, then {_BRAIN_GUIDANCE_NUDGE} and "
+    f"{_BRAIN_FUNCTIONS_NUDGE}. "
+    "Rule 7 — Invite them to ask for next month's report and WAIT; replay only "
+    f"once they ask ({LEARNING_EXPENSES_REPLAY_HINT}). "
+    "Rule 8 — Replay: second act(persist=True) over month-N+1 files; send the "
+    "replay deliverable tagged onboarding_learning_phase=replay. "
+    "Brain nudges and attachment intro messages are not phase deliverables. "
+    f"Before and during each act run, {_ACTIONS_TAB_NUDGE}."
 )
 
 # Interaction channel for Learning beat outbound tagging (mirrors workspace_demo
@@ -478,11 +499,8 @@ _TASK_BEAT_KIND: dict[str, str] = {
 
 # Learning-phase beat: one row, no chips. The row click starts the openly
 # scripted expenses-etl tutorial directly (see LEARNING_FRAMING).
-_LEARNING_SCENARIO_ID = "expenses-etl"
-_LEARNING_REPLAY_HINT = (
-    "Run the stored pipeline on the next month's bank exports "
-    "(onboarding/learning/expenses month N+1 files) once the user asks."
-)
+_LEARNING_SCENARIO_ID = LEARNING_EXPENSES_SCENARIO_ID
+_LEARNING_REPLAY_HINT = LEARNING_EXPENSES_REPLAY_HINT
 
 
 def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
@@ -563,20 +581,26 @@ def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     return OnboardingEventSpec(
         event_type="coordinator_onboarding_event",
         message=(
-            f"The user just clicked '{title}', so run the guided tutorial "
-            "now: tell them openly this is a demo of how they correct me, "
-            "send them the month-N bank export CSVs as unify_message "
-            "attachments so they can inspect the data, then run a "
-            "deliberately naive first pass over those files via "
-            "act(persist=True): sum every outflow, add abs(Amount) again for each "
-            "INTERNAL XFER row on either file (including card-side credits), "
-            "ignore refunds — all with real computed numbers. Surface my own "
-            "mistake with those numbers, suggest the exact correction text, "
-            "and WAIT for them to send it — never proceed on their behalf. "
-            "After their correction, revise, store the rule as Guidance AND "
-            f"the pipeline as a Function, then {_BRAIN_GUIDANCE_NUDGE} and "
-            f"{_BRAIN_FUNCTIONS_NUDGE}. Invite them to ask for next month's "
-            f"report and WAIT. Replay: {_LEARNING_REPLAY_HINT} "
+            f"The user just clicked '{title}' — run the guided learning demo now. "
+            f"{learning_expenses_opening_script_guidance()} "
+            "Then send the two January bank export CSVs as unify_message attachments "
+            "(one file per message), describing each file's rows as you send it: "
+            f"{learning_expenses_checking_attachment_description()} "
+            f"{learning_expenses_card_attachment_description()} "
+            f"Tell them to open the Actions tab before the first act. "
+            f"Rule — {learning_expenses_deliverable_handoff_rule()} "
+            "Run act(persist=True) for the naive first pass "
+            f"({LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION}; real computed "
+            "numbers only). When that act completes, your SAME turn must send "
+            "the result tagged onboarding_learning_phase=first_attempt — never "
+            "a bare wait. Surface the mistake, suggest this correction for them "
+            f'to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}", then WAIT. '
+            "After their correction: revise, store Guidance and Function, send "
+            "improved tagged onboarding_learning_phase=improved, "
+            f"then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
+            f"Invite them to ask for next month's report and WAIT. Replay: "
+            f"{_LEARNING_REPLAY_HINT} Send replay tagged "
+            "onboarding_learning_phase=replay. "
             f"{_ACTIONS_TAB_NUDGE} before and during each act run. "
             f"Full contract: {LEARNING_FRAMING}"
         ),
