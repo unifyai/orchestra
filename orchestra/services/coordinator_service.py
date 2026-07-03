@@ -2513,7 +2513,9 @@ def compute_onboarding_render(
       - ``next_targets``: the steps the Coordinator may nudge toward
         right now (``status == available``), each carrying ready-to-use
         chat and voice copy plus its channel. There can be more than one
-        once the ``depends_on`` graph branches.
+        once the ``depends_on`` graph branches; the first entry is the
+        primary nudge — the next step after the user's active or furthest
+        completed step in that phase, otherwise the topmost available step.
       - ``active_step_id``: the step the user is currently mid-flow on.
 
     Steps in a ``local_only`` phase are omitted entirely on hosted
@@ -2641,6 +2643,12 @@ def compute_onboarding_render(
                     ),
                 },
             )
+
+    next_targets = onboarding_graph.order_next_targets(
+        next_targets,
+        completed=completed,
+        active_step_id=active_id,
+    )
 
     return {
         "active_step_id": active_id,

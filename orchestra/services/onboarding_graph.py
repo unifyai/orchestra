@@ -1705,6 +1705,94 @@ def manual_completion_block_reason(step_id: str) -> str | None:
     return None
 
 
+def phase_step_ids_in_graph_order(phase_label: str) -> tuple[str, ...]:
+    """Step ids for ``phase_label`` in canonical graph order."""
+    return tuple(step.id for step in ONBOARDING_GRAPH if step.phase == phase_label)
+
+
+def select_primary_next_target_id(
+    next_target_ids: set[str],
+    *,
+    completed: set[str],
+    active_step_id: str | None,
+) -> str | None:
+    """Pick the primary next onboarding target for nudging.
+
+    Default: the first available step in graph order. When the user has
+    progress in a phase, prefer continuing that path — the next available
+    step after their active step, or after the furthest completed step in
+    that phase when no step is active.
+    """
+    if not next_target_ids:
+        return None
+
+    graph_order = [step.id for step in ONBOARDING_GRAPH]
+    graph_index = {step_id: index for index, step_id in enumerate(graph_order)}
+
+    def first_in_graph_order(step_ids: set[str]) -> str:
+        return min(step_ids, key=lambda step_id: graph_index[step_id])
+
+    focus_phase: str | None = None
+    if active_step_id and active_step_id in STEP_BY_ID:
+        focus_phase = STEP_BY_ID[active_step_id].phase
+    if focus_phase is None:
+        focus_phase = STEP_BY_ID[first_in_graph_order(next_target_ids)].phase
+
+    phase_order = phase_step_ids_in_graph_order(focus_phase)
+    phase_order_index = {step_id: index for index, step_id in enumerate(phase_order)}
+
+    anchor: str | None = None
+    if active_step_id and active_step_id in phase_order_index:
+        anchor = active_step_id
+    else:
+        completed_in_phase = [
+            step_id for step_id in phase_order if step_id in completed
+        ]
+        if completed_in_phase:
+            anchor = max(
+                completed_in_phase,
+                key=lambda step_id: phase_order_index[step_id],
+            )
+
+    if anchor is not None:
+        if anchor in next_target_ids:
+            return anchor
+        anchor_index = phase_order_index[anchor]
+        for step_id in phase_order[anchor_index + 1 :]:
+            if step_id in next_target_ids:
+                return step_id
+
+    return first_in_graph_order(next_target_ids)
+
+
+def order_next_targets(
+    next_targets: list[dict[str, Any]],
+    *,
+    completed: set[str],
+    active_step_id: str | None,
+) -> list[dict[str, Any]]:
+    """Reorder ``next_targets`` so the primary nudge target is first."""
+    if len(next_targets) <= 1:
+        return next_targets
+
+    target_ids = {target["id"] for target in next_targets}
+    graph_index = {step.id: index for index, step in enumerate(ONBOARDING_GRAPH)}
+    primary_id = select_primary_next_target_id(
+        target_ids,
+        completed=completed,
+        active_step_id=active_step_id,
+    )
+    if primary_id is None:
+        return next_targets
+
+    by_id = {target["id"]: target for target in next_targets}
+    ordered_ids = [primary_id] + sorted(
+        target_ids - {primary_id},
+        key=lambda step_id: graph_index[step_id],
+    )
+    return [by_id[step_id] for step_id in ordered_ids]
+
+
 def _assert_graph_integrity() -> None:
     """Fail loudly on a malformed hand-authored graph.
 
