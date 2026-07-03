@@ -26,6 +26,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantConsoleConfig,
     ContactMembership,
     Organization,
+    SlackInstall,
     Team,
     TeamAssistantMembership,
     User,
@@ -2549,3 +2550,80 @@ async def test_non_admin_does_not_return_desktop_filesync_sshkey(
     assistants = list_resp.json()["info"]
     our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
     assert our["desktop_filesync_sshkey"] is None
+
+
+# =============================================================================
+# Slack bot_user_id bootstrap resolution
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_resolves_slack_bot_user_id_for_personal_owner(
+    client: AsyncClient,
+    dbsession,
+):
+    """The runtime bootstrap read surfaces the owner's active Slack install bot
+    user id, so an assistant can send outbound Slack before any inbound event."""
+    owner = await create_test_user(client, "slack_bootstrap_personal@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SlackBoot",
+            "surname": "Personal",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    dbsession.add(
+        SlackInstall(
+            user_id=owner["id"],
+            slack_team_id="T_BOOT_PERSONAL",
+            slack_team_name="Bootstrap Workspace",
+            slack_app_id="A_BOOT",
+            bot_user_id="U_BOOT_PERSONAL",
+            bot_access_token="xoxb-boot",
+            installer_user_id="U_INSTALLER",
+            scopes="chat:write,im:history",
+        ),
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_slack_bot_user_id"] == "U_BOOT_PERSONAL"
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_slack_bot_user_id_none_without_install(
+    client: AsyncClient,
+):
+    """No active Slack install for the owner ⇒ the field is null (Slack disabled)."""
+    owner = await create_test_user(client, "slack_bootstrap_noinstall@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SlackBoot",
+            "surname": "NoInstall",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_slack_bot_user_id"] is None

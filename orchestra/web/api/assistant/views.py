@@ -44,6 +44,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.slack_dao import SlackDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
@@ -600,6 +601,7 @@ def _build_assistant_read(
     secrets: Optional[dict] = None,
     workspace_secrets: Optional[dict] = None,
     resolve_workspace_secrets: bool = True,
+    resolve_slack_install: bool = False,
     include_internal: bool = False,
     requesting_user_id: Optional[str] = None,
 ) -> AssistantRead:
@@ -734,6 +736,23 @@ def _build_assistant_read(
         }
     workspace_provider = _derive_workspace_provider(ws_source)
 
+    # Slack's ``bot_user_id`` is workspace-scoped — it lives on the owner's
+    # ``slack_installs`` row, not on any per-assistant contact — so unlike
+    # Discord it is never surfaced by the contact map. Resolve it from the
+    # active install for the assistant's owner (org first, else personal user)
+    # so the runtime can send outbound Slack before any inbound Slack event.
+    # Gated to the runtime bootstrap read path to avoid a per-assistant query
+    # on Console list endpoints that don't need it.
+    assistant_slack_bot_user_id: Optional[str] = None
+    if resolve_slack_install:
+        slack_dao = SlackDAO(session)
+        install = (
+            slack_dao.get_install_for_org(a.organization_id)
+            if a.organization_id is not None
+            else slack_dao.get_install_for_user(a.user_id)
+        )
+        assistant_slack_bot_user_id = install.bot_user_id if install else None
+
     return AssistantRead(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
@@ -770,6 +789,7 @@ def _build_assistant_read(
         assistant_discord_bot_id=(
             discord_contact.contact_value if discord_contact else None
         ),
+        assistant_slack_bot_user_id=assistant_slack_bot_user_id,
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
         timezone=a.timezone,
@@ -7166,6 +7186,7 @@ def admin_list_all_assistants(
                     else None
                 ),
                 resolve_workspace_secrets=not skip_secrets,
+                resolve_slack_install=True,
                 include_internal=True,
             )
             for i, a in enumerate(assistants)

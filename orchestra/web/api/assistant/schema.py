@@ -446,6 +446,15 @@ class AssistantRead(AssistantCreate):
         None,
         description="Discord bot ID assigned to the assistant",
     )
+    assistant_slack_bot_user_id: Optional[str] = Field(
+        None,
+        description=(
+            "Slack bot user ID for the assistant's active workspace install. "
+            "Resolved from the owner's (org or user) active slack_installs row "
+            "so the assistant can send outbound Slack messages before any "
+            "inbound Slack event."
+        ),
+    )
     api_key: Optional[str] = Field(
         None,
         description="API key associated with this assistant (personal or org key)",
