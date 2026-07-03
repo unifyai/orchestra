@@ -283,6 +283,35 @@ async def test_step_reset_event_embeds_step_snapshots() -> None:
     }
 
 
+@pytest.mark.anyio
+async def test_step_completed_event_embeds_progress_and_render() -> None:
+    """Completed events name the finished step and carry the fresh render."""
+    coordinator = _fake_coordinator(agent_id=17)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.emit_onboarding_step_completed_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            step_id="workspace-mailbox",
+            completed_step_ids=["apps", "workspace-mailbox"],
+            skipped_step_ids=[],
+        )
+    assert result is True
+    fields = post.await_args.kwargs["extra_event_fields"]
+    assert fields == {
+        "subtype": svc.SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        "details": {
+            "step_id": "workspace-mailbox",
+            "completed_step_ids": ["apps", "workspace-mailbox"],
+            "skipped_step_ids": [],
+            "onboarding": _RENDER,
+        },
+    }
+
+
 def test_sync_notify_silent_when_onboarding_inactive() -> None:
     """Gate applies symmetrically across sync + async variants."""
     coordinator = _fake_coordinator()

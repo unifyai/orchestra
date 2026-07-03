@@ -32,10 +32,31 @@ def test_dependencies_satisfied_levels() -> None:
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, set(), {"a"}) is False
 
 
+def test_workspace_demos_are_settable_triggers_that_never_auto_derive() -> None:
+    """Demos are the one trigger class that completes explicitly, not by derivation.
+
+    They must stay out of ``TRIGGER_TO_OUTBOUND_MEDIUMS`` (so
+    ``derive_onboarding_progress`` never flips them from a tagged outbound) while
+    remaining manually settable, so the assistant can mark them done after the
+    full multi-part task.
+    """
+    for step_id in graph.DEMO_STEP_IDS:
+        assert step_id in graph.STEP_BY_ID
+        assert graph.STEP_BY_ID[step_id].kind == "trigger"
+        assert step_id not in graph.TRIGGER_TO_OUTBOUND_MEDIUMS
+        assert graph.manual_completion_block_reason(step_id) is None
+
+
 def test_manual_completion_block_reason() -> None:
-    """Communication and auto-triggered rows reject manual completion."""
+    """Communication and auto-triggered rows reject manual completion.
+
+    Workspace demos are the deliberate exception: they are multi-part tasks the
+    assistant finishes and then marks done explicitly, so they must be settable.
+    """
     assert graph.manual_completion_block_reason("email-reference") is not None
     assert graph.manual_completion_block_reason("email-reply") is not None
-    assert graph.manual_completion_block_reason("workspace-mailbox") is not None
+    assert graph.manual_completion_block_reason("workspace-mailbox") is None
+    assert graph.manual_completion_block_reason("workspace-drive") is None
+    assert graph.manual_completion_block_reason("workspace-calendar") is None
     assert graph.manual_completion_block_reason("apps") is None
     assert graph.manual_completion_block_reason("create-scheduled-task") is None

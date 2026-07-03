@@ -1548,10 +1548,16 @@ SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
 SUBTYPE_ONBOARDING_STEP_RESET = "onboarding_step_reset"
 SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # Fired when the user clicks a workspace demo row (mailbox / Drive /
-# calendar). Twin reads that area of the connected workspace and delivers a
-# short summary back as a single unify_message, which is also what proves the
-# step complete (see onboarding_graph.DEMO_TO_OUTBOUND_MEDIUMS).
+# calendar). Twin reads that area of the connected workspace and performs the
+# whole demo task, then explicitly marks the step complete via
+# ``set_onboarding_task_state`` (see onboarding_graph.DEMO_STEP_IDS). The demo
+# is deliberately NOT auto-derived from the summary outbound.
 SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
+# Fired when a demo (or any non-auto-derived, non-Communication) step is marked
+# complete via the ``onboarding_step_completion`` PATCH — i.e. Twin finished the
+# task and set it done. Carries the freshly-derived render so Console reflects
+# the assistant-driven completion without waiting for a poll.
+SUBTYPE_ONBOARDING_STEP_COMPLETED = "onboarding_step_completed"
 # Fired when the user clicks a Tasks-phase beat row ("Create a scheduled task"
 # / "Create a triggerable task"). The row is the freeform entry point: Twin
 # opens the conversation by asking what standing work the user wants, then sets
@@ -1601,6 +1607,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
         SUBTYPE_ONBOARDING_STEP_RESET,
+        SUBTYPE_ONBOARDING_STEP_COMPLETED,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_WORKSPACE_DEMO_REQUESTED,
         SUBTYPE_TASK_BEAT_REQUESTED,
@@ -3200,6 +3207,46 @@ async def emit_onboarding_step_reset_event(
         details={
             "step_id": step_id,
             "reset_step_ids": reset_ids,
+            "completed_step_ids": completed,
+            "skipped_step_ids": skipped,
+        },
+    )
+
+
+async def emit_onboarding_step_completed_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that a step was explicitly marked complete by the assistant.
+
+    Fired from the ``onboarding_step_completion`` PATCH when Twin finishes a
+    task (e.g. a workspace demo) and sets it done. Carries the recomputed
+    progress + attached render so Console reflects the assistant-driven
+    completion immediately. Because completion originated from the brain's own
+    tool call, the runtime handler refreshes its render but does NOT trigger an
+    extra acknowledgement turn.
+    """
+    completed = list(
+        completed_step_ids
+        or derive_onboarding_progress(session, coordinator=coordinator),
+    )
+    skipped = normalize_onboarding_step_ids(
+        skipped_step_ids
+        or get_coordinator_state(session, coordinator=coordinator).get(
+            "skipped_step_ids",
+        ),
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        message=f"The '{step_id}' onboarding step is now complete.",
+        details={
+            "step_id": step_id,
             "completed_step_ids": completed,
             "skipped_step_ids": skipped,
         },

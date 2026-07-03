@@ -1163,15 +1163,21 @@ class SharedPoolDAO:
             target_user.id,
             pool.number,
         )
-        if candidates != [contact.assistant_id]:
+        if contact.assistant_id not in candidates:
             raise ValueError(
-                "Universal Unity routes require an unambiguous contact.",
+                "Universal Unity routes can only message verified owners.",
             )
 
-        # Reuse the persisted route (created by inbound touch) so its
-        # last_inbound_at drives the free-form window. When the contact has never
-        # messaged this coordinator, fall back to a transient route, which leaves
-        # the window closed (correct for coordinator-initiated first contact).
+        # The shared bot ↔ owner channel is a single identity, so a user who owns
+        # several coordinators (e.g. personal + org) shares one persisted route.
+        # Bind it to the sending coordinator: the send is itself the latest
+        # activity, and inbound replies resolve to the most-recently-active
+        # coordinator, so the channel follows whoever last acted (mirrors the
+        # email/WhatsApp inbound tie-break). Reuse the persisted route (created by
+        # an inbound touch) so its last_inbound_at keeps driving the free-form
+        # window; when the owner has never messaged, fall back to a transient
+        # route with the window closed (correct for coordinator-initiated first
+        # contact).
         existing = (
             self.session.query(SharedPlatformRoute)
             .filter(
@@ -1181,6 +1187,7 @@ class SharedPoolDAO:
             .first()
         )
         if existing is not None:
+            existing.assistant_id = contact.assistant_id
             return existing
 
         return SharedPlatformRoute(

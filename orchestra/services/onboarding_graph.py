@@ -150,13 +150,16 @@ WORKSPACE_FRAMING = (
     "each workspace demo T-W1N reads the relevant area with its own tools "
     "(recent mailbox, Drive/OneDrive files, or the upcoming week's calendar), then "
     "delivers one short, plain-spoken summary to the user as a single "
-    "unify_message. That delivered message is the proof the demo worked, so it "
-    "must be sent as an assistant message back to the user — not merely spoken "
-    "on a call. Afterwards T-W1N offers exactly one natural follow-up and only "
-    "acts on it if the user says yes: draft a reply to a notable email, suggest "
-    "a simple optional way to tidy a messy Drive, or flag a conflict or gap on "
-    "the calendar. If the area is empty or T-W1N genuinely cannot read it, it "
-    "says so honestly and moves on rather than inventing content."
+    "unify_message — sent as an assistant message back to the user, not merely "
+    "spoken on a call. Delivering that summary is the demo task; the checklist "
+    "does NOT auto-detect it, so once the summary is sent T-W1N marks the step "
+    "done explicitly by calling set_onboarding_task_state(step_id, True). "
+    "Afterwards T-W1N offers exactly one natural follow-up and only acts on it if "
+    "the user says yes: draft a reply to a notable email, suggest a simple "
+    "optional way to tidy a messy Drive, or flag a conflict or gap on the "
+    "calendar — this follow-up is optional and never gates completion. If the "
+    "area is empty or T-W1N genuinely cannot read it, it says so honestly, still "
+    "marks the step done, and moves on rather than inventing content."
 )
 
 TASKS_FRAMING = (
@@ -405,10 +408,11 @@ def _demo(
     """A workspace demo trigger row.
 
     Structurally a trigger (clicking it asks Twin to act now) but, unlike the
-    reference-quiz triggers, it has no paired reply: the proof of completion is
-    the assistant-authored summary delivered back to the user over
-    ``unify_message`` (see ``DEMO_TO_OUTBOUND_MEDIUMS``). The ``workspace_demo``
-    interaction type lets Unity narrate it differently from a quiz clue.
+    reference-quiz triggers, it has no paired reply and is not auto-derived from
+    an outbound: Twin performs the whole demo task, then explicitly marks the
+    step done via ``set_onboarding_task_state`` (see ``DEMO_STEP_IDS`` /
+    ``manual_completion_block_reason``). The ``workspace_demo`` interaction type
+    lets Unity narrate it differently from a quiz clue.
     """
     interaction = {
         "type": "workspace_demo",
@@ -421,10 +425,15 @@ def _demo(
         message=(
             f"The user just clicked '{title}', so they want T-W1N to run this "
             "workspace demo now: read the relevant part of their connected "
-            "workspace and send the summary back to them as a unify_message. "
-            "This is a poll, not a request to repeat work already done: if the "
-            "summary has already been delivered, treat this as confirmation and "
-            "do NOT send a duplicate."
+            "workspace with its own tools and deliver one short summary as a "
+            "single unify_message. The checklist does NOT auto-detect that "
+            "summary, so once it is sent T-W1N mark the step complete with "
+            "set_onboarding_task_state(step_id, completed=True) — handling the "
+            "demo is not finished until that call is made. Any reply, tidy-up, or "
+            "flag is an optional follow-up offered afterwards and never required "
+            "to complete the step. This is a poll, not a request to repeat work "
+            "already done: if the task is already finished, treat this as "
+            "confirmation and do NOT redo it."
         ),
         subtype="workspace_demo_requested",
         details={
@@ -1045,17 +1054,19 @@ TRIGGER_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
 }
 
-# Workspace demo trigger rows have no paired reply: completion is proved by the
-# assistant's own summary delivered back to the user over ``unify_message``.
-# They derive through the same trigger-outbound path as the reference quiz, so
-# they merge into ``TRIGGER_TO_OUTBOUND_MEDIUMS`` and are picked up by
-# ``derive_onboarding_progress`` without any extra wiring.
-DEMO_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
-    "workspace-mailbox": ("unify_message",),
-    "workspace-drive": ("unify_message",),
-    "workspace-calendar": ("unify_message",),
-}
-TRIGGER_TO_OUTBOUND_MEDIUMS.update(DEMO_TO_OUTBOUND_MEDIUMS)
+# Workspace demo trigger rows have no paired reply and are deliberately NOT
+# auto-derived from an outbound: a single tagged summary must not complete a
+# multi-part task. The assistant performs the full demo task end to end, then
+# explicitly marks the step done via ``set_onboarding_task_state`` (permitted for
+# these ids by ``manual_completion_block_reason``), which records the step in
+# ``manually_completed_step_ids``. They are therefore absent from
+# ``TRIGGER_TO_OUTBOUND_MEDIUMS`` and are never picked up by
+# ``derive_onboarding_progress`` from transcript evidence.
+DEMO_STEP_IDS: tuple[str, ...] = (
+    "workspace-mailbox",
+    "workspace-drive",
+    "workspace-calendar",
+)
 
 # Channel → accepted outbound mediums for non-quiz onboarding beats. Unity
 # mirrors this map as a golden constant in
@@ -1327,23 +1338,30 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "workspace-mailbox": (
         "Clicking the 'Summarise my mailbox' row tells me the user wants a live "
         "demo of their connected mailbox: I read their recent mail with my own "
-        "tools and deliver one short summary back to them as a single "
-        "unify_message, then offer to draft a reply to a notable thread. If I "
-        "have already delivered the summary I just confirm it rather than "
-        "sending another."
+        "tools and deliver one short summary as a single unify_message. The "
+        "checklist does not auto-detect that summary, so once it is sent I mark "
+        "the step done with set_onboarding_task_state('workspace-mailbox', True) "
+        "— the demo is not finished until I make that call. Offering or drafting "
+        "a reply to a notable thread is an optional follow-up I only act on if "
+        "the user says yes; it never gates completion. If I have already finished "
+        "the task I just confirm it rather than redoing the work."
     ),
     "workspace-drive": (
         "Clicking the 'Take a look at my files' row tells me the user wants a "
         "demo of their connected Drive or OneDrive: I read what's there and send "
-        "one short summary back as a single unify_message, then offer a simple, "
-        "optional way to tidy things up if the files look disorganised. I only "
-        "reorganise anything if they say yes."
+        "one short summary as a single unify_message, then offer a simple, "
+        "optional way to tidy things up if the files look disorganised (I only "
+        "reorganise if they say yes). Once the demo task is genuinely done I mark "
+        "it complete with set_onboarding_task_state('workspace-drive', True) — "
+        "the step does not auto-complete from the summary."
     ),
     "workspace-calendar": (
         "Clicking the 'Check my upcoming calendar events within a week' row "
         "tells me the user wants a demo of their connected calendar: I read "
-        "their events for the next week and send one short summary back as a "
-        "single unify_message, flagging any conflicts or gaps."
+        "their events for the next week and send one short summary as a single "
+        "unify_message, flagging any conflicts or gaps. Once done I mark it "
+        "complete with set_onboarding_task_state('workspace-calendar', True) — "
+        "the step does not auto-complete from the summary."
     ),
     "apps": (
         "Clicking the 'Connect me with your apps' row opens the Integrations "
@@ -1628,6 +1646,10 @@ def manual_completion_block_reason(step_id: str) -> str | None:
             "are sent and received on each channel — I cannot mark them done "
             "manually."
         )
+    if step_id in DEMO_STEP_IDS:
+        # Workspace demos are the one trigger class Twin completes explicitly:
+        # it does the whole task, then marks the step done. Allow it here.
+        return None
     if step.kind == "trigger":
         return (
             "This step starts from the onboarding checklist (or when the user "
