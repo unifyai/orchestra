@@ -3304,23 +3304,14 @@ def notify_onboarding_render_if_changed_sync(
     )
 
 
-async def emit_onboarding_step_completed_event(
+def _onboarding_step_completed_event_details(
     session: Session,
     *,
     coordinator: Assistant,
     step_id: str,
     completed_step_ids: Sequence[str] | None = None,
     skipped_step_ids: Sequence[str] | None = None,
-) -> bool:
-    """Notify Unity that a step was explicitly marked complete by the assistant.
-
-    Fired from the ``onboarding_step_completion`` PATCH when Twin finishes a
-    task (e.g. a workspace demo) and sets it done. Carries the recomputed
-    progress + attached render so Console reflects the assistant-driven
-    completion immediately. Because completion originated from the brain's own
-    tool call, the runtime handler refreshes its render but does NOT trigger an
-    extra acknowledgement turn.
-    """
+) -> dict[str, Any]:
     completed = list(
         completed_step_ids
         or derive_onboarding_progress(session, coordinator=coordinator),
@@ -3331,16 +3322,69 @@ async def emit_onboarding_step_completed_event(
             "skipped_step_ids",
         ),
     )
+    return {
+        "step_id": step_id,
+        "completed_step_ids": completed,
+        "skipped_step_ids": skipped,
+    }
+
+
+def emit_onboarding_step_completed_event_safe_sync(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that a step was explicitly marked complete by the assistant.
+
+    Fire-and-forget variant for the ``onboarding_step_completion`` PATCH
+    critical path: the adapters POST runs on a daemon thread so the state
+    response is not blocked on a Unity round-trip.
+    """
+    return notify_coordinator_onboarding_event_safe_sync(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        message=f"The '{step_id}' onboarding step is now complete.",
+        details=_onboarding_step_completed_event_details(
+            session,
+            coordinator=coordinator,
+            step_id=step_id,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=skipped_step_ids,
+        ),
+    )
+
+
+async def emit_onboarding_step_completed_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that a step was explicitly marked complete by the assistant.
+
+    Async variant for callers that can await the adapters POST. The
+    ``onboarding_step_completion`` PATCH uses
+    :func:`emit_onboarding_step_completed_event_safe_sync` instead so the
+    response is not blocked on narration.
+    """
     return await notify_coordinator_onboarding_event(
         session,
         coordinator=coordinator,
         subtype=SUBTYPE_ONBOARDING_STEP_COMPLETED,
         message=f"The '{step_id}' onboarding step is now complete.",
-        details={
-            "step_id": step_id,
-            "completed_step_ids": completed,
-            "skipped_step_ids": skipped,
-        },
+        details=_onboarding_step_completed_event_details(
+            session,
+            coordinator=coordinator,
+            step_id=step_id,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=skipped_step_ids,
+        ),
     )
 
 

@@ -312,6 +312,35 @@ async def test_step_completed_event_embeds_progress_and_render() -> None:
     }
 
 
+def test_step_completed_event_safe_sync_fires_without_blocking() -> None:
+    """PATCH step completion uses fire-and-forget narration."""
+    coordinator = _fake_coordinator(agent_id=17)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "_fire_and_forget_onboarding_event") as fire,
+    ):
+        result = svc.emit_onboarding_step_completed_event_safe_sync(
+            session=MagicMock(),
+            coordinator=coordinator,
+            step_id="workspace-mailbox",
+            completed_step_ids=["apps", "workspace-mailbox"],
+            skipped_step_ids=[],
+        )
+    assert result is True
+    payload = fire.call_args.args[0]
+    assert payload["assistant_id"] == 17
+    assert payload["extra_event_fields"] == {
+        "subtype": svc.SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        "details": {
+            "step_id": "workspace-mailbox",
+            "completed_step_ids": ["apps", "workspace-mailbox"],
+            "skipped_step_ids": [],
+            "onboarding": _RENDER,
+        },
+    }
+
+
 def test_sync_notify_silent_when_onboarding_inactive() -> None:
     """Gate applies symmetrically across sync + async variants."""
     coordinator = _fake_coordinator()

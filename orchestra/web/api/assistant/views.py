@@ -94,7 +94,7 @@ from orchestra.services.coordinator_service import (
     compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
-    emit_onboarding_step_completed_event,
+    emit_onboarding_step_completed_event_safe_sync,
     emit_onboarding_step_event,
     emit_onboarding_step_reset_event,
     emit_onboarding_step_skipped_event,
@@ -1738,7 +1738,7 @@ async def update_coordinator_state_endpoint(
         and update.onboarding_step_completion.completed
         and next_state.get("onboarding_active")
     ):
-        await emit_onboarding_step_completed_event(
+        emit_onboarding_step_completed_event_safe_sync(
             session,
             coordinator=coordinator,
             step_id=update.onboarding_step_completion.step_id,
