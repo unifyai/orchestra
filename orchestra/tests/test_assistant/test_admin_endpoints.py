@@ -14,6 +14,7 @@ from alembic.operations import Operations
 from fastapi import status
 from httpx import AsyncClient
 
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
@@ -66,6 +67,25 @@ def mock_assistant_infra_calls(request):
         mock_settings.charges_billing = False
 
         yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
+
+
+def _load_assistant_contacts_lookup_index_migration():
+    migration_path = (
+        Path(__file__).parents[2]
+        / "db"
+        / "migrations"
+        / "versions"
+        / "2026-07-10-00-00_index_assistant_contacts_lookup.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "index_assistant_contacts_lookup",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_seed_memberships_migration():
@@ -2656,6 +2676,7 @@ async def test_admin_list_rejects_universal_email_without_agent_id(
 @pytest.mark.anyio
 async def test_admin_list_allows_universal_email_with_agent_id(
     client: AsyncClient,
+    dbsession,
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -2663,24 +2684,32 @@ async def test_admin_list_allows_universal_email_with_agent_id(
         "staging-twin@unify.ai",
     )
     owner = await create_test_user(client, "universal-email-filter@test.com")
+    universal_email = "staging-twin@unify.ai"
 
     create_resp = await client.post(
         "/v0/assistant",
         json={
             "first_name": "Universal",
             "surname": "Filter",
-            "email": "staging-twin@unify.ai",
+            "email": universal_email,
             "create_infra": False,
         },
         headers=owner["headers"],
     )
     assert create_resp.status_code == 200
-    agent_id = create_resp.json()["info"]["agent_id"]
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+    AssistantContactDAO(dbsession).upsert_assistant_contact(
+        assistant_id=agent_id,
+        contact_type="email",
+        contact_value=universal_email,
+        provider="google_workspace",
+    )
+    dbsession.flush()
 
     admin_resp = await client.get(
         "/v0/admin/assistant",
         params={
-            "email": "staging-twin@unify.ai",
+            "email": universal_email,
             "agent_id": agent_id,
             "from_fields": "agent_id,email",
         },
@@ -2689,13 +2718,14 @@ async def test_admin_list_allows_universal_email_with_agent_id(
 
     assert admin_resp.status_code == 200
     assert admin_resp.json()["info"] == [
-        {"agent_id": str(agent_id), "email": "staging-twin@unify.ai"},
+        {"agent_id": str(agent_id), "email": universal_email},
     ]
 
 
 @pytest.mark.anyio
 async def test_admin_list_by_unique_email_returns_single_assistant(
     client: AsyncClient,
+    dbsession,
 ):
     owner = await create_test_user(client, "unique-admin-email-filter@test.com")
     unique_email = "unique-admin-email-filter@test.com"
@@ -2711,7 +2741,14 @@ async def test_admin_list_by_unique_email_returns_single_assistant(
         headers=owner["headers"],
     )
     assert create_resp.status_code == 200
-    agent_id = create_resp.json()["info"]["agent_id"]
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+    AssistantContactDAO(dbsession).upsert_assistant_contact(
+        assistant_id=agent_id,
+        contact_type="email",
+        contact_value=unique_email,
+        provider="google_workspace",
+    )
+    dbsession.flush()
 
     admin_resp = await client.get(
         "/v0/admin/assistant",
@@ -2772,21 +2809,19 @@ async def test_admin_list_from_fields_skips_slack_install_lookup(
     mock_get_install.assert_not_called()
 
 
-def test_assistant_contacts_lookup_index_migration_exists(dbsession):
-    migration_path = (
-        Path(__file__).resolve().parents[2]
-        / "db"
-        / "migrations"
-        / "versions"
-        / "2026-07-10-00-00_index_assistant_contacts_lookup.py"
-    )
-    assert migration_path.is_file()
+def test_assistant_contacts_lookup_index_migration_exists(dbsession, monkeypatch):
+    migration = _load_assistant_contacts_lookup_index_migration()
+    assert migration.INDEX_NAME == "ix_assistant_contacts_lookup"
 
-    context = MigrationContext.configure(dbsession.connection())
-    operations = Operations(context)
+    operations = Operations(MigrationContext.configure(dbsession.connection()))
+    monkeypatch.setattr(migration, "op", operations)
+    migration.upgrade()
+
+    from sqlalchemy import inspect
+
     indexes = {
         index["name"]
-        for index in operations.impl.inspector.get_indexes("assistant_contacts")
+        for index in inspect(dbsession.connection()).get_indexes("assistant_contacts")
     }
     assert "ix_assistant_contacts_lookup" in indexes
 

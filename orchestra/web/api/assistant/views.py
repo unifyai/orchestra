@@ -7153,10 +7153,9 @@ def admin_list_all_assistants(
         skip_contact_ids = requested_fields is not None and not (
             {"self_contact_id", "boss_contact_id"} & requested_fields
         )
-        skip_contact_identity_roots = (
-            requested_fields is not None
-            and "contact_identity_roots" not in requested_fields
-        ) or use_slim_hydration
+        skip_contact_identity_roots = use_slim_hydration and (
+            requested_fields is None or "contact_identity_roots" not in requested_fields
+        )
         resolve_slack_install = not use_slim_hydration or (
             requested_fields is not None
             and "assistant_slack_bot_user_id" in requested_fields
