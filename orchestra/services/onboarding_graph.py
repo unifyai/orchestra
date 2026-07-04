@@ -37,6 +37,7 @@ from orchestra.services.learning_expenses_fixtures import (
     LEARNING_EXPENSES_USER_CORRECTION_TEXT,
     learning_expenses_card_attachment_description,
     learning_expenses_checking_attachment_description,
+    learning_expenses_concepts_opening_guidance,
     learning_expenses_contrivance_acknowledgment,
     learning_expenses_deliverable_handoff_rule,
     learning_expenses_intro_arc_lines,
@@ -224,11 +225,12 @@ _BRAIN_FUNCTIONS_NUDGE = (
 _LEARNING_ARC_PREVIEW = "; ".join(learning_expenses_intro_arc_lines())
 LEARNING_FRAMING = (
     "The Learning phase is an openly narrated tutorial over seeded bank exports. "
-    "One user correction becomes durable Guidance (a rule that changes behavior "
-    "permanently) and a reusable Function (a stored pipeline); replay on "
-    "fresh month-N+1 data proves it stuck. "
+    f"{learning_expenses_concepts_opening_guidance()} "
+    "The hands-on demo shows this in action: one user correction becomes durable "
+    "Guidance (playbook) and a reusable Function (skill); replay on fresh data "
+    "proves it stuck. "
     f"{learning_expenses_contrivance_acknowledgment()} "
-    "Before any attachments, preview the full arc up front: "
+    "Before any attachments, preview the full hands-on arc up front: "
     f"{_LEARNING_ARC_PREVIEW}. "
     "Rule 1 — "
     f"{learning_expenses_deliverable_handoff_rule()} "
@@ -1427,9 +1429,10 @@ STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "learn-from-correction": (
         "Clicking the 'Teach me by correcting me' row starts an openly "
-        "narrated tutorial: I send the seeded month-N bank exports as chat "
-        "attachments, make a deliberately naive pass over them, point out my "
-        "own mistake, suggest the correction for the user to send, and wait. "
+        "narrated tutorial: I first explain what learning, Guidance, and "
+        "Functions are and why they matter, then walk through a seeded demo — "
+        "month-N bank exports as chat attachments, a deliberately naive pass, "
+        "my mistake, a correction for the user to send, and a wait. "
         "After they send it I revise, stop the persist act so StorageCheck can "
         "save the learning in Brain (Guidance and Functions), and invite them "
         "to ask me for next month's report — the replay runs only when they ask. "

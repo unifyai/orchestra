@@ -56,7 +56,12 @@ def learning_expenses_user_facing_voice() -> str:
         "disposition/contribution columns, or accounting jargon (gross outflows, "
         "netted, phantom spending, rule 1/rule 2). The CSVs are attachments for "
         "anyone curious; do not recite every row in chat. "
-        "Opening arc: at most five short bullets; casual tone, not a compliance brief. "
+        "Opening message: first teach Brain in 3–4 short concept bullets — "
+        "corrections stick (learning), Guidance is my playbook for how to work, "
+        "Functions are reusable skills, and together they mean less re-explaining "
+        "on similar tasks. Keep concept lines domain-agnostic (no CSV/month/"
+        "pipeline jargon). Then preview the hands-on demo in at most five short "
+        "plan bullets; casual tone, not a compliance brief. "
         "Attachment captions: one sentence each (what the file is; mention the "
         "checking↔card transfer trap in plain English). "
         "First-attempt deliverable: state the naive total, then one sentence on "
@@ -116,6 +121,32 @@ def learning_expenses_intro_arc_lines() -> tuple[str, ...]:
     )
 
 
+def learning_expenses_concepts_intro_lines() -> tuple[str, ...]:
+    """Plain-language Brain concepts to teach before the hands-on demo steps."""
+    return (
+        "Learning — when you correct me, the fix sticks beyond this chat; "
+        "you shouldn't have to repeat yourself on similar work.",
+        "Guidance (Brain → Guidance) — my playbook for *how* to work with you: "
+        "rules, preferences, steps, and pitfalls (the way we do things here).",
+        "Functions (Brain → Functions) — skills I pick up for *what* I can do "
+        "again: concrete workflows I reuse when a similar task comes up.",
+        "How they fit — after I finish work, I review what happened and save "
+        "worthwhile rules and skills to Brain, so similar tasks start smarter.",
+    )
+
+
+def learning_expenses_concepts_opening_guidance() -> str:
+    """Instruct the CM to teach Brain concepts before the demo plan."""
+    concepts = " | ".join(learning_expenses_concepts_intro_lines())
+    return (
+        "Before the step-by-step plan, teach the intuition behind learning, "
+        "Guidance, and Functions — the onboarding goal is day-to-day understanding "
+        "(corrections stick, playbooks vs skills, less re-explaining), not demo "
+        "mechanics. Cover these in plain language (short bullets or sentences, "
+        f"non-technical, domain-agnostic): {concepts}"
+    )
+
+
 def learning_expenses_contrivance_acknowledgment() -> str:
     """Tone guidance: own that the demo is staged."""
     return (
@@ -145,11 +176,13 @@ def learning_expenses_card_attachment_description() -> str:
 
 def learning_expenses_opening_script_guidance() -> str:
     """Conversational opening tone for the first message after the row click."""
+    concepts = " → ".join(learning_expenses_concepts_intro_lines())
     arc = " → ".join(learning_expenses_intro_arc_lines())
     return (
-        "Open casually (for example: ok, this is the learning demo — here is the "
-        "plan). Preview the arc in at most five short bullets before attachments: "
-        f"{arc}. "
+        "Open casually (for example: ok, this is the learning demo). "
+        f"First teach the concepts: {concepts}. "
+        "Then preview the hands-on plan in at most five short bullets before "
+        f"attachments: {arc}. "
         f"{learning_expenses_contrivance_acknowledgment()} "
         f"{learning_expenses_user_facing_voice()}"
     )
