@@ -3,6 +3,7 @@ Consolidated User DAO.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 from zoneinfo import available_timezones
@@ -242,6 +243,8 @@ class UserDAO:
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
         monthly_spending_cap: Optional[float] = ...,
+        voice_sample: Optional[str] = ...,
+        voice_sample_uploaded_at: Optional[datetime] = ...,
     ) -> None:
         """
         Update user profile fields.
@@ -324,6 +327,10 @@ class UserDAO:
                 setattr(entry, "queries_enabled", queries_enabled)
             if evaluations_enabled is not ...:
                 setattr(entry, "evaluations_enabled", evaluations_enabled)
+            if voice_sample is not ...:
+                setattr(entry, "voice_sample", voice_sample)
+            if voice_sample_uploaded_at is not ...:
+                setattr(entry, "voice_sample_uploaded_at", voice_sample_uploaded_at)
 
             # Handle monthly_spending_cap with cascade logic
             if monthly_spending_cap is not ...:

@@ -864,6 +864,10 @@ class User(Base):
     phone_number = Column(String, nullable=True)
     whatsapp_number = Column(String, nullable=True)
     discord_id = Column(String, nullable=True)
+    # Voice enrollment: gs:// URL of the user's recorded voice sample, used by
+    # assistants to voice-verify the user's turns on calls.
+    voice_sample = Column(String, nullable=True)
+    voice_sample_uploaded_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     # === BILLING (via BillingAccount) ===
     billing_account_id = Column(
