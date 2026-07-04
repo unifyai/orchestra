@@ -34,6 +34,19 @@ def learning_expenses_storage_check_nudge() -> str:
     )
 
 
+def learning_expenses_stop_act_for_storage_rule() -> str:
+    """CM must end the persist act after the improved deliverable to run StorageCheck."""
+    return (
+        "After sending the improved deliverable tagged "
+        "onboarding_learning_phase=improved, call stop_* on the running "
+        "persist act in the SAME turn — StorageCheck only starts once the "
+        "persist session ends, not while it sits in awaiting_input. Tell the "
+        "user in plain language that you are stopping the action so Brain can "
+        "save their rule (for example: stopping it now so your correction gets "
+        "saved), then invoke stop_* before inviting February."
+    )
+
+
 def learning_expenses_user_facing_voice() -> str:
     """Plain-language rules for Learning demo chat messages (non-technical audience)."""
     return (
@@ -51,7 +64,9 @@ def learning_expenses_user_facing_voice() -> str:
         "card), then the exact correction text to paste — nothing else. "
         "Improved deliverable: state the corrected total, one sentence on what "
         "changed (skipped transfers, counted refunds), optionally one contrast "
-        "vs the naive total — then Brain/StorageCheck nudge and invite February. "
+        "vs the naive total — say you are stopping the action so Brain can save "
+        "their rule, then stop_* the persist act in the same turn, then "
+        "Brain/StorageCheck nudge and invite February. "
         "Replay deliverable: corrected total for the new month in one line."
     )
 
@@ -96,7 +111,7 @@ def learning_expenses_intro_arc_lines() -> tuple[str, ...]:
         "Share two January bank CSVs (checking + card).",
         "Run a naive pass that double-counts the internal transfer.",
         "You send a short correction (I'll suggest exact text).",
-        "I revise; Brain saves your rule and a reusable pipeline.",
+        "I revise, stop the action so Brain saves your rule and a reusable pipeline.",
         "Ask for February when ready — I'll replay using what we learned.",
     )
 

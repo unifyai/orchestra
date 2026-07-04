@@ -41,6 +41,7 @@ from orchestra.services.learning_expenses_fixtures import (
     learning_expenses_deliverable_handoff_rule,
     learning_expenses_intro_arc_lines,
     learning_expenses_opening_script_guidance,
+    learning_expenses_stop_act_for_storage_rule,
     learning_expenses_storage_check_nudge,
     learning_expenses_user_facing_voice,
 )
@@ -258,6 +259,7 @@ LEARNING_FRAMING = (
     "tools — StorageCheck persists after the act completes; after StorageCheck "
     f"finishes, cite the stored ids from its summary when nudging the user, then "
     f"{_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
+    f"Rule 6b — {learning_expenses_stop_act_for_storage_rule()} "
     "Rule 7 — Invite them to ask for next month's report and WAIT; replay only "
     f"once they ask ({LEARNING_EXPENSES_REPLAY_HINT}). "
     "Rule 8 — Replay: second act(persist=True) over month-N+1 files; send the "
@@ -607,6 +609,7 @@ def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             f'to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}", then WAIT. '
             "After their correction: revise, store Guidance and Function, send "
             "improved tagged onboarding_learning_phase=improved, "
+            f"{learning_expenses_stop_act_for_storage_rule()} "
             f"then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
             f"Invite them to ask for next month's report and WAIT. Replay: "
             f"{_LEARNING_REPLAY_HINT} Send replay tagged "
@@ -1427,9 +1430,10 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "narrated tutorial: I send the seeded month-N bank exports as chat "
         "attachments, make a deliberately naive pass over them, point out my "
         "own mistake, suggest the correction for the user to send, and wait. "
-        "After they send it I revise, store the learning in Brain (Guidance "
-        "and Functions), and invite them to ask me for next month's report — "
-        "the replay runs only when they ask. Completion is derived from the "
+        "After they send it I revise, stop the persist act so StorageCheck can "
+        "save the learning in Brain (Guidance and Functions), and invite them "
+        "to ask me for next month's report — the replay runs only when they ask. "
+        "Completion is derived from the "
         "tagged chat deliverables plus the stored learning and the replay — "
         "not from the click alone."
     ),
