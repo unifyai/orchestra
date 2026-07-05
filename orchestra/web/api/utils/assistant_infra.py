@@ -1705,6 +1705,58 @@ async def wake_up_assistant(assistant_id: str):
     )
 
 
+def _should_skip_coordinator_wakeup() -> bool:
+    return settings.is_self_host or not comms_explicitly_configured()
+
+
+def wake_up_coordinator_best_effort_sync(assistant_id: str | int) -> None:
+    """Start the Coordinator runtime from sync callers without failing the request."""
+    if _should_skip_coordinator_wakeup():
+        return
+    try:
+        wake_up_url = _adapters_url() + "/assistant/wakeup"
+        with httpx.Client(timeout=20) as client:
+            response = client.post(
+                wake_up_url,
+                data={"assistant_id": str(assistant_id)},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            )
+        if response.status_code != 200:
+            logging.warning(
+                "Coordinator wakeup failed (assistant_id=%s, status=%s): %s",
+                assistant_id,
+                response.status_code,
+                response.text,
+            )
+    except Exception:
+        logging.warning(
+            "Coordinator wakeup request failed (assistant_id=%s)",
+            assistant_id,
+            exc_info=True,
+        )
+
+
+async def wake_up_coordinator_best_effort(assistant_id: str | int) -> None:
+    """Start the Coordinator runtime from async callers without failing the request."""
+    if _should_skip_coordinator_wakeup():
+        return
+    try:
+        response = await wake_up_assistant(str(assistant_id))
+        if response.status_code != 200:
+            logging.warning(
+                "Coordinator wakeup failed (assistant_id=%s, status=%s): %s",
+                assistant_id,
+                response.status_code,
+                response.text,
+            )
+    except Exception:
+        logging.warning(
+            "Coordinator wakeup request failed (assistant_id=%s)",
+            assistant_id,
+            exc_info=True,
+        )
+
+
 async def reawaken_assistant(
     assistant_id: str,
     *,

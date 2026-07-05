@@ -632,6 +632,13 @@ class OnboardingSessionStartedResponse(BaseModel):
     emitted: bool
 
 
+class CoordinatorWakeupResponse(BaseModel):
+    """Acknowledgement returned after a best-effort Coordinator wakeup."""
+
+    coordinator_id: str
+    attempted: bool
+
+
 class OnboardingStepEventRequest(BaseModel):
     """Request body for firing the graph-owned event attached to a step.
 

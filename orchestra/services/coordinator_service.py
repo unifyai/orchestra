@@ -138,6 +138,46 @@ def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None
     )
 
 
+def wake_workspace_coordinator_best_effort_sync(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int | None = None,
+) -> None:
+    """Wake the user's workspace Coordinator without failing the caller."""
+    from orchestra.web.api.utils.assistant_infra import (
+        wake_up_coordinator_best_effort_sync,
+    )
+
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if coordinator is None:
+        return
+    wake_up_coordinator_best_effort_sync(coordinator.agent_id)
+
+
+async def wake_workspace_coordinator_best_effort(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int | None = None,
+) -> None:
+    """Async variant of :func:`wake_workspace_coordinator_best_effort_sync`."""
+    from orchestra.web.api.utils.assistant_infra import wake_up_coordinator_best_effort
+
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if coordinator is None:
+        return
+    await wake_up_coordinator_best_effort(coordinator.agent_id)
+
+
 def get_organization_coordinator(
     session: Session,
     *,

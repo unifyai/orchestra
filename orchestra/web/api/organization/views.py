@@ -101,6 +101,7 @@ from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.assistant_infra import (
     delete_pubsub_topic,
     fan_out_contact_sync_for_org,
+    wake_up_coordinator_best_effort,
 )
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.mfa_enforcement import check_org_mfa_enforcement
@@ -225,6 +226,7 @@ async def _create_organization_with_owner_coordinator(
             "api_key": new_api_key,
         }
         session.commit()
+        await wake_up_coordinator_best_effort(org_coordinator.agent_id)
         await publish_membership_refreshes_best_effort(sharing_refresh_payloads)
         return response_data
     except OrgWideSharingConflictError as exc:

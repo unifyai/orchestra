@@ -2263,3 +2263,32 @@ async def test_onboarding_step_event_emits_task_beat_row_event(
     extra = post.await_args.kwargs["extra_event_fields"]
     assert extra["subtype"] == "task_beat_requested"
     assert extra["details"]["task_kind"] == "triggered"
+
+
+@pytest.mark.anyio
+async def test_coordinator_wakeup_endpoint(client: AsyncClient) -> None:
+    owner = await _create_user(client, "coordinator-wakeup")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch(
+        "orchestra.web.api.assistant.views.wake_up_coordinator_best_effort",
+        new=AsyncMock(),
+    ) as wake:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/wakeup",
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    info = response.json()["info"]
+    assert info["coordinator_id"] == str(coordinator_id)
+    assert info["attempted"] is True
+    wake.assert_awaited_once_with(coordinator_id)

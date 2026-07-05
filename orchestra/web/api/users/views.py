@@ -47,6 +47,7 @@ from orchestra.services.coordinator_service import (
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
     notify_onboarding_render_if_changed,
+    wake_workspace_coordinator_best_effort_sync,
 )
 from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.services.universal_unity_whatsapp import (
@@ -176,6 +177,12 @@ async def create_user(
                 new_user.id,
                 exc_info=True,
             )
+
+    wake_workspace_coordinator_best_effort_sync(
+        session,
+        user_id=str(new_user.id),
+        organization_id=None,
+    )
 
     return {
         "id": new_user.id,
@@ -2343,6 +2350,20 @@ def update_onboarding_progress(
     )
 
     session.commit()
+
+    if body.current_step == "completed":
+        organization_id: int | None = None
+        org_id_raw = (body.step_data or {}).get("organizationId")
+        if org_id_raw is not None:
+            try:
+                organization_id = int(org_id_raw)
+            except (TypeError, ValueError):
+                organization_id = None
+        wake_workspace_coordinator_best_effort_sync(
+            session,
+            user_id=request.state.user_id,
+            organization_id=organization_id,
+        )
 
     return OnboardingStatusDetailedResponse(
         user_id=status.user_id,

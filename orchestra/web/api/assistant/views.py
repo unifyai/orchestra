@@ -170,6 +170,7 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorStateUpdate,
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
+    CoordinatorWakeupResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -208,6 +209,7 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     trigger_contact_sync_safe,
     wake_up_assistant,
+    wake_up_coordinator_best_effort,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -1827,6 +1829,38 @@ async def notify_onboarding_session_started_endpoint(
         info=OnboardingSessionStartedResponse(
             coordinator_id=str(coordinator.agent_id),
             emitted=emitted,
+        ),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/wakeup",
+    response_model=InfoResponse[CoordinatorWakeupResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Wake the Coordinator runtime early",
+    tags=["Assistant Management"],
+)
+async def wake_coordinator_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorWakeupResponse]:
+    """Start the Coordinator GKE job without waiting for a user action.
+
+    Best-effort: a transient adapters outage is logged and the endpoint
+    still returns 200 so Console can fire this during onboarding without
+    blocking navigation.
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    await wake_up_coordinator_best_effort(coordinator.agent_id)
+    return InfoResponse(
+        info=CoordinatorWakeupResponse(
+            coordinator_id=str(coordinator.agent_id),
+            attempted=not (settings.is_self_host or not comms_explicitly_configured()),
         ),
     )
 
