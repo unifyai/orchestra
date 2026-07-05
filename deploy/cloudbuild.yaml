@@ -120,7 +120,8 @@ steps:
     --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
   - '--region=$_DEPLOY_REGION'
   - '--quiet'
-  - '--vpc-connector=orchestra-connector-v2'
+  - '--set-cloudsql-instances=$_CLOUDSQL_INSTANCE'
+  - '--vpc-connector=orchestra-connector-usc1'
   - '--vpc-egress=all-traffic'
   - '--no-cpu-throttling'
   - '--cpu-boost'
@@ -138,18 +139,18 @@ options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 substitutions:
-  _JOB_REGION: europe-west3
+  _JOB_REGION: us-central1
   _SERVICE_NAME: orchestra
   _TRIGGER_ID: 0bfee4b7-25c8-453a-8484-fca72480864c
   REPO_NAME: orchestra
-  _DEPLOY_REGION: europe-west1
-  _AR_HOSTNAME: europe-west3-docker.pkg.dev
+  _DEPLOY_REGION: us-central1
+  _AR_HOSTNAME: us-central1-docker.pkg.dev
   _PLATFORM: managed
   _JOB_NAME: orchestra-migrator
   _REINDEX_JOB_NAME: orchestra-index-maintenance-reindex
   _PROMOTE_JOB_NAME: orchestra-partition-promote
   _BUILTINS_SEED_JOB_NAME: orchestra-builtins-seed
-  _CLOUDSQL_INSTANCE: gcp-project-saas:europe-west3:prod-ssd
+  _CLOUDSQL_INSTANCE: gcp-project-saas:us-central1:prod-ssd-usc1
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
