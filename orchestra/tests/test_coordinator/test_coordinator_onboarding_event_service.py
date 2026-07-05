@@ -478,6 +478,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
     so the opener relies entirely on this derivation being attached.
     """
     coordinator = _fake_coordinator(agent_id=11)
+    session = MagicMock()
     with (
         patch.object(
             svc,
@@ -493,16 +494,27 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
             return_value=["workspace", "apps"],
         ) as derive,
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
-        patch.object(svc, "set_coordinator_state", MagicMock()),
+        patch.object(svc, "set_coordinator_state", MagicMock()) as set_state,
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(
-            session=MagicMock(),
+            session=session,
             coordinator=coordinator,
             medium="chat",
         )
     assert result is True
     derive.assert_called_once()
+    # The chat pick latches intro_watched and arms the durable chat-intro
+    # intent server-side — Console's own PATCH is best-effort redundancy.
+    set_state.assert_called_once_with(
+        session,
+        coordinator=coordinator,
+        intro_watched=True,
+        pending_chat_intro=True,
+    )
+    # The state write commits (releasing its advisory lock) before the
+    # adapter POST so concurrent state PATCHes never wait on network I/O.
+    assert session.commit.called
     fields = post.await_args.kwargs["extra_event_fields"]
     assert fields["subtype"] == svc.SUBTYPE_ONBOARDING_SESSION_STARTED
     assert fields["details"] == {
@@ -511,6 +523,46 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
         "skipped_step_ids": ["phone-number"],
         "onboarding": _RENDER,
     }
+
+
+@pytest.mark.anyio
+async def test_session_started_call_latches_intro_before_adapter_post() -> None:
+    """The call pick latches intro_watched and commits before the POST.
+
+    ``intro_watched`` must never depend solely on Console's concurrent
+    state PATCH, and the state write's advisory lock must be released
+    (committed) before the adapter network call so concurrent PATCHes
+    can't be starved into lock timeouts.
+    """
+    coordinator = _fake_coordinator(agent_id=13)
+    session = MagicMock()
+    post = AsyncMock()
+
+    def _commit_before_post() -> None:
+        assert post.await_count == 0, "commit must precede the adapter POST"
+
+    session.commit.side_effect = _commit_before_post
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
+        patch.object(svc, "derive_onboarding_progress", return_value=[]),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "set_coordinator_state", MagicMock()) as set_state,
+        patch.object(svc, "_post_unity_system_event", new=post),
+    ):
+        result = await svc.emit_onboarding_session_started_event(
+            session=session,
+            coordinator=coordinator,
+            medium="call",
+        )
+    assert result is True
+    set_state.assert_called_once_with(
+        session,
+        coordinator=coordinator,
+        intro_watched=True,
+        pending_chat_intro=None,
+    )
+    assert session.commit.called
+    assert post.await_count == 1
 
 
 @pytest.mark.anyio

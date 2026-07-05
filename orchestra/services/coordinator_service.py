@@ -3545,6 +3545,9 @@ async def emit_onboarding_step_event(
             coordinator=coordinator,
             onboarding_step=step.paired_reply,
         )
+    # Release the Coordinator/State advisory lock taken by the state
+    # writes above before the adapter POST inside the notify below.
+    session.commit()
     details = {
         **dict(event.details),
         "step_id": step.id,
@@ -3591,6 +3594,12 @@ async def emit_onboarding_session_started_event(
     steps completed in earlier sessions — which never produce
     transition events — are still visible to Unity's opening turn.
 
+    Resolving the picker *is* watching the intro, so ``intro_watched``
+    is latched here rather than relying solely on Console's concurrent
+    state PATCH — that PATCH is best-effort and Unity's chat-intro
+    delivery gate requires the flag, so a dropped PATCH must not be
+    able to strand the scripted opener.
+
     Gated on ``Coordinator/State.onboarding_active`` like the
     other onboarding events; emissions while inactive are
     silently dropped (returns ``False``).
@@ -3601,12 +3610,17 @@ async def emit_onboarding_session_started_event(
             medium,
         )
         return False
-    if medium == ONBOARDING_SESSION_MEDIUM_CHAT:
-        set_coordinator_state(
-            session,
-            coordinator=coordinator,
-            pending_chat_intro=True,
-        )
+    set_coordinator_state(
+        session,
+        coordinator=coordinator,
+        intro_watched=True,
+        pending_chat_intro=(True if medium == ONBOARDING_SESSION_MEDIUM_CHAT else None),
+    )
+    # Commit immediately so the Coordinator/State advisory lock taken by
+    # the write above is released before the render derivation and the
+    # adapter POST below. Holding it across network I/O starves concurrent
+    # state PATCHes into Postgres lock timeouts (10s on hosted deploys).
+    session.commit()
     details: dict[str, Any] = {"medium": medium}
     completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
     skipped_step_ids = get_coordinator_state(session, coordinator=coordinator).get(

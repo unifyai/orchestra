@@ -1700,6 +1700,12 @@ async def update_coordinator_state_endpoint(
             else None
         ),
     )
+    # Commit the state write immediately so its Coordinator/State advisory
+    # lock is released before the event emissions below, which POST to the
+    # adapters. Holding the lock across network I/O starves concurrent state
+    # writers (other PATCHes, the picker-resolution event) into Postgres
+    # lock timeouts.
+    session.commit()
     # The event branches below all read the same post-update progress; derive
     # it at most once per request (each derivation walks the whole onboarding
     # graph with per-step probes).
