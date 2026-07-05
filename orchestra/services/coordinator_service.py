@@ -3,7 +3,7 @@
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 import httpx
 from fastapi import HTTPException, status
@@ -1814,7 +1814,84 @@ def _onboarding_step_phase(step_id: str) -> str | None:
     return step.phase if step is not None else None
 
 
-def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
+class _OnboardingProbeScope:
+    """Shared lookups for one onboarding-progress derivation.
+
+    A single state read fans out into dozens of per-step completion probes.
+    Without this cache each probe independently re-resolved the Assistants
+    project, Transcripts context, user row, secrets, and task rows — and
+    reply probes re-ran their trigger's transcript scan — so one derivation
+    cost well over a hundred sequential round-trips. Resolving every shared
+    lookup exactly once keeps a derivation to roughly one query per step.
+    """
+
+    def __init__(self, session: Session, coordinator: Assistant) -> None:
+        self.session = session
+        self.coordinator = coordinator
+        self.project = _project_for_coordinator(session, coordinator)
+        self.transcripts_context = _get_context(
+            session,
+            project_id=self.project.id,
+            context_name=_coordinator_context_name(
+                coordinator,
+                COORDINATOR_TRANSCRIPTS_CONTEXT,
+            ),
+        )
+        self._user: User | None = None
+        self._user_loaded = False
+        self._secrets: dict[str, str] | None = None
+        self._task_rows: list[LogEvent] | None = None
+        self._trigger_outbound_at: dict[str, datetime | None] = {}
+
+    @property
+    def user(self) -> "User | None":
+        if not self._user_loaded:
+            self._user = _user_for_coordinator(
+                self.session,
+                coordinator=self.coordinator,
+            )
+            self._user_loaded = True
+        return self._user
+
+    @property
+    def secrets(self) -> dict[str, str]:
+        if self._secrets is None:
+            self._secrets = AssistantSecretDAO(self.session).get_all(
+                self.coordinator.agent_id,
+            )
+        return self._secrets
+
+    @property
+    def task_rows(self) -> list[LogEvent]:
+        if self._task_rows is None:
+            self._task_rows = _coordinator_task_rows(
+                self.session,
+                coordinator=self.coordinator,
+            )
+        return self._task_rows
+
+    def trigger_outbound_created_at(
+        self,
+        step_id: str,
+        *,
+        reset_after: datetime | None = None,
+    ) -> datetime | None:
+        """First tagged outbound for one trigger step, memoized per derivation.
+
+        Safe to key by step id alone: within one derivation the reset map is
+        fixed, so both the trigger row's own check and its paired reply's
+        threshold lookup resolve the same ``reset_after``.
+        """
+        if step_id not in self._trigger_outbound_at:
+            self._trigger_outbound_at[step_id] = _trigger_outbound_created_at(
+                self,
+                step_id=step_id,
+                reset_after=reset_after,
+            )
+        return self._trigger_outbound_at[step_id]
+
+
+def _has_workspace_email(scope: "_OnboardingProbeScope") -> bool:
     """Workspace step: the user connected a workspace, via either signal.
 
     Two durable signals mark a connected workspace, and either counts:
@@ -1834,8 +1911,8 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
       — unlike the broad ``GOOGLE_``/``MICROSOFT_`` prefix, it can't be
       left ticked by a stray secret (e.g. an orphaned ``*_ACCOUNT_EMAIL``).
     """
-    contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
-        coordinator.agent_id,
+    contacts = AssistantContactDAO(scope.session).get_active_contacts_for_assistant(
+        scope.coordinator.agent_id,
     )
     if any(
         contact.contact_type == "email"
@@ -1846,7 +1923,7 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
     ):
         return True
 
-    secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
+    secrets = scope.secrets
     return bool(
         secrets.get("GOOGLE_GRANTED_SCOPES") or secrets.get("MICROSOFT_GRANTED_SCOPES"),
     )
@@ -1882,11 +1959,11 @@ def _connected_workspace(
     return None, frozenset()
 
 
-def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
+def _has_app_secret(scope: "_OnboardingProbeScope") -> bool:
     """Apps step: any owned secret that is NOT a workspace OAuth token."""
-    secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
     return any(
-        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES) for name in secret_names
+        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES)
+        for name in scope.secrets
     )
 
 
@@ -1919,7 +1996,7 @@ def _coordinator_task_rows(
     )
 
 
-def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
+def _has_scheduled_task(scope: "_OnboardingProbeScope") -> bool:
     """Create-a-scheduled-task step: a schedule-bearing task exists.
 
     Completion proof for the "boomerang" beat — the user set up a task that
@@ -1929,11 +2006,11 @@ def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
     """
     return any(
         isinstance(row.data, dict) and row.data.get("schedule")
-        for row in _coordinator_task_rows(session, coordinator=coordinator)
+        for row in scope.task_rows
     )
 
 
-def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
+def _has_triggerable_task(scope: "_OnboardingProbeScope") -> bool:
     """Create-a-triggerable-task step: a trigger-bearing task exists.
 
     Completion proof for the "triggerable task" beat — the user armed a task
@@ -1942,28 +2019,8 @@ def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
     """
     return any(
         isinstance(row.data, dict) and row.data.get("trigger")
-        for row in _coordinator_task_rows(session, coordinator=coordinator)
+        for row in scope.task_rows
     )
-
-
-def _transcripts_context_for_coordinator(
-    session: Session,
-    *,
-    coordinator: Assistant,
-) -> tuple[int, Context] | None:
-    """Assistants project id and Transcripts context for one coordinator."""
-    project = _project_for_coordinator(session, coordinator)
-    context = _get_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_TRANSCRIPTS_CONTEXT,
-        ),
-    )
-    if context is None:
-        return None
-    return project.id, context
 
 
 def _tagged_assistant_transcript_at(
@@ -2070,16 +2127,16 @@ def _earliest_coordinator_context_row_after(
 
 
 def _learning_beat_complete(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     beat_anchor: datetime,
 ) -> bool:
     """Learn-from-correction step: tagged correction loop + Brain storage + replay."""
-    transcripts = _transcripts_context_for_coordinator(session, coordinator=coordinator)
-    if transcripts is None:
+    if scope.transcripts_context is None:
         return False
-    project_id, transcripts_context = transcripts
+    session = scope.session
+    project_id = scope.project.id
+    transcripts_context = scope.transcripts_context
 
     first_attempt_at = _tagged_assistant_transcript_at(
         session,
@@ -2115,14 +2172,14 @@ def _learning_beat_complete(
     guidance_at = _earliest_coordinator_context_row_after(
         session,
         project_id=project_id,
-        coordinator=coordinator,
+        coordinator=scope.coordinator,
         suffix=COORDINATOR_GUIDANCE_CONTEXT,
         after=correction_at,
     )
     function_at = _earliest_coordinator_context_row_after(
         session,
         project_id=project_id,
-        coordinator=coordinator,
+        coordinator=scope.coordinator,
         suffix=COORDINATOR_FUNCTIONS_COMPOSITIONAL_CONTEXT,
         after=correction_at,
     )
@@ -2171,18 +2228,19 @@ def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User |
     return session.get(User, coordinator.user_id)
 
 
-def _has_user_whatsapp_number(session: Session, *, coordinator: Assistant) -> bool:
-    user = _user_for_coordinator(session, coordinator=coordinator)
+def _has_user_whatsapp_number(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
     return bool(user and user.whatsapp_number and user.whatsapp_number.strip())
 
 
-def _has_user_phone_number(session: Session, *, coordinator: Assistant) -> bool:
-    user = _user_for_coordinator(session, coordinator=coordinator)
+def _has_user_phone_number(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
     return bool(user and user.phone_number and user.phone_number.strip())
 
 
-def _has_slack_install(session: Session, *, coordinator: Assistant) -> bool:
-    dao = SlackDAO(session)
+def _has_slack_install(scope: "_OnboardingProbeScope") -> bool:
+    dao = SlackDAO(scope.session)
+    coordinator = scope.coordinator
     install = (
         dao.get_install_for_org(coordinator.organization_id)
         if coordinator.organization_id is not None
@@ -2191,39 +2249,30 @@ def _has_slack_install(session: Session, *, coordinator: Assistant) -> bool:
     return install is not None
 
 
-def _has_discord_connection(session: Session, *, coordinator: Assistant) -> bool:
-    user = _user_for_coordinator(session, coordinator=coordinator)
+def _has_discord_connection(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
     if not user or not user.discord_id or not user.discord_id.strip():
         return False
-    contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
-        coordinator.agent_id,
+    contact = AssistantContactDAO(scope.session).get_contact_by_assistant_and_type(
+        scope.coordinator.agent_id,
         "discord",
     )
     return bool(contact and contact.contact_value and contact.contact_value.strip())
 
 
 def _has_user_transcript_message(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     mediums: Sequence[str],
     after: datetime | None = None,
     reset_after: datetime | None = None,
 ) -> bool:
-    project = _project_for_coordinator(session, coordinator)
-    context = _get_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_TRANSCRIPTS_CONTEXT,
-        ),
-    )
+    context = scope.transcripts_context
     if context is None:
         return False
     query = (
         project_scoped_log_events(
-            project.id,
+            scope.project.id,
             LogEvent.id,
             owner_key=single_owner_key(context.owner_scope, context.owner_id),
         )
@@ -2240,32 +2289,23 @@ def _has_user_transcript_message(
         threshold = reset_after
     if threshold is not None:
         query = query.where(LogEvent.created_at > threshold)
-    row = session.scalar(query)
+    row = scope.session.scalar(query)
     return row is not None
 
 
 def _assistant_transcript_created_at(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     mediums: Sequence[str],
     onboarding_trigger_step_id: str | None = None,
     reset_after: datetime | None = None,
 ) -> datetime | None:
-    project = _project_for_coordinator(session, coordinator)
-    context = _get_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_TRANSCRIPTS_CONTEXT,
-        ),
-    )
+    context = scope.transcripts_context
     if context is None:
         return None
     query = (
         project_scoped_log_events(
-            project.id,
+            scope.project.id,
             LogEvent.created_at,
             owner_key=single_owner_key(context.owner_scope, context.owner_id),
         )
@@ -2287,13 +2327,12 @@ def _assistant_transcript_created_at(
         )
     if reset_after is not None:
         query = query.where(LogEvent.created_at > reset_after)
-    return session.scalar(query)
+    return scope.session.scalar(query)
 
 
 def _trigger_outbound_created_at(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     step_id: str,
     reset_after: datetime | None = None,
 ) -> datetime | None:
@@ -2301,8 +2340,7 @@ def _trigger_outbound_created_at(
     if not mediums:
         return None
     return _assistant_transcript_created_at(
-        session,
-        coordinator=coordinator,
+        scope,
         mediums=mediums,
         onboarding_trigger_step_id=step_id,
         reset_after=reset_after,
@@ -2310,27 +2348,19 @@ def _trigger_outbound_created_at(
 
 
 def _has_trigger_outbound(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     step_id: str,
     reset_after: datetime | None = None,
 ) -> bool:
     return (
-        _trigger_outbound_created_at(
-            session,
-            coordinator=coordinator,
-            step_id=step_id,
-            reset_after=reset_after,
-        )
-        is not None
+        scope.trigger_outbound_created_at(step_id, reset_after=reset_after) is not None
     )
 
 
 def _has_reply_to_trigger(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     step_id: str,
     trigger_reset_after: datetime | None = None,
     reset_after: datetime | None = None,
@@ -2341,17 +2371,14 @@ def _has_reply_to_trigger(
     mediums = onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS.get(trigger_id)
     if not mediums:
         return False
-    trigger_created_at = _trigger_outbound_created_at(
-        session,
-        coordinator=coordinator,
-        step_id=trigger_id,
+    trigger_created_at = scope.trigger_outbound_created_at(
+        trigger_id,
         reset_after=trigger_reset_after,
     )
     if trigger_created_at is None:
         return False
     return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
+        scope,
         mediums=mediums,
         after=trigger_created_at,
         reset_after=reset_after,
@@ -2378,6 +2405,7 @@ def derive_onboarding_progress(
     """
     state = state or get_coordinator_state(session, coordinator=coordinator)
     reset_at = normalize_onboarding_reset_at(state.get("onboarding_reset_at"))
+    scope = _OnboardingProbeScope(session, coordinator)
     durable_checks: dict[str, Any] = {
         ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
@@ -2394,16 +2422,14 @@ def derive_onboarding_progress(
         reset_after = _parse_onboarding_reset_at(reset_at.get(step_id))
         if step_id == ONBOARDING_STEP_LEARN_FROM_CORRECTION:
             if reset_after is not None and _learning_beat_complete(
-                session,
-                coordinator=coordinator,
+                scope,
                 beat_anchor=reset_after,
             ):
                 completed.append(step_id)
             continue
         if step_id in onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS:
             if _has_trigger_outbound(
-                session,
-                coordinator=coordinator,
+                scope,
                 step_id=step_id,
                 reset_after=reset_after,
             ):
@@ -2413,8 +2439,7 @@ def derive_onboarding_progress(
         if trigger_id is not None:
             trigger_reset_after = _parse_onboarding_reset_at(reset_at.get(trigger_id))
             if _has_reply_to_trigger(
-                session,
-                coordinator=coordinator,
+                scope,
                 step_id=step_id,
                 trigger_reset_after=trigger_reset_after,
                 reset_after=reset_after,
@@ -2422,7 +2447,7 @@ def derive_onboarding_progress(
                 completed.append(step_id)
             continue
         check = durable_checks.get(step_id)
-        if check is not None and check(session, coordinator=coordinator):
+        if check is not None and check(scope):
             completed.append(step_id)
     manual = normalize_onboarding_step_ids(state.get("manually_completed_step_ids"))
     return sorted(set(completed) | set(manual))
@@ -2567,6 +2592,8 @@ def compute_onboarding_render(
     *,
     coordinator: Assistant,
     local_mode: bool | None = None,
+    state: dict[str, Any] | None = None,
+    completed: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Build the precomputed onboarding rendering for the brains + Console.
 
@@ -2600,9 +2627,21 @@ def compute_onboarding_render(
         session,
         coordinator=coordinator,
     )
-    state = get_coordinator_state(session, coordinator=coordinator)
-    completed: set[str] = set(
-        derive_onboarding_progress(session, coordinator=coordinator, state=state),
+    # Callers that already hold the state row and derived progress (the state
+    # endpoint, event emitters) pass them in so the expensive derivation runs
+    # once per request instead of once per consumer.
+    if state is None:
+        state = get_coordinator_state(session, coordinator=coordinator)
+    completed = set(
+        (
+            completed
+            if completed is not None
+            else derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+                state=state,
+            )
+        ),
     )
     skipped: set[str] = set(
         normalize_onboarding_step_ids(state.get("skipped_step_ids")),

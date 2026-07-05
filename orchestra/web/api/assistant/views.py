@@ -1579,8 +1579,9 @@ def _coordinator_state_response(
     every read (see ``derive_onboarding_progress``) so the console
     checklist and Unity's openers agree on what is already done even
     when the completing action happened in an earlier session. The
-    derivation queries are skipped when onboarding is inactive, where the
-    checklist no longer renders.
+    derivation runs exactly once per read — the render reuses the same
+    state row and derived progress — and is skipped entirely when
+    onboarding is inactive, where the checklist no longer renders.
     """
     state = get_coordinator_state(session, coordinator=coordinator)
     actively_onboarding = bool(state.get("onboarding_active"))
@@ -1590,7 +1591,12 @@ def _coordinator_state_response(
         else []
     )
     onboarding = (
-        compute_onboarding_render(session, coordinator=coordinator)
+        compute_onboarding_render(
+            session,
+            coordinator=coordinator,
+            state=state,
+            completed=completed_step_ids,
+        )
         if actively_onboarding
         else None
     )
@@ -1694,46 +1700,49 @@ async def update_coordinator_state_endpoint(
             else None
         ),
     )
+    # The event branches below all read the same post-update progress; derive
+    # it at most once per request (each derivation walks the whole onboarding
+    # graph with per-step probes).
+    derived_completed: list[str] | None = None
+
+    def _completed_step_ids() -> list[str]:
+        nonlocal derived_completed
+        if not next_state.get("onboarding_active"):
+            return []
+        if derived_completed is None:
+            derived_completed = derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+                state=next_state,
+            )
+        return derived_completed
+
     if (
         update.onboarding_step
         and next_state.get("onboarding_active")
         and previous_state.get("onboarding_step") != update.onboarding_step
     ):
-        completed_step_ids = derive_onboarding_progress(
-            session,
-            coordinator=coordinator,
-        )
         await emit_onboarding_step_started_event(
             session,
             coordinator=coordinator,
             step_id=update.onboarding_step,
-            completed_step_ids=completed_step_ids,
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     if update.skip_onboarding_step:
-        completed_step_ids = (
-            derive_onboarding_progress(session, coordinator=coordinator)
-            if next_state.get("onboarding_active")
-            else []
-        )
         await emit_onboarding_step_skipped_event(
             session,
             coordinator=coordinator,
             step_id=update.skip_onboarding_step,
-            completed_step_ids=completed_step_ids,
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     if update.reset_onboarding_step:
-        completed_step_ids = (
-            derive_onboarding_progress(session, coordinator=coordinator)
-            if next_state.get("onboarding_active")
-            else []
-        )
         await emit_onboarding_step_reset_event(
             session,
             coordinator=coordinator,
             step_id=update.reset_onboarding_step,
-            completed_step_ids=completed_step_ids,
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     if (
@@ -1745,10 +1754,7 @@ async def update_coordinator_state_endpoint(
             session,
             coordinator=coordinator,
             step_id=update.onboarding_step_completion.step_id,
-            completed_step_ids=derive_onboarding_progress(
-                session,
-                coordinator=coordinator,
-            ),
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     session.commit()
