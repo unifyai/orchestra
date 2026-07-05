@@ -308,7 +308,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         id="workspace",
         label=PHASE_WORKSPACE,
         title="Workspace",
-        description="Give me access to your Google or Microsoft workspace.",
+        description="Give T-W1N access to your Google or Microsoft workspace.",
         framing=WORKSPACE_FRAMING,
     ),
     OnboardingPhase(
@@ -910,47 +910,47 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     OnboardingStep(
         id="workspace",
-        title="Give me access to your workspace",
+        title="Give T-W1N access to your workspace",
         phase=PHASE_WORKSPACE,
         kind="connect",
         depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Give me access to your workspace' row in the "
+            "Have them click the 'Give T-W1N access to your workspace' row in the "
             "Onboarding checklist; it opens the Google or Microsoft workspace "
             "connection flow."
         ),
         nudge_voice=(
-            "clicking the 'Give me access to your workspace' row in the Onboarding checklist"
+            "clicking the 'Give T-W1N access to your workspace' row in the Onboarding checklist"
         ),
     ),
     _demo(
         "workspace-mailbox",
-        "Summarise my mailbox",
+        "Ask T-W1N to summarize your mailbox",
         channel="workspace_mailbox",
         depends_on={"workspace": COMPLETED},
         nudge_chat=(
             "Once their workspace is connected, invite them to click the "
-            "'Summarise my mailbox' row in the Onboarding checklist; I read their "
+            "'Ask T-W1N to summarize your mailbox' row in the Onboarding checklist; I read their "
             "recent mail and send back a short summary, then offer to draft a reply."
         ),
         nudge_voice=(
-            "clicking the 'Summarise my mailbox' row in the Onboarding checklist"
+            "clicking the 'Ask T-W1N to summarize your mailbox' row in the Onboarding checklist"
         ),
     ),
     _demo(
         "workspace-drive",
-        "Take a look at my files",
+        "Ask T-W1N to summarize your files",
         channel="workspace_drive",
         depends_on={"workspace": COMPLETED},
         nudge_chat=(
-            "Invite them to click the 'Take a look at my files' row in the "
+            "Invite them to click the 'Ask T-W1N to summarize your files' row in the "
             "Onboarding checklist; I scan their Drive or OneDrive and send back a "
             "short summary, then suggest a simple, optional tidy-up if it looks messy."
         ),
         nudge_voice=(
-            "clicking the 'Take a look at my files' row in the Onboarding checklist"
+            "clicking the 'Ask T-W1N to summarize your files' row in the Onboarding checklist"
         ),
     ),
     _demo(
@@ -972,19 +972,19 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     OnboardingStep(
         id="apps",
-        title="Connect me with your apps",
+        title="Connect T-W1N with your apps",
         phase=PHASE_INTEGRATIONS,
         kind="connect",
         depends_on={"workspace": COMPLETED},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Connect me with your apps' row in the "
+            "Have them click the 'Connect T-W1N with your apps' row in the "
             "Onboarding checklist; it opens Integrations so they can connect "
             "at least one app (Slack, Gmail, Notion, ...)."
         ),
         nudge_voice=(
-            "clicking the 'Connect me with your apps' row in the Onboarding checklist"
+            "clicking the 'Connect T-W1N with your apps' row in the Onboarding checklist"
         ),
     ),
     OnboardingStep(
@@ -1369,13 +1369,13 @@ STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "Clicking the 'Give T-W1N access to your workspace' row opens the workspace "
         "OAuth dialog (Google Workspace or Microsoft 365). Completing OAuth "
         "grants me access to their email, calendar, files, and other workspace "
         "resources."
     ),
     "workspace-mailbox": (
-        "Clicking the 'Summarise my mailbox' row tells me the user wants a live "
+        "Clicking the 'Ask T-W1N to summarize your mailbox' row tells me the user wants a live "
         "demo of their connected mailbox: I read their recent mail with my own "
         "tools and deliver one short summary as a single unify_message. The "
         "checklist does not auto-detect that summary, so once it is sent I mark "
@@ -1386,7 +1386,7 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "the task I just confirm it rather than redoing the work."
     ),
     "workspace-drive": (
-        "Clicking the 'Take a look at my files' row tells me the user wants a "
+        "Clicking the 'Ask T-W1N to summarize your files' row tells me the user wants a "
         "demo of their connected Drive or OneDrive: I read what's there and send "
         "one short summary as a single unify_message, then offer a simple, "
         "optional way to tidy things up if the files look disorganised (I only "
@@ -1403,7 +1403,7 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "the step does not auto-complete from the summary."
     ),
     "apps": (
-        "Clicking the 'Connect me with your apps' row opens the Integrations "
+        "Clicking the 'Connect T-W1N with your apps' row opens the Integrations "
         "tab; they connect at least one app from the gallery and authorize it."
     ),
     "create-scheduled-task": (
