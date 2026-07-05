@@ -493,6 +493,7 @@ async def test_session_started_event_embeds_server_derived_steps() -> None:
             return_value=["workspace", "apps"],
         ) as derive,
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "set_coordinator_state", MagicMock()),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(
@@ -520,6 +521,7 @@ async def test_session_started_event_omits_empty_step_snapshot() -> None:
         patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
         patch.object(svc, "derive_onboarding_progress", return_value=[]),
         patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "set_coordinator_state", MagicMock()),
         patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
     ):
         result = await svc.emit_onboarding_session_started_event(

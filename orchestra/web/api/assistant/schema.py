@@ -736,6 +736,9 @@ class CoordinatorStateUpdate(BaseModel):
     auto-playing intro never re-appear on a later page load. It is
     one-way sticky: once ``True`` it cannot be reset to ``False``.
 
+    ``pending_chat_intro`` arms the durable scripted chat opener on
+    ``Coordinator/State``. Unity clears it after the opener is sent.
+
     ``onboarding_active`` is the single gate for onboarding scaffolding.
     When ``False``, milestone events, the server-side step derivation,
     and the onboarding render are suppressed without touching per-step
@@ -755,6 +758,7 @@ class CoordinatorStateUpdate(BaseModel):
     skip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
+    pending_chat_intro: Optional[bool] = Field(None)
     onboarding_step_completion: Optional[OnboardingStepCompletionUpdate] = Field(
         None,
     )
@@ -919,6 +923,8 @@ class CoordinatorStateResponse(BaseModel):
     skipped_step_ids: List[str] = Field(default_factory=list)
     skipped_phase_ids: List[str] = Field(default_factory=list)
     intro_watched: bool = False
+    pending_chat_intro: bool = False
+    chat_intro_armed_at: Optional[str] = None
     # Precomputed depends_on-aware rendering (steps + statuses + valid
     # next targets with nudge copy). Present only while
     # ``onboarding_active``; ``None`` when inactive.

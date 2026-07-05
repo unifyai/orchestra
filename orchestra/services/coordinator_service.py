@@ -986,6 +986,7 @@ def _coordinator_state_entry(
     onboarding_reset_at: dict[str, str] | None,
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
+    pending_chat_intro: bool | None = None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
 
@@ -1014,6 +1015,19 @@ def _coordinator_state_entry(
     next_intro_watched = bool((previous or {}).get("intro_watched")) or bool(
         intro_watched,
     )
+    prev_pending_chat_intro = bool((previous or {}).get("pending_chat_intro"))
+    if pending_chat_intro is True:
+        next_pending_chat_intro = True
+        next_chat_intro_armed_at = now
+    elif pending_chat_intro is False:
+        next_pending_chat_intro = False
+        next_chat_intro_armed_at = None
+    else:
+        next_pending_chat_intro = prev_pending_chat_intro
+        prev_armed_at = (previous or {}).get("chat_intro_armed_at")
+        next_chat_intro_armed_at = (
+            prev_armed_at if isinstance(prev_armed_at, str) else None
+        )
     return {
         "onboarding_active": onboarding_active,
         "onboarding_step": onboarding_step,
@@ -1024,6 +1038,10 @@ def _coordinator_state_entry(
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
+        "pending_chat_intro": next_pending_chat_intro,
+        "chat_intro_armed_at": (
+            next_chat_intro_armed_at if next_pending_chat_intro else None
+        ),
         "timestamp": now,
     }
 
@@ -1088,6 +1106,8 @@ def get_coordinator_state(
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
+            "pending_chat_intro": False,
+            "chat_intro_armed_at": None,
         }
     onboarding_step = row.get("onboarding_step")
     if onboarding_step is not None and not isinstance(onboarding_step, str):
@@ -1108,6 +1128,8 @@ def get_coordinator_state(
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
+        "pending_chat_intro": bool(row.get("pending_chat_intro", False)),
+        "chat_intro_armed_at": row.get("chat_intro_armed_at"),
     }
 
 
@@ -1172,6 +1194,7 @@ def set_coordinator_state(
     skip_onboarding_phase: str | None = None,
     unskip_onboarding_phase: str | None = None,
     intro_watched: bool | None = None,
+    pending_chat_intro: bool | None = None,
     onboarding_step_completion: tuple[str, bool] | None = None,
     onboarding_reset_at_updates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -1437,6 +1460,7 @@ def set_coordinator_state(
         onboarding_reset_at=reset_at,
         previous=previous,
         intro_watched=intro_watched,
+        pending_chat_intro=pending_chat_intro,
     )
     _write_coordinator_state_row(
         session,
@@ -3498,6 +3522,12 @@ async def emit_onboarding_session_started_event(
             medium,
         )
         return False
+    if medium == ONBOARDING_SESSION_MEDIUM_CHAT:
+        set_coordinator_state(
+            session,
+            coordinator=coordinator,
+            pending_chat_intro=True,
+        )
     details: dict[str, Any] = {"medium": medium}
     completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
     skipped_step_ids = get_coordinator_state(session, coordinator=coordinator).get(

@@ -1852,7 +1852,6 @@ async def _post_unity_system_event(
     outage cannot break the surrounding request.
     """
     url = f"{_adapters_url()}/unity/system-event"
-    client = get_async_client()
     payload: dict[str, Any] = {
         "assistant_id": assistant_id,
         "event_type": event_type,
@@ -1860,16 +1859,27 @@ async def _post_unity_system_event(
     }
     if extra_event_fields:
         payload["extra_event_fields"] = extra_event_fields
-    response = await client.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {ADMIN_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=20,
-    )
-    response.raise_for_status()
+    headers = {
+        "Authorization": f"Bearer {ADMIN_KEY}",
+        "Content-Type": "application/json",
+    }
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                )
+            response.raise_for_status()
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
 
 
 async def trigger_contact_sync_safe(

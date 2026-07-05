@@ -1243,6 +1243,44 @@ async def test_coordinator_state_intro_watched_is_one_way_sticky(
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_pending_chat_intro_arms_and_clears(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """``pending_chat_intro`` arms the scripted opener and clears on demand."""
+    owner = await _create_user(client, "state-pending-chat-intro")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    armed = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"intro_watched": True, "pending_chat_intro": True},
+        headers=owner["headers"],
+    )
+    assert armed.status_code == status.HTTP_200_OK, armed.json()
+    armed_info = armed.json()["info"]
+    assert armed_info["pending_chat_intro"] is True
+    assert isinstance(armed_info.get("chat_intro_armed_at"), str)
+
+    cleared = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"pending_chat_intro": False},
+        headers=owner["headers"],
+    )
+    assert cleared.status_code == status.HTTP_200_OK, cleared.json()
+    cleared_info = cleared.json()["info"]
+    assert cleared_info["pending_chat_intro"] is False
+    assert cleared_info.get("chat_intro_armed_at") is None
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_deactivates_onboarding_and_stamps_ended_at(
     client: AsyncClient,
     dbsession: Session,

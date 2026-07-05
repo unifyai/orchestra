@@ -1682,6 +1682,7 @@ async def update_coordinator_state_endpoint(
         skip_onboarding_phase=update.skip_onboarding_phase,
         unskip_onboarding_phase=update.unskip_onboarding_phase,
         intro_watched=update.intro_watched,
+        pending_chat_intro=update.pending_chat_intro,
         onboarding_step_completion=(
             (
                 update.onboarding_step_completion.step_id,
