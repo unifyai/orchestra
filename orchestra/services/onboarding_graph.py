@@ -105,6 +105,7 @@ class OnboardingChip:
 
     id: str
     label: str
+    metadata: dict[str, Any] | None = None
 
 
 REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
@@ -177,6 +178,72 @@ WORKSPACE_FRAMING = (
     "calendar — this follow-up is optional and never gates completion. If the "
     "area is empty or T-W1N genuinely cannot read it, it says so honestly, still "
     "marks the step done, and moves on rather than inventing content."
+)
+
+INTEGRATIONS_FRAMING = (
+    "In the Integrations phase T-W1N proves connected apps are more than a "
+    "gallery: first the user connects at least one non-workspace app, then "
+    "T-W1N reads from a connected app and finally takes one concrete, "
+    "user-safe action across connected apps. For each live demo T-W1N chooses "
+    "a connected app that fits the user's click or chip, explains any missing "
+    "connection plainly, and never pretends an app is connected. The checklist "
+    "does NOT auto-detect read/action demos, so after the demo result is sent "
+    "T-W1N marks the step done explicitly with "
+    "set_onboarding_task_state(step_id, True)."
+)
+
+
+@dataclass(frozen=True)
+class DemoContract:
+    """Shared semantics for demo rows that complete by explicit brain action."""
+
+    phase: str
+    phase_id: str
+    framing: str
+    interaction_type: str
+    subtype: str
+    domain: str
+    instruction: str
+
+
+WORKSPACE_DEMO_CONTRACT = DemoContract(
+    phase=PHASE_WORKSPACE,
+    phase_id="workspace",
+    framing=WORKSPACE_FRAMING,
+    interaction_type="workspace_demo",
+    subtype="workspace_demo_requested",
+    domain="workspace",
+    instruction=(
+        "read the relevant part of their connected workspace with its own tools "
+        "and deliver one short summary as a single unify_message"
+    ),
+)
+
+INTEGRATION_READ_DEMO_CONTRACT = DemoContract(
+    phase=PHASE_INTEGRATIONS,
+    phase_id="integrations",
+    framing=INTEGRATIONS_FRAMING,
+    interaction_type="integration_demo",
+    subtype="integration_demo_requested",
+    domain="integration",
+    instruction=(
+        "read from one connected app that fits their request and deliver one "
+        "short brief as a single unify_message"
+    ),
+)
+
+INTEGRATION_ACTION_DEMO_CONTRACT = DemoContract(
+    phase=PHASE_INTEGRATIONS,
+    phase_id="integrations",
+    framing=INTEGRATIONS_FRAMING,
+    interaction_type="integration_demo",
+    subtype="integration_demo_requested",
+    domain="integration",
+    instruction=(
+        "take one concrete, user-safe action in a connected app or across "
+        "connected apps, then report exactly what happened as a single "
+        "unify_message"
+    ),
 )
 
 TASKS_FRAMING = (
@@ -342,6 +409,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_INTEGRATIONS,
         title="Integrations",
         description="Connect the apps and services I should work with.",
+        framing=INTEGRATIONS_FRAMING,
     ),
     OnboardingPhase(
         id="tasks",
@@ -466,8 +534,9 @@ def _demo(
     nudge_voice: str,
     providers: tuple[str, ...] = (),
     requires_feature: str | None = None,
+    contract: DemoContract = WORKSPACE_DEMO_CONTRACT,
 ) -> OnboardingStep:
-    """A workspace demo trigger row.
+    """A demo trigger row that completes explicitly after Twin performs it.
 
     Structurally a trigger (clicking it asks Twin to act now) but, unlike the
     reference-quiz triggers, it has no paired reply and is not auto-derived from
@@ -477,19 +546,18 @@ def _demo(
     lets Unity narrate it differently from a quiz clue.
     """
     interaction = {
-        "type": "workspace_demo",
+        "type": contract.interaction_type,
         "trigger_step_id": step_id,
         "channel": channel,
-        "instructions": WORKSPACE_FRAMING,
+        "instructions": contract.framing,
     }
     event = OnboardingEventSpec(
         event_type="coordinator_onboarding_event",
         message=(
             f"The user just clicked '{title}', so they want T-W1N to run this "
-            "workspace demo now: read the relevant part of their connected "
-            "workspace with its own tools and deliver one short summary as a "
-            "single unify_message. The checklist does NOT auto-detect that "
-            "summary, so once it is sent T-W1N mark the step complete with "
+            f"{contract.domain} demo now: {contract.instruction}. "
+            "The checklist does NOT auto-detect that "
+            "deliverable, so once it is sent T-W1N marks the step complete with "
             "set_onboarding_task_state(step_id, completed=True) — handling the "
             "demo is not finished until that call is made. Any reply, tidy-up, or "
             "flag is an optional follow-up offered afterwards and never required "
@@ -497,21 +565,21 @@ def _demo(
             "already done: if the task is already finished, treat this as "
             "confirmation and do NOT redo it."
         ),
-        subtype="workspace_demo_requested",
+        subtype=contract.subtype,
         details={
             "trigger_step_id": step_id,
             "channel": channel,
-            "framing": WORKSPACE_FRAMING,
-            "phase": PHASE_WORKSPACE,
-            "phase_id": "workspace",
-            "phase_framing": WORKSPACE_FRAMING,
+            "framing": contract.framing,
+            "phase": contract.phase,
+            "phase_id": contract.phase_id,
+            "phase_framing": contract.framing,
             "interaction": interaction,
         },
     )
     return OnboardingStep(
         id=step_id,
         title=title,
-        phase=PHASE_WORKSPACE,
+        phase=contract.phase,
         kind="trigger",
         depends_on=depends_on,
         can_skip=True,
@@ -1073,6 +1141,36 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "clicking the 'Connect T-W1N with your apps' row in the Onboarding checklist"
         ),
     ),
+    _demo(
+        "integration-read",
+        "Ask T-W1N to read from your connected apps",
+        channel="integration_read",
+        depends_on={"apps": COMPLETED},
+        nudge_chat=(
+            "Once they have connected an app, invite them to click the "
+            "'Ask T-W1N to read from your connected apps' row in the Onboarding "
+            "checklist; I read from a connected app and brief them here."
+        ),
+        nudge_voice=(
+            "clicking the 'Ask T-W1N to read from your connected apps' row in the Onboarding checklist"
+        ),
+        contract=INTEGRATION_READ_DEMO_CONTRACT,
+    ),
+    _demo(
+        "integration-action",
+        "Ask T-W1N to take action across your apps",
+        channel="integration_action",
+        depends_on={"integration-read": ADDRESSED},
+        nudge_chat=(
+            "Invite them to click the 'Ask T-W1N to take action across your apps' "
+            "row in the Onboarding checklist; I take one concrete, safe action "
+            "with connected apps and report back."
+        ),
+        nudge_voice=(
+            "clicking the 'Ask T-W1N to take action across your apps' row in the Onboarding checklist"
+        ),
+        contract=INTEGRATION_ACTION_DEMO_CONTRACT,
+    ),
     OnboardingStep(
         id="create-scheduled-task",
         title="Create a scheduled task",
@@ -1214,6 +1312,8 @@ DEMO_STEP_IDS: tuple[str, ...] = (
     "workspace-mailbox",
     "workspace-drive",
     "workspace-calendar",
+    "integration-read",
+    "integration-action",
 )
 
 # Steps Twin may mark done via ``set_onboarding_task_state`` / the
@@ -1255,6 +1355,60 @@ class StepPresentation:
 # short-fuse "boomerang" the user can watch land live during onboarding and
 # would genuinely keep (real inbox triage, not a test ping); the rest are
 # real recurring routines referencing workspace data they've connected.
+_INTEGRATION_CONNECT_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "day-to-day-tools",
+        "Connect the apps you already check every day",
+        {
+            "gallery_category": "productivity",
+            "search_query": "productivity calendar docs",
+        },
+    ),
+    OnboardingChip(
+        "crm-sales",
+        "Connect a CRM or sales tool — if you use one",
+        {
+            "gallery_category": "crm_sales",
+            "search_query": "crm sales hubspot pipedrive",
+        },
+    ),
+    OnboardingChip(
+        "dev-ops",
+        "Connect a dev, HR, or ops tool — whatever fits",
+        {"gallery_category": "dev_ops", "search_query": "github linear jira hr ops"},
+    ),
+)
+
+_INTEGRATION_READ_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "crm-pipeline-summary",
+        "Summarise what's open in your connected CRM or pipeline",
+    ),
+    OnboardingChip(
+        "dev-tool-activity",
+        "Show me recent activity from a connected dev tool",
+    ),
+    OnboardingChip(
+        "connected-app-brief",
+        "Pull the latest from one of my connected apps and brief me here",
+    ),
+)
+
+_INTEGRATION_ACTION_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "take-concrete-action",
+        "Take one concrete action in a connected app and report back to me",
+    ),
+    OnboardingChip(
+        "draft-follow-up",
+        "Draft a follow-up from a connected app and send it to my workspace",
+    ),
+    OnboardingChip(
+        "cross-app-update",
+        "Update something in one app using info from another",
+    ),
+)
+
 _SCHEDULED_TASK_CHIPS: tuple[OnboardingChip, ...] = (
     OnboardingChip(
         "inbox-sweep-soon",
@@ -1385,7 +1539,24 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "summary, flagging any conflicts or gaps.",
         "~30s",
     ),
-    "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
+    "apps": StepPresentation(
+        "Hook up at least one app from the Integrations gallery.",
+        "~2 min",
+        _INTEGRATION_CONNECT_CHIPS,
+        _INTEGRATION_CONNECT_CHIPS,
+    ),
+    "integration-read": StepPresentation(
+        "T-W1N reads from a connected app and briefs you here.",
+        "~30s",
+        _INTEGRATION_READ_CHIPS,
+        _INTEGRATION_READ_CHIPS,
+    ),
+    "integration-action": StepPresentation(
+        "T-W1N takes one concrete action with connected apps and reports back.",
+        "~1 min",
+        _INTEGRATION_ACTION_CHIPS,
+        _INTEGRATION_ACTION_CHIPS,
+    ),
     "create-scheduled-task": StepPresentation(
         "Schedule a task and watch me report back on your channel.",
         "~2 min",
@@ -1531,6 +1702,22 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "Clicking the 'Connect T-W1N with your apps' row opens the Integrations "
         "tab; they connect at least one app from the gallery and authorize it."
     ),
+    "integration-read": (
+        "Clicking the 'Ask T-W1N to read from your connected apps' row tells me "
+        "the user wants a live demo with connected apps: I read from an app that "
+        "fits their request, send one short brief as a single unify_message, and "
+        "then mark it complete with set_onboarding_task_state('integration-read', "
+        "True). If no connected app fits, I say exactly what is missing and leave "
+        "the step pending."
+    ),
+    "integration-action": (
+        "Clicking the 'Ask T-W1N to take action across your apps' row tells me "
+        "the user wants a live action demo: I take one concrete, user-safe action "
+        "with connected apps, send one short report as a single unify_message, "
+        "and then mark it complete with set_onboarding_task_state("
+        "'integration-action', True). If no connected app fits, I say exactly "
+        "what is missing and leave the step pending."
+    ),
     "create-scheduled-task": (
         "Clicking the 'Create a scheduled task' row asks me to open the "
         "conversation: I ask what scheduled job they'd like and, once they tell "
@@ -1643,18 +1830,16 @@ def step_visible_for_features(
 
 
 def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
-    """Event fired when the user clicks a Tasks-phase example chip.
+    """Event fired when the user clicks a graph-owned example chip.
 
-    Unlike a beat row (which asks Twin to open a freeform conversation), a chip
-    is a fully-specified example task: the click asks Twin to set that exact
-    task up now. The instruction is resolved from the canonical presentation
-    chips server-side, so the wire payload never carries user-supplied text and
+    The instruction is resolved from the canonical presentation chips
+    server-side, so the wire payload never carries user-supplied text and
     an unknown ``step_id``/``chip_id`` pair yields ``None`` (the caller then
     emits nothing).
     """
     step = STEP_BY_ID.get(step_id)
     presentation = STEP_PRESENTATION.get(step_id)
-    if step is None or presentation is None or step_id not in _TASK_BEAT_KIND:
+    if step is None or presentation is None:
         return None
     chip = next(
         (
@@ -1665,6 +1850,69 @@ def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
         None,
     )
     if chip is None:
+        return None
+    if step_id == "apps":
+        metadata = dict(chip.metadata or {})
+        return OnboardingEventSpec(
+            event_type="coordinator_onboarding_event",
+            message=(
+                f'The user picked "{chip.label}" under "{step.title}". Open with '
+                "a short nudge that connects this use case to the Integrations "
+                "gallery, then let them connect the app in Console. Do not mark "
+                "the step complete from this click; it completes only after an "
+                "app credential lands."
+            ),
+            subtype="integration_connect_chip_requested",
+            details={
+                "trigger_step_id": step_id,
+                "chip_id": chip_id,
+                "instruction": chip.label,
+                **metadata,
+                "framing": INTEGRATIONS_FRAMING,
+                "phase": PHASE_INTEGRATIONS,
+                "phase_id": "integrations",
+                "phase_framing": INTEGRATIONS_FRAMING,
+                "interaction": {
+                    "type": "integration_connect_chip",
+                    "trigger_step_id": step_id,
+                    "instruction": chip.label,
+                    **metadata,
+                    "instructions": INTEGRATIONS_FRAMING,
+                },
+            },
+        )
+    if step_id in {"integration-read", "integration-action"}:
+        return OnboardingEventSpec(
+            event_type="coordinator_onboarding_event",
+            message=(
+                f'The user picked "{chip.label}" under "{step.title}". Treat '
+                "the chip label as the demo instruction: use connected app tools "
+                "to do it now, send one short user-facing deliverable as a "
+                "unify_message, and then mark the step complete with "
+                "set_onboarding_task_state(step_id, completed=True). If no "
+                "connected app fits, say exactly what connection is missing and "
+                "do not mark the step complete."
+            ),
+            subtype="integration_demo_chip_requested",
+            details={
+                "trigger_step_id": step_id,
+                "chip_id": chip_id,
+                "instruction": chip.label,
+                "channel": step.channel,
+                "framing": INTEGRATIONS_FRAMING,
+                "phase": PHASE_INTEGRATIONS,
+                "phase_id": "integrations",
+                "phase_framing": INTEGRATIONS_FRAMING,
+                "interaction": {
+                    "type": "integration_demo_chip",
+                    "trigger_step_id": step_id,
+                    "instruction": chip.label,
+                    "channel": step.channel,
+                    "instructions": INTEGRATIONS_FRAMING,
+                },
+            },
+        )
+    if step_id not in _TASK_BEAT_KIND:
         return None
     task_kind = _TASK_BEAT_KIND[step_id]
     run_note = (
