@@ -55,6 +55,7 @@ def test_integrations_phase_has_three_steps_and_chip_metadata() -> None:
         "integration-action",
     )
     apps_chips = graph.presentation_for("apps").chips_chat
+    assert graph.STEP_BY_ID["apps"].depends_on == {}
     assert [chip.id for chip in apps_chips] == [
         "day-to-day-tools",
         "crm-sales",
