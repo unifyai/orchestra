@@ -1706,6 +1706,13 @@ def manual_completion_block_reason(step_id: str) -> str | None:
         return "That onboarding step does not exist."
     if step.kind == "coming_soon":
         return "That onboarding step is not available yet."
+    if step_id == "discord-connect":
+        # Adding T-W1N's public Discord bot to a server is invisible to
+        # Orchestra — there is no inbound event to auto-derive from. The
+        # explicit user click on the connect row is the only completion
+        # signal, so allow it to be marked done manually even though it
+        # sits in the Communication phase.
+        return None
     if step.phase == PHASE_COMMUNICATION:
         return (
             "Communication checklist steps complete automatically when messages "
