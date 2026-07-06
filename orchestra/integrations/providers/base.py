@@ -24,6 +24,8 @@ class ProviderAppEntry(TypedDict, total=False):
     display_name: str
     description: str | None
     category: str | None
+    categories: list[str]
+    tags: list[str]
     icon_url: str | None
     auth_modes: list[str]
     available_scopes: list[dict[str, Any]]

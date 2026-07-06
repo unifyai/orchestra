@@ -328,6 +328,119 @@ def test_builtins_context_upsert_updates_duplicate_function_id(
     assert rows[0][0]["docstring"] == "new"
 
 
+def test_app_catalog_row_materializes_normalized_labels() -> None:
+    row = builtins_integration_sync.app_catalog_row(
+        {
+            "backend_id": "composio",
+            "provider_app_id": "HUBSPOT",
+            "canonical_app_slug": "hubspot",
+            "display_name": "HubSpot",
+            "description": "CRM and sales automation.",
+            "categories": [
+                "CRM",
+                {"name": "Sales"},
+                {"name": "CRM"},
+            ],
+            "tags": ["Customer Support", "Sales"],
+            "auth_modes": ["oauth"],
+            "raw_provider_metadata": {
+                "raw_toolkit_detail": {
+                    "meta": {
+                        "categories": [{"name": "Marketing"}],
+                        "tags": ["Lifecycle"],
+                    },
+                },
+            },
+        },
+        default_backend_id="composio",
+    )
+
+    assert row["category"] == "CRM"
+    assert row["labels"] == {
+        "primary_category": {"key": "crm", "label": "CRM"},
+        "categories": [
+            {"key": "crm", "label": "CRM"},
+            {"key": "sales", "label": "Sales"},
+            {"key": "marketing", "label": "Marketing"},
+        ],
+        "tags": [
+            {"key": "crm", "label": "CRM"},
+            {"key": "sales", "label": "Sales"},
+            {"key": "marketing", "label": "Marketing"},
+            {"key": "customer_support", "label": "Customer Support"},
+            {"key": "lifecycle", "label": "Lifecycle"},
+        ],
+    }
+    assert "Customer Support" in row["embedding_text"]
+
+
+def test_composio_adapter_emits_raw_category_and_tag_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get(url, *, headers, params=None, timeout):
+        if url.endswith("/toolkits"):
+            return FakeResponse(
+                {
+                    "items": [
+                        {
+                            "slug": "HUBSPOT",
+                            "name": "HubSpot",
+                            "meta": {"categories": [{"name": "CRM"}]},
+                        },
+                    ],
+                },
+            )
+        if url.endswith("/toolkits/hubspot"):
+            return FakeResponse(
+                {
+                    "meta": {
+                        "categories": [{"name": "Sales"}, {"name": "CRM"}],
+                        "tags": ["Lifecycle"],
+                    },
+                    "auth_config_details": [],
+                },
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    adapter = ComposioProviderAdapter(api_key="composio-key", timeout_seconds=9)
+
+    entries = adapter.list_app_entries(include_all=True)
+
+    assert len(entries) == 1
+    assert entries[0]["category"] == "Sales"
+    assert entries[0]["categories"] == ["Sales", "CRM"]
+    assert entries[0]["tags"] == ["Sales", "CRM", "Lifecycle"]
+
+
+def test_pipedream_adapter_emits_raw_category_and_tag_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestra.integrations.providers.pipedream import PipedreamProviderAdapter
+
+    adapter = PipedreamProviderAdapter(access_token="pipedream-token")
+    monkeypatch.setattr(
+        adapter,
+        "list_apps",
+        lambda **kwargs: [
+            {
+                "id": "hubspot",
+                "name_slug": "hubspot",
+                "name": "HubSpot",
+                "categories": [{"name": "CRM"}, {"name": "Sales"}],
+                "tags": ["Lifecycle"],
+            },
+        ],
+    )
+
+    entries = adapter.list_app_entries(include_all=True)
+
+    assert len(entries) == 1
+    assert entries[0]["category"] == "CRM"
+    assert entries[0]["categories"] == ["CRM", "Sales"]
+    assert entries[0]["tags"] == ["CRM", "Sales", "Lifecycle"]
+
+
 def test_builtins_context_upsert_converges_under_parallel_same_key_writes(
     _engine,
 ) -> None:

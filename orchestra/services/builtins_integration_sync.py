@@ -218,46 +218,136 @@ def _normalize_app_slug(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
+def _normalize_label_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+
+
+def _label_text(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("label", "name", "title", "slug", "id", "key"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                return text
+        return None
+    text = str(value or "").strip()
+    return text or None
+
+
+def _iter_label_candidates(value: Any) -> Iterable[Any]:
+    if value is None:
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield item
+        return
+    yield value
+
+
+def _normalized_label_values(*candidate_groups: Any) -> list[dict[str, str]]:
+    labels: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for group in candidate_groups:
+        for candidate in _iter_label_candidates(group):
+            text = _label_text(candidate)
+            if not text:
+                continue
+            key = _normalize_label_key(text)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            labels.append({"key": key, "label": text})
+    return labels
+
+
+def _raw_metadata_label_candidates(
+    raw_metadata: dict[str, Any],
+    *,
+    fields: tuple[str, ...],
+) -> list[Any]:
+    candidates: list[Any] = []
+    for container_key in ("raw_toolkit_detail", "raw_toolkit", "raw_app"):
+        container = raw_metadata.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        meta = container.get("meta")
+        for source in (meta if isinstance(meta, dict) else None, container):
+            if not isinstance(source, dict):
+                continue
+            for field in fields:
+                value = source.get(field)
+                if isinstance(value, list):
+                    candidates.extend(value)
+                elif value:
+                    candidates.append(value)
+    return candidates
+
+
 def _harvest_category_names(
     *,
     category: Any,
     raw_metadata: dict[str, Any],
 ) -> list[str]:
-    """Collect category names from the canonical field plus raw provider metadata.
+    """Compatibility wrapper for older diagnostics scripts."""
 
-    The canonical ``category`` is the primary; additional names are recovered
-    best-effort from the provider's own catalog metadata so multi-category apps
-    contribute richer retrieval signal. Provider-neutral: it probes the common
-    metadata containers and tolerates both ``{"name": ...}`` dicts and strings.
-    """
+    return [
+        label["label"]
+        for label in _normalized_label_values(
+            category,
+            _raw_metadata_label_candidates(
+                raw_metadata,
+                fields=("categories", "category"),
+            ),
+        )
+    ]
 
-    names: list[str] = []
-    lowered: set[str] = set()
 
-    def add(value: Any) -> None:
-        text = str(value or "").strip()
-        if text and text.lower() not in lowered:
-            lowered.add(text.lower())
-            names.append(text)
+def _integration_labels(
+    *,
+    category: Any,
+    categories: Any,
+    tags: Any,
+    raw_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    category_labels = _normalized_label_values(
+        category,
+        categories,
+        _raw_metadata_label_candidates(raw_metadata, fields=("categories", "category")),
+    )
+    tag_labels = _normalized_label_values(
+        category_labels,
+        tags,
+        _raw_metadata_label_candidates(
+            raw_metadata,
+            fields=("tags", "tag_names", "labels"),
+        ),
+    )
+    return {
+        "primary_category": category_labels[0] if category_labels else None,
+        "categories": category_labels,
+        "tags": tag_labels,
+    }
 
-    add(category)
-    if isinstance(raw_metadata, dict):
-        for container_key in ("raw_toolkit_detail", "raw_toolkit", "raw_app"):
-            container = raw_metadata.get(container_key)
-            if not isinstance(container, dict):
-                continue
-            meta = container.get("meta")
-            categories = (
-                meta.get("categories") if isinstance(meta, dict) else None
-            ) or container.get("categories")
-            if not isinstance(categories, list):
-                continue
-            for entry in categories:
-                if isinstance(entry, dict):
-                    add(entry.get("name") or entry.get("slug") or entry.get("id"))
-                else:
-                    add(entry)
-    return names
+
+def _display_label(value: Any) -> str | None:
+    text = _label_text(value)
+    return text if text else None
+
+
+def _label_texts(labels: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("categories", "tags"):
+        for item in labels.get(key) or []:
+            if isinstance(item, dict) and item.get("label"):
+                values.append(str(item["label"]))
+    return list(dict.fromkeys(values))
+
+
+def _app_display_category(category: Any, labels: dict[str, Any]) -> str | None:
+    display = _display_label(category)
+    if display:
+        return display
+    primary = labels.get("primary_category")
+    return str(primary["label"]) if isinstance(primary, dict) else None
 
 
 def _stable_hash_for_rows(
@@ -290,10 +380,17 @@ def app_catalog_row(
     )
     recommended_scopes = app.get("recommended_scopes") or []
     api_key_schema = app.get("api_key_schema") or app.get("api_key_schema_json")
-    category = app.get("category")
     raw_metadata = (
         app.get("raw_provider_metadata") or app.get("raw_provider_metadata_json") or {}
     )
+    category = app.get("category")
+    labels = _integration_labels(
+        category=category,
+        categories=app.get("categories"),
+        tags=app.get("tags"),
+        raw_metadata=raw_metadata,
+    )
+    category = _app_display_category(category, labels)
     requires_custom_oauth = bool(
         (
             app.get("requires_custom_oauth")
@@ -306,14 +403,12 @@ def app_catalog_row(
         if app.get("managed_auth") is not None
         else raw_metadata.get("managed_auth")
     )
-    categories_text = ", ".join(
-        _harvest_category_names(category=category, raw_metadata=raw_metadata),
-    )
+    labels_text = ", ".join(_label_texts(labels))
     embedding_text = normalize_embedding_text(
         [
             display_name,
             description,
-            categories_text,
+            labels_text,
             humanize_auth_modes(auth_modes),
             slug,
         ],
@@ -326,6 +421,7 @@ def app_catalog_row(
         "display_name": display_name,
         "description": description,
         "category": category,
+        "labels": labels,
         "icon_url": app.get("icon_url") or app.get("app_icon_url"),
         "auth_modes": auth_modes,
         "available_scopes": available_scopes,

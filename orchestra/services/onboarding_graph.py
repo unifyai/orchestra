@@ -1140,7 +1140,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         title="Connect T-W1N with your apps",
         phase=PHASE_INTEGRATIONS,
         kind="connect",
-        depends_on={"workspace": COMPLETED},
+        depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat=(
@@ -1659,8 +1659,8 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "slack-message": "The user guesses the Slack clue.",
     "discord-id": (
         "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
-        "Walk them through it: in Discord, turn on Settings -> Advanced -> "
-        "Developer Mode, then click their own name and 'Copy User ID' and "
+        "Walk them through it: in Discord, turn on Settings -> Developer -> "
+        "Developer Mode, then click their own name or profile photo, and 'Copy User ID' and "
         "paste that into the Discord ID field, then save."
     ),
     "discord-connect": (

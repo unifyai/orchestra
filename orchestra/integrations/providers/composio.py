@@ -325,6 +325,7 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 raw_provider_metadata["raw_toolkit_detail"] = detail
             if auth_config_id:
                 raw_provider_metadata["auth_config_id"] = auth_config_id
+            category_names = _composio_category_names(toolkit, detail)
             entry: ProviderAppEntry = {
                 "backend_id": "composio",
                 "provider_app_id": toolkit_slug,
@@ -332,7 +333,9 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
                 "display_name": toolkit.get("name")
                 or canonical_app_slug.replace("_", " ").title(),
                 "description": _composio_description(toolkit, detail),
-                "category": _composio_primary_category(toolkit, detail),
+                "category": category_names[0] if category_names else None,
+                "categories": category_names,
+                "tags": _composio_tag_names(toolkit, detail),
                 "icon_url": _composio_icon_url(toolkit),
                 "auth_modes": auth_modes,
                 "available_scopes": _composio_oauth_scopes(detail),
@@ -1182,6 +1185,35 @@ def _composio_category_names(
                 else:
                     add(entry)
     add(toolkit.get("category"))
+    return names
+
+
+def _composio_tag_names(
+    toolkit: dict[str, Any],
+    detail: dict[str, Any] | None = None,
+) -> list[str]:
+    names = list(_composio_category_names(toolkit, detail))
+    lowered = {name.lower() for name in names}
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text.lower() not in lowered:
+            lowered.add(text.lower())
+            names.append(text)
+
+    for meta in (_toolkit_meta(detail or {}), _toolkit_meta(toolkit)):
+        for key in ("tags", "tag_names", "labels"):
+            values = meta.get(key)
+            if isinstance(values, list):
+                for entry in values:
+                    if isinstance(entry, dict):
+                        add(
+                            entry.get("name")
+                            or entry.get("label")
+                            or entry.get("slug"),
+                        )
+                    else:
+                        add(entry)
     return names
 
 

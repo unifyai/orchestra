@@ -722,6 +722,69 @@ ensure_test_user_coordinator() {
   return 1
 }
 
+ensure_test_user_billing() {
+  local db_container="$1"
+  local test_user_id="$2"
+
+  docker exec "$db_container" psql -q -U orchestra -d orchestra -c "
+DO \$\$
+DECLARE
+  _user_id text := '$test_user_id';
+  _ba_id integer;
+  _default_template_id bigint;
+  _assignment_id bigint;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM \"user\" WHERE id = _user_id) THEN
+    RETURN;
+  END IF;
+
+  SELECT billing_account_id INTO _ba_id FROM \"user\" WHERE id = _user_id;
+
+  IF _ba_id IS NULL THEN
+    INSERT INTO billing_account (credits, account_status)
+    VALUES (10000, 'ACTIVE')
+    RETURNING id INTO _ba_id;
+
+    UPDATE \"user\" SET billing_account_id = _ba_id WHERE id = _user_id;
+  END IF;
+
+  SELECT id INTO _default_template_id
+  FROM billing_plan_template
+  WHERE name = 'default' AND is_active = true
+  ORDER BY id
+  LIMIT 1;
+
+  IF _default_template_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM billing_plan_assignment
+    WHERE billing_account_id = _ba_id
+      AND ended_at IS NULL
+  ) THEN
+    INSERT INTO billing_plan_assignment (billing_account_id, template_id, change_reason)
+    VALUES (_ba_id, _default_template_id, 'repair missing billing assignment')
+    RETURNING id INTO _assignment_id;
+
+    UPDATE billing_account
+    SET plan_assignment_id = _assignment_id
+    WHERE id = _ba_id;
+  END IF;
+END
+\$\$;
+" 2>&1
+}
+
+ensure_test_user_api_key() {
+  local db_container="$1"
+  local test_user_id="$2"
+  local test_api_key="$3"
+
+  docker exec "$db_container" psql -q -U orchestra -d orchestra -c "
+INSERT INTO api_key (user_id, key)
+VALUES ('$test_user_id', '$test_api_key')
+ON CONFLICT (key) DO UPDATE SET user_id = EXCLUDED.user_id;
+" 2>&1
+}
+
 seed_test_user() {
   local test_user_id="${ORCHESTRA_TEST_USER_ID:-test-user-001}"
   local test_api_key="${UNIFY_KEY:-local-test-api-key}"
@@ -753,6 +816,8 @@ seed_test_user() {
 
   if [[ "$user_exists" == "1" ]]; then
     log_success "Test user already exists"
+    ensure_test_user_billing "$db_container" "$test_user_id"
+    ensure_test_user_api_key "$db_container" "$test_user_id" "$test_api_key"
     ensure_test_user_coordinator "$test_user_id"
     return $?
   fi
@@ -1101,6 +1166,25 @@ stop_orchestra_server() {
 # Main Commands
 # =============================================================================
 
+cmd_seed() {
+  echo "Seeding local Orchestra test user + billing defaults..."
+
+  if ! check_docker; then
+    return 1
+  fi
+
+  if ! start_db_container; then
+    return 1
+  fi
+
+  if [[ "$ORCHESTRA_SKIP_TEST_USER" == "1" ]]; then
+    log_info "Skipping local test user seed (ORCHESTRA_SKIP_TEST_USER=1)"
+    return 0
+  fi
+
+  seed_test_user
+}
+
 cmd_start() {
   refuse_isolated_when_full_stack_active start || return 1
 
@@ -1330,6 +1414,9 @@ main() {
     check)
       cmd_check
       ;;
+    seed)
+      cmd_seed
+      ;;
     env)
       cmd_env
       ;;
@@ -1343,6 +1430,7 @@ main() {
       echo "  purge    Destroy container + named data volume (wipes all data)"
       echo "  status   Show status"
       echo "  check    Quick check if running (returns URL or exits 1)"
+      echo "  seed     Ensure test user, API key, and billing defaults (idempotent)"
       echo "  env      Output environment variables for shell eval"
       echo ""
       echo "Environment Variables:"

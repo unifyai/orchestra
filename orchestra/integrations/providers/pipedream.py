@@ -134,6 +134,7 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
                 or provider_app.get("slug")
                 or canonical_app_slug,
             )
+            category_names = _pipedream_category_names(provider_app)
             entries.append(
                 {
                     "backend_id": "pipedream",
@@ -142,7 +143,9 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
                     "display_name": provider_app.get("name")
                     or canonical_app_slug.replace("_", " ").title(),
                     "description": provider_app.get("description"),
-                    "category": _pipedream_category(provider_app),
+                    "category": category_names[0] if category_names else None,
+                    "categories": category_names,
+                    "tags": _pipedream_tag_names(provider_app),
                     "icon_url": provider_app.get("img_src")
                     or provider_app.get("logo_url")
                     or provider_app.get("logoUrl"),
@@ -575,16 +578,54 @@ def _pipedream_tool_name(provider_tool_id: str, canonical_app_slug: str) -> str:
 
 
 def _pipedream_category(app: dict[str, Any]) -> str | None:
+    categories = _pipedream_category_names(app)
+    return categories[0] if categories else None
+
+
+def _pipedream_category_names(app: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    lowered: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text.lower() not in lowered:
+            lowered.add(text.lower())
+            names.append(text)
+
     category = app.get("category")
     if isinstance(category, dict):
-        return category.get("name") or category.get("slug")
+        add(category.get("name") or category.get("slug"))
+    else:
+        add(category)
     categories = app.get("categories")
-    if isinstance(categories, list) and categories:
-        first = categories[0]
-        if isinstance(first, dict):
-            return first.get("name") or first.get("slug")
-        return str(first)
-    return str(category) if category else None
+    if isinstance(categories, list):
+        for entry in categories:
+            if isinstance(entry, dict):
+                add(entry.get("name") or entry.get("slug"))
+            else:
+                add(entry)
+    return names
+
+
+def _pipedream_tag_names(app: dict[str, Any]) -> list[str]:
+    names = list(_pipedream_category_names(app))
+    lowered = {name.lower() for name in names}
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text.lower() not in lowered:
+            lowered.add(text.lower())
+            names.append(text)
+
+    for key in ("tags", "tag_names", "labels"):
+        values = app.get(key)
+        if isinstance(values, list):
+            for entry in values:
+                if isinstance(entry, dict):
+                    add(entry.get("name") or entry.get("label") or entry.get("slug"))
+                else:
+                    add(entry)
+    return names
 
 
 def _pipedream_input_schema(component: dict[str, Any]) -> dict[str, Any]:
