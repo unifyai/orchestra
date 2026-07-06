@@ -749,6 +749,7 @@ def _build_assistant_read(
     # Gated to the runtime bootstrap read path to avoid a per-assistant query
     # on Console list endpoints that don't need it.
     assistant_slack_bot_user_id: Optional[str] = None
+    assistant_slack_team_id: Optional[str] = None
     if resolve_slack_install:
         slack_dao = SlackDAO(session)
         install = (
@@ -757,6 +758,7 @@ def _build_assistant_read(
             else slack_dao.get_install_for_user(a.user_id)
         )
         assistant_slack_bot_user_id = install.bot_user_id if install else None
+        assistant_slack_team_id = install.slack_team_id if install else None
 
     return AssistantRead(
         agent_id=str(a.agent_id),
@@ -795,6 +797,7 @@ def _build_assistant_read(
             discord_contact.contact_value if discord_contact else None
         ),
         assistant_slack_bot_user_id=assistant_slack_bot_user_id,
+        assistant_slack_team_id=assistant_slack_team_id,
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
         timezone=a.timezone,
@@ -7205,7 +7208,10 @@ def admin_list_all_assistants(
         )
         resolve_slack_install = not use_slim_hydration or (
             requested_fields is not None
-            and "assistant_slack_bot_user_id" in requested_fields
+            and bool(
+                {"assistant_slack_bot_user_id", "assistant_slack_team_id"}
+                & requested_fields,
+            )
         )
         include_internal = not use_slim_hydration or (
             requested_fields is not None

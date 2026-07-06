@@ -455,6 +455,15 @@ class AssistantRead(AssistantCreate):
             "inbound Slack event."
         ),
     )
+    assistant_slack_team_id: Optional[str] = Field(
+        None,
+        description=(
+            "Slack workspace/team ID (T...) for the assistant's active "
+            "workspace install. Resolved from the same slack_installs row as "
+            "assistant_slack_bot_user_id so the assistant can auto-resolve the "
+            "team for outbound Slack sends without asking the user."
+        ),
+    )
     api_key: Optional[str] = Field(
         None,
         description="API key associated with this assistant (personal or org key)",
