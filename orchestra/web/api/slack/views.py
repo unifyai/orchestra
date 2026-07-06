@@ -225,8 +225,21 @@ def _require_owner_xor(
 # ---------------------------------------------------------------------------
 
 
+@admin_router.get("/slack/installs")
+def list_installs(
+    session: Session = Depends(get_db_session),
+) -> list[InstallResponse]:
+    """List every Slack install known to Orchestra (debug / health check).
+
+    Bot tokens are never included. Callers that need a token read a single
+    install via ``GET /slack/install`` with ``include_token=true``.
+    """
+    installs = SlackDAO(session).list_installs()
+    return [_install_to_response(install) for install in installs]
+
+
 @admin_router.post("/slack/install")
-def upsert_install(
+async def upsert_install(
     body: InstallUpsertRequest,
     session: Session = Depends(get_db_session),
 ) -> InstallResponse:
@@ -235,6 +248,11 @@ def upsert_install(
     Called by the gateway after the OAuth callback exchanges the code
     for a bot token. Idempotent on ``(owner, slack_team_id)``; a
     re-install replaces the bot token and clears any prior ``revoked_at``.
+
+    After persisting, reawakens the owner's assistants so any live
+    session picks up the freshly resolved ``bot_user_id`` /
+    ``slack_team_id`` (and exposes the Slack send tools) without waiting
+    for a restart or an inbound Slack event.
     """
     _require_owner_xor(body.organization_id, body.user_id)
     dao = SlackDAO(session)
@@ -251,6 +269,23 @@ def upsert_install(
         scopes=body.scopes,
     )
     session.commit()
+
+    from orchestra.web.api.utils.assistant_infra import reawaken_slack_owner_assistants
+
+    try:
+        await reawaken_slack_owner_assistants(
+            session,
+            organization_id=body.organization_id,
+            user_id=body.user_id,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to reawaken owner assistants after Slack install "
+            "(org=%s user=%s)",
+            body.organization_id,
+            body.user_id,
+            exc_info=True,
+        )
     return _install_to_response(install)
 
 

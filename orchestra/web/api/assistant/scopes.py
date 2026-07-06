@@ -64,8 +64,8 @@ _BASE = {
 }
 
 REQUIRED_FEATURES: dict[str, list[str]] = {
-    "google": ["email"],
-    "microsoft": ["email", "teams"],
+    "google": ["email", "drive"],
+    "microsoft": ["email", "teams", "drive", "sharepoint"],
 }
 
 

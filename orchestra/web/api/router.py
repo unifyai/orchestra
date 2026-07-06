@@ -2,6 +2,7 @@ from fastapi import Depends
 from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRouter
 
+from orchestra.services.universal_unity_discord import get_universal_unity_discord_bot
 from orchestra.settings import settings
 from orchestra.web.api import (  # noqa: WPS235
     admin,
@@ -345,6 +346,8 @@ api_router.include_router(
 # NO AUTH
 
 api_router.include_router(stripe_webhooks.router)
+# White-label OAuth redirect proxy (provider browsers hit this with no auth).
+api_router.include_router(integrations.public_router)
 
 
 # Simple system endpoints (no auth required)
@@ -360,10 +363,10 @@ async def get_features() -> dict[str, bool]:
     Cross-service features are owned by whichever service holds the
     authoritative credentials. Console (and other consumers) read these flags
     rather than re-deriving them from their own partial env, so a feature is
-    only surfaced when the owning service can actually fulfil it. Contact
-    channels are owned by the communication layer, so we fold in its
-    ``/features`` probe. No auth: the response carries no secrets, only on/off
-    capability bits.
+    only surfaced when the owning service can actually fulfil it. Phone/WhatsApp
+    credentials live in the communication layer, so we fold in its ``/features``
+    probe; Discord is Orchestra-owned and derived directly. No auth: the response
+    carries no secrets, only on/off capability bits.
     """
     channels = await fetch_comms_features()
     return {
@@ -374,12 +377,16 @@ async def get_features() -> dict[str, bool]:
         "account_reset": settings.account_reset,
         "workspace_google": settings.workspace_google_enabled,
         "workspace_microsoft": settings.workspace_microsoft_enabled,
-        # Contact channels (probed from the communication gateway). Absent keys
-        # mean the comms layer is unreachable or the channel isn't configured;
-        # either way the channel is treated as unavailable downstream.
+        # Phone / WhatsApp credentials (Twilio) live in the communication layer,
+        # so those flags come from its probe. Absent keys mean the comms layer is
+        # unreachable or the channel isn't configured; either way the channel is
+        # treated as unavailable downstream.
         "contact_phone": bool(channels.get("phone", False)),
         "contact_whatsapp": bool(channels.get("whatsapp", False)),
-        "contact_discord": bool(channels.get("discord", False)),
+        # Discord is Orchestra-owned: the coordinator bot ID/token are configured
+        # via Secret Manager on Orchestra only and pulled down by the gateway's
+        # shared-pool sync, so availability is derived here rather than probed.
+        "contact_discord": bool(get_universal_unity_discord_bot()),
     }
 
 

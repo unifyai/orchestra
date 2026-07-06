@@ -63,7 +63,10 @@ def get_universal_unity_phone_number(country: str | None) -> str | None:
 def is_universal_unity_phone_number(number: str | None) -> bool:
     if not number:
         return False
-    normalized = _normalize_phone_number(number)
+    try:
+        normalized = _normalize_phone_number(number)
+    except ValueError:
+        return False
     return normalized in set(get_universal_unity_phone_numbers().values())
 
 

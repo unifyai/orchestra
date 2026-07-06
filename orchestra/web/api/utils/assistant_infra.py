@@ -23,6 +23,10 @@ PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
 RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS = 90.0
 RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS = 3.0
 
+# Bound the reawaken fan-out so an owner with many assistants (e.g. a large
+# org connecting Slack) does not stampede the adapters service.
+SLACK_REAWAKEN_CONCURRENCY = 8
+
 
 def _safe_json(response: httpx.Response) -> dict[str, Any]:
     """Return response JSON when present, otherwise an empty object."""
@@ -1705,6 +1709,58 @@ async def wake_up_assistant(assistant_id: str):
     )
 
 
+def _should_skip_coordinator_wakeup() -> bool:
+    return settings.is_self_host or not comms_explicitly_configured()
+
+
+def wake_up_coordinator_best_effort_sync(assistant_id: str | int) -> None:
+    """Start the Coordinator runtime from sync callers without failing the request."""
+    if _should_skip_coordinator_wakeup():
+        return
+    try:
+        wake_up_url = _adapters_url() + "/assistant/wakeup"
+        with httpx.Client(timeout=20) as client:
+            response = client.post(
+                wake_up_url,
+                data={"assistant_id": str(assistant_id)},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            )
+        if response.status_code != 200:
+            logging.warning(
+                "Coordinator wakeup failed (assistant_id=%s, status=%s): %s",
+                assistant_id,
+                response.status_code,
+                response.text,
+            )
+    except Exception:
+        logging.warning(
+            "Coordinator wakeup request failed (assistant_id=%s)",
+            assistant_id,
+            exc_info=True,
+        )
+
+
+async def wake_up_coordinator_best_effort(assistant_id: str | int) -> None:
+    """Start the Coordinator runtime from async callers without failing the request."""
+    if _should_skip_coordinator_wakeup():
+        return
+    try:
+        response = await wake_up_assistant(str(assistant_id))
+        if response.status_code != 200:
+            logging.warning(
+                "Coordinator wakeup failed (assistant_id=%s, status=%s): %s",
+                assistant_id,
+                response.status_code,
+                response.text,
+            )
+    except Exception:
+        logging.warning(
+            "Coordinator wakeup request failed (assistant_id=%s)",
+            assistant_id,
+            exc_info=True,
+        )
+
+
 async def reawaken_assistant(
     assistant_id: str,
     *,
@@ -1733,6 +1789,53 @@ async def reawaken_assistant(
     )
     response.raise_for_status()
     return response.json()
+
+
+async def reawaken_slack_owner_assistants(
+    session: Session,
+    *,
+    organization_id: int | None,
+    user_id: str | None,
+) -> None:
+    """Refresh live runtimes of an owner's assistants after a Slack install change.
+
+    A Slack install is owner-scoped (a Unify organization or a personal
+    user), not assistant-scoped, and its ``bot_user_id`` / ``slack_team_id``
+    are resolved into the assistant runtime only at wake time. When a
+    workspace is connected (or re-installed) mid-session, this pushes an
+    assistant update into every owner assistant so already-running sessions
+    pick up the freshly resolved Slack fields (and expose the Slack send
+    tools) without waiting for a restart or an inbound Slack event.
+
+    Best-effort: per-assistant failures are logged and never propagate, so
+    the install write stays durable.
+    """
+    from orchestra.db.models.orchestra_models import Assistant
+
+    query = session.query(Assistant.agent_id)
+    if organization_id is not None:
+        query = query.filter(Assistant.organization_id == organization_id)
+    else:
+        query = query.filter(
+            Assistant.user_id == user_id,
+            Assistant.organization_id.is_(None),
+        )
+    agent_ids = [row[0] for row in query.all()]
+
+    semaphore = asyncio.Semaphore(SLACK_REAWAKEN_CONCURRENCY)
+
+    async def _reawaken_one(agent_id: Any) -> None:
+        async with semaphore:
+            try:
+                await reawaken_assistant(str(agent_id))
+            except Exception as exc:
+                logging.warning(
+                    "Failed to reawaken assistant %s after Slack install change: %s",
+                    agent_id,
+                    exc,
+                )
+
+    await asyncio.gather(*(_reawaken_one(aid) for aid in agent_ids))
 
 
 async def delegate_to_colleague_runtime(
@@ -1852,7 +1955,6 @@ async def _post_unity_system_event(
     outage cannot break the surrounding request.
     """
     url = f"{_adapters_url()}/unity/system-event"
-    client = get_async_client()
     payload: dict[str, Any] = {
         "assistant_id": assistant_id,
         "event_type": event_type,
@@ -1860,16 +1962,27 @@ async def _post_unity_system_event(
     }
     if extra_event_fields:
         payload["extra_event_fields"] = extra_event_fields
-    response = await client.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {ADMIN_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=20,
-    )
-    response.raise_for_status()
+    headers = {
+        "Authorization": f"Bearer {ADMIN_KEY}",
+        "Content-Type": "application/json",
+    }
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                )
+            response.raise_for_status()
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
 
 
 async def trigger_contact_sync_safe(

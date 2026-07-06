@@ -30,3 +30,80 @@ def test_dependencies_satisfied_levels() -> None:
     assert graph.dependencies_satisfied({"a": graph.ADDRESSED}, set(), set()) is False
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, {"a"}, set()) is True
     assert graph.dependencies_satisfied({"a": graph.COMPLETED}, set(), {"a"}) is False
+
+
+def test_workspace_demos_are_settable_triggers_that_never_auto_derive() -> None:
+    """Demos are the one trigger class that completes explicitly, not by derivation.
+
+    They must stay out of ``TRIGGER_TO_OUTBOUND_MEDIUMS`` (so
+    ``derive_onboarding_progress`` never flips them from a tagged outbound) while
+    remaining manually settable, so the assistant can mark them done after the
+    full multi-part task.
+    """
+    for step_id in graph.DEMO_STEP_IDS:
+        assert step_id in graph.STEP_BY_ID
+        assert graph.STEP_BY_ID[step_id].kind == "trigger"
+        assert step_id not in graph.TRIGGER_TO_OUTBOUND_MEDIUMS
+        assert graph.manual_completion_block_reason(step_id) is None
+
+
+def test_integrations_phase_has_three_steps_and_chip_metadata() -> None:
+    """The Integrations phase renders connect, read, and action rows."""
+    assert graph.phase_step_ids_in_graph_order(graph.PHASE_INTEGRATIONS) == (
+        "apps",
+        "integration-read",
+        "integration-action",
+    )
+    apps_chips = graph.presentation_for("apps").chips_chat
+    assert [chip.id for chip in apps_chips] == [
+        "day-to-day-tools",
+        "crm-sales",
+        "dev-ops",
+    ]
+    assert apps_chips[0].metadata == {
+        "gallery_category": "productivity",
+        "search_query": "productivity calendar docs",
+    }
+    assert graph.STEP_BY_ID["integration-read"].event is not None
+    assert graph.STEP_BY_ID["integration-read"].event.subtype == (
+        "integration_demo_requested"
+    )
+    assert graph.STEP_BY_ID["integration-action"].depends_on == {
+        "integration-read": graph.ADDRESSED,
+    }
+
+
+def test_integration_chip_events_resolve_server_side() -> None:
+    """Integrations chips use the same graph-owned chip resolver as Tasks."""
+    connect = graph.chip_event_for("apps", "crm-sales")
+    assert connect is not None
+    assert connect.subtype == "integration_connect_chip_requested"
+    assert connect.details["gallery_category"] == "crm_sales"
+    assert connect.details["search_query"] == "crm sales hubspot pipedrive"
+
+    demo = graph.chip_event_for("integration-read", "connected-app-brief")
+    assert demo is not None
+    assert demo.subtype == "integration_demo_chip_requested"
+    assert demo.details["trigger_step_id"] == "integration-read"
+    assert demo.details["instruction"] == (
+        "Pull the latest from one of my connected apps and brief me here"
+    )
+
+
+def test_manual_completion_block_reason() -> None:
+    """Communication and auto-triggered rows reject manual completion.
+
+    Explicitly-completed beats (workspace demos, discord-connect, learning) must
+    be settable; schedule rows with durable checks also fall through as allowed.
+    """
+    assert graph.manual_completion_block_reason("email-reference") is not None
+    assert graph.manual_completion_block_reason("email-reply") is not None
+    assert graph.manual_completion_block_reason("workspace-mailbox") is None
+    assert graph.manual_completion_block_reason("workspace-drive") is None
+    assert graph.manual_completion_block_reason("workspace-calendar") is None
+    assert graph.manual_completion_block_reason("learn-from-correction") is None
+    assert graph.manual_completion_block_reason("my-computer-demo") is None
+    assert graph.manual_completion_block_reason("integration-read") is None
+    assert graph.manual_completion_block_reason("integration-action") is None
+    assert graph.manual_completion_block_reason("apps") is None
+    assert graph.manual_completion_block_reason("create-scheduled-task") is None

@@ -446,6 +446,24 @@ class AssistantRead(AssistantCreate):
         None,
         description="Discord bot ID assigned to the assistant",
     )
+    assistant_slack_bot_user_id: Optional[str] = Field(
+        None,
+        description=(
+            "Slack bot user ID for the assistant's active workspace install. "
+            "Resolved from the owner's (org or user) active slack_installs row "
+            "so the assistant can send outbound Slack messages before any "
+            "inbound Slack event."
+        ),
+    )
+    assistant_slack_team_id: Optional[str] = Field(
+        None,
+        description=(
+            "Slack workspace/team ID (T...) for the assistant's active "
+            "workspace install. Resolved from the same slack_installs row as "
+            "assistant_slack_bot_user_id so the assistant can auto-resolve the "
+            "team for outbound Slack sends without asking the user."
+        ),
+    )
     api_key: Optional[str] = Field(
         None,
         description="API key associated with this assistant (personal or org key)",
@@ -623,12 +641,19 @@ class OnboardingSessionStartedResponse(BaseModel):
     emitted: bool
 
 
+class CoordinatorWakeupResponse(BaseModel):
+    """Acknowledgement returned after a best-effort Coordinator wakeup."""
+
+    coordinator_id: str
+    attempted: bool
+
+
 class OnboardingStepEventRequest(BaseModel):
     """Request body for firing the graph-owned event attached to a step.
 
-    ``chip_id`` targets one of a Tasks-phase beat row's example chips: when
-    present the chip's canonical event is published instead of the row's own
-    event (see ``onboarding_graph.chip_event_for``).
+    ``chip_id`` targets one of the graph-owned example chips: when present the
+    chip's canonical event is published instead of the row's own event (see
+    ``onboarding_graph.chip_event_for``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -698,37 +723,49 @@ class CoordinatorResetResponse(BaseModel):
     coordinator_id: str
 
 
+class OnboardingStepCompletionUpdate(BaseModel):
+    """Manual completion toggle for one onboarding checklist step."""
+
+    step_id: str = Field(..., min_length=1)
+    completed: bool
+
+
 class CoordinatorStateUpdate(BaseModel):
     """Request body for transitioning a Coordinator's onboarding state.
 
-    All fields are optional: a request specifying only ``mode`` flips
-    the lifecycle without touching the current step; specifying only
-    ``onboarding_step`` advances the in-flight step marker without
-    leaving ``onboarding``. Passing ``clear_onboarding_step=True``
-    resets the step (used when moving to ``working`` so a future
-    re-entry doesn't carry stale step state). ``skip_onboarding_step``
-    records an intentional user skip separately from real completion;
-    ``unskip_onboarding_step`` returns that step to the active checklist.
-    ``skip_onboarding_phase`` records a section-level defer without
-    expanding it into per-step skips; ``unskip_onboarding_phase`` resumes
-    that section while preserving any per-step skips inside it.
+    All fields are optional: a request specifying only ``onboarding_active``
+    toggles whether onboarding scaffolding is live without touching the
+    current step; specifying only ``onboarding_step`` advances the in-flight
+    step marker while onboarding remains active. Passing
+    ``clear_onboarding_step=True`` resets the step (used when deactivating
+    onboarding so a future re-entry doesn't carry stale step state).
+    ``skip_onboarding_step`` records an intentional user skip separately from
+    real completion; ``unskip_onboarding_step`` returns that step to the
+    active checklist. ``skip_onboarding_phase`` records a section-level defer
+    without expanding it into per-step skips; ``unskip_onboarding_phase``
+    resumes that section while preserving any per-step skips inside it.
+    ``onboarding_step_completion`` records a Coordinator slow-brain manual
+    complete/uncomplete for steps outside auto-triggered Communication rows.
 
     ``intro_watched`` records that the user has resolved the opening
     picker (started the call or chose chat) so the ringing picker and
     auto-playing intro never re-appear on a later page load. It is
     one-way sticky: once ``True`` it cannot be reset to ``False``.
 
-    ``onboarding_deferred`` is the global "do onboarding later" switch.
-    Setting it ``True`` suppresses every onboarding narration/opener
-    event and the server-side step derivation exactly as if onboarding
-    were complete, without touching ``mode`` or any per-step state, so
-    the user can start using the platform first. It is freely
-    reversible: setting it back to ``False`` resumes the flow untouched.
+    ``pending_chat_intro`` arms the durable scripted chat opener on
+    ``Coordinator/State``. Unity clears it after the opener is sent.
+
+    ``onboarding_active`` is the single gate for onboarding scaffolding.
+    When ``False``, milestone events, the server-side step derivation,
+    and the onboarding render are suppressed without touching per-step
+    state, so the user can pause or finish onboarding and return later.
+    May be toggled by the Console UI or by the Coordinator slow-brain
+    after the user verbally confirms pause or resume.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Optional[Literal["onboarding", "working"]] = Field(None)
+    onboarding_active: Optional[bool] = Field(None)
     onboarding_step: Optional[str] = Field(None, min_length=1)
     clear_onboarding_step: bool = Field(False)
     skip_onboarding_step: Optional[str] = Field(None, min_length=1)
@@ -737,11 +774,20 @@ class CoordinatorStateUpdate(BaseModel):
     skip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     unskip_onboarding_phase: Optional[str] = Field(None, min_length=1)
     intro_watched: Optional[bool] = Field(None)
-    onboarding_deferred: Optional[bool] = Field(None)
+    pending_chat_intro: Optional[bool] = Field(None)
+    onboarding_step_completion: Optional[OnboardingStepCompletionUpdate] = Field(
+        None,
+    )
 
 
 class OnboardingChip(BaseModel):
-    """A read-only suggestion chip shown under the act/schedule rows."""
+    """A read-only suggestion chip shown under an onboarding step row.
+
+    Graph-owned metadata is flattened onto the wire shape so Console can use it
+    without learning about the internal graph dataclass.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     id: str
     label: str
@@ -785,11 +831,13 @@ class OnboardingStepDependency(BaseModel):
 class OnboardingStepStatus(BaseModel):
     """One onboarding step with its resolved status and presentation copy.
 
-    ``status`` is one of ``done`` / ``skipped`` / ``available`` /
-    ``locked`` — computed server-side from the canonical graph so
-    consumers never re-derive it. ``description`` / ``estimated_time`` /
-    ``chips_*`` carry the per-step display copy from the canonical graph so
-    Console renders straight from this payload without its own copy.
+    ``status`` is one of ``done`` / ``skipped`` / ``in_progress`` /
+    ``available`` / ``locked`` — computed server-side from the canonical graph so
+    consumers never re-derive it. Manual-completion steps that were clicked but
+    not yet finished render as ``in_progress`` with ``dispatched_at`` set.
+    ``description`` / ``estimated_time`` / ``chips_*`` carry the per-step display
+    copy from the canonical graph so Console renders straight from this payload
+    without its own copy.
     """
 
     id: str
@@ -799,10 +847,12 @@ class OnboardingStepStatus(BaseModel):
     kind: str = ""
     channel: Optional[str] = None
     paired_reply: Optional[str] = None
+    dispatched_at: Optional[str] = None
     nudge_chat: str = ""
     nudge_voice: str = ""
     phase_id: Optional[str] = None
     can_skip: bool = False
+    manually_completed: bool = False
     dependencies: List[OnboardingStepDependency] = Field(default_factory=list)
     description: str = ""
     estimated_time: str = ""
@@ -886,11 +936,11 @@ class CoordinatorStateResponse(BaseModel):
     profile contact fields, Slack/Discord setup, workspace email contact,
     integration secrets, action history, Tasks rows) so consumers see steps
     completed in earlier sessions without any transition event. Always ``[]``
-    outside onboarding mode, where derivation is skipped.
+    when ``onboarding_active`` is ``False``, where derivation is skipped.
     """
 
     coordinator_id: int
-    mode: Literal["onboarding", "working"]
+    onboarding_active: bool = True
     onboarding_step: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
@@ -898,14 +948,15 @@ class CoordinatorStateResponse(BaseModel):
     skipped_step_ids: List[str] = Field(default_factory=list)
     skipped_phase_ids: List[str] = Field(default_factory=list)
     intro_watched: bool = False
-    onboarding_deferred: bool = False
+    pending_chat_intro: bool = False
+    chat_intro_armed_at: Optional[str] = None
     # Precomputed depends_on-aware rendering (steps + statuses + valid
-    # next targets with nudge copy). Present only while actively
-    # onboarding; ``None`` once complete, working, or deferred.
+    # next targets with nudge copy). Present only while
+    # ``onboarding_active``; ``None`` when inactive.
     onboarding: Optional[OnboardingRender] = None
     # Self-contained orientation briefing for a fresh onboarding voice call,
     # derived from the graph so the call initiator can pass it straight to the
-    # voice agent as a ``briefed`` opening. Empty outside active onboarding.
+    # voice agent as a ``briefed`` opening. Empty when onboarding is inactive.
     voice_intro_briefing: str = ""
 
 

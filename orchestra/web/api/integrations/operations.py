@@ -1086,6 +1086,22 @@ def list_custom_auth_configs(
     ]
 
 
+def default_composio_oauth_redirect_uri() -> str:
+    """White-label Composio OAuth callback on Orchestra's public API host."""
+
+    raw = (
+        (
+            os.getenv("ORCHESTRA_PUBLIC_URL")
+            or os.getenv("ORCHESTRA_URL")
+            or "https://api.unify.ai"
+        )
+        .strip()
+        .rstrip("/")
+    )
+    base_v0 = raw if raw.endswith("/v0") else f"{raw}/v0"
+    return f"{base_v0}/integrations/composio/oauth/callback"
+
+
 def set_custom_auth_config(
     session: Session,
     *,
@@ -1129,6 +1145,7 @@ def set_custom_auth_config(
             f"Backend {backend_id} does not support custom OAuth configs.",
         )
     scope_list = [s.strip() for s in (scopes or []) if s and s.strip()]
+    resolved_redirect_uri = oauth_redirect_uri or default_composio_oauth_redirect_uri()
     auth_config_id = adapter.create_custom_auth_config(
         slug,
         client_id=client_id,
@@ -1136,7 +1153,7 @@ def set_custom_auth_config(
         auth_scheme=auth_scheme,
         scopes=scope_list or None,
         name=display_name,
-        oauth_redirect_uri=oauth_redirect_uri,
+        oauth_redirect_uri=resolved_redirect_uri,
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -1146,11 +1163,6 @@ def set_custom_auth_config(
     previous = overrides.get(key)
     previous = previous if isinstance(previous, dict) else {}
     old_auth_config_id = previous.get("auth_config_id")
-    resolved_redirect_uri = oauth_redirect_uri or (
-        adapter.default_oauth_callback_url()
-        if hasattr(adapter, "default_oauth_callback_url")
-        else None
-    )
     entry = {
         "auth_config_id": auth_config_id,
         "auth_scheme": auth_scheme,
@@ -2445,4 +2457,34 @@ def run_tool(
         error=error,
         audit_id=audit.id,
         confirmation=confirmation,
+    )
+
+
+def stage_composio_file(
+    *,
+    content: bytes,
+    filename: str,
+    mimetype: str,
+    toolkit_slug: str,
+    tool_slug: str,
+) -> dict[str, Any]:
+    """Stage a file in Composio storage for FileUploadable tool parameters."""
+    from orchestra.integrations.providers.composio import ComposioProviderAdapter
+    from orchestra.integrations.providers.registry import get_provider_adapter
+
+    adapter = get_provider_adapter("composio")
+    if not isinstance(adapter, ComposioProviderAdapter):
+        return {
+            "status": "error",
+            "error": {
+                "code": "provider_not_configured",
+                "message": "Composio backend is not configured for file staging.",
+            },
+        }
+    return adapter.stage_file(
+        content=content,
+        filename=filename,
+        mimetype=mimetype,
+        toolkit_slug=toolkit_slug.strip().lower(),
+        tool_slug=tool_slug.strip().upper(),
     )

@@ -14,6 +14,7 @@ from alembic.operations import Operations
 from fastapi import status
 from httpx import AsyncClient
 
+from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.models.orchestra_models import (
@@ -26,6 +27,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantConsoleConfig,
     ContactMembership,
     Organization,
+    SlackInstall,
     Team,
     TeamAssistantMembership,
     User,
@@ -65,6 +67,25 @@ def mock_assistant_infra_calls(request):
         mock_settings.charges_billing = False
 
         yield mock_wake_up, mock_reawaken, mock_cleanup_tasks
+
+
+def _load_assistant_contacts_lookup_index_migration():
+    migration_path = (
+        Path(__file__).parents[2]
+        / "db"
+        / "migrations"
+        / "versions"
+        / "2026-07-10-00-00_index_assistant_contacts_lookup.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "index_assistant_contacts_lookup",
+        migration_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_seed_memberships_migration():
@@ -2549,3 +2570,285 @@ async def test_non_admin_does_not_return_desktop_filesync_sshkey(
     assistants = list_resp.json()["info"]
     our = next(a for a in assistants if str(a["agent_id"]) == str(agent_id))
     assert our["desktop_filesync_sshkey"] is None
+
+
+# =============================================================================
+# Slack bot_user_id bootstrap resolution
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_resolves_slack_bot_user_id_for_personal_owner(
+    client: AsyncClient,
+    dbsession,
+):
+    """The runtime bootstrap read surfaces the owner's active Slack install bot
+    user id, so an assistant can send outbound Slack before any inbound event."""
+    owner = await create_test_user(client, "slack_bootstrap_personal@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SlackBoot",
+            "surname": "Personal",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    dbsession.add(
+        SlackInstall(
+            user_id=owner["id"],
+            slack_team_id="T_BOOT_PERSONAL",
+            slack_team_name="Bootstrap Workspace",
+            slack_app_id="A_BOOT",
+            bot_user_id="U_BOOT_PERSONAL",
+            bot_access_token="xoxb-boot",
+            installer_user_id="U_INSTALLER",
+            scopes="chat:write,im:history",
+        ),
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_slack_bot_user_id"] == "U_BOOT_PERSONAL"
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_slack_bot_user_id_none_without_install(
+    client: AsyncClient,
+):
+    """No active Slack install for the owner ⇒ the field is null (Slack disabled)."""
+    owner = await create_test_user(client, "slack_bootstrap_noinstall@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SlackBoot",
+            "surname": "NoInstall",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+
+
+# =============================================================================
+# Admin contact-filter performance and universal lookup guard
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_admin_list_rejects_universal_email_without_agent_id(
+    client: AsyncClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "orchestra.settings.settings.unity_coordinator_email_address",
+        "staging-twin@unify.ai",
+    )
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"email": "staging-twin@unify.ai"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 400
+    assert "agent_id" in admin_resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_admin_list_allows_universal_email_with_agent_id(
+    client: AsyncClient,
+    dbsession,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "orchestra.settings.settings.unity_coordinator_email_address",
+        "staging-twin@unify.ai",
+    )
+    owner = await create_test_user(client, "universal-email-filter@test.com")
+    universal_email = "staging-twin@unify.ai"
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Universal",
+            "surname": "Filter",
+            "email": universal_email,
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+    AssistantContactDAO(dbsession).upsert_assistant_contact(
+        assistant_id=agent_id,
+        contact_type="email",
+        contact_value=universal_email,
+        provider="google_workspace",
+    )
+    dbsession.flush()
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={
+            "email": universal_email,
+            "agent_id": agent_id,
+            "from_fields": "agent_id,email",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["info"] == [
+        {"agent_id": str(agent_id), "email": universal_email},
+    ]
+
+
+@pytest.mark.anyio
+async def test_admin_list_by_unique_email_returns_single_assistant(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "unique-admin-email-filter@test.com")
+    unique_email = "unique-admin-email-filter@test.com"
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Unique",
+            "surname": "Email",
+            "email": unique_email,
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+    AssistantContactDAO(dbsession).upsert_assistant_contact(
+        assistant_id=agent_id,
+        contact_type="email",
+        contact_value=unique_email,
+        provider="google_workspace",
+    )
+    dbsession.flush()
+
+    admin_resp = await client.get(
+        "/v0/admin/assistant",
+        params={"email": unique_email, "from_fields": "agent_id,email"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert admin_resp.status_code == 200
+    matches = admin_resp.json()["info"]
+    assert len(matches) == 1
+    assert matches[0]["agent_id"] == str(agent_id)
+    assert matches[0]["email"] == unique_email
+
+
+@pytest.mark.anyio
+async def test_admin_list_from_fields_skips_slack_install_lookup(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "slim-admin-list@test.com")
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Slim",
+            "surname": "List",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    dbsession.add(
+        SlackInstall(
+            user_id=owner["id"],
+            slack_team_id="T_SLIM_LIST",
+            slack_team_name="Slim List Workspace",
+            slack_app_id="A_SLIM",
+            bot_user_id="U_SLIM_LIST",
+            bot_access_token="xoxb-slim",
+            installer_user_id="U_INSTALLER",
+            scopes="chat:write",
+        ),
+    )
+    dbsession.commit()
+
+    with patch(
+        "orchestra.web.api.assistant.views.SlackDAO.get_install_for_user",
+    ) as mock_get_install:
+        admin_resp = await client.get(
+            "/v0/admin/assistant",
+            params={"agent_id": agent_id, "from_fields": "agent_id"},
+            headers=ADMIN_HEADERS,
+        )
+
+    assert admin_resp.status_code == 200
+    assert admin_resp.json()["info"] == [{"agent_id": str(agent_id)}]
+    mock_get_install.assert_not_called()
+
+
+def test_assistant_contacts_lookup_index_migration_exists(dbsession, monkeypatch):
+    migration = _load_assistant_contacts_lookup_index_migration()
+    assert migration.INDEX_NAME == "ix_assistant_contacts_lookup"
+
+    operations = Operations(MigrationContext.configure(dbsession.connection()))
+    monkeypatch.setattr(migration, "op", operations)
+    migration.upgrade()
+
+    from sqlalchemy import inspect
+
+    indexes = {
+        index["name"]
+        for index in inspect(dbsession.connection()).get_indexes("assistant_contacts")
+    }
+    assert "ix_assistant_contacts_lookup" in indexes
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_slack_bot_user_id_none_without_install(
+    client: AsyncClient,
+):
+    """No active Slack install for the owner ⇒ the field is null (Slack disabled)."""
+    owner = await create_test_user(client, "slack_bootstrap_noinstall@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "SlackBoot",
+            "surname": "NoInstall",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_slack_bot_user_id"] is None

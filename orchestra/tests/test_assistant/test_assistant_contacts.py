@@ -3973,7 +3973,7 @@ class TestConnectEndpoint:
         assert "_sig" not in state
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
-        assert state["features"] == ["email"]
+        assert state["features"] == ["email", "drive"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4167,7 +4167,7 @@ class TestConnectEndpoint:
         assert len(sig) == 64
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
-        assert state["features"] == ["email"]
+        assert state["features"] == ["email", "drive"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4407,7 +4407,7 @@ class TestConnectEndpointEdgeCases:
         mock_all_infra,
     ):
         """Default features=['email','teams'] drops 'teams' for Google (not
-        available), so only email scopes appear."""
+        available); email plus the compulsory drive scopes appear."""
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "OAuth", "surname": "Default", "create_infra": False},
@@ -4439,7 +4439,7 @@ class TestConnectEndpointEdgeCases:
         parsed = urlparse(oauth_url)
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
-        assert state["features"] == ["email"]
+        assert state["features"] == ["email", "drive"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4447,6 +4447,7 @@ class TestConnectEndpointEdgeCases:
         }
 
         assert "gmail.send" in oauth_url
+        assert "drive" in oauth_url
         assert "Chat.Read" not in oauth_url
         assert "calendar" not in oauth_url
 
@@ -4457,8 +4458,8 @@ class TestConnectEndpointEdgeCases:
         dbsession: Session,
         mock_all_infra,
     ):
-        """Default features=['email','teams'] — both are valid for Microsoft,
-        so both email and Teams scopes appear."""
+        """Default features=['email','teams'] — both valid for Microsoft, and
+        the compulsory drive + sharepoint options are auto-added."""
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "OAuth", "surname": "MsDef", "create_infra": False},
@@ -4491,7 +4492,7 @@ class TestConnectEndpointEdgeCases:
         parsed = urlparse(oauth_url)
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
-        assert sorted(state["features"]) == ["email", "teams"]
+        assert sorted(state["features"]) == ["drive", "email", "sharepoint", "teams"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4500,6 +4501,8 @@ class TestConnectEndpointEdgeCases:
 
         assert "Mail.Send" in oauth_url
         assert "Chat.Read" in oauth_url
+        assert "Files.Read" in oauth_url
+        assert "Sites.Read.All" in oauth_url
 
     @pytest.mark.anyio
     async def test_connect_cross_provider_feature_silently_dropped(
@@ -4781,6 +4784,7 @@ class TestCompulsoryFeatures:
         oauth_url = resp.json()["info"]["oauth_url"]
         assert "gmail.send" in oauth_url
         assert "calendar" in oauth_url
+        assert "drive" in oauth_url
 
         import base64
         import json
@@ -4793,18 +4797,20 @@ class TestCompulsoryFeatures:
         )
         assert "email" in state["features"]
         assert "calendar" in state["features"]
+        assert "drive" in state["features"]
         assert state["actions"]["register_email_contact"] is True
         assert state["actions"]["setup_email_watch"] is True
         assert state["actions"]["setup_teams_watch"] is False
 
     @pytest.mark.anyio
-    async def test_microsoft_always_includes_email_and_teams(
+    async def test_microsoft_always_includes_email_teams_and_drive_options(
         self,
         client: AsyncClient,
         dbsession: Session,
         mock_all_infra,
     ):
-        """Microsoft connect with features=['calendar'] auto-adds email + teams."""
+        """Microsoft connect with features=['calendar'] auto-adds email, teams,
+        drive and sharepoint."""
         create_resp = await client.post(
             "/v0/assistant",
             json={"first_name": "Comp", "surname": "MS", "create_infra": False},
@@ -4831,6 +4837,8 @@ class TestCompulsoryFeatures:
         assert "Mail.Send" in oauth_url
         assert "Chat.Read" in oauth_url
         assert "Calendars.Read" in oauth_url
+        assert "Files.Read" in oauth_url
+        assert "Sites.Read.All" in oauth_url
 
         import base64
         import json
@@ -4841,7 +4849,13 @@ class TestCompulsoryFeatures:
                 parse_qs(urlparse(oauth_url).query)["state"][0],
             ),
         )
-        assert sorted(state["features"]) == ["calendar", "email", "teams"]
+        assert sorted(state["features"]) == [
+            "calendar",
+            "drive",
+            "email",
+            "sharepoint",
+            "teams",
+        ]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4893,7 +4907,7 @@ class TestGrantedFeaturesRequiredField:
 
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()["info"]
-        assert data["required_features"] == ["email"]
+        assert sorted(data["required_features"]) == ["drive", "email"]
 
     @pytest.mark.anyio
     async def test_microsoft_required_features(
@@ -4937,7 +4951,12 @@ class TestGrantedFeaturesRequiredField:
 
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()["info"]
-        assert sorted(data["required_features"]) == ["email", "teams"]
+        assert sorted(data["required_features"]) == [
+            "drive",
+            "email",
+            "sharepoint",
+            "teams",
+        ]
 
     @pytest.mark.anyio
     async def test_no_scopes_empty_required(
@@ -5679,7 +5698,7 @@ class TestConnectEndpointOrg:
                 parse_qs(urlparse(oauth_url).query)["state"][0],
             ),
         )
-        assert state["features"] == ["email"]
+        assert state["features"] == ["email", "drive"]
         assert state["actions"] == {
             "register_email_contact": False,
             "setup_email_watch": False,
@@ -5854,7 +5873,8 @@ class TestConnectEndpointOrg:
         dbsession: Session,
         mock_all_infra,
     ):
-        """Org assistant: features=['calendar'] for Microsoft auto-adds email+teams."""
+        """Org assistant: features=['calendar'] for Microsoft auto-adds email,
+        teams, drive and sharepoint."""
         owner, org, agent_id, _, _ = await _setup_org_assistant_with_members(
             client,
             dbsession,
@@ -5879,6 +5899,8 @@ class TestConnectEndpointOrg:
         assert "Mail.Send" in oauth_url
         assert "Chat.Read" in oauth_url
         assert "Calendars.Read" in oauth_url
+        assert "Files.Read" in oauth_url
+        assert "Sites.Read.All" in oauth_url
 
         import base64
         import json
@@ -5889,7 +5911,13 @@ class TestConnectEndpointOrg:
                 parse_qs(urlparse(oauth_url).query)["state"][0],
             ),
         )
-        assert sorted(state["features"]) == ["calendar", "email", "teams"]
+        assert sorted(state["features"]) == [
+            "calendar",
+            "drive",
+            "email",
+            "sharepoint",
+            "teams",
+        ]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -6206,7 +6234,7 @@ class TestGrantedFeaturesEndpointOrg:
         data = resp.json()["info"]
         assert data["provider"] == "google"
         assert "email" in data["features"]
-        assert data["required_features"] == ["email"]
+        assert sorted(data["required_features"]) == ["drive", "email"]
 
     @pytest.mark.anyio
     async def test_org_member_with_read_can_read(
@@ -6250,7 +6278,12 @@ class TestGrantedFeaturesEndpointOrg:
         data = resp.json()["info"]
         assert data["provider"] == "microsoft"
         assert "email" in data["features"]
-        assert sorted(data["required_features"]) == ["email", "teams"]
+        assert sorted(data["required_features"]) == [
+            "drive",
+            "email",
+            "sharepoint",
+            "teams",
+        ]
 
     @pytest.mark.anyio
     async def test_org_member_cannot_read_other_members_workspace_coordinator_features(
@@ -6379,4 +6412,9 @@ class TestGrantedFeaturesEndpointOrg:
         data = resp.json()["info"]
         assert data["provider"] == "microsoft"
         assert sorted(data["features"]) == ["email", "teams"]
-        assert sorted(data["required_features"]) == ["email", "teams"]
+        assert sorted(data["required_features"]) == [
+            "drive",
+            "email",
+            "sharepoint",
+            "teams",
+        ]

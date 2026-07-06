@@ -20,6 +20,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import status
@@ -2465,6 +2466,177 @@ class TestAdminEndpoints:
         )
         assert get_by_org.status_code == status.HTTP_200_OK
         assert get_by_org.json()["slack_team_id"] == "T_HTTP"
+
+    async def test_install_upsert_reawakens_org_assistants(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        owner = _make_user(dbsession, "reawaken-org")
+        org = _make_org(dbsession, owner, "reawaken-org")
+        coordinator = _make_assistant(
+            dbsession,
+            owner,
+            first_name="Coord",
+            organization=org,
+            is_coordinator=True,
+        )
+        member = _make_assistant(
+            dbsession,
+            owner,
+            first_name="Member",
+            organization=org,
+        )
+        # A personal assistant of the same owner must not be reawakened
+        # for an org install.
+        personal = _make_assistant(
+            dbsession,
+            owner,
+            first_name="Solo",
+            organization=None,
+        )
+        dbsession.commit()
+
+        with patch(
+            "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken:
+            resp = await client.post(
+                "/v0/admin/slack/install",
+                json={
+                    "organization_id": org.id,
+                    "slack_team_id": "T_REAWAKEN_ORG",
+                    "slack_app_id": "A_REAWAKEN",
+                    "bot_user_id": "U_REAWAKEN_BOT",
+                    "bot_access_token": "xoxb-reawaken",
+                },
+                headers=ADMIN_HEADERS,
+            )
+        assert resp.status_code == status.HTTP_200_OK
+        reawakened = {call.args[0] for call in mock_reawaken.call_args_list}
+        assert reawakened == {
+            str(coordinator.agent_id),
+            str(member.agent_id),
+        }
+        assert str(personal.agent_id) not in reawakened
+
+    async def test_install_upsert_reawakens_personal_assistants(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        owner = _make_user(dbsession, "reawaken-personal")
+        org = _make_org(dbsession, owner, "reawaken-personal")
+        personal = _make_assistant(
+            dbsession,
+            owner,
+            first_name="Solo",
+            organization=None,
+        )
+        # An org assistant of the same owner must not be reawakened for a
+        # personal install.
+        org_assistant = _make_assistant(
+            dbsession,
+            owner,
+            first_name="OrgBot",
+            organization=org,
+        )
+        dbsession.commit()
+
+        with patch(
+            "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken:
+            resp = await client.post(
+                "/v0/admin/slack/install",
+                json={
+                    "user_id": owner.id,
+                    "slack_team_id": "T_REAWAKEN_USER",
+                    "slack_app_id": "A_REAWAKEN",
+                    "bot_user_id": "U_REAWAKEN_BOT",
+                    "bot_access_token": "xoxb-reawaken",
+                },
+                headers=ADMIN_HEADERS,
+            )
+        assert resp.status_code == status.HTTP_200_OK
+        reawakened = {call.args[0] for call in mock_reawaken.call_args_list}
+        assert reawakened == {str(personal.agent_id)}
+        assert str(org_assistant.agent_id) not in reawakened
+
+    async def test_install_upsert_survives_reawaken_failure(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        owner = _make_user(dbsession, "reawaken-fail")
+        _make_assistant(
+            dbsession,
+            owner,
+            first_name="Solo",
+            organization=None,
+        )
+        dbsession.commit()
+
+        with patch(
+            "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("adapters down"),
+        ):
+            resp = await client.post(
+                "/v0/admin/slack/install",
+                json={
+                    "user_id": owner.id,
+                    "slack_team_id": "T_REAWAKEN_FAIL",
+                    "slack_app_id": "A_REAWAKEN",
+                    "bot_user_id": "U_REAWAKEN_BOT",
+                    "bot_access_token": "xoxb-reawaken",
+                },
+                headers=ADMIN_HEADERS,
+            )
+        assert resp.status_code == status.HTTP_200_OK
+
+    async def test_installs_list_returns_all_without_tokens(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        owner = _make_user(dbsession, "http-list")
+        org = _make_org(dbsession, owner, "http-list")
+        personal = _make_user(dbsession, "http-list-personal")
+        dbsession.commit()
+
+        await client.post(
+            "/v0/admin/slack/install",
+            json={
+                "organization_id": org.id,
+                "slack_team_id": "T_LIST_ORG",
+                "slack_app_id": "A_LIST",
+                "bot_user_id": "U_LIST_ORG",
+                "bot_access_token": "xoxb-list-org",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        await client.post(
+            "/v0/admin/slack/install",
+            json={
+                "user_id": personal.id,
+                "slack_team_id": "T_LIST_USER",
+                "slack_app_id": "A_LIST",
+                "bot_user_id": "U_LIST_USER",
+                "bot_access_token": "xoxb-list-user",
+            },
+            headers=ADMIN_HEADERS,
+        )
+
+        resp = await client.get("/v0/admin/slack/installs", headers=ADMIN_HEADERS)
+        assert resp.status_code == status.HTTP_200_OK
+        rows = resp.json()
+        by_team = {row["slack_team_id"]: row for row in rows}
+        assert {"T_LIST_ORG", "T_LIST_USER"} <= set(by_team)
+        assert by_team["T_LIST_ORG"]["organization_id"] == org.id
+        assert by_team["T_LIST_USER"]["user_id"] == personal.id
+        # List never leaks bot tokens.
+        assert all(row["bot_access_token"] is None for row in rows)
 
     async def test_install_get_404_when_missing(
         self,

@@ -755,6 +755,89 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             alias=connection_id,
         )
 
+    def stage_file(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        mimetype: str,
+        toolkit_slug: str,
+        tool_slug: str,
+    ) -> dict[str, Any]:
+        """Upload bytes to Composio storage for a FileUploadable tool argument."""
+        if not self.api_key:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "provider_not_configured",
+                    "message": "COMPOSIO_API_KEY is required for Composio file staging.",
+                },
+            }
+        import hashlib
+
+        import requests
+
+        md5_hash = hashlib.md5(content, usedforsecurity=False).hexdigest()
+        try:
+            response = requests.post(
+                f"{self.base_url}/files/upload/request",
+                headers=self._api_key_headers(),
+                json={
+                    "md5": md5_hash,
+                    "filename": filename,
+                    "mimetype": mimetype,
+                    "tool_slug": tool_slug,
+                    "toolkit_slug": toolkit_slug,
+                },
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            meta = response.json()
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "provider_file_stage_failed",
+                    "message": str(exc),
+                },
+            }
+
+        key = str(meta.get("key") or "")
+        presigned = meta.get("new_presigned_url") or meta.get("newPresignedUrl")
+        if presigned:
+            try:
+                upload = requests.put(
+                    str(presigned),
+                    data=content,
+                    headers={"Content-Type": mimetype},
+                    timeout=max(self.timeout_seconds, 120),
+                )
+                upload.raise_for_status()
+            except Exception as exc:
+                return {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_file_upload_failed",
+                        "message": str(exc),
+                    },
+                }
+        if not key:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "provider_file_stage_failed",
+                    "message": "Composio file staging returned no storage key.",
+                },
+            }
+        return {
+            "status": "ok",
+            "file": {
+                "name": filename,
+                "mimetype": mimetype,
+                "s3key": key,
+            },
+        }
+
     def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
         if not self.api_key:
             return ProviderExecutionResult(

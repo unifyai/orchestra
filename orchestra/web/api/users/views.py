@@ -38,12 +38,16 @@ from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.lib.referrals import ReferralError, attribute_referral
 from orchestra.services.account_reset_service import reset_personal_account
 from orchestra.services.coordinator_service import (
+    derive_onboarding_progress,
     ensure_coordinator_intro_watched,
     ensure_personal_coordinator_provisioned,
     ensure_workspace_coordinator_provisioned,
+    get_coordinator_state,
     get_workspace_coordinator,
     list_coordinators_missing_intro_watched,
     list_workspace_memberships_missing_coordinator,
+    notify_onboarding_render_if_changed,
+    wake_workspace_coordinator_best_effort_sync,
 )
 from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
 from orchestra.services.universal_unity_whatsapp import (
@@ -173,6 +177,12 @@ async def create_user(
                 new_user.id,
                 exc_info=True,
             )
+
+    wake_workspace_coordinator_best_effort_sync(
+        session,
+        user_id=str(new_user.id),
+        organization_id=None,
+    )
 
     return {
         "id": new_user.id,
@@ -327,6 +337,12 @@ def get_user_by_email(
         "phone_number": user_instance.phone_number,
         "whatsapp_number": user_instance.whatsapp_number,
         "discord_id": user_instance.discord_id,
+        "voice_sample": user_instance.voice_sample,
+        "voice_sample_uploaded_at": (
+            user_instance.voice_sample_uploaded_at.isoformat()
+            if user_instance.voice_sample_uploaded_at
+            else None
+        ),
     }
 
 
@@ -504,12 +520,34 @@ async def update_user(
         for field in ("phone_number", "whatsapp_number", "discord_id")
     )
 
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user.id,
+        organization_id=None,
+    )
+    baseline_completed_step_ids: list[str] | None = None
+    if coordinator is not None:
+        coordinator_state = get_coordinator_state(session, coordinator=coordinator)
+        if coordinator_state.get("onboarding_active"):
+            baseline_completed_step_ids = derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+                state=coordinator_state,
+            )
+
     user_dao.update(**update_kwargs)
 
     user_dao.cleanup_phone_verifications(updated_user.user_id)
 
     if contact_identity_submitted:
         await _reawaken_user_assistants(session, updated_user.user_id)
+        if coordinator is not None and baseline_completed_step_ids is not None:
+            await notify_onboarding_render_if_changed(
+                session,
+                coordinator=coordinator,
+                baseline_completed_step_ids=baseline_completed_step_ids,
+                reason="contact_identity_updated",
+            )
 
     return "User information updated successfully!"
 
@@ -1317,6 +1355,104 @@ def remove_user_photo(
     return {"message": "Profile photo removed."}
 
 
+@router.post(
+    "/user/voice/upload",
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload user voice-enrollment sample",
+    tags=["Users"],
+)
+async def upload_user_voice_sample(
+    request: Request,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+):
+    """Store a recorded voice sample used for speaker verification on calls.
+
+    Expects a mono 16-bit WAV file (the Console recorder encodes to WAV
+    client-side so assistants can decode it with no extra codecs).
+    """
+    from orchestra.services.bucket_service import create_bucket_service
+
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authenticated.",
+        )
+
+    ALLOWED_AUDIO_TYPES = {"audio/wav", "audio/x-wav", "audio/wave"}
+    if not file.content_type or file.content_type not in ALLOWED_AUDIO_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(sorted(ALLOWED_AUDIO_TYPES))}",
+        )
+
+    MAX_SIZE_BYTES = 20 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > MAX_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
+        )
+
+    bucket_service = create_bucket_service()
+    # Replace any previous sample so exactly one enrollment exists per user.
+    try:
+        bucket_service.delete_user_voice_samples(user_id)
+    except Exception as e:
+        logger.error(f"Failed to delete old voice samples for user {user_id}: {e}")
+    gcs_url = bucket_service.upload_user_voice_file(
+        file_content=file_content,
+        user_id=user_id,
+        content_type="audio/wav",
+    )
+
+    from datetime import datetime, timezone
+
+    user_dao = UserDAO(session)
+    user_dao.update(
+        id=user_id,
+        voice_sample=gcs_url,
+        voice_sample_uploaded_at=datetime.now(timezone.utc),
+    )
+
+    return {"gcs_url": gcs_url}
+
+
+@router.delete(
+    "/user/voice",
+    summary="Remove user voice-enrollment sample",
+    tags=["Users"],
+)
+def remove_user_voice_sample(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    from orchestra.services.bucket_service import create_bucket_service
+
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authenticated.",
+        )
+
+    try:
+        bucket_service = create_bucket_service()
+        bucket_service.delete_user_voice_samples(user_id)
+    except Exception as e:
+        logger.error(f"Failed to delete voice samples for user {user_id}: {e}")
+
+    user_dao = UserDAO(session)
+    user_dao.update(
+        id=user_id,
+        voice_sample=None,
+        voice_sample_uploaded_at=None,
+    )
+
+    return {"message": "Voice sample removed."}
+
+
 @router.get("/user/query-logging")
 def get_query_logging_status(
     request: Request,
@@ -1359,6 +1495,12 @@ def get_user_basic_info(
         "whatsapp_number": user.whatsapp_number,
         "discord_id": user.discord_id,
         "personal_workspace_disabled": user.personal_workspace_disabled_at is not None,
+        "voice_sample": user.voice_sample,
+        "voice_sample_uploaded_at": (
+            user.voice_sample_uploaded_at.isoformat()
+            if user.voice_sample_uploaded_at
+            else None
+        ),
     }
 
 
@@ -2208,6 +2350,20 @@ def update_onboarding_progress(
     )
 
     session.commit()
+
+    if body.current_step == "completed":
+        organization_id: int | None = None
+        org_id_raw = (body.step_data or {}).get("organizationId")
+        if org_id_raw is not None:
+            try:
+                organization_id = int(org_id_raw)
+            except (TypeError, ValueError):
+                organization_id = None
+        wake_workspace_coordinator_best_effort_sync(
+            session,
+            user_id=request.state.user_id,
+            organization_id=organization_id,
+        )
 
     return OnboardingStatusDetailedResponse(
         user_id=status.user_id,

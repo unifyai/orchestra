@@ -55,6 +55,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import EmailVerification
 from orchestra.services.coordinator_service import (
     ensure_personal_coordinator_provisioned,
+    get_personal_coordinator,
 )
 from orchestra.settings import settings
 from orchestra.web.api.auth.schema import (
@@ -89,7 +90,10 @@ from orchestra.web.api.auth.schema import (
 )
 from orchestra.web.api.dependencies import enforce_unify_members_only
 from orchestra.web.api.users.schema import AccountRequest
-from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
+from orchestra.web.api.utils.assistant_infra import (
+    delete_pubsub_topic,
+    wake_up_coordinator_best_effort,
+)
 from orchestra.web.api.utils.auth_rate_limiting import enforce_auth_rate_limit
 
 admin_router = APIRouter()
@@ -257,6 +261,9 @@ async def register(
             password_hash=password_hash,
         )
         session.commit()
+        coordinator = get_personal_coordinator(session, str(user.id))
+        if coordinator is not None:
+            await wake_up_coordinator_best_effort(str(coordinator.agent_id))
         return AuthRegisterResponse(
             email=email,
             requires_verification=False,
@@ -473,6 +480,10 @@ async def create_user_after_verification(
         session.commit()
     except Exception:
         raise
+
+    coordinator = get_personal_coordinator(session, str(user.id))
+    if coordinator is not None:
+        await wake_up_coordinator_best_effort(str(coordinator.agent_id))
 
     return AuthVerifyResponse(
         id=str(user.id),

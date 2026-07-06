@@ -369,6 +369,24 @@ class LocalBucketService:
             content_type=content_type,
         )
 
+    def upload_user_voice_file(
+        self,
+        file_content: bytes,
+        user_id: str,
+        content_type: str = "audio/wav",
+    ) -> str:
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"user-voice/{user_id}/{file_name}.wav"
+        return self._write_object(
+            self.account_photo_bucket_name,
+            object_path,
+            file_content,
+            content_type=content_type,
+        )
+
+    def delete_user_voice_samples(self, user_id: str) -> int:
+        return self._delete_account_photo_prefix(f"user-voice/{user_id}/")
+
     def upload_org_photo_file(
         self,
         file_content: bytes,

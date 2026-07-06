@@ -30,6 +30,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from orchestra.services.learning_expenses_fixtures import (
+    LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION,
+    LEARNING_EXPENSES_REPLAY_HINT,
+    LEARNING_EXPENSES_SCENARIO_ID,
+    LEARNING_EXPENSES_USER_CORRECTION_TEXT,
+    learning_expenses_card_attachment_description,
+    learning_expenses_checking_attachment_description,
+    learning_expenses_concepts_opening_guidance,
+    learning_expenses_contrivance_acknowledgment,
+    learning_expenses_deliverable_handoff_rule,
+    learning_expenses_intro_arc_lines,
+    learning_expenses_opening_script_guidance,
+    learning_expenses_stop_act_for_storage_rule,
+    learning_expenses_storage_check_nudge,
+    learning_expenses_user_facing_voice,
+)
+
 ADDRESSED = 0
 COMPLETED = 1
 
@@ -71,6 +88,12 @@ class OnboardingStep:
     # (e.g. Microsoft-only Teams) that is only rendered once the connected
     # workspace matches; it is omitted from the provider-agnostic catalog.
     providers: tuple[str, ...] = ()
+    # Workspace feature (scope bundle) this step needs the user to have
+    # granted. ``None`` means the step is always eligible; a value (e.g.
+    # ``"calendar"``) hides the step until that feature's scopes appear in
+    # the connected workspace's granted-scopes secret. Feature names mirror
+    # the bundles in ``assistant.scopes`` (email, calendar, drive, ...).
+    requires_feature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +105,7 @@ class OnboardingChip:
 
     id: str
     label: str
+    metadata: dict[str, Any] | None = None
 
 
 REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
@@ -112,8 +136,8 @@ PHASE_INTEGRATIONS = "Integrations"
 PHASE_TASKS = "Tasks"
 PHASE_LEARNING = "Learning"
 PHASE_CANVAS = "Canvas"
-PHASE_MY_COMPUTER = "My Computer"
-PHASE_YOUR_COMPUTER = "Your Computer"
+PHASE_MY_COMPUTER = "Your Computer"
+PHASE_YOUR_COMPUTER = "Their Computer"
 PHASE_TEAMS = "Teams"
 PHASE_HIRING = "Hiring"
 
@@ -144,13 +168,82 @@ WORKSPACE_FRAMING = (
     "each workspace demo T-W1N reads the relevant area with its own tools "
     "(recent mailbox, Drive/OneDrive files, or the upcoming week's calendar), then "
     "delivers one short, plain-spoken summary to the user as a single "
-    "unify_message. That delivered message is the proof the demo worked, so it "
-    "must be sent as an assistant message back to the user — not merely spoken "
-    "on a call. Afterwards T-W1N offers exactly one natural follow-up and only "
-    "acts on it if the user says yes: draft a reply to a notable email, suggest "
-    "a simple optional way to tidy a messy Drive, or flag a conflict or gap on "
-    "the calendar. If the area is empty or T-W1N genuinely cannot read it, it "
-    "says so honestly and moves on rather than inventing content."
+    "unify_message — sent as an assistant message back to the user, not merely "
+    "spoken on a call. Delivering that summary is the demo task; the checklist "
+    "does NOT auto-detect it, so once the summary is sent T-W1N marks the step "
+    "done explicitly by calling set_onboarding_task_state(step_id, True). "
+    "Afterwards T-W1N offers exactly one natural follow-up and only acts on it if "
+    "the user says yes: draft a reply to a notable email, suggest a simple "
+    "optional way to tidy a messy Drive, or flag a conflict or gap on the "
+    "calendar — this follow-up is optional and never gates completion. If the "
+    "area is empty or T-W1N genuinely cannot read it, it says so honestly, still "
+    "marks the step done, and moves on rather than inventing content."
+)
+
+INTEGRATIONS_FRAMING = (
+    "In the Integrations phase T-W1N proves connected apps are more than a "
+    "gallery: first the user connects at least one non-workspace app, then "
+    "T-W1N reads from a connected app and finally takes one concrete, "
+    "user-safe action across connected apps. For each live demo T-W1N chooses "
+    "a connected app that fits the user's click or chip, explains any missing "
+    "connection plainly, and never pretends an app is connected. The checklist "
+    "does NOT auto-detect read/action demos, so after the demo result is sent "
+    "T-W1N marks the step done explicitly with "
+    "set_onboarding_task_state(step_id, True)."
+)
+
+
+@dataclass(frozen=True)
+class DemoContract:
+    """Shared semantics for demo rows that complete by explicit brain action."""
+
+    phase: str
+    phase_id: str
+    framing: str
+    interaction_type: str
+    subtype: str
+    domain: str
+    instruction: str
+
+
+WORKSPACE_DEMO_CONTRACT = DemoContract(
+    phase=PHASE_WORKSPACE,
+    phase_id="workspace",
+    framing=WORKSPACE_FRAMING,
+    interaction_type="workspace_demo",
+    subtype="workspace_demo_requested",
+    domain="workspace",
+    instruction=(
+        "read the relevant part of their connected workspace with its own tools "
+        "and deliver one short summary as a single unify_message"
+    ),
+)
+
+INTEGRATION_READ_DEMO_CONTRACT = DemoContract(
+    phase=PHASE_INTEGRATIONS,
+    phase_id="integrations",
+    framing=INTEGRATIONS_FRAMING,
+    interaction_type="integration_demo",
+    subtype="integration_demo_requested",
+    domain="integration",
+    instruction=(
+        "read from one connected app that fits their request and deliver one "
+        "short brief as a single unify_message"
+    ),
+)
+
+INTEGRATION_ACTION_DEMO_CONTRACT = DemoContract(
+    phase=PHASE_INTEGRATIONS,
+    phase_id="integrations",
+    framing=INTEGRATIONS_FRAMING,
+    interaction_type="integration_demo",
+    subtype="integration_demo_requested",
+    domain="integration",
+    instruction=(
+        "take one concrete, user-safe action in a connected app or across "
+        "connected apps, then report exactly what happened as a single "
+        "unify_message"
+    ),
 )
 
 TASKS_FRAMING = (
@@ -176,7 +269,109 @@ TASKS_FRAMING = (
 # the live feed of a run in progress.
 _TASKS_TAB_NUDGE = "point them to the Tasks tab, where the new task now shows up"
 _ACTIONS_TAB_NUDGE = (
-    "point them to the Actions tab, which streams my work live while a task runs"
+    "tell the user to open the Actions tab themselves so they can watch my work "
+    "live while a run is in progress — I have no tool to navigate the Console "
+    "for them"
+)
+
+# Brain rail sections T-W1N tells the user to open after storing learning.
+_BRAIN_GUIDANCE_NUDGE = (
+    "tell the user to open the Guidance section in the Brain rail themselves, "
+    "where the new rules now live — I have no tool to navigate the Console "
+    "for them"
+)
+_BRAIN_FUNCTIONS_NUDGE = (
+    "tell the user to open the Functions section in the Brain rail themselves, "
+    "where the reusable procedure now lives — I have no tool to navigate the "
+    "Console for them"
+)
+
+# The Learning beat is one openly-narrated tutorial (scripted narrative, real
+# mechanics) over the seeded Expenses ETL example. One constant so the phase
+# framing and the beat event tell the same story.
+_LEARNING_ARC_PREVIEW = "; ".join(learning_expenses_intro_arc_lines())
+LEARNING_FRAMING = (
+    "The Learning phase is an openly narrated tutorial over seeded bank exports. "
+    f"{learning_expenses_concepts_opening_guidance()} "
+    "The hands-on demo shows this in action: one user correction becomes durable "
+    "Guidance (playbook) and a reusable Function (skill); replay on fresh data "
+    "proves it stuck. "
+    f"{learning_expenses_contrivance_acknowledgment()} "
+    "Before any attachments, preview the full hands-on arc up front: "
+    f"{_LEARNING_ARC_PREVIEW}. "
+    "Rule 1 — "
+    f"{learning_expenses_deliverable_handoff_rule()} "
+    "Rule 2 — Opening voice: "
+    f"{learning_expenses_opening_script_guidance()} "
+    "Rule 2b — User-facing deliverables: "
+    f"{learning_expenses_user_facing_voice()} "
+    "Rule 3 — Attachments: before the first attempt, send the month-N bank "
+    "export CSVs as unify_message attachments (one attachment per message). "
+    f"{learning_expenses_checking_attachment_description()} "
+    f"{learning_expenses_card_attachment_description()} "
+    "Rule 4 — First act: run a deliberately naive first pass over the month-N "
+    "files via act(persist=True) — "
+    f"{LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION} "
+    "from the fixtures; numbers are genuinely computed, never asserted. "
+    "Rule 5 — After the first act completes, send the naive result as a "
+    "unify_message (see Rule 1). State the naive total and explain the mistake "
+    "in plain language (Rule 2b) — never forward act tables or row-by-row math. "
+    "Suggest this exact correction text "
+    f'for the user to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}" — '
+    "then WAIT; never send the correction or proceed on their behalf. "
+    "Rule 6 — After their correction: interject into the running persist act "
+    "with the corrected algorithm and include this StorageCheck memoization "
+    f"request verbatim: {learning_expenses_storage_check_nudge()} "
+    "Send the improved deliverable as a unify_message. The doing loop must not "
+    "call store tools — StorageCheck persists after the act completes; after "
+    f"StorageCheck finishes, cite the stored ids from its summary when nudging "
+    f"the user, then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
+    f"Rule 6b — {learning_expenses_stop_act_for_storage_rule()} "
+    "Rule 7 — Invite them to ask for next month's report and WAIT; replay only "
+    f"once they ask ({LEARNING_EXPENSES_REPLAY_HINT}). "
+    "Rule 8 — Replay: second act(persist=True) over month-N+1 files; send the "
+    "replay deliverable as a unify_message. Brain nudges and attachment intro "
+    "messages are not deliverables. "
+    f"Before and during each act run, {_ACTIONS_TAB_NUDGE}. "
+    "Rule 9 — After sending the replay deliverable, mark the step done with "
+    "set_onboarding_task_state('learn-from-correction', True) — the checklist "
+    "does not auto-detect the tutorial."
+)
+
+# Interaction channel id stamped on the Learning beat event (Unity narration).
+LEARNING_BEAT_CHANNEL = "learning_beat"
+
+# The My Computer beat is a call-anchored live desktop demo on T-W1N's managed
+# VM. One constant so the phase framing and the beat event tell the same story.
+MY_COMPUTER_FRAMING = (
+    "The My Computer phase shows T-W1N has a real computer of its own — the user "
+    "just watched it use it on a call. "
+    "Rule 1 — Call-anchored: on an active call, run the demo now and tell the "
+    "user to click Show assistant screen so they watch live. "
+    "Not on a call: do not run the demo and do not ask permission to call — ring "
+    "the user now with start_unify_meet. The opener speaks the demo intro "
+    "verbatim (e.g. \"You clicked the computer demo — I'll show you my machine "
+    'live. Give it a moment to boot."). The briefing carries the full demo '
+    "script: the APOD errand, telling them to click Show assistant screen, the "
+    "boot narration rule, the completion call after the attachment is delivered, "
+    "and the honest-failure rule. If the ring goes unanswered, send ONE short "
+    "chat line inviting them to ring back when ready — the demo will start the "
+    "moment they answer; do not re-ring on your own. "
+    "Rule 2 — Boot narration: the managed VM may take ~30–60s to boot; say so "
+    "plainly ('give me a moment — my computer is starting up'). The boot is part "
+    "of the demo — it proves a real machine. "
+    "Rule 3 — Default errand: navigate visibly to NASA's Astronomy Picture of "
+    "the Day, download today's image into the synced workspace, show it in the "
+    "filesystem, then send it over chat as a send_unify_message attachment. If "
+    "the user asks for something else mid-call, honor it as long as it keeps the "
+    "same shape (real site → download → deliver). "
+    "Rule 4 — Explicit completion: after the attachment is delivered, call "
+    "set_onboarding_task_state('my-computer-demo', True). The checklist does "
+    "not auto-detect anything. "
+    "Rule 5 — Scope: no shell/terminal showcase; nothing touching the user's own "
+    "machine (that is the separate Your Computer phase). One beat, one concept. "
+    "Rule 6 — Honest failure: if the VM won't come up or the site is unreachable, "
+    "say so, offer to retry later, and do not mark the step done."
 )
 
 
@@ -213,7 +408,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         id="workspace",
         label=PHASE_WORKSPACE,
         title="Workspace",
-        description="Give me access to your Google or Microsoft workspace.",
+        description="Give T-W1N access to your Google or Microsoft workspace.",
         framing=WORKSPACE_FRAMING,
     ),
     OnboardingPhase(
@@ -221,6 +416,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_INTEGRATIONS,
         title="Integrations",
         description="Connect the apps and services I should work with.",
+        framing=INTEGRATIONS_FRAMING,
     ),
     OnboardingPhase(
         id="tasks",
@@ -233,7 +429,8 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         id="learning",
         label=PHASE_LEARNING,
         title="Learning",
-        description="Teach me the background I should remember.",
+        description="Correct me once — I'll remember how you want it done.",
+        framing=LEARNING_FRAMING,
     ),
     OnboardingPhase(
         id="canvas",
@@ -242,16 +439,17 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         description="Use a shared visual workspace.",
     ),
     OnboardingPhase(
-        id="my-computer",
-        label=PHASE_MY_COMPUTER,
-        title="My Computer",
-        description="Ask me to operate from my computer.",
-    ),
-    OnboardingPhase(
         id="your-computer",
         label=PHASE_YOUR_COMPUTER,
-        title="Your Computer",
+        title="Their Computer",
         description="Let me help on your computer.",
+    ),
+    OnboardingPhase(
+        id="my-computer",
+        label=PHASE_MY_COMPUTER,
+        title="Your Computer",
+        description="Ask me to operate from my computer.",
+        framing=MY_COMPUTER_FRAMING,
     ),
     OnboardingPhase(
         id="teams",
@@ -342,46 +540,53 @@ def _demo(
     nudge_chat: str,
     nudge_voice: str,
     providers: tuple[str, ...] = (),
+    requires_feature: str | None = None,
+    contract: DemoContract = WORKSPACE_DEMO_CONTRACT,
 ) -> OnboardingStep:
-    """A workspace demo trigger row.
+    """A demo trigger row that completes explicitly after Twin performs it.
 
     Structurally a trigger (clicking it asks Twin to act now) but, unlike the
-    reference-quiz triggers, it has no paired reply: the proof of completion is
-    the assistant-authored summary delivered back to the user over
-    ``unify_message`` (see ``DEMO_TO_OUTBOUND_MEDIUMS``). The ``workspace_demo``
-    interaction type lets Unity narrate it differently from a quiz clue.
+    reference-quiz triggers, it has no paired reply and is not auto-derived from
+    an outbound: Twin performs the whole demo task, then explicitly marks the
+    step done via ``set_onboarding_task_state`` (see ``MANUAL_COMPLETION_STEP_IDS`` /
+    ``manual_completion_block_reason``). The ``workspace_demo`` interaction type
+    lets Unity narrate it differently from a quiz clue.
     """
     interaction = {
-        "type": "workspace_demo",
+        "type": contract.interaction_type,
         "trigger_step_id": step_id,
         "channel": channel,
-        "instructions": WORKSPACE_FRAMING,
+        "instructions": contract.framing,
     }
     event = OnboardingEventSpec(
         event_type="coordinator_onboarding_event",
         message=(
             f"The user just clicked '{title}', so they want T-W1N to run this "
-            "workspace demo now: read the relevant part of their connected "
-            "workspace and send the summary back to them as a unify_message. "
-            "This is a poll, not a request to repeat work already done: if the "
-            "summary has already been delivered, treat this as confirmation and "
-            "do NOT send a duplicate."
+            f"{contract.domain} demo now: {contract.instruction}. "
+            "The checklist does NOT auto-detect that "
+            "deliverable, so once it is sent T-W1N marks the step complete with "
+            "set_onboarding_task_state(step_id, completed=True) — handling the "
+            "demo is not finished until that call is made. Any reply, tidy-up, or "
+            "flag is an optional follow-up offered afterwards and never required "
+            "to complete the step. This is a poll, not a request to repeat work "
+            "already done: if the task is already finished, treat this as "
+            "confirmation and do NOT redo it."
         ),
-        subtype="workspace_demo_requested",
+        subtype=contract.subtype,
         details={
             "trigger_step_id": step_id,
             "channel": channel,
-            "framing": WORKSPACE_FRAMING,
-            "phase": PHASE_WORKSPACE,
-            "phase_id": "workspace",
-            "phase_framing": WORKSPACE_FRAMING,
+            "framing": contract.framing,
+            "phase": contract.phase,
+            "phase_id": contract.phase_id,
+            "phase_framing": contract.framing,
             "interaction": interaction,
         },
     )
     return OnboardingStep(
         id=step_id,
         title=title,
-        phase=PHASE_WORKSPACE,
+        phase=contract.phase,
         kind="trigger",
         depends_on=depends_on,
         can_skip=True,
@@ -392,6 +597,7 @@ def _demo(
         nudge_voice=nudge_voice,
         event=event,
         providers=providers,
+        requires_feature=requires_feature,
     )
 
 
@@ -406,6 +612,11 @@ _TASK_BEAT_KIND: dict[str, str] = {
     "create-scheduled-task": "scheduled",
     "create-triggerable-task": "triggered",
 }
+
+# Learning-phase beat: one row, no chips. The row click starts the openly
+# scripted expenses-etl tutorial directly (see LEARNING_FRAMING).
+_LEARNING_SCENARIO_ID = LEARNING_EXPENSES_SCENARIO_ID
+_LEARNING_REPLAY_HINT = LEARNING_EXPENSES_REPLAY_HINT
 
 
 def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
@@ -464,6 +675,107 @@ def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "phase": PHASE_TASKS,
             "phase_id": "tasks",
             "phase_framing": TASKS_FRAMING,
+            "interaction": interaction,
+        },
+    )
+
+
+def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks the Learning beat row.
+
+    The click starts the guided expenses-etl tutorial directly — an openly
+    narrated correction loop over seeded bank exports, scripted end to end by
+    ``LEARNING_FRAMING``. There is no freeform mode and there are no chips.
+    """
+    interaction = {
+        "type": "learning_beat",
+        "trigger_step_id": step_id,
+        "channel": LEARNING_BEAT_CHANNEL,
+        "scenario_id": _LEARNING_SCENARIO_ID,
+        "instructions": LEARNING_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}' — run the guided learning demo now. "
+            f"{learning_expenses_opening_script_guidance()} "
+            "Then send the two January bank export CSVs as unify_message attachments "
+            "(one file per message), describing each file's rows as you send it: "
+            f"{learning_expenses_checking_attachment_description()} "
+            f"{learning_expenses_card_attachment_description()} "
+            f"Tell them to open the Actions tab before the first act. "
+            f"Rule — {learning_expenses_deliverable_handoff_rule()} "
+            "Run act(persist=True) for the naive first pass "
+            f"({LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION}; real computed "
+            "numbers only). When that act completes, your SAME turn must send "
+            "the result as a unify_message — never a bare wait. Surface the "
+            "mistake, suggest this correction for them "
+            f'to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}", then WAIT. '
+            "After their correction: revise, store Guidance and Function, send "
+            "the improved deliverable, "
+            f"{learning_expenses_stop_act_for_storage_rule()} "
+            f"then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
+            f"Invite them to ask for next month's report and WAIT. Replay: "
+            f"{_LEARNING_REPLAY_HINT} Send the replay deliverable, then mark "
+            "the step done with set_onboarding_task_state('learn-from-correction', "
+            "True). "
+            f"{_ACTIONS_TAB_NUDGE} before and during each act run. "
+            f"Full contract: {LEARNING_FRAMING}"
+        ),
+        subtype="learning_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "channel": LEARNING_BEAT_CHANNEL,
+            "scenario_id": _LEARNING_SCENARIO_ID,
+            "replay_hint": _LEARNING_REPLAY_HINT,
+            "framing": LEARNING_FRAMING,
+            "phase": PHASE_LEARNING,
+            "phase_id": "learning",
+            "phase_framing": LEARNING_FRAMING,
+            "interaction": interaction,
+        },
+    )
+
+
+def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks the My Computer beat row.
+
+    The click starts the call-anchored live desktop demo — browser on the managed
+    VM, download, filesystem proof, chat attachment — scripted end to end by
+    ``MY_COMPUTER_FRAMING``. There is no freeform mode and there are no chips.
+    """
+    interaction = {
+        "type": "my_computer_beat",
+        "trigger_step_id": step_id,
+        "instructions": MY_COMPUTER_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}'. "
+            "On an active call: run the live desktop demo now — tell them to click "
+            "Show assistant screen, narrate honestly if the VM is cold (~30–60s), "
+            "default errand is NASA Astronomy Picture of the Day → download "
+            "today's image → show it in the filesystem → send_unify_message "
+            "attachment, then set_onboarding_task_state('my-computer-demo', "
+            "True). Not on a call: do not run the demo and do not ask permission "
+            "to call — ring the user now with start_unify_meet(opener, briefing). "
+            "The opener speaks the demo intro verbatim; the briefing carries the "
+            "full demo script. If the ring goes unanswered, send ONE short chat "
+            "line inviting them to ring back when ready — do not re-ring on your "
+            "own. If the VM or site fails, say so and do not mark done. "
+            "This is a poll, not a request to repeat work already done: if the "
+            "demo is already finished, treat this as confirmation and do NOT "
+            "redo it. "
+            f"Full contract: {MY_COMPUTER_FRAMING}"
+        ),
+        subtype="my_computer_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "framing": MY_COMPUTER_FRAMING,
+            "phase": PHASE_MY_COMPUTER,
+            "phase_id": "my-computer",
+            "phase_framing": MY_COMPUTER_FRAMING,
             "interaction": interaction,
         },
     )
@@ -701,19 +1013,37 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         nudge_voice="replying to the Slack message",
     ),
     OnboardingStep(
-        id="discord-connect",
-        title="Connect Discord",
+        id="discord-id",
+        title="Add your Discord ID",
         phase=PHASE_COMMUNICATION,
-        kind="connect",
+        kind="setup",
         depends_on={},
         can_skip=True,
         derivable=True,
         channel="discord",
         nudge_chat=(
+            "Have them click the 'Add your Discord ID' row in the Onboarding "
+            "checklist; it opens Account → Contact info so they can copy their "
+            "Discord user ID (Settings → Advanced → Developer Mode, then "
+            "click their name → Copy User ID) and save it."
+        ),
+        nudge_voice=(
+            "clicking the 'Add your Discord ID' row in the Onboarding checklist"
+        ),
+    ),
+    OnboardingStep(
+        id="discord-connect",
+        title="Connect Discord",
+        phase=PHASE_COMMUNICATION,
+        kind="connect",
+        depends_on={"discord-id": COMPLETED},
+        can_skip=True,
+        derivable=False,
+        channel="discord",
+        nudge_chat=(
             "Have them click the 'Connect Discord' row in the Onboarding checklist; "
-            "it walks them through copying their Discord user ID (Developer Mode) "
-            "and adding my public bot. Remind them the bot can only DM them once "
-            "they share a server with it."
+            "it walks them through adding my public bot. Remind them the bot can "
+            "only DM them once they share a server with it."
         ),
         nudge_voice="clicking the 'Connect Discord' row in the Onboarding checklist",
     ),
@@ -745,47 +1075,47 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     OnboardingStep(
         id="workspace",
-        title="Give me access to your workspace",
+        title="Give T-W1N access to your workspace",
         phase=PHASE_WORKSPACE,
         kind="connect",
         depends_on={},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Give me access to your workspace' row in the "
+            "Have them click the 'Give T-W1N access to your workspace' row in the "
             "Onboarding checklist; it opens the Google or Microsoft workspace "
             "connection flow."
         ),
         nudge_voice=(
-            "clicking the 'Give me access to your workspace' row in the Onboarding checklist"
+            "clicking the 'Give T-W1N access to your workspace' row in the Onboarding checklist"
         ),
     ),
     _demo(
         "workspace-mailbox",
-        "Summarise my mailbox",
+        "Ask T-W1N to summarize your mailbox",
         channel="workspace_mailbox",
         depends_on={"workspace": COMPLETED},
         nudge_chat=(
             "Once their workspace is connected, invite them to click the "
-            "'Summarise my mailbox' row in the Onboarding checklist; I read their "
+            "'Ask T-W1N to summarize your mailbox' row in the Onboarding checklist; I read their "
             "recent mail and send back a short summary, then offer to draft a reply."
         ),
         nudge_voice=(
-            "clicking the 'Summarise my mailbox' row in the Onboarding checklist"
+            "clicking the 'Ask T-W1N to summarize your mailbox' row in the Onboarding checklist"
         ),
     ),
     _demo(
         "workspace-drive",
-        "Take a look at my files",
+        "Ask T-W1N to summarize your files",
         channel="workspace_drive",
         depends_on={"workspace": COMPLETED},
         nudge_chat=(
-            "Invite them to click the 'Take a look at my files' row in the "
+            "Invite them to click the 'Ask T-W1N to summarize your files' row in the "
             "Onboarding checklist; I scan their Drive or OneDrive and send back a "
             "short summary, then suggest a simple, optional tidy-up if it looks messy."
         ),
         nudge_voice=(
-            "clicking the 'Take a look at my files' row in the Onboarding checklist"
+            "clicking the 'Ask T-W1N to summarize your files' row in the Onboarding checklist"
         ),
     ),
     _demo(
@@ -803,66 +1133,54 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "clicking the 'Check my upcoming calendar events within a week' row "
             "in the Onboarding checklist"
         ),
-    ),
-    _demo(
-        "workspace-contacts",
-        "Check my workspace contacts",
-        channel="workspace_contacts",
-        depends_on={"workspace": COMPLETED},
-        nudge_chat=(
-            "Invite them to click the 'Check my workspace contacts' row in the "
-            "Onboarding checklist; I read their connected workspace contacts and "
-            "send back a short summary of who's there."
-        ),
-        nudge_voice=(
-            "clicking the 'Check my workspace contacts' row in the Onboarding checklist"
-        ),
-    ),
-    _demo(
-        "workspace-tasks",
-        "Check my tasks due within a week",
-        channel="workspace_tasks",
-        depends_on={"workspace": COMPLETED},
-        nudge_chat=(
-            "Invite them to click the 'Check my tasks due within a week' row in "
-            "the Onboarding checklist; I read their connected workspace tasks and "
-            "send back a short summary of what's open and due in the next week."
-        ),
-        nudge_voice=(
-            "clicking the 'Check my tasks due within a week' row in the Onboarding checklist"
-        ),
-    ),
-    _demo(
-        "workspace-teams",
-        "Summarise my Teams messages",
-        channel="workspace_teams",
-        depends_on={"workspace": COMPLETED},
-        providers=("microsoft",),
-        nudge_chat=(
-            "Invite them to click the 'Summarise my Teams messages' row in the "
-            "Onboarding checklist; I read their recent Microsoft Teams chats and "
-            "channels and send back a short summary of what needs their attention."
-        ),
-        nudge_voice=(
-            "clicking the 'Summarise my Teams messages' row in the Onboarding checklist"
-        ),
+        requires_feature="calendar",
     ),
     OnboardingStep(
         id="apps",
-        title="Connect me with your apps",
+        title="Connect T-W1N with your apps",
         phase=PHASE_INTEGRATIONS,
         kind="connect",
         depends_on={"workspace": COMPLETED},
         can_skip=True,
         derivable=True,
         nudge_chat=(
-            "Have them click the 'Connect me with your apps' row in the "
+            "Have them click the 'Connect T-W1N with your apps' row in the "
             "Onboarding checklist; it opens Integrations so they can connect "
             "at least one app (Slack, Gmail, Notion, ...)."
         ),
         nudge_voice=(
-            "clicking the 'Connect me with your apps' row in the Onboarding checklist"
+            "clicking the 'Connect T-W1N with your apps' row in the Onboarding checklist"
         ),
+    ),
+    _demo(
+        "integration-read",
+        "Ask T-W1N to read from your connected apps",
+        channel="integration_read",
+        depends_on={"apps": COMPLETED},
+        nudge_chat=(
+            "Once they have connected an app, invite them to click the "
+            "'Ask T-W1N to read from your connected apps' row in the Onboarding "
+            "checklist; I read from a connected app and brief them here."
+        ),
+        nudge_voice=(
+            "clicking the 'Ask T-W1N to read from your connected apps' row in the Onboarding checklist"
+        ),
+        contract=INTEGRATION_READ_DEMO_CONTRACT,
+    ),
+    _demo(
+        "integration-action",
+        "Ask T-W1N to take action across your apps",
+        channel="integration_action",
+        depends_on={"integration-read": ADDRESSED},
+        nudge_chat=(
+            "Invite them to click the 'Ask T-W1N to take action across your apps' "
+            "row in the Onboarding checklist; I take one concrete, safe action "
+            "with connected apps and report back."
+        ),
+        nudge_voice=(
+            "clicking the 'Ask T-W1N to take action across your apps' row in the Onboarding checklist"
+        ),
+        contract=INTEGRATION_ACTION_DEMO_CONTRACT,
     ),
     OnboardingStep(
         id="create-scheduled-task",
@@ -904,9 +1222,54 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         ),
         event=_task_beat_event("create-triggerable-task", "Create a triggerable task"),
     ),
-    _coming_soon("learning-coming-soon", PHASE_LEARNING),
+    OnboardingStep(
+        id="learn-from-correction",
+        title="Teach me by correcting me",
+        phase=PHASE_LEARNING,
+        kind="schedule",
+        depends_on={},
+        can_skip=True,
+        derivable=False,
+        nudge_chat=(
+            "Have them click the 'Teach me by correcting me' row in the "
+            "Onboarding checklist. It starts a guided tutorial where I make "
+            "a deliberate mistake on seeded bank exports, they correct me, "
+            "I store the learning in Brain, and they prove it by asking me "
+            "to run next month's report."
+        ),
+        nudge_voice=(
+            "clicking the 'Teach me by correcting me' row in the Onboarding checklist"
+        ),
+        event=_learning_beat_event(
+            "learn-from-correction",
+            "Teach me by correcting me",
+        ),
+    ),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
-    _coming_soon("my-computer-coming-soon", PHASE_MY_COMPUTER),
+    OnboardingStep(
+        id="my-computer-demo",
+        title="Watch me work on my computer",
+        phase=PHASE_MY_COMPUTER,
+        kind="trigger",
+        depends_on={},
+        can_skip=True,
+        derivable=False,
+        paired_reply=None,
+        nudge_chat=(
+            "Have them click the 'Watch me work on my computer' row in the "
+            "Onboarding checklist on a call — I drive my managed desktop live, "
+            "fetch a file from the web, show it landing in my filesystem, and "
+            "send it to them in chat."
+        ),
+        nudge_voice=(
+            "clicking the 'Watch me work on my computer' row in the Onboarding "
+            "checklist"
+        ),
+        event=_my_computer_beat_event(
+            "my-computer-demo",
+            "Watch me work on my computer",
+        ),
+    ),
     _coming_soon("your-computer-coming-soon", PHASE_YOUR_COMPUTER),
     _coming_soon("teams-coming-soon", PHASE_TEAMS),
     _coming_soon("hiring-coming-soon", PHASE_HIRING),
@@ -948,20 +1311,35 @@ TRIGGER_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
 }
 
-# Workspace demo trigger rows have no paired reply: completion is proved by the
-# assistant's own summary delivered back to the user over ``unify_message``.
-# They derive through the same trigger-outbound path as the reference quiz, so
-# they merge into ``TRIGGER_TO_OUTBOUND_MEDIUMS`` and are picked up by
-# ``derive_onboarding_progress`` without any extra wiring.
-DEMO_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
-    "workspace-mailbox": ("unify_message",),
-    "workspace-drive": ("unify_message",),
-    "workspace-calendar": ("unify_message",),
-    "workspace-contacts": ("unify_message",),
-    "workspace-tasks": ("unify_message",),
-    "workspace-teams": ("unify_message",),
-}
-TRIGGER_TO_OUTBOUND_MEDIUMS.update(DEMO_TO_OUTBOUND_MEDIUMS)
+# Workspace and Integrations demo trigger rows have no paired reply and are
+# deliberately NOT auto-derived from an outbound: a single tagged summary/report
+# must not complete a multi-part task. The assistant performs the full demo task
+# end to end, then explicitly marks the step done via
+# ``set_onboarding_task_state`` (permitted for these ids by
+# ``manual_completion_block_reason``), which records the step in
+# ``manually_completed_step_ids``. They are therefore absent from
+# ``TRIGGER_TO_OUTBOUND_MEDIUMS`` and are never picked up by
+# ``derive_onboarding_progress`` from transcript evidence.
+DEMO_STEP_IDS: tuple[str, ...] = (
+    "workspace-mailbox",
+    "workspace-drive",
+    "workspace-calendar",
+    "integration-read",
+    "integration-action",
+)
+
+# Steps Twin may mark done via ``set_onboarding_task_state`` / the
+# ``onboarding_step_completion`` PATCH. Demo ids are trigger rows with no paired
+# reply and no transcript derivation; discord-connect sits in Communication but
+# has no inbound auto-derive signal; learn-from-correction is an
+# explicitly-completed tutorial beat; my-computer-demo is completed after the
+# managed-desktop proof finishes.
+MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
+    *DEMO_STEP_IDS,
+    "discord-connect",
+    "learn-from-correction",
+    "my-computer-demo",
+)
 
 # Steps whose completion Orchestra derives from durable domain state.
 DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
@@ -990,6 +1368,60 @@ class StepPresentation:
 # short-fuse "boomerang" the user can watch land live during onboarding and
 # would genuinely keep (real inbox triage, not a test ping); the rest are
 # real recurring routines referencing workspace data they've connected.
+_INTEGRATION_CONNECT_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "day-to-day-tools",
+        "Connect the apps you already check every day",
+        {
+            "gallery_category": "productivity",
+            "search_query": "productivity calendar docs",
+        },
+    ),
+    OnboardingChip(
+        "crm-sales",
+        "Connect a CRM or sales tool — if you use one",
+        {
+            "gallery_category": "crm_sales",
+            "search_query": "crm sales hubspot pipedrive",
+        },
+    ),
+    OnboardingChip(
+        "dev-ops",
+        "Connect a dev, HR, or ops tool — whatever fits",
+        {"gallery_category": "dev_ops", "search_query": "github linear jira hr ops"},
+    ),
+)
+
+_INTEGRATION_READ_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "crm-pipeline-summary",
+        "Summarise what's open in your connected CRM or pipeline",
+    ),
+    OnboardingChip(
+        "dev-tool-activity",
+        "Show me recent activity from a connected dev tool",
+    ),
+    OnboardingChip(
+        "connected-app-brief",
+        "Pull the latest from one of my connected apps and brief me here",
+    ),
+)
+
+_INTEGRATION_ACTION_CHIPS: tuple[OnboardingChip, ...] = (
+    OnboardingChip(
+        "take-concrete-action",
+        "Take one concrete action in a connected app and report back to me",
+    ),
+    OnboardingChip(
+        "draft-follow-up",
+        "Draft a follow-up from a connected app and send it to my workspace",
+    ),
+    OnboardingChip(
+        "cross-app-update",
+        "Update something in one app using info from another",
+    ),
+)
+
 _SCHEDULED_TASK_CHIPS: tuple[OnboardingChip, ...] = (
     OnboardingChip(
         "inbox-sweep-soon",
@@ -1085,9 +1517,12 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "Reply to T-W1N's Slack message with your guess.",
         "~1 min",
     ),
+    "discord-id": StepPresentation(
+        "Add your Discord user ID so T-W1N can DM you.",
+        "~1 min",
+    ),
     "discord-connect": StepPresentation(
-        "Add T-W1N's public Discord bot and share your Discord user ID so it "
-        "can DM you.",
+        "Add T-W1N's public Discord bot so it can DM you.",
         "~1 min",
     ),
     "discord-reference": StepPresentation(
@@ -1117,22 +1552,24 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "summary, flagging any conflicts or gaps.",
         "~30s",
     ),
-    "workspace-contacts": StepPresentation(
-        "T-W1N reads your connected workspace contacts and sends back a short "
-        "summary of who's there.",
-        "~30s",
+    "apps": StepPresentation(
+        "Hook up at least one app from the Integrations gallery.",
+        "~2 min",
+        _INTEGRATION_CONNECT_CHIPS,
+        _INTEGRATION_CONNECT_CHIPS,
     ),
-    "workspace-tasks": StepPresentation(
-        "T-W1N reads your connected workspace tasks and sends back a short "
-        "summary of what's open and due in the next week.",
+    "integration-read": StepPresentation(
+        "T-W1N reads from a connected app and briefs you here.",
         "~30s",
+        _INTEGRATION_READ_CHIPS,
+        _INTEGRATION_READ_CHIPS,
     ),
-    "workspace-teams": StepPresentation(
-        "T-W1N reads your recent Microsoft Teams chats and channels and sends "
-        "back a short summary of what needs your attention.",
-        "~30s",
+    "integration-action": StepPresentation(
+        "T-W1N takes one concrete action with connected apps and reports back.",
+        "~1 min",
+        _INTEGRATION_ACTION_CHIPS,
+        _INTEGRATION_ACTION_CHIPS,
     ),
-    "apps": StepPresentation("Hook up at least one app (Slack, Gmail…).", "~2 min"),
     "create-scheduled-task": StepPresentation(
         "Schedule a task and watch me report back on your channel.",
         "~2 min",
@@ -1144,6 +1581,16 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~2 min",
         _TRIGGERABLE_TASK_CHIPS,
         _TRIGGERABLE_TASK_CHIPS,
+    ),
+    "learn-from-correction": StepPresentation(
+        "A guided demo: correct my first attempt and I'll store how you "
+        "want it done, then prove it on the next one.",
+        "~5 min",
+    ),
+    "my-computer-demo": StepPresentation(
+        "T-W1N drives its own computer live on a call — it fetches a file from "
+        "the web, shows it landing in its filesystem, and sends it to you here.",
+        "~3 min",
     ),
 }
 
@@ -1210,15 +1657,19 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "already, otherwise I just confirm it."
     ),
     "slack-message": "The user guesses the Slack clue.",
+    "discord-id": (
+        "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
+        "Walk them through it: in Discord, turn on Settings -> Advanced -> "
+        "Developer Mode, then click their own name and 'Copy User ID' and "
+        "paste that into the Discord ID field, then save."
+    ),
     "discord-connect": (
-        "Clicking the 'Connect Discord' row opens the Discord setup path. Walk "
-        "them through it: in Discord, turn on Settings -> Advanced -> Developer "
-        "Mode, then right-click their own name and 'Copy User ID' and paste that "
-        "into the setup dialog; then add T-W1N's public Discord bot from the "
-        "link in the same dialog. The thing that trips people up: the bot can "
-        "only DM them once they share a server with it, so if my first Discord "
-        "message never arrives that is almost always why -- have them add the "
-        "bot to a server they're in and try the clue again."
+        "Clicking the 'Connect Discord' row opens the Discord setup path so they "
+        "can add T-W1N's public Discord bot from the link in the dialog. The "
+        "thing that trips people up: the bot can only DM them once they share a "
+        "server with it, so if my first Discord message never arrives that is "
+        "almost always why -- have them add the bot to a server they're in and "
+        "try the clue again."
     ),
     "discord-reference": (
         "Clicking the 'Trigger Discord message from T-W1N' row tells me the "
@@ -1227,56 +1678,58 @@ STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "Clicking the 'Give T-W1N access to your workspace' row opens the workspace "
         "OAuth dialog (Google Workspace or Microsoft 365). Completing OAuth "
         "grants me access to their email, calendar, files, and other workspace "
         "resources."
     ),
     "workspace-mailbox": (
-        "Clicking the 'Summarise my mailbox' row tells me the user wants a live "
+        "Clicking the 'Ask T-W1N to summarize your mailbox' row tells me the user wants a live "
         "demo of their connected mailbox: I read their recent mail with my own "
-        "tools and deliver one short summary back to them as a single "
-        "unify_message, then offer to draft a reply to a notable thread. If I "
-        "have already delivered the summary I just confirm it rather than "
-        "sending another."
+        "tools and deliver one short summary as a single unify_message. The "
+        "checklist does not auto-detect that summary, so once it is sent I mark "
+        "the step done with set_onboarding_task_state('workspace-mailbox', True) "
+        "— the demo is not finished until I make that call. Offering or drafting "
+        "a reply to a notable thread is an optional follow-up I only act on if "
+        "the user says yes; it never gates completion. If I have already finished "
+        "the task I just confirm it rather than redoing the work."
     ),
     "workspace-drive": (
-        "Clicking the 'Take a look at my files' row tells me the user wants a "
+        "Clicking the 'Ask T-W1N to summarize your files' row tells me the user wants a "
         "demo of their connected Drive or OneDrive: I read what's there and send "
-        "one short summary back as a single unify_message, then offer a simple, "
-        "optional way to tidy things up if the files look disorganised. I only "
-        "reorganise anything if they say yes."
+        "one short summary as a single unify_message, then offer a simple, "
+        "optional way to tidy things up if the files look disorganised (I only "
+        "reorganise if they say yes). Once the demo task is genuinely done I mark "
+        "it complete with set_onboarding_task_state('workspace-drive', True) — "
+        "the step does not auto-complete from the summary."
     ),
     "workspace-calendar": (
         "Clicking the 'Check my upcoming calendar events within a week' row "
         "tells me the user wants a demo of their connected calendar: I read "
-        "their events for the next week and send one short summary back as a "
-        "single unify_message, flagging any conflicts or gaps."
-    ),
-    "workspace-contacts": (
-        "Clicking the 'Check my workspace contacts' row tells me the user wants "
-        "a demo of their connected workspace contacts: I read them and send one "
-        "short summary back as a single unify_message. If I have already "
-        "delivered the summary I just confirm it rather than sending another."
-    ),
-    "workspace-tasks": (
-        "Clicking the 'Check my tasks due within a week' row tells me the user "
-        "wants a demo of their connected workspace tasks: I read what's open and "
-        "due in the next week and send one short summary back as a single "
-        "unify_message. If I have already delivered the summary I just confirm "
-        "it rather than sending another."
-    ),
-    "workspace-teams": (
-        "Clicking the 'Summarise my Teams messages' row tells me the user wants "
-        "a demo of their Microsoft Teams messages: I read their recent Teams "
-        "chats and channels and send one short summary of what needs their "
-        "attention back as a single unify_message. If I have already delivered "
-        "the summary I just confirm it rather than sending another. This row "
-        "only appears for a connected Microsoft workspace."
+        "their events for the next week and send one short summary as a single "
+        "unify_message, flagging any conflicts or gaps. Once done I mark it "
+        "complete with set_onboarding_task_state('workspace-calendar', True) — "
+        "the step does not auto-complete from the summary."
     ),
     "apps": (
-        "Clicking the 'Connect me with your apps' row opens the Integrations "
+        "Clicking the 'Connect T-W1N with your apps' row opens the Integrations "
         "tab; they connect at least one app from the gallery and authorize it."
+    ),
+    "integration-read": (
+        "Clicking the 'Ask T-W1N to read from your connected apps' row tells me "
+        "the user wants a live demo with connected apps: I read from an app that "
+        "fits their request, send one short brief as a single unify_message, and "
+        "then mark it complete with set_onboarding_task_state('integration-read', "
+        "True). If no connected app fits, I say exactly what is missing and leave "
+        "the step pending."
+    ),
+    "integration-action": (
+        "Clicking the 'Ask T-W1N to take action across your apps' row tells me "
+        "the user wants a live action demo: I take one concrete, user-safe action "
+        "with connected apps, send one short report as a single unify_message, "
+        "and then mark it complete with set_onboarding_task_state("
+        "'integration-action', True). If no connected app fits, I say exactly "
+        "what is missing and leave the step pending."
     ),
     "create-scheduled-task": (
         "Clicking the 'Create a scheduled task' row asks me to open the "
@@ -1298,6 +1751,26 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "watch it run live when they trip it. The suggestion chips under the row "
         "are clickable: clicking one asks me to arm that specific triggerable "
         "task straight away."
+    ),
+    "learn-from-correction": (
+        "Clicking the 'Teach me by correcting me' row starts an openly "
+        "narrated tutorial: I first explain what learning, Guidance, and "
+        "Functions are and why they matter, then walk through a seeded demo — "
+        "month-N bank exports as chat attachments, a deliberately naive pass, "
+        "my mistake, a correction for the user to send, and a wait. "
+        "After they send it I revise, stop the persist act so StorageCheck can "
+        "save the learning in Brain (Guidance and Functions), and invite them "
+        "to ask me for next month's report — the replay runs only when they ask. "
+        "When the replay deliverable is sent, I mark the step done explicitly — "
+        "the checklist does not auto-detect the tutorial."
+    ),
+    "my-computer-demo": (
+        "Clicking the 'Watch me work on my computer' row starts the live desktop "
+        "demo on a call — T-W1N opens its browser on the managed VM, downloads "
+        "today's NASA Astronomy Picture of the Day, shows the file in its "
+        "filesystem, and sends it as a chat attachment; off-call the click is a "
+        "call invitation instead. When the attachment is delivered, I mark the "
+        "step done explicitly — nothing auto-completes."
     ),
 }
 
@@ -1352,19 +1825,34 @@ def step_visible_for_provider(
     return provider is not None and provider in step.providers
 
 
-def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
-    """Event fired when the user clicks a Tasks-phase example chip.
+def step_visible_for_features(
+    step: OnboardingStep,
+    granted_features: frozenset[str],
+) -> bool:
+    """Whether a step renders given the workspace features the user granted.
 
-    Unlike a beat row (which asks Twin to open a freeform conversation), a chip
-    is a fully-specified example task: the click asks Twin to set that exact
-    task up now. The instruction is resolved from the canonical presentation
-    chips server-side, so the wire payload never carries user-supplied text and
+    Feature-agnostic steps (``requires_feature is None``) always render. A
+    feature-gated step (e.g. the calendar demo) renders only once that
+    feature's scopes appear in the connected workspace's granted-scopes
+    secret; before then — or if the user declined the scope at connect — it
+    stays hidden.
+    """
+    if step.requires_feature is None:
+        return True
+    return step.requires_feature in granted_features
+
+
+def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
+    """Event fired when the user clicks a graph-owned example chip.
+
+    The instruction is resolved from the canonical presentation chips
+    server-side, so the wire payload never carries user-supplied text and
     an unknown ``step_id``/``chip_id`` pair yields ``None`` (the caller then
     emits nothing).
     """
     step = STEP_BY_ID.get(step_id)
     presentation = STEP_PRESENTATION.get(step_id)
-    if step is None or presentation is None or step_id not in _TASK_BEAT_KIND:
+    if step is None or presentation is None:
         return None
     chip = next(
         (
@@ -1375,6 +1863,69 @@ def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
         None,
     )
     if chip is None:
+        return None
+    if step_id == "apps":
+        metadata = dict(chip.metadata or {})
+        return OnboardingEventSpec(
+            event_type="coordinator_onboarding_event",
+            message=(
+                f'The user picked "{chip.label}" under "{step.title}". Open with '
+                "a short nudge that connects this use case to the Integrations "
+                "gallery, then let them connect the app in Console. Do not mark "
+                "the step complete from this click; it completes only after an "
+                "app credential lands."
+            ),
+            subtype="integration_connect_chip_requested",
+            details={
+                "trigger_step_id": step_id,
+                "chip_id": chip_id,
+                "instruction": chip.label,
+                **metadata,
+                "framing": INTEGRATIONS_FRAMING,
+                "phase": PHASE_INTEGRATIONS,
+                "phase_id": "integrations",
+                "phase_framing": INTEGRATIONS_FRAMING,
+                "interaction": {
+                    "type": "integration_connect_chip",
+                    "trigger_step_id": step_id,
+                    "instruction": chip.label,
+                    **metadata,
+                    "instructions": INTEGRATIONS_FRAMING,
+                },
+            },
+        )
+    if step_id in {"integration-read", "integration-action"}:
+        return OnboardingEventSpec(
+            event_type="coordinator_onboarding_event",
+            message=(
+                f'The user picked "{chip.label}" under "{step.title}". Treat '
+                "the chip label as the demo instruction: use connected app tools "
+                "to do it now, send one short user-facing deliverable as a "
+                "unify_message, and then mark the step complete with "
+                "set_onboarding_task_state(step_id, completed=True). If no "
+                "connected app fits, say exactly what connection is missing and "
+                "do not mark the step complete."
+            ),
+            subtype="integration_demo_chip_requested",
+            details={
+                "trigger_step_id": step_id,
+                "chip_id": chip_id,
+                "instruction": chip.label,
+                "channel": step.channel,
+                "framing": INTEGRATIONS_FRAMING,
+                "phase": PHASE_INTEGRATIONS,
+                "phase_id": "integrations",
+                "phase_framing": INTEGRATIONS_FRAMING,
+                "interaction": {
+                    "type": "integration_demo_chip",
+                    "trigger_step_id": step_id,
+                    "instruction": chip.label,
+                    "channel": step.channel,
+                    "instructions": INTEGRATIONS_FRAMING,
+                },
+            },
+        )
+    if step_id not in _TASK_BEAT_KIND:
         return None
     task_kind = _TASK_BEAT_KIND[step_id]
     run_note = (
@@ -1510,6 +2061,127 @@ def completion_coupled_steps(step_id: str) -> tuple[str, ...]:
     for coupled_id in tuple(coupled):
         coupled.update(completion_blocked_descendants(coupled_id))
     return tuple(step.id for step in ONBOARDING_GRAPH if step.id in coupled)
+
+
+def manual_completion_block_reason(step_id: str) -> str | None:
+    """Return a user-facing reason when Twin must not manually set this step.
+
+    ``None`` means manual completion is allowed. Callers surface the reason
+    on attempted PATCH rather than documenting settable steps upfront.
+    """
+    step = STEP_BY_ID.get(step_id)
+    if step is None:
+        return "That onboarding step does not exist."
+    if step.kind == "coming_soon":
+        return "That onboarding step is not available yet."
+    if step_id in MANUAL_COMPLETION_STEP_IDS:
+        return None
+    if step.phase == PHASE_COMMUNICATION:
+        return (
+            "Communication checklist steps complete automatically when messages "
+            "are sent and received on each channel — I cannot mark them done "
+            "manually."
+        )
+    if step.kind == "trigger":
+        return (
+            "This step starts from the onboarding checklist (or when the user "
+            "asks me to begin it) and completes when I perform the action — "
+            "I cannot mark it done without doing the work."
+        )
+    if step.kind == "reply":
+        return (
+            "This step completes when the user replies on the channel — "
+            "I cannot mark it done manually."
+        )
+    return None
+
+
+def phase_step_ids_in_graph_order(phase_label: str) -> tuple[str, ...]:
+    """Step ids for ``phase_label`` in canonical graph order."""
+    return tuple(step.id for step in ONBOARDING_GRAPH if step.phase == phase_label)
+
+
+def select_primary_next_target_id(
+    next_target_ids: set[str],
+    *,
+    completed: set[str],
+    active_step_id: str | None,
+) -> str | None:
+    """Pick the primary next onboarding target for nudging.
+
+    Default: the first available step in graph order. When the user has
+    progress in a phase, prefer continuing that path — the next available
+    step after their active step, or after the furthest completed step in
+    that phase when no step is active.
+    """
+    if not next_target_ids:
+        return None
+
+    graph_order = [step.id for step in ONBOARDING_GRAPH]
+    graph_index = {step_id: index for index, step_id in enumerate(graph_order)}
+
+    def first_in_graph_order(step_ids: set[str]) -> str:
+        return min(step_ids, key=lambda step_id: graph_index[step_id])
+
+    focus_phase: str | None = None
+    if active_step_id and active_step_id in STEP_BY_ID:
+        focus_phase = STEP_BY_ID[active_step_id].phase
+    if focus_phase is None:
+        focus_phase = STEP_BY_ID[first_in_graph_order(next_target_ids)].phase
+
+    phase_order = phase_step_ids_in_graph_order(focus_phase)
+    phase_order_index = {step_id: index for index, step_id in enumerate(phase_order)}
+
+    anchor: str | None = None
+    if active_step_id and active_step_id in phase_order_index:
+        anchor = active_step_id
+    else:
+        completed_in_phase = [
+            step_id for step_id in phase_order if step_id in completed
+        ]
+        if completed_in_phase:
+            anchor = max(
+                completed_in_phase,
+                key=lambda step_id: phase_order_index[step_id],
+            )
+
+    if anchor is not None:
+        if anchor in next_target_ids:
+            return anchor
+        anchor_index = phase_order_index[anchor]
+        for step_id in phase_order[anchor_index + 1 :]:
+            if step_id in next_target_ids:
+                return step_id
+
+    return first_in_graph_order(next_target_ids)
+
+
+def order_next_targets(
+    next_targets: list[dict[str, Any]],
+    *,
+    completed: set[str],
+    active_step_id: str | None,
+) -> list[dict[str, Any]]:
+    """Reorder ``next_targets`` so the primary nudge target is first."""
+    if len(next_targets) <= 1:
+        return next_targets
+
+    target_ids = {target["id"] for target in next_targets}
+    graph_index = {step.id: index for index, step in enumerate(ONBOARDING_GRAPH)}
+    primary_id = select_primary_next_target_id(
+        target_ids,
+        completed=completed,
+        active_step_id=active_step_id,
+    )
+    if primary_id is None:
+        return next_targets
+
+    by_id = {target["id"]: target for target in next_targets}
+    ordered_ids = [primary_id] + sorted(
+        target_ids - {primary_id},
+        key=lambda step_id: graph_index[step_id],
+    )
+    return [by_id[step_id] for step_id in ordered_ids]
 
 
 def _assert_graph_integrity() -> None:

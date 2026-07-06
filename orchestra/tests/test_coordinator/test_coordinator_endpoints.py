@@ -294,7 +294,7 @@ async def test_onboarding_reply_requires_stamped_outbound_before_user_reply(
         return svc.derive_onboarding_progress(
             dbsession,
             coordinator=coordinator,
-            state={"mode": svc.COORDINATOR_MODE_ONBOARDING},
+            state={"onboarding_active": True},
         )
 
     def insert_message(
@@ -665,7 +665,7 @@ async def test_reset_clears_only_coordinator_contexts(
     coordinator = dbsession.get(Assistant, coordinator_id)
     project = _assistants_project(dbsession, coordinator=coordinator)
     for suffix, data in (
-        ("Coordinator/State", {"mode": "working"}),
+        ("Coordinator/State", {"onboarding_active": False}),
         ("Coordinator/Checklist", {}),
         ("Transcripts", {"role": "assistant", "content": "Welcome."}),
         ("Exchanges", {"value": "exchange"}),
@@ -721,7 +721,7 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Newly-provisioned Coordinators land in ``onboarding`` mode."""
+    """Newly-provisioned Coordinators start with onboarding active."""
     owner = await _create_user(client, "state-seed-personal")
 
     create = await client.post(
@@ -741,7 +741,7 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert response.status_code == status.HTTP_200_OK, response.json()
     payload = response.json()["info"]
     assert payload["coordinator_id"] == coordinator_id
-    assert payload["mode"] == "onboarding"
+    assert payload["onboarding_active"] is True
     assert payload["onboarding_step"] is None
     assert payload["started_at"] is not None
     assert payload["ended_at"] is None
@@ -750,6 +750,33 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     # platform-provisioned universal Unity email contact must NOT
     # count as a connected workspace.
     assert payload["completed_step_ids"] == []
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_response_preserves_chip_metadata(
+    client: AsyncClient,
+) -> None:
+    """Integrations chips carry gallery hints through the public state schema."""
+    owner = await _create_user(client, "state-chip-metadata")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    apps = _render_step(response.json()["info"]["onboarding"], "apps")
+    chips = {chip["id"]: chip for chip in apps["chips_chat"]}
+    assert chips["crm-sales"]["gallery_category"] == "crm_sales"
+    assert chips["crm-sales"]["search_query"] == "crm sales hubspot pipedrive"
 
 
 def _render_step_ids(render: dict) -> set[str]:
@@ -761,15 +788,15 @@ def _render_step(render: dict, step_id: str) -> dict:
 
 
 @pytest.mark.anyio
-async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
+async def test_onboarding_render_specialises_workspace_copy_by_provider(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Provider-exclusive steps + provider-aware copy follow the connected workspace.
+    """The shared files demo's copy specialises to the connected workspace.
 
-    The Microsoft-only Teams demo renders only once a Microsoft workspace is
-    connected, is hidden for Google (and before any connection), and the shared
-    files demo's description specialises to the connected provider.
+    The files demo's description stays neutral before any connection and names
+    the provider's own product (Google Drive vs OneDrive/SharePoint) once a
+    workspace is connected.
     """
     owner = await _create_user(client, "provider-gated-onboarding")
     create = await client.post(
@@ -784,15 +811,11 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
     coordinator = dbsession.get(Assistant, coordinator_id)
     dao = svc.AssistantSecretDAO(dbsession)
 
-    # No workspace connected: Teams is hidden, files copy stays neutral, and
-    # the provider-agnostic catalog never lists a provider-exclusive step.
+    # No workspace connected: files copy stays neutral.
     render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
-    assert "workspace-teams" not in _render_step_ids(render)
     assert "Drive or OneDrive" in _render_step(render, "workspace-drive")["description"]
-    catalog = svc.build_onboarding_catalog()
-    assert "workspace-teams" not in {step["id"] for step in catalog["steps"]}
 
-    # Google workspace: still no Teams, and the files copy names Google Drive.
+    # Google workspace: the files copy names Google Drive.
     dao.upsert(
         coordinator.user_id,
         coordinator.agent_id,
@@ -800,11 +823,9 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
         "https://www.googleapis.com/auth/drive.readonly",
     )
     render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
-    assert "workspace-teams" not in _render_step_ids(render)
     assert "Google Drive" in _render_step(render, "workspace-drive")["description"]
 
-    # Microsoft workspace: Teams surfaces as an available demo (workspace is
-    # connected), and the files copy names OneDrive/SharePoint.
+    # Microsoft workspace: the files copy names OneDrive/SharePoint.
     dao.delete(coordinator.agent_id, "GOOGLE_GRANTED_SCOPES")
     dao.upsert(
         coordinator.user_id,
@@ -813,10 +834,60 @@ async def test_onboarding_render_gates_teams_and_specialises_copy_by_provider(
         "Files.Read.All ChannelMessage.Read.All",
     )
     render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
-    assert "workspace-teams" in _render_step_ids(render)
-    assert _render_step(render, "workspace-teams")["status"] == "available"
-    assert "workspace-teams" in {t["id"] for t in render["next_targets"]}
     assert "OneDrive" in _render_step(render, "workspace-drive")["description"]
+
+
+@pytest.mark.anyio
+async def test_onboarding_render_gates_calendar_demo_on_calendar_scope(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """The calendar demo renders only once the calendar scope is granted.
+
+    A workspace connected without calendar access still surfaces the
+    (ungated) drive demo but omits the calendar demo entirely; granting the
+    calendar bundle reveals it.
+    """
+    owner = await _create_user(client, "calendar-gated-onboarding")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    dao = svc.AssistantSecretDAO(dbsession)
+
+    # Google workspace connected with drive + email but NOT calendar: the
+    # ungated drive demo shows while the calendar demo is gated out.
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive "
+        "https://www.googleapis.com/auth/gmail.send "
+        "https://www.googleapis.com/auth/gmail.readonly "
+        "https://www.googleapis.com/auth/gmail.modify",
+    )
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    step_ids = _render_step_ids(render)
+    assert "workspace-drive" in step_ids
+    assert "workspace-calendar" not in step_ids
+
+    # Granting the full calendar bundle reveals the calendar demo.
+    dao.upsert(
+        coordinator.user_id,
+        coordinator.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive "
+        "https://www.googleapis.com/auth/calendar "
+        "https://www.googleapis.com/auth/calendar.events",
+    )
+    render = svc.compute_onboarding_render(dbsession, coordinator=coordinator)
+    assert "workspace-calendar" in _render_step_ids(render)
 
 
 @pytest.mark.anyio
@@ -950,7 +1021,7 @@ async def test_workspace_coordinator_backfill_marks_existing_user_intro_watched(
         headers=owner["headers"],
     )
     assert state.status_code == status.HTTP_200_OK, state.json()
-    assert state.json()["info"]["mode"] == "onboarding"
+    assert state.json()["info"]["onboarding_active"] is True
     assert state.json()["info"]["intro_watched"] is True
 
 
@@ -991,7 +1062,7 @@ async def test_intro_watched_backfill_marks_existing_coordinator_state(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Existing Coordinator state is marked watched without changing mode."""
+    """Existing Coordinator state is marked watched without changing onboarding_active."""
     owner = await _create_user(client, "intro-state-backfill")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -1022,7 +1093,7 @@ async def test_intro_watched_backfill_marks_existing_coordinator_state(
         headers=owner["headers"],
     )
     assert follow_up.status_code == status.HTTP_200_OK, follow_up.json()
-    assert follow_up.json()["info"]["mode"] == "onboarding"
+    assert follow_up.json()["info"]["onboarding_active"] is True
     assert follow_up.json()["info"]["intro_watched"] is True
 
 
@@ -1092,7 +1163,7 @@ async def test_coordinator_state_patch_records_onboarding_step(
     emit.assert_awaited_once()
     assert emit.await_args.kwargs["step_id"] == "email-reply"
     info = patch_response.json()["info"]
-    assert info["mode"] == "onboarding"
+    assert info["onboarding_active"] is True
     assert info["onboarding_step"] == "email-reply"
 
     follow_up = await client.get(
@@ -1199,11 +1270,49 @@ async def test_coordinator_state_intro_watched_is_one_way_sticky(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
+async def test_coordinator_state_pending_chat_intro_arms_and_clears(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Promoting to ``working`` stamps ``ended_at`` exactly once."""
+    """``pending_chat_intro`` arms the scripted opener and clears on demand."""
+    owner = await _create_user(client, "state-pending-chat-intro")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    armed = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"intro_watched": True, "pending_chat_intro": True},
+        headers=owner["headers"],
+    )
+    assert armed.status_code == status.HTTP_200_OK, armed.json()
+    armed_info = armed.json()["info"]
+    assert armed_info["pending_chat_intro"] is True
+    assert isinstance(armed_info.get("chat_intro_armed_at"), str)
+
+    cleared = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"pending_chat_intro": False},
+        headers=owner["headers"],
+    )
+    assert cleared.status_code == status.HTTP_200_OK, cleared.json()
+    cleared_info = cleared.json()["info"]
+    assert cleared_info["pending_chat_intro"] is False
+    assert cleared_info.get("chat_intro_armed_at") is None
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_deactivates_onboarding_and_stamps_ended_at(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Deactivating onboarding stamps ``ended_at`` exactly once."""
     owner = await _create_user(client, "state-working")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -1217,12 +1326,12 @@ async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
 
     promote = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
+        json={"onboarding_active": False, "clear_onboarding_step": True},
         headers=owner["headers"],
     )
     assert promote.status_code == status.HTTP_200_OK, promote.json()
     info = promote.json()["info"]
-    assert info["mode"] == "working"
+    assert info["onboarding_active"] is False
     assert info["onboarding_step"] is None
     assert info["started_at"] is not None
     first_ended_at = info["ended_at"]
@@ -1231,7 +1340,7 @@ async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
     # A no-op write should preserve ``ended_at`` rather than re-stamp it.
     noop = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working"},
+        json={"onboarding_active": False},
         headers=owner["headers"],
     )
     assert noop.status_code == status.HTTP_200_OK, noop.json()
@@ -1239,16 +1348,248 @@ async def test_coordinator_state_patch_promotes_to_working_and_stamps_ended_at(
 
 
 @pytest.mark.anyio
+async def test_coordinator_state_patch_onboarding_active_with_assistant_api_key(
+    client: AsyncClient,
+) -> None:
+    """The coordinator runtime API key can toggle ``onboarding_active``."""
+    owner = await _create_user(client, "state-runtime-key")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    admin = await client.get(
+        f"/v0/admin/assistant?agent_id={coordinator_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin.status_code == status.HTTP_200_OK, admin.json()
+    runtime_key = admin.json()["info"][0]["api_key"]
+    runtime_headers = {"Authorization": f"Bearer {runtime_key}"}
+
+    deactivate = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_active": False, "clear_onboarding_step": True},
+        headers=runtime_headers,
+    )
+    assert deactivate.status_code == status.HTTP_200_OK, deactivate.json()
+    assert deactivate.json()["info"]["onboarding_active"] is False
+
+    activate = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"onboarding_active": True},
+        headers=runtime_headers,
+    )
+    assert activate.status_code == status.HTTP_200_OK, activate.json()
+    assert activate.json()["info"]["onboarding_active"] is True
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion(
+    client: AsyncClient,
+) -> None:
+    """The slow brain can manually complete settable onboarding steps."""
+    owner = await _create_user(client, "state-manual-complete")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    complete = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "create-scheduled-task",
+                "completed": True,
+            },
+        },
+        headers=owner["headers"],
+    )
+    assert complete.status_code == status.HTTP_200_OK, complete.json()
+    info = complete.json()["info"]
+    assert "create-scheduled-task" in info["completed_step_ids"]
+    steps = {step["id"]: step for step in info["onboarding"]["steps"]}
+    assert steps["create-scheduled-task"]["status"] == "done"
+    assert steps["create-scheduled-task"]["manually_completed"] is True
+
+    uncomplete = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "create-scheduled-task",
+                "completed": False,
+            },
+        },
+        headers=owner["headers"],
+    )
+    assert uncomplete.status_code == status.HTTP_200_OK, uncomplete.json()
+    info = uncomplete.json()["info"]
+    assert "create-scheduled-task" not in info["completed_step_ids"]
+    assert info["onboarding"]["steps"]
+    steps = {step["id"]: step for step in info["onboarding"]["steps"]}
+    assert steps["create-scheduled-task"]["status"] != "done"
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion_allows_workspace_demos(
+    client: AsyncClient,
+) -> None:
+    """Workspace demos are settable: the assistant finishes the multi-part task,
+    then marks the step done explicitly (they never auto-complete)."""
+    owner = await _create_user(client, "state-manual-demo")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    for step_id in (
+        "workspace-mailbox",
+        "workspace-drive",
+        "workspace-calendar",
+        "integration-read",
+        "integration-action",
+    ):
+        complete = await client.patch(
+            f"/v0/assistant/{coordinator_id}/state",
+            json={
+                "onboarding_step_completion": {"step_id": step_id, "completed": True},
+            },
+            headers=owner["headers"],
+        )
+        assert complete.status_code == status.HTTP_200_OK, complete.json()
+        assert step_id in complete.json()["info"]["completed_step_ids"]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion_rejects_auto_steps(
+    client: AsyncClient,
+) -> None:
+    """Auto-triggered Communication rows return an explanatory 400."""
+    owner = await _create_user(client, "state-manual-reject")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    blocked = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "email-reference",
+                "completed": True,
+            },
+        },
+        headers=owner["headers"],
+    )
+    assert blocked.status_code == status.HTTP_400_BAD_REQUEST, blocked.json()
+    detail = blocked.json()["detail"]
+    assert detail["code"] == "onboarding_step_not_manually_settable"
+    assert "Communication" in detail["message"]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_manual_step_completion_with_assistant_api_key(
+    client: AsyncClient,
+) -> None:
+    """The coordinator runtime API key can toggle manual step completion."""
+    owner = await _create_user(client, "state-manual-runtime-key")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+    admin = await client.get(
+        f"/v0/admin/assistant?agent_id={coordinator_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin.status_code == status.HTTP_200_OK, admin.json()
+    runtime_key = admin.json()["info"][0]["api_key"]
+    runtime_headers = {"Authorization": f"Bearer {runtime_key}"}
+
+    complete = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "apps",
+                "completed": True,
+            },
+        },
+        headers=runtime_headers,
+    )
+    assert complete.status_code == status.HTTP_200_OK, complete.json()
+    assert "apps" in complete.json()["info"]["completed_step_ids"]
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_patch_reset_clears_manual_completion(
+    client: AsyncClient,
+) -> None:
+    """Resetting a step clears any manual completion flag for it."""
+    owner = await _create_user(client, "state-manual-reset")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={
+            "onboarding_step_completion": {
+                "step_id": "create-scheduled-task",
+                "completed": True,
+            },
+        },
+        headers=owner["headers"],
+    )
+    reset = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "create-scheduled-task"},
+        headers=owner["headers"],
+    )
+    assert reset.status_code == status.HTTP_200_OK, reset.json()
+    info = reset.json()["info"]
+    assert "create-scheduled-task" not in info["completed_step_ids"]
+    steps = {step["id"]: step for step in info["onboarding"]["steps"]}
+    assert steps["create-scheduled-task"]["manually_completed"] is False
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_resume_clears_ended_at(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Resuming onboarding (working → onboarding) clears ``ended_at``.
+    """Resuming onboarding clears ``ended_at``.
 
-    A row in ``onboarding`` mode with a stamped ``ended_at`` is
-    semantically incoherent ("onboarding finished on X, currently
-    onboarding"). The resume path must wipe the timestamp; a
-    subsequent skip / completion re-stamps it from scratch.
+    A row with ``onboarding_active=True`` and a stamped ``ended_at`` is
+    semantically incoherent. The resume path must wipe the timestamp; a
+    subsequent deactivation re-stamps it from scratch.
     """
     owner = await _create_user(client, "state-resume")
     create = await client.post(
@@ -1264,7 +1605,7 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     # Skip → working, ``ended_at`` is stamped.
     skip = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
+        json={"onboarding_active": False, "clear_onboarding_step": True},
         headers=owner["headers"],
     )
     assert skip.status_code == status.HTTP_200_OK, skip.json()
@@ -1274,12 +1615,12 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     # Resume → onboarding clears it.
     resume = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "onboarding"},
+        json={"onboarding_active": True},
         headers=owner["headers"],
     )
     assert resume.status_code == status.HTTP_200_OK, resume.json()
     resumed = resume.json()["info"]
-    assert resumed["mode"] == "onboarding"
+    assert resumed["onboarding_active"] is True
     assert resumed["ended_at"] is None
     # ``started_at`` is sticky across the round-trip so we still
     # know when the lifecycle began.
@@ -1290,7 +1631,7 @@ async def test_coordinator_state_patch_resume_clears_ended_at(
     # between).
     re_skip = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working", "clear_onboarding_step": True},
+        json={"onboarding_active": False, "clear_onboarding_step": True},
         headers=owner["headers"],
     )
     assert re_skip.status_code == status.HTTP_200_OK, re_skip.json()
@@ -1304,7 +1645,7 @@ async def test_coordinator_state_patch_rejects_invalid_values(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Unknown modes and empty step strings fail validation up front."""
+    """Empty step strings and unknown skip ids fail validation up front."""
     owner = await _create_user(client, "state-invalid")
     create = await client.post(
         f"/v0/user/{owner['id']}/coordinator",
@@ -1315,21 +1656,6 @@ async def test_coordinator_state_patch_rejects_invalid_values(
         status.HTTP_201_CREATED,
     }, create.json()
     coordinator_id = int(create.json()["coordinator_id"])
-
-    # ``ready_to_go`` is not a valid Coordinator/State mode.
-    bad_mode = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "ready_to_go"},
-        headers=owner["headers"],
-    )
-    assert bad_mode.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
-    legacy_mode = await client.patch(
-        f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "active"},
-        headers=owner["headers"],
-    )
-    assert legacy_mode.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     empty_step = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
@@ -1372,7 +1698,7 @@ async def test_coordinator_state_forbidden_for_non_owner(
 
     write = await client.patch(
         f"/v0/assistant/{coordinator_id}/state",
-        json={"mode": "working"},
+        json={"onboarding_active": False},
         headers=intruder["headers"],
     )
     assert write.status_code == status.HTTP_403_FORBIDDEN
@@ -1910,6 +2236,80 @@ async def test_onboarding_step_event_emits_task_chip_event(
 
 
 @pytest.mark.anyio
+async def test_onboarding_step_event_emits_integration_connect_chip_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """An Integrations connect chip publishes a nudge event, not completion."""
+    owner = await _create_user(client, "step-event-integration-connect-chip")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={"step_id": "apps", "chip_id": "crm-sales"},
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    info = response.json()["info"]
+    assert info["emitted"] is True
+    assert info["chip_id"] == "crm-sales"
+    post.assert_awaited_once()
+    extra = post.await_args.kwargs["extra_event_fields"]
+    assert extra["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED
+    assert extra["details"]["step_id"] == "apps"
+    assert extra["details"]["gallery_category"] == "crm_sales"
+    assert extra["details"]["search_query"] == "crm sales hubspot pipedrive"
+
+
+@pytest.mark.anyio
+async def test_onboarding_step_event_emits_integration_demo_chip_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """An Integrations demo chip publishes its canonical demo instruction."""
+    owner = await _create_user(client, "step-event-integration-demo-chip")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={
+                "step_id": "integration-action",
+                "chip_id": "take-concrete-action",
+            },
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json()["info"]["emitted"] is True
+    post.assert_awaited_once()
+    extra = post.await_args.kwargs["extra_event_fields"]
+    assert extra["subtype"] == svc.SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED
+    assert extra["details"]["step_id"] == "integration-action"
+    assert extra["details"]["instruction"] == (
+        "Take one concrete action in a connected app and report back to me"
+    )
+
+
+@pytest.mark.anyio
 async def test_onboarding_step_event_unknown_chip_does_not_emit(
     client: AsyncClient,
     dbsession: Session,
@@ -1970,3 +2370,38 @@ async def test_onboarding_step_event_emits_task_beat_row_event(
     extra = post.await_args.kwargs["extra_event_fields"]
     assert extra["subtype"] == "task_beat_requested"
     assert extra["details"]["task_kind"] == "triggered"
+
+
+@pytest.mark.anyio
+async def test_coordinator_wakeup_endpoint(client: AsyncClient) -> None:
+    owner = await _create_user(client, "coordinator-wakeup")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    # The endpoint reports ``attempted`` based on a hosted comms backend being
+    # configured; CI has no COMMS_URL, so model the hosted environment the same
+    # way test_assistant_infra.py does.
+    with patch(
+        "orchestra.web.api.assistant.views.wake_up_coordinator_best_effort",
+        new=AsyncMock(),
+    ) as wake, patch(
+        "orchestra.web.api.assistant.views.comms_explicitly_configured",
+        return_value=True,
+    ):
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/wakeup",
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    info = response.json()["info"]
+    assert info["coordinator_id"] == str(coordinator_id)
+    assert info["attempted"] is True
+    wake.assert_awaited_once_with(coordinator_id)

@@ -3,7 +3,7 @@
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 import httpx
 from fastapi import HTTPException, status
@@ -88,19 +88,11 @@ COORDINATOR_EXCHANGES_CONTEXT = "Exchanges"
 COORDINATOR_CHAT_MEDIUM = "unify_message"
 COORDINATOR_OPENER_SOURCE = "coordinator_opener"
 
-# Coordinator state machine on the ``Coordinator/State`` context: a
-# freshly-provisioned Coordinator starts in ``onboarding`` and the
-# assistants surface renders the guided call-or-chat view until it
-# transitions to ``working`` (either by the user clicking
-# "Skip onboarding" or by the conversation completing in some other
-# backend-driven way).
-#
-# We deliberately avoid the word ``active`` here because other
-# coordinator-facing surfaces use ``active`` with a different meaning.
-# ``Coordinator/State`` owns the onboarding lifecycle vocabulary.
-COORDINATOR_MODE_ONBOARDING = "onboarding"
-COORDINATOR_MODE_WORKING = "working"
-COORDINATOR_MODES = frozenset({COORDINATOR_MODE_ONBOARDING, COORDINATOR_MODE_WORKING})
+# Coordinator onboarding gate on the ``Coordinator/State`` context: a
+# freshly-provisioned Coordinator starts with ``onboarding_active=True``
+# and the assistants surface renders the guided call-or-chat view until
+# onboarding is paused or finished (``onboarding_active=False``).
+TRANSCRIPTS_UNIQUE_KEYS = {"message_id": "int"}
 TRANSCRIPTS_UNIQUE_KEYS = {"message_id": "int"}
 EXCHANGES_UNIQUE_KEYS = {"exchange_id": "int"}
 TRANSCRIPTS_AUTO_COUNTING = {"message_id": None}
@@ -144,6 +136,46 @@ def get_personal_coordinator(session: Session, user_id: str) -> Assistant | None
         user_id=user_id,
         organization_id=None,
     )
+
+
+def wake_workspace_coordinator_best_effort_sync(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int | None = None,
+) -> None:
+    """Wake the user's workspace Coordinator without failing the caller."""
+    from orchestra.web.api.utils.assistant_infra import (
+        wake_up_coordinator_best_effort_sync,
+    )
+
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if coordinator is None:
+        return
+    wake_up_coordinator_best_effort_sync(coordinator.agent_id)
+
+
+async def wake_workspace_coordinator_best_effort(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int | None = None,
+) -> None:
+    """Async variant of :func:`wake_workspace_coordinator_best_effort_sync`."""
+    from orchestra.web.api.utils.assistant_infra import wake_up_coordinator_best_effort
+
+    coordinator = get_workspace_coordinator(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if coordinator is None:
+        return
+    await wake_up_coordinator_best_effort(coordinator.agent_id)
 
 
 def get_organization_coordinator(
@@ -986,42 +1018,37 @@ def _latest_coordinator_state_row(
 
 def _coordinator_state_entry(
     *,
-    mode: str,
+    onboarding_active: bool,
     onboarding_step: str | None,
     skipped_step_ids: Sequence[str],
     skipped_phase_ids: Sequence[str],
+    manually_completed_step_ids: Sequence[str],
     onboarding_reset_at: dict[str, str] | None,
+    onboarding_dispatched_at: dict[str, str] | None,
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
-    onboarding_deferred: bool | None = None,
+    pending_chat_intro: bool | None = None,
 ) -> dict[str, Any]:
     """Build a fully-formed ``Coordinator/State`` row.
 
     ``started_at`` is sticky across transitions (captured the first
-    time we ever write a row, regardless of mode, so we always know
-    when the lifecycle began).
+    time we ever write a row, regardless of onboarding activity, so we
+    always know when the lifecycle began).
 
-    ``ended_at`` tracks the *current* working-mode entry: it's
-    stamped the moment we cross into ``working`` (and stays put
-    while we remain there), but cleared the moment a Resume flips
-    the row back to ``onboarding`` — otherwise an
-    ``onboarding``-mode row would carry a stale "ended" timestamp,
-    which is semantically nonsense. A subsequent skip / completion
-    re-stamps ``ended_at`` to the new transition time, so the
-    frontend always sees a coherent (started, ended) pair while in
-    ``working``.
+    ``ended_at`` tracks the current inactive stretch: it is stamped when
+    ``onboarding_active`` becomes ``False`` (and stays put while
+    inactive), but cleared when onboarding resumes — otherwise an active
+    row would carry a stale "ended" timestamp. A subsequent deactivation
+    re-stamps ``ended_at`` to the new transition time.
     """
     now = datetime.now(timezone.utc).isoformat()
     started_at = (previous or {}).get("started_at") if previous else None
     if not started_at:
         started_at = now
     previous_ended_at = (previous or {}).get("ended_at") if previous else None
-    if mode == COORDINATOR_MODE_WORKING:
+    if not onboarding_active:
         ended_at = previous_ended_at or now
     else:
-        # Resume / initial-seed paths both land here; either way the
-        # row is currently in onboarding so ``ended_at`` has no
-        # meaning until we transition out again.
         ended_at = None
     # ``intro_watched`` is one-way sticky: once the user has resolved the
     # opening picker we never want the ringing picker / auto-playing intro
@@ -1029,27 +1056,34 @@ def _coordinator_state_entry(
     next_intro_watched = bool((previous or {}).get("intro_watched")) or bool(
         intro_watched,
     )
-    # ``onboarding_deferred`` is the global "do onboarding later" switch.
-    # Unlike ``intro_watched`` it is freely reversible — the user can defer
-    # the whole onboarding phase to start using the platform, then resume
-    # it later — so we carry the previous value forward only when the
-    # current write doesn't explicitly set it.
-    if onboarding_deferred is None:
-        next_onboarding_deferred = bool(
-            (previous or {}).get("onboarding_deferred", False),
-        )
+    prev_pending_chat_intro = bool((previous or {}).get("pending_chat_intro"))
+    if pending_chat_intro is True:
+        next_pending_chat_intro = True
+        next_chat_intro_armed_at = now
+    elif pending_chat_intro is False:
+        next_pending_chat_intro = False
+        next_chat_intro_armed_at = None
     else:
-        next_onboarding_deferred = bool(onboarding_deferred)
+        next_pending_chat_intro = prev_pending_chat_intro
+        prev_armed_at = (previous or {}).get("chat_intro_armed_at")
+        next_chat_intro_armed_at = (
+            prev_armed_at if isinstance(prev_armed_at, str) else None
+        )
     return {
-        "mode": mode,
+        "onboarding_active": onboarding_active,
         "onboarding_step": onboarding_step,
         "skipped_step_ids": list(skipped_step_ids),
         "skipped_phase_ids": list(skipped_phase_ids),
+        "manually_completed_step_ids": list(manually_completed_step_ids),
         "onboarding_reset_at": dict(onboarding_reset_at or {}),
+        "onboarding_dispatched_at": dict(onboarding_dispatched_at or {}),
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
-        "onboarding_deferred": next_onboarding_deferred,
+        "pending_chat_intro": next_pending_chat_intro,
+        "chat_intro_armed_at": (
+            next_chat_intro_armed_at if next_pending_chat_intro else None
+        ),
         "timestamp": now,
     }
 
@@ -1088,7 +1122,7 @@ def get_coordinator_state(
 ) -> dict[str, Any]:
     """Return the latest ``Coordinator/State`` row, normalised.
 
-    Falls back to a synthetic ``onboarding`` snapshot when no row has
+    Falls back to a synthetic active snapshot when no row has
     been written yet — the create/repair paths seed an initial row,
     but the endpoint stays well-behaved even if a Coordinator slipped
     through without one (e.g. inserted directly via seed scripts).
@@ -1105,36 +1139,43 @@ def get_coordinator_state(
     )
     if row is None:
         return {
-            "mode": COORDINATOR_MODE_ONBOARDING,
+            "onboarding_active": True,
             "onboarding_step": None,
             "skipped_step_ids": [],
             "skipped_phase_ids": [],
+            "manually_completed_step_ids": [],
             "onboarding_reset_at": {},
+            "onboarding_dispatched_at": {},
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
-            "onboarding_deferred": False,
+            "pending_chat_intro": False,
+            "chat_intro_armed_at": None,
         }
-    mode = row.get("mode")
-    if mode not in COORDINATOR_MODES:
-        mode = COORDINATOR_MODE_ONBOARDING
     onboarding_step = row.get("onboarding_step")
     if onboarding_step is not None and not isinstance(onboarding_step, str):
         onboarding_step = None
     return {
-        "mode": mode,
+        "onboarding_active": bool(row.get("onboarding_active", False)),
         "onboarding_step": onboarding_step,
         "skipped_step_ids": normalize_onboarding_step_ids(row.get("skipped_step_ids")),
         "skipped_phase_ids": normalize_onboarding_phase_ids(
             row.get("skipped_phase_ids"),
         ),
+        "manually_completed_step_ids": normalize_onboarding_step_ids(
+            row.get("manually_completed_step_ids"),
+        ),
         "onboarding_reset_at": normalize_onboarding_reset_at(
             row.get("onboarding_reset_at"),
+        ),
+        "onboarding_dispatched_at": normalize_onboarding_dispatched_at(
+            row.get("onboarding_dispatched_at"),
         ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
         "intro_watched": bool(row.get("intro_watched", False)),
-        "onboarding_deferred": bool(row.get("onboarding_deferred", False)),
+        "pending_chat_intro": bool(row.get("pending_chat_intro", False)),
+        "chat_intro_armed_at": row.get("chat_intro_armed_at"),
     }
 
 
@@ -1168,11 +1209,13 @@ def seed_initial_coordinator_state(
     if existing is not None:
         return None
     entry = _coordinator_state_entry(
-        mode=COORDINATOR_MODE_ONBOARDING,
+        onboarding_active=True,
         onboarding_step=None,
         skipped_step_ids=[],
         skipped_phase_ids=[],
+        manually_completed_step_ids=[],
         onboarding_reset_at={},
+        onboarding_dispatched_at={},
         previous=None,
         intro_watched=intro_watched,
     )
@@ -1189,7 +1232,7 @@ def set_coordinator_state(
     session: Session,
     *,
     coordinator: Assistant,
-    mode: str | None = None,
+    onboarding_active: bool | None = None,
     onboarding_step: str | None = None,
     clear_onboarding_step: bool = False,
     skip_onboarding_step: str | None = None,
@@ -1198,7 +1241,10 @@ def set_coordinator_state(
     skip_onboarding_phase: str | None = None,
     unskip_onboarding_phase: str | None = None,
     intro_watched: bool | None = None,
-    onboarding_deferred: bool | None = None,
+    pending_chat_intro: bool | None = None,
+    onboarding_step_completion: tuple[str, bool] | None = None,
+    onboarding_reset_at_updates: dict[str, str] | None = None,
+    onboarding_dispatched_at_updates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1207,7 +1253,7 @@ def set_coordinator_state(
     on a single read returning the full picture.
 
     ``clear_onboarding_step=True`` resets the step back to ``None``
-    (used when transitioning to ``working`` — the in-flight step no
+    (used when deactivating onboarding — the in-flight step no
     longer applies). Callers should not pass both ``onboarding_step``
     and ``clear_onboarding_step``; the explicit value wins if they do.
 
@@ -1217,11 +1263,6 @@ def set_coordinator_state(
     re-appear on a later page load; the user replays the intro on
     demand from the onboarding pane instead.
     """
-    if mode is not None and mode not in COORDINATOR_MODES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"invalid_coordinator_mode: {mode}",
-        )
     if onboarding_step is not None and (
         not isinstance(onboarding_step, str)
         or not onboarding_step.strip()
@@ -1271,6 +1312,17 @@ def set_coordinator_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid_unskip_onboarding_phase",
         )
+    if onboarding_step_completion is not None:
+        step_id, _completed = onboarding_step_completion
+        if (
+            not isinstance(step_id, str)
+            or not step_id.strip()
+            or step_id not in onboarding_graph.STEP_BY_ID
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid_onboarding_step_completion",
+            )
     _lock_coordinator_context(
         session,
         coordinator=coordinator,
@@ -1289,6 +1341,9 @@ def set_coordinator_state(
     reset_at = normalize_onboarding_reset_at(
         (previous or {}).get("onboarding_reset_at"),
     )
+    dispatched_at = normalize_onboarding_dispatched_at(
+        (previous or {}).get("onboarding_dispatched_at"),
+    )
     reset_step_ids: tuple[str, ...] = ()
     if reset_onboarding_step is not None:
         reset_step_ids = onboarding_graph.completion_coupled_steps(
@@ -1303,7 +1358,29 @@ def set_coordinator_state(
                 user.whatsapp_number = None
             if ONBOARDING_STEP_PHONE_NUMBER in reset_step_ids:
                 user.phone_number = None
-    next_mode = mode or (previous or {}).get("mode") or COORDINATOR_MODE_ONBOARDING
+    if onboarding_reset_at_updates:
+        valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
+        for step_id, timestamp in onboarding_reset_at_updates.items():
+            if (
+                step_id in valid_step_ids
+                and isinstance(timestamp, str)
+                and _parse_onboarding_reset_at(timestamp) is not None
+            ):
+                reset_at[step_id] = timestamp
+    if onboarding_dispatched_at_updates:
+        valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
+        for step_id, timestamp in onboarding_dispatched_at_updates.items():
+            if (
+                step_id in valid_step_ids
+                and isinstance(timestamp, str)
+                and _parse_onboarding_reset_at(timestamp) is not None
+            ):
+                dispatched_at[step_id] = timestamp
+    next_onboarding_active = (
+        bool(onboarding_active)
+        if onboarding_active is not None
+        else bool((previous or {}).get("onboarding_active", True))
+    )
     if onboarding_step is not None:
         next_step: str | None = onboarding_step
     elif clear_onboarding_step:
@@ -1327,6 +1404,8 @@ def set_coordinator_state(
             for step_id in SKIPPABLE_ONBOARDING_STEPS
             if step_id in skipped_step_set
         ]
+        for step_id in skipped_step_set:
+            dispatched_at.pop(step_id, None)
     if unskip_onboarding_step is not None:
         # Unskip mirrors skip: it re-offers the step and the descendants that were
         # only skipped because they depended on it, leaving prerequisites untouched.
@@ -1346,6 +1425,72 @@ def set_coordinator_state(
             for step_id in next_skipped_step_ids
             if step_id not in reset_step_set
         ]
+        for step_id in reset_step_set:
+            dispatched_at.pop(step_id, None)
+    next_manually_completed_step_ids = normalize_onboarding_step_ids(
+        (previous or {}).get("manually_completed_step_ids"),
+    )
+    if reset_step_ids:
+        reset_step_set = set(reset_step_ids)
+        next_manually_completed_step_ids = [
+            step_id
+            for step_id in next_manually_completed_step_ids
+            if step_id not in reset_step_set
+        ]
+    if onboarding_step_completion is not None:
+        completion_step_id, completion_completed = onboarding_step_completion
+        if not next_onboarding_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "onboarding_inactive",
+                    "message": (
+                        "Onboarding is not active — I cannot change checklist "
+                        "step completion while setup is paused."
+                    ),
+                    "step_id": completion_step_id,
+                },
+            )
+        skipped_step_set = set(next_skipped_step_ids)
+        if completion_step_id in skipped_step_set:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "onboarding_step_skipped",
+                    "message": (
+                        f"The '{completion_step_id}' onboarding step is skipped — "
+                        "unskip it from the checklist before changing completion."
+                    ),
+                    "step_id": completion_step_id,
+                },
+            )
+        if completion_completed:
+            block_reason = onboarding_graph.manual_completion_block_reason(
+                completion_step_id,
+            )
+            if block_reason is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "onboarding_step_not_manually_settable",
+                        "message": block_reason,
+                        "step_id": completion_step_id,
+                    },
+                )
+            manual_set = set(next_manually_completed_step_ids)
+            manual_set.add(completion_step_id)
+            next_manually_completed_step_ids = [
+                step.id
+                for step in onboarding_graph.ONBOARDING_GRAPH
+                if step.id in manual_set
+            ]
+            dispatched_at.pop(completion_step_id, None)
+        else:
+            next_manually_completed_step_ids = [
+                step_id
+                for step_id in next_manually_completed_step_ids
+                if step_id != completion_step_id
+            ]
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
     )
@@ -1372,14 +1517,16 @@ def set_coordinator_state(
     if next_step in reset_step_ids:
         next_step = None
     entry = _coordinator_state_entry(
-        mode=next_mode,
+        onboarding_active=next_onboarding_active,
         onboarding_step=next_step,
         skipped_step_ids=next_skipped_step_ids,
         skipped_phase_ids=next_skipped_phase_ids,
+        manually_completed_step_ids=next_manually_completed_step_ids,
         onboarding_reset_at=reset_at,
+        onboarding_dispatched_at=dispatched_at,
         previous=previous,
         intro_watched=intro_watched,
-        onboarding_deferred=onboarding_deferred,
+        pending_chat_intro=pending_chat_intro,
     )
     _write_coordinator_state_row(
         session,
@@ -1440,8 +1587,8 @@ def list_coordinators_missing_intro_watched(
 #
 # Two design choices baked in here:
 #
-# * **Gated on mode**: every emission first checks
-#   ``Coordinator/State.mode == 'onboarding'`` so day-to-day work
+# * **Gated on onboarding_active**: every emission first checks
+#   ``Coordinator/State.onboarding_active`` so day-to-day work
 #   (post-onboarding integration tweaks, ongoing task creation,
 #   etc.) stays silent. The same trigger sites are still useful
 #   then but the narration becomes noise, so the helper is the
@@ -1491,10 +1638,25 @@ SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
 SUBTYPE_ONBOARDING_STEP_RESET = "onboarding_step_reset"
 SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # Fired when the user clicks a workspace demo row (mailbox / Drive /
-# calendar). Twin reads that area of the connected workspace and delivers a
-# short summary back as a single unify_message, which is also what proves the
-# step complete (see onboarding_graph.DEMO_TO_OUTBOUND_MEDIUMS).
+# calendar). Twin reads that area of the connected workspace and performs the
+# whole demo task, then explicitly marks the step complete via
+# ``set_onboarding_task_state`` (see onboarding_graph.MANUAL_COMPLETION_STEP_IDS). The demo
+# is deliberately NOT auto-derived from the summary outbound.
 SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
+# Fired when the user clicks an Integrations demo row. Twin reads from or acts
+# with connected apps, sends the user-facing deliverable, then explicitly marks
+# the step complete via ``set_onboarding_task_state``.
+SUBTYPE_INTEGRATION_DEMO_REQUESTED = "integration_demo_requested"
+# Fired when a demo (or any non-auto-derived, non-Communication) step is marked
+# complete via the ``onboarding_step_completion`` PATCH — i.e. Twin finished the
+# task and set it done. Carries the freshly-derived render so Console reflects
+# the assistant-driven completion without waiting for a poll.
+SUBTYPE_ONBOARDING_STEP_COMPLETED = "onboarding_step_completed"
+# Fired when durable domain state changes the derived onboarding picture
+# without an explicit checklist interaction (e.g. verified phone/WhatsApp on
+# the Account page). Carries the fresh render for Unity + Console but must
+# not trigger a narration turn or checklist acknowledgement.
+SUBTYPE_ONBOARDING_RENDER_UPDATED = "onboarding_render_updated"
 # Fired when the user clicks a Tasks-phase beat row ("Create a scheduled task"
 # / "Create a triggerable task"). The row is the freeform entry point: Twin
 # opens the conversation by asking what standing work the user wants, then sets
@@ -1507,6 +1669,21 @@ SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 # rather than asking. The canonical instruction is resolved server-side from
 # the graph presentation (see onboarding_graph.chip_event_for).
 SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
+# Fired when the user clicks an Integrations connect-row chip. The click nudges
+# the user toward a use case in the gallery; the step still completes only when
+# a non-workspace app credential lands.
+SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED = "integration_connect_chip_requested"
+# Fired when the user clicks an Integrations demo chip. The chip is the canonical
+# demo instruction, resolved server-side from the graph.
+SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
+# Fired when the user clicks the Learning-phase beat row: it starts the guided
+# expenses-etl tutorial directly (no chips). Twin marks the step done explicitly
+# after the replay deliverable via ``set_onboarding_task_state``.
+SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
+# Fired when the user clicks the My Computer beat row: it starts the call-anchored
+# live desktop demo (no chips). Twin marks the step done explicitly after the
+# chat attachment via ``set_onboarding_task_state``.
+SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1539,10 +1716,17 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
         SUBTYPE_ONBOARDING_STEP_RESET,
+        SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        SUBTYPE_ONBOARDING_RENDER_UPDATED,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_WORKSPACE_DEMO_REQUESTED,
+        SUBTYPE_INTEGRATION_DEMO_REQUESTED,
         SUBTYPE_TASK_BEAT_REQUESTED,
         SUBTYPE_TASK_CHIP_REQUESTED,
+        SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED,
+        SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
+        SUBTYPE_LEARNING_BEAT_REQUESTED,
+        SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1571,8 +1755,8 @@ _WORKSPACE_CONNECTED_MARKERS: frozenset[str] = frozenset(
 
 # Onboarding checklist step ids derivable from durable domain state.
 # ``meet`` (picker resolution) is deliberately absent because it is
-# session-local to Console. ``hire-specialist`` ends onboarding by
-# flipping ``mode`` to ``working`` so derivation never runs for it.
+# session-local to Console. ``hire-specialist`` completion should
+# PATCH ``onboarding_active=False`` so derivation never runs for it.
 ONBOARDING_STEP_EMAIL_REPLY = "email-reply"
 ONBOARDING_STEP_WHATSAPP_NUMBER = "whatsapp-number"
 ONBOARDING_STEP_WHATSAPP_MESSAGE = "whatsapp-message"
@@ -1582,6 +1766,7 @@ ONBOARDING_STEP_SMS_MESSAGE = "sms-message"
 ONBOARDING_STEP_PHONE_CALL = "phone-call"
 ONBOARDING_STEP_SLACK_CONNECT = "slack-connect"
 ONBOARDING_STEP_SLACK_MESSAGE = "slack-message"
+ONBOARDING_STEP_DISCORD_ID = "discord-id"
 ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
@@ -1599,7 +1784,7 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_PHONE_CALL,
     ONBOARDING_STEP_SLACK_CONNECT,
     ONBOARDING_STEP_SLACK_MESSAGE,
-    ONBOARDING_STEP_DISCORD_CONNECT,
+    ONBOARDING_STEP_DISCORD_ID,
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
@@ -1661,12 +1846,103 @@ def normalize_onboarding_reset_at(value: Any) -> dict[str, str]:
     }
 
 
+def normalize_onboarding_dispatched_at(value: Any) -> dict[str, str]:
+    """Return dispatch timestamps keyed by valid onboarding step id."""
+    if not isinstance(value, dict):
+        return {}
+    valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
+    return {
+        step_id: timestamp
+        for step_id, timestamp in value.items()
+        if step_id in valid_step_ids
+        and isinstance(timestamp, str)
+        and _parse_onboarding_reset_at(timestamp) is not None
+    }
+
+
 def _onboarding_step_phase(step_id: str) -> str | None:
     step = onboarding_graph.STEP_BY_ID.get(step_id)
     return step.phase if step is not None else None
 
 
-def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
+class _OnboardingProbeScope:
+    """Shared lookups for one onboarding-progress derivation.
+
+    A single state read fans out into dozens of per-step completion probes.
+    Without this cache each probe independently re-resolved the Assistants
+    project, Transcripts context, user row, secrets, and task rows — and
+    reply probes re-ran their trigger's transcript scan — so one derivation
+    cost well over a hundred sequential round-trips. Resolving every shared
+    lookup exactly once keeps a derivation to roughly one query per step.
+    """
+
+    def __init__(self, session: Session, coordinator: Assistant) -> None:
+        self.session = session
+        self.coordinator = coordinator
+        self.project = _project_for_coordinator(session, coordinator)
+        self.transcripts_context = _get_context(
+            session,
+            project_id=self.project.id,
+            context_name=_coordinator_context_name(
+                coordinator,
+                COORDINATOR_TRANSCRIPTS_CONTEXT,
+            ),
+        )
+        self._user: User | None = None
+        self._user_loaded = False
+        self._secrets: dict[str, str] | None = None
+        self._task_rows: list[LogEvent] | None = None
+        self._trigger_outbound_at: dict[str, datetime | None] = {}
+
+    @property
+    def user(self) -> "User | None":
+        if not self._user_loaded:
+            self._user = _user_for_coordinator(
+                self.session,
+                coordinator=self.coordinator,
+            )
+            self._user_loaded = True
+        return self._user
+
+    @property
+    def secrets(self) -> dict[str, str]:
+        if self._secrets is None:
+            self._secrets = AssistantSecretDAO(self.session).get_all(
+                self.coordinator.agent_id,
+            )
+        return self._secrets
+
+    @property
+    def task_rows(self) -> list[LogEvent]:
+        if self._task_rows is None:
+            self._task_rows = _coordinator_task_rows(
+                self.session,
+                coordinator=self.coordinator,
+            )
+        return self._task_rows
+
+    def trigger_outbound_created_at(
+        self,
+        step_id: str,
+        *,
+        reset_after: datetime | None = None,
+    ) -> datetime | None:
+        """First tagged outbound for one trigger step, memoized per derivation.
+
+        Safe to key by step id alone: within one derivation the reset map is
+        fixed, so both the trigger row's own check and its paired reply's
+        threshold lookup resolve the same ``reset_after``.
+        """
+        if step_id not in self._trigger_outbound_at:
+            self._trigger_outbound_at[step_id] = _trigger_outbound_created_at(
+                self,
+                step_id=step_id,
+                reset_after=reset_after,
+            )
+        return self._trigger_outbound_at[step_id]
+
+
+def _has_workspace_email(scope: "_OnboardingProbeScope") -> bool:
     """Workspace step: the user connected a workspace, via either signal.
 
     Two durable signals mark a connected workspace, and either counts:
@@ -1686,8 +1962,8 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
       — unlike the broad ``GOOGLE_``/``MICROSOFT_`` prefix, it can't be
       left ticked by a stray secret (e.g. an orphaned ``*_ACCOUNT_EMAIL``).
     """
-    contacts = AssistantContactDAO(session).get_active_contacts_for_assistant(
-        coordinator.agent_id,
+    contacts = AssistantContactDAO(scope.session).get_active_contacts_for_assistant(
+        scope.coordinator.agent_id,
     )
     if any(
         contact.contact_type == "email"
@@ -1698,38 +1974,47 @@ def _has_workspace_email(session: Session, *, coordinator: Assistant) -> bool:
     ):
         return True
 
-    secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
+    secrets = scope.secrets
     return bool(
         secrets.get("GOOGLE_GRANTED_SCOPES") or secrets.get("MICROSOFT_GRANTED_SCOPES"),
     )
 
 
-def _connected_workspace_provider(
+def _connected_workspace(
     session: Session,
     *,
     coordinator: Assistant,
-) -> str | None:
-    """Which workspace provider the Coordinator connected, if any.
+) -> tuple[str | None, frozenset[str]]:
+    """The connected workspace provider and the features the user granted.
 
-    Returns ``"google"`` or ``"microsoft"`` from the canonical
-    granted-scopes secret the OAuth handshake writes (and the disconnect
-    flow clears), or ``None`` when no workspace is connected. This drives
-    which provider-exclusive onboarding steps render (e.g. the
-    Microsoft-only Teams demo) and specialises provider-aware copy.
+    Reads the canonical granted-scopes secret the OAuth handshake writes
+    (and the disconnect flow clears). Returns ``("google" | "microsoft",
+    {features})`` — the provider drives which provider-exclusive onboarding
+    steps render (e.g. the Microsoft-only Teams demo) and specialises
+    provider-aware copy, while the granted features gate scope-dependent
+    steps (e.g. the calendar demo only shows once calendar was granted).
+    Returns ``(None, frozenset())`` when no workspace is connected.
     """
+    from orchestra.web.api.assistant.scopes import map_scopes_to_features
+
     secrets = AssistantSecretDAO(session).get_all(coordinator.agent_id)
-    if secrets.get("GOOGLE_GRANTED_SCOPES"):
-        return "google"
-    if secrets.get("MICROSOFT_GRANTED_SCOPES"):
-        return "microsoft"
-    return None
+    for provider, secret_name in (
+        ("google", "GOOGLE_GRANTED_SCOPES"),
+        ("microsoft", "MICROSOFT_GRANTED_SCOPES"),
+    ):
+        granted_scopes = secrets.get(secret_name)
+        if granted_scopes:
+            return provider, frozenset(
+                map_scopes_to_features(provider, granted_scopes),
+            )
+    return None, frozenset()
 
 
-def _has_app_secret(session: Session, *, coordinator: Assistant) -> bool:
+def _has_app_secret(scope: "_OnboardingProbeScope") -> bool:
     """Apps step: any owned secret that is NOT a workspace OAuth token."""
-    secret_names = AssistantSecretDAO(session).get_all(coordinator.agent_id).keys()
     return any(
-        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES) for name in secret_names
+        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES)
+        for name in scope.secrets
     )
 
 
@@ -1762,7 +2047,7 @@ def _coordinator_task_rows(
     )
 
 
-def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
+def _has_scheduled_task(scope: "_OnboardingProbeScope") -> bool:
     """Create-a-scheduled-task step: a schedule-bearing task exists.
 
     Completion proof for the "boomerang" beat — the user set up a task that
@@ -1772,11 +2057,11 @@ def _has_scheduled_task(session: Session, *, coordinator: Assistant) -> bool:
     """
     return any(
         isinstance(row.data, dict) and row.data.get("schedule")
-        for row in _coordinator_task_rows(session, coordinator=coordinator)
+        for row in scope.task_rows
     )
 
 
-def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
+def _has_triggerable_task(scope: "_OnboardingProbeScope") -> bool:
     """Create-a-triggerable-task step: a trigger-bearing task exists.
 
     Completion proof for the "triggerable task" beat — the user armed a task
@@ -1785,7 +2070,7 @@ def _has_triggerable_task(session: Session, *, coordinator: Assistant) -> bool:
     """
     return any(
         isinstance(row.data, dict) and row.data.get("trigger")
-        for row in _coordinator_task_rows(session, coordinator=coordinator)
+        for row in scope.task_rows
     )
 
 
@@ -1793,18 +2078,19 @@ def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User |
     return session.get(User, coordinator.user_id)
 
 
-def _has_user_whatsapp_number(session: Session, *, coordinator: Assistant) -> bool:
-    user = _user_for_coordinator(session, coordinator=coordinator)
+def _has_user_whatsapp_number(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
     return bool(user and user.whatsapp_number and user.whatsapp_number.strip())
 
 
-def _has_user_phone_number(session: Session, *, coordinator: Assistant) -> bool:
-    user = _user_for_coordinator(session, coordinator=coordinator)
+def _has_user_phone_number(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
     return bool(user and user.phone_number and user.phone_number.strip())
 
 
-def _has_slack_install(session: Session, *, coordinator: Assistant) -> bool:
-    dao = SlackDAO(session)
+def _has_slack_install(scope: "_OnboardingProbeScope") -> bool:
+    dao = SlackDAO(scope.session)
+    coordinator = scope.coordinator
     install = (
         dao.get_install_for_org(coordinator.organization_id)
         if coordinator.organization_id is not None
@@ -1813,39 +2099,24 @@ def _has_slack_install(session: Session, *, coordinator: Assistant) -> bool:
     return install is not None
 
 
-def _has_discord_connection(session: Session, *, coordinator: Assistant) -> bool:
-    user = _user_for_coordinator(session, coordinator=coordinator)
-    if not user or not user.discord_id or not user.discord_id.strip():
-        return False
-    contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
-        coordinator.agent_id,
-        "discord",
-    )
-    return bool(contact and contact.contact_value and contact.contact_value.strip())
+def _has_user_discord_id(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
+    return bool(user and user.discord_id and user.discord_id.strip())
 
 
 def _has_user_transcript_message(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     mediums: Sequence[str],
     after: datetime | None = None,
     reset_after: datetime | None = None,
 ) -> bool:
-    project = _project_for_coordinator(session, coordinator)
-    context = _get_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_TRANSCRIPTS_CONTEXT,
-        ),
-    )
+    context = scope.transcripts_context
     if context is None:
         return False
     query = (
         project_scoped_log_events(
-            project.id,
+            scope.project.id,
             LogEvent.id,
             owner_key=single_owner_key(context.owner_scope, context.owner_id),
         )
@@ -1862,32 +2133,23 @@ def _has_user_transcript_message(
         threshold = reset_after
     if threshold is not None:
         query = query.where(LogEvent.created_at > threshold)
-    row = session.scalar(query)
+    row = scope.session.scalar(query)
     return row is not None
 
 
 def _assistant_transcript_created_at(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     mediums: Sequence[str],
     onboarding_trigger_step_id: str | None = None,
     reset_after: datetime | None = None,
 ) -> datetime | None:
-    project = _project_for_coordinator(session, coordinator)
-    context = _get_context(
-        session,
-        project_id=project.id,
-        context_name=_coordinator_context_name(
-            coordinator,
-            COORDINATOR_TRANSCRIPTS_CONTEXT,
-        ),
-    )
+    context = scope.transcripts_context
     if context is None:
         return None
     query = (
         project_scoped_log_events(
-            project.id,
+            scope.project.id,
             LogEvent.created_at,
             owner_key=single_owner_key(context.owner_scope, context.owner_id),
         )
@@ -1909,13 +2171,12 @@ def _assistant_transcript_created_at(
         )
     if reset_after is not None:
         query = query.where(LogEvent.created_at > reset_after)
-    return session.scalar(query)
+    return scope.session.scalar(query)
 
 
 def _trigger_outbound_created_at(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     step_id: str,
     reset_after: datetime | None = None,
 ) -> datetime | None:
@@ -1923,8 +2184,7 @@ def _trigger_outbound_created_at(
     if not mediums:
         return None
     return _assistant_transcript_created_at(
-        session,
-        coordinator=coordinator,
+        scope,
         mediums=mediums,
         onboarding_trigger_step_id=step_id,
         reset_after=reset_after,
@@ -1932,27 +2192,19 @@ def _trigger_outbound_created_at(
 
 
 def _has_trigger_outbound(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     step_id: str,
     reset_after: datetime | None = None,
 ) -> bool:
     return (
-        _trigger_outbound_created_at(
-            session,
-            coordinator=coordinator,
-            step_id=step_id,
-            reset_after=reset_after,
-        )
-        is not None
+        scope.trigger_outbound_created_at(step_id, reset_after=reset_after) is not None
     )
 
 
 def _has_reply_to_trigger(
-    session: Session,
+    scope: "_OnboardingProbeScope",
     *,
-    coordinator: Assistant,
     step_id: str,
     trigger_reset_after: datetime | None = None,
     reset_after: datetime | None = None,
@@ -1963,17 +2215,14 @@ def _has_reply_to_trigger(
     mediums = onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS.get(trigger_id)
     if not mediums:
         return False
-    trigger_created_at = _trigger_outbound_created_at(
-        session,
-        coordinator=coordinator,
-        step_id=trigger_id,
+    trigger_created_at = scope.trigger_outbound_created_at(
+        trigger_id,
         reset_after=trigger_reset_after,
     )
     if trigger_created_at is None:
         return False
     return _has_user_transcript_message(
-        session,
-        coordinator=coordinator,
+        scope,
         mediums=mediums,
         after=trigger_created_at,
         reset_after=reset_after,
@@ -2000,11 +2249,12 @@ def derive_onboarding_progress(
     """
     state = state or get_coordinator_state(session, coordinator=coordinator)
     reset_at = normalize_onboarding_reset_at(state.get("onboarding_reset_at"))
+    scope = _OnboardingProbeScope(session, coordinator)
     durable_checks: dict[str, Any] = {
         ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
-        ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
+        ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_app_secret,
         ONBOARDING_STEP_CREATE_SCHEDULED_TASK: _has_scheduled_task,
@@ -2016,8 +2266,7 @@ def derive_onboarding_progress(
         reset_after = _parse_onboarding_reset_at(reset_at.get(step_id))
         if step_id in onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS:
             if _has_trigger_outbound(
-                session,
-                coordinator=coordinator,
+                scope,
                 step_id=step_id,
                 reset_after=reset_after,
             ):
@@ -2027,8 +2276,7 @@ def derive_onboarding_progress(
         if trigger_id is not None:
             trigger_reset_after = _parse_onboarding_reset_at(reset_at.get(trigger_id))
             if _has_reply_to_trigger(
-                session,
-                coordinator=coordinator,
+                scope,
                 step_id=step_id,
                 trigger_reset_after=trigger_reset_after,
                 reset_after=reset_after,
@@ -2036,9 +2284,10 @@ def derive_onboarding_progress(
                 completed.append(step_id)
             continue
         check = durable_checks.get(step_id)
-        if check is not None and check(session, coordinator=coordinator):
+        if check is not None and check(scope):
             completed.append(step_id)
-    return completed
+    manual = normalize_onboarding_step_ids(state.get("manually_completed_step_ids"))
+    return sorted(set(completed) | set(manual))
 
 
 _HOSTED_ENVIRONMENTS = ("staging", "production")
@@ -2060,8 +2309,11 @@ def onboarding_local_mode() -> bool:
     return settings.environment not in _HOSTED_ENVIRONMENTS
 
 
-def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, str]:
-    return {"id": chip.id, "label": chip.label}
+def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, Any]:
+    payload: dict[str, Any] = {"id": chip.id, "label": chip.label}
+    if chip.metadata:
+        payload.update(chip.metadata)
+    return payload
 
 
 def _serialize_onboarding_event(
@@ -2180,6 +2432,8 @@ def compute_onboarding_render(
     *,
     coordinator: Assistant,
     local_mode: bool | None = None,
+    state: dict[str, Any] | None = None,
+    completed: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Build the precomputed onboarding rendering for the brains + Console.
 
@@ -2190,13 +2444,15 @@ def compute_onboarding_render(
       - ``phases``: the visible phase headers (id + label + title +
         description), in display order, already deployment-gated.
       - ``steps``: every visible graph step with a resolved ``status`` of
-        ``done`` / ``skipped`` / ``available`` / ``locked``, plus the
-        presentation copy (description, time estimate, suggestion chips)
+        ``done`` / ``skipped`` / ``in_progress`` / ``available`` / ``locked``,
+        plus the presentation copy (description, time estimate, suggestion chips)
         consumers render directly.
       - ``next_targets``: the steps the Coordinator may nudge toward
         right now (``status == available``), each carrying ready-to-use
         chat and voice copy plus its channel. There can be more than one
-        once the ``depends_on`` graph branches.
+        once the ``depends_on`` graph branches; the first entry is the
+        primary nudge — the next step after the user's active or furthest
+        completed step in that phase, otherwise the topmost available step.
       - ``active_step_id``: the step the user is currently mid-flow on.
 
     Steps in a ``local_only`` phase are omitted entirely on hosted
@@ -2207,16 +2463,37 @@ def compute_onboarding_render(
     """
     if local_mode is None:
         local_mode = onboarding_local_mode()
-    provider = _connected_workspace_provider(session, coordinator=coordinator)
-    state = get_coordinator_state(session, coordinator=coordinator)
-    completed: set[str] = set(
-        derive_onboarding_progress(session, coordinator=coordinator, state=state),
+    provider, granted_features = _connected_workspace(
+        session,
+        coordinator=coordinator,
+    )
+    # Callers that already hold the state row and derived progress (the state
+    # endpoint, event emitters) pass them in so the expensive derivation runs
+    # once per request instead of once per consumer.
+    if state is None:
+        state = get_coordinator_state(session, coordinator=coordinator)
+    completed = set(
+        (
+            completed
+            if completed is not None
+            else derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+                state=state,
+            )
+        ),
     )
     skipped: set[str] = set(
         normalize_onboarding_step_ids(state.get("skipped_step_ids")),
     )
     skipped_phases: set[str] = set(
         normalize_onboarding_phase_ids(state.get("skipped_phase_ids")),
+    )
+    manually_completed: set[str] = set(
+        normalize_onboarding_step_ids(state.get("manually_completed_step_ids")),
+    )
+    dispatched_at = normalize_onboarding_dispatched_at(
+        state.get("onboarding_dispatched_at"),
     )
     active = state.get("onboarding_step")
     active_id = active if isinstance(active, str) else None
@@ -2241,12 +2518,27 @@ def compute_onboarding_render(
         # demo (and vice versa), and nothing shows before a workspace connects.
         if not onboarding_graph.step_visible_for_provider(step, provider):
             continue
+        # Feature-gated steps (e.g. the calendar demo) render only once the
+        # user granted that workspace scope; a workspace connected without
+        # calendar access never surfaces the calendar demo.
+        if not onboarding_graph.step_visible_for_features(step, granted_features):
+            continue
         if step.kind == "coming_soon":
             status = "coming_soon"
         elif step.id in completed:
             status = "done"
         elif step.id in skipped:
             status = "skipped"
+        elif (
+            step.id in onboarding_graph.MANUAL_COMPLETION_STEP_IDS
+            and step.id in dispatched_at
+            and onboarding_graph.dependencies_satisfied(
+                step.depends_on,
+                completed,
+                skipped,
+            )
+        ):
+            status = "in_progress"
         elif onboarding_graph.dependencies_satisfied(
             step.depends_on,
             completed,
@@ -2261,6 +2553,8 @@ def compute_onboarding_render(
             if not onboarding_graph.phase_is_visible(dep.phase, local_mode=local_mode):
                 continue
             if not onboarding_graph.step_visible_for_provider(dep, provider):
+                continue
+            if not onboarding_graph.step_visible_for_features(dep, granted_features):
                 continue
             satisfied = (
                 dep_id in completed
@@ -2281,18 +2575,20 @@ def compute_onboarding_render(
                 },
             )
         step_statuses[step.id] = status
-        steps.append(
-            {
-                "id": step.id,
-                "title": step.title,
-                "phase": step.phase,
-                "status": status,
-                "can_skip": step.can_skip,
-                "dependencies": dependencies,
-                **_step_contract_fields(step),
-                **_step_presentation_fields(step.id, provider=provider),
-            },
-        )
+        step_payload: dict[str, Any] = {
+            "id": step.id,
+            "title": step.title,
+            "phase": step.phase,
+            "status": status,
+            "can_skip": step.can_skip,
+            "manually_completed": step.id in manually_completed,
+            "dependencies": dependencies,
+            **_step_contract_fields(step),
+            **_step_presentation_fields(step.id, provider=provider),
+        }
+        if status == "in_progress":
+            step_payload["dispatched_at"] = dispatched_at[step.id]
+        steps.append(step_payload)
         if status == "available" and step.phase not in skipped_phases:
             next_targets.append(
                 {
@@ -2310,6 +2606,12 @@ def compute_onboarding_render(
                     ),
                 },
             )
+
+    next_targets = onboarding_graph.order_next_targets(
+        next_targets,
+        completed=completed,
+        active_step_id=active_id,
+    )
 
     return {
         "active_step_id": active_id,
@@ -2387,9 +2689,10 @@ def compose_voice_intro_briefing(render: dict[str, Any]) -> str:
             )
 
     lines.append(
-        "If they would rather pause onboarding, reassure them they can just "
-        "start asking for help or sharing documents; onboarding can be resumed "
-        "later.",
+        "If they would rather pause onboarding, reassure them they can say so "
+        "and you will pause after confirming; they can also start asking for "
+        "help or sharing documents right away once paused. Onboarding can be "
+        "resumed later from the checklist or by asking you to continue setup.",
     )
     lines.append(
         "The user may interrupt at any point — if they do, respond to what "
@@ -2412,13 +2715,10 @@ def _is_coordinator_in_onboarding(
     silent than crash the user-facing endpoint that wrapped the
     call.
 
-    A Coordinator counts as onboarding only when it is in
-    ``onboarding`` mode *and* the user has not deferred the whole
-    onboarding phase. The reversible ``onboarding_deferred`` switch
-    lets the user start using the platform without ever finishing
-    onboarding: while it's set we suppress every onboarding narration
-    event exactly as if onboarding were complete, without touching
-    per-step state, so flipping it back resumes the flow untouched.
+    A Coordinator counts as actively onboarding only when
+    ``onboarding_active`` is ``True``. While inactive we suppress every
+    onboarding narration event without touching per-step state, so
+    flipping it back resumes the flow untouched.
     """
     try:
         state = get_coordinator_state(session, coordinator=coordinator)
@@ -2429,9 +2729,7 @@ def _is_coordinator_in_onboarding(
             exc,
         )
         return False
-    if state.get("onboarding_deferred"):
-        return False
-    return state.get("mode") == COORDINATOR_MODE_ONBOARDING
+    return bool(state.get("onboarding_active"))
 
 
 def _resolve_target_coordinator(
@@ -2886,6 +3184,167 @@ async def emit_onboarding_step_reset_event(
     )
 
 
+async def notify_onboarding_render_if_changed(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    baseline_completed_step_ids: Sequence[str],
+    reason: str = "",
+    details: dict[str, Any] | None = None,
+) -> bool:
+    """Emit a silent onboarding render refresh when derived progress moved.
+
+    Compares the current :func:`derive_onboarding_progress` snapshot against
+    ``baseline_completed_step_ids`` captured before a durable-state mutation.
+    When onboarding is active and the completed set changed, publishes
+    ``onboarding_render_updated`` with the attached render so Unity's prompt
+    and Console's checklist can catch up without a poll.
+    """
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        return False
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_now = derive_onboarding_progress(
+        session,
+        coordinator=coordinator,
+        state=state,
+    )
+    if set(completed_now) == set(baseline_completed_step_ids):
+        return False
+    merged_details = dict(details or {})
+    if reason:
+        merged_details["reason"] = reason
+    merged_details["completed_step_ids"] = completed_now
+    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
+        state.get("skipped_step_ids"),
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_RENDER_UPDATED,
+        message="Onboarding progress updated.",
+        details=merged_details,
+    )
+
+
+def notify_onboarding_render_if_changed_sync(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    baseline_completed_step_ids: Sequence[str],
+    reason: str = "",
+    details: dict[str, Any] | None = None,
+) -> bool:
+    """Sync wrapper for :func:`notify_onboarding_render_if_changed`."""
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        return False
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_now = derive_onboarding_progress(
+        session,
+        coordinator=coordinator,
+        state=state,
+    )
+    if set(completed_now) == set(baseline_completed_step_ids):
+        return False
+    merged_details = dict(details or {})
+    if reason:
+        merged_details["reason"] = reason
+    merged_details["completed_step_ids"] = completed_now
+    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
+        state.get("skipped_step_ids"),
+    )
+    return notify_coordinator_onboarding_event_safe_sync(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_RENDER_UPDATED,
+        message="Onboarding progress updated.",
+        details=merged_details,
+    )
+
+
+def _onboarding_step_completed_event_details(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    completed = list(
+        completed_step_ids
+        or derive_onboarding_progress(session, coordinator=coordinator),
+    )
+    skipped = normalize_onboarding_step_ids(
+        skipped_step_ids
+        or get_coordinator_state(session, coordinator=coordinator).get(
+            "skipped_step_ids",
+        ),
+    )
+    return {
+        "step_id": step_id,
+        "completed_step_ids": completed,
+        "skipped_step_ids": skipped,
+    }
+
+
+def emit_onboarding_step_completed_event_safe_sync(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that a step was explicitly marked complete by the assistant.
+
+    Fire-and-forget variant for the ``onboarding_step_completion`` PATCH
+    critical path: the adapters POST runs on a daemon thread so the state
+    response is not blocked on a Unity round-trip.
+    """
+    return notify_coordinator_onboarding_event_safe_sync(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        message=f"The '{step_id}' onboarding step is now complete.",
+        details=_onboarding_step_completed_event_details(
+            session,
+            coordinator=coordinator,
+            step_id=step_id,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=skipped_step_ids,
+        ),
+    )
+
+
+async def emit_onboarding_step_completed_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that a step was explicitly marked complete by the assistant.
+
+    Async variant for callers that can await the adapters POST. The
+    ``onboarding_step_completion`` PATCH uses
+    :func:`emit_onboarding_step_completed_event_safe_sync` instead so the
+    response is not blocked on narration.
+    """
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_COMPLETED,
+        message=f"The '{step_id}' onboarding step is now complete.",
+        details=_onboarding_step_completed_event_details(
+            session,
+            coordinator=coordinator,
+            step_id=step_id,
+            completed_step_ids=completed_step_ids,
+            skipped_step_ids=skipped_step_ids,
+        ),
+    )
+
+
 async def emit_onboarding_step_event(
     session: Session,
     *,
@@ -2927,6 +3386,8 @@ async def emit_onboarding_step_event(
             )
             return False
     phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
+    dispatch_timestamp = datetime.now(timezone.utc).isoformat()
+    dispatch_updates = {step.id: dispatch_timestamp}
     # Row triggers with a paired reply advance the active step before
     # publishing; chip events never carry a paired reply.
     if not chip_id and step.paired_reply:
@@ -2934,7 +3395,17 @@ async def emit_onboarding_step_event(
             session,
             coordinator=coordinator,
             onboarding_step=step.paired_reply,
+            onboarding_dispatched_at_updates=dispatch_updates,
         )
+    else:
+        set_coordinator_state(
+            session,
+            coordinator=coordinator,
+            onboarding_dispatched_at_updates=dispatch_updates,
+        )
+    # Release the Coordinator/State advisory lock taken by the state
+    # writes above before the adapter POST inside the notify below.
+    session.commit()
     details = {
         **dict(event.details),
         "step_id": step.id,
@@ -2981,8 +3452,14 @@ async def emit_onboarding_session_started_event(
     steps completed in earlier sessions — which never produce
     transition events — are still visible to Unity's opening turn.
 
-    Gated on ``Coordinator/State.mode == 'onboarding'`` like the
-    other onboarding events; emissions outside onboarding are
+    Resolving the picker *is* watching the intro, so ``intro_watched``
+    is latched here rather than relying solely on Console's concurrent
+    state PATCH — that PATCH is best-effort and Unity's chat-intro
+    delivery gate requires the flag, so a dropped PATCH must not be
+    able to strand the scripted opener.
+
+    Gated on ``Coordinator/State.onboarding_active`` like the
+    other onboarding events; emissions while inactive are
     silently dropped (returns ``False``).
     """
     if medium not in ONBOARDING_SESSION_MEDIUMS:
@@ -2991,6 +3468,17 @@ async def emit_onboarding_session_started_event(
             medium,
         )
         return False
+    set_coordinator_state(
+        session,
+        coordinator=coordinator,
+        intro_watched=True,
+        pending_chat_intro=(True if medium == ONBOARDING_SESSION_MEDIUM_CHAT else None),
+    )
+    # Commit immediately so the Coordinator/State advisory lock taken by
+    # the write above is released before the render derivation and the
+    # adapter POST below. Holding it across network I/O starves concurrent
+    # state PATCHes into Postgres lock timeouts (10s on hosted deploys).
+    session.commit()
     details: dict[str, Any] = {"medium": medium}
     completed_step_ids = derive_onboarding_progress(session, coordinator=coordinator)
     skipped_step_ids = get_coordinator_state(session, coordinator=coordinator).get(

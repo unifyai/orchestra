@@ -44,6 +44,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.slack_dao import SlackDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_dao import UserDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
@@ -88,12 +89,12 @@ from orchestra.services.contact_membership_service import (
     ensure_team_contact_memberships,
 )
 from orchestra.services.coordinator_service import (
-    COORDINATOR_MODE_ONBOARDING,
     build_onboarding_catalog,
     compose_voice_intro_briefing,
     compute_onboarding_render,
     derive_onboarding_progress,
     emit_onboarding_session_started_event,
+    emit_onboarding_step_completed_event_safe_sync,
     emit_onboarding_step_event,
     emit_onboarding_step_reset_event,
     emit_onboarding_step_skipped_event,
@@ -120,8 +121,10 @@ from orchestra.services.team_membership_refresh_service import (
     publish_membership_refreshes_best_effort,
 )
 from orchestra.services.universal_unity_contacts import (
+    AMBIGUOUS_UNIVERSAL_ADMIN_LOOKUP_DETAIL,
     UNIVERSAL_CONTACT_TYPES,
     drifted_universal_coordinator_contact_types,
+    is_ambiguous_universal_admin_contact_lookup,
     missing_universal_coordinator_contact_types,
 )
 from orchestra.services.universal_unity_discord import (
@@ -167,6 +170,7 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorStateUpdate,
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
+    CoordinatorWakeupResponse,
     DemoAssistantCreate,
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
@@ -205,6 +209,7 @@ from orchestra.web.api.utils.assistant_infra import (
     reawaken_assistant,
     trigger_contact_sync_safe,
     wake_up_assistant,
+    wake_up_coordinator_best_effort,
 )
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
@@ -601,6 +606,7 @@ def _build_assistant_read(
     secrets: Optional[dict] = None,
     workspace_secrets: Optional[dict] = None,
     resolve_workspace_secrets: bool = True,
+    resolve_slack_install: bool = False,
     include_internal: bool = False,
     requesting_user_id: Optional[str] = None,
 ) -> AssistantRead:
@@ -735,6 +741,25 @@ def _build_assistant_read(
         }
     workspace_provider = _derive_workspace_provider(ws_source)
 
+    # Slack's ``bot_user_id`` is workspace-scoped — it lives on the owner's
+    # ``slack_installs`` row, not on any per-assistant contact — so unlike
+    # Discord it is never surfaced by the contact map. Resolve it from the
+    # active install for the assistant's owner (org first, else personal user)
+    # so the runtime can send outbound Slack before any inbound Slack event.
+    # Gated to the runtime bootstrap read path to avoid a per-assistant query
+    # on Console list endpoints that don't need it.
+    assistant_slack_bot_user_id: Optional[str] = None
+    assistant_slack_team_id: Optional[str] = None
+    if resolve_slack_install:
+        slack_dao = SlackDAO(session)
+        install = (
+            slack_dao.get_install_for_org(a.organization_id)
+            if a.organization_id is not None
+            else slack_dao.get_install_for_user(a.user_id)
+        )
+        assistant_slack_bot_user_id = install.bot_user_id if install else None
+        assistant_slack_team_id = install.slack_team_id if install else None
+
     return AssistantRead(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
@@ -771,6 +796,8 @@ def _build_assistant_read(
         assistant_discord_bot_id=(
             discord_contact.contact_value if discord_contact else None
         ),
+        assistant_slack_bot_user_id=assistant_slack_bot_user_id,
+        assistant_slack_team_id=assistant_slack_team_id,
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
         timezone=a.timezone,
@@ -1555,22 +1582,24 @@ def _coordinator_state_response(
     every read (see ``derive_onboarding_progress``) so the console
     checklist and Unity's openers agree on what is already done even
     when the completing action happened in an earlier session. The
-    derivation queries are skipped outside onboarding mode, where the
-    checklist no longer renders.
+    derivation runs exactly once per read — the render reuses the same
+    state row and derived progress — and is skipped entirely when
+    onboarding is inactive, where the checklist no longer renders.
     """
     state = get_coordinator_state(session, coordinator=coordinator)
-    actively_onboarding = state[
-        "mode"
-    ] == COORDINATOR_MODE_ONBOARDING and not state.get(
-        "onboarding_deferred",
-    )
+    actively_onboarding = bool(state.get("onboarding_active"))
     completed_step_ids = (
         derive_onboarding_progress(session, coordinator=coordinator, state=state)
         if actively_onboarding
         else []
     )
     onboarding = (
-        compute_onboarding_render(session, coordinator=coordinator)
+        compute_onboarding_render(
+            session,
+            coordinator=coordinator,
+            state=state,
+            completed=completed_step_ids,
+        )
         if actively_onboarding
         else None
     )
@@ -1639,13 +1668,12 @@ async def update_coordinator_state_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[CoordinatorStateResponse]:
-    """Transition the Coordinator between ``onboarding`` and ``working``.
+    """Update the Coordinator's onboarding state.
 
-    Used by the assistants page when the user finishes or skips
-    onboarding (writes ``mode='working'``), when the user re-enters
-    the guided view from a menu (writes ``mode='onboarding'``), and
-    when the coordinator-driven conversation advances to a new step
-    (writes ``onboarding_step``).
+    Used by the assistants page when the user pauses or resumes
+    onboarding (writes ``onboarding_active``), and when the user
+    advances, skips, or resets checklist steps (writes ``onboarding_step``
+    and related fields).
     """
     coordinator = require_authorized_coordinator(
         session,
@@ -1656,7 +1684,7 @@ async def update_coordinator_state_endpoint(
     next_state = set_coordinator_state(
         session,
         coordinator=coordinator,
-        mode=update.mode,
+        onboarding_active=update.onboarding_active,
         onboarding_step=update.onboarding_step,
         clear_onboarding_step=update.clear_onboarding_step,
         skip_onboarding_step=update.skip_onboarding_step,
@@ -1665,48 +1693,77 @@ async def update_coordinator_state_endpoint(
         skip_onboarding_phase=update.skip_onboarding_phase,
         unskip_onboarding_phase=update.unskip_onboarding_phase,
         intro_watched=update.intro_watched,
-        onboarding_deferred=update.onboarding_deferred,
+        pending_chat_intro=update.pending_chat_intro,
+        onboarding_step_completion=(
+            (
+                update.onboarding_step_completion.step_id,
+                update.onboarding_step_completion.completed,
+            )
+            if update.onboarding_step_completion is not None
+            else None
+        ),
     )
+    # Commit the state write immediately so its Coordinator/State advisory
+    # lock is released before the event emissions below, which POST to the
+    # adapters. Holding the lock across network I/O starves concurrent state
+    # writers (other PATCHes, the picker-resolution event) into Postgres
+    # lock timeouts.
+    session.commit()
+    # The event branches below all read the same post-update progress; derive
+    # it at most once per request (each derivation walks the whole onboarding
+    # graph with per-step probes).
+    derived_completed: list[str] | None = None
+
+    def _completed_step_ids() -> list[str]:
+        nonlocal derived_completed
+        if not next_state.get("onboarding_active"):
+            return []
+        if derived_completed is None:
+            derived_completed = derive_onboarding_progress(
+                session,
+                coordinator=coordinator,
+                state=next_state,
+            )
+        return derived_completed
+
     if (
         update.onboarding_step
-        and next_state["mode"] == COORDINATOR_MODE_ONBOARDING
+        and next_state.get("onboarding_active")
         and previous_state.get("onboarding_step") != update.onboarding_step
     ):
-        completed_step_ids = derive_onboarding_progress(
-            session,
-            coordinator=coordinator,
-        )
         await emit_onboarding_step_started_event(
             session,
             coordinator=coordinator,
             step_id=update.onboarding_step,
-            completed_step_ids=completed_step_ids,
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     if update.skip_onboarding_step:
-        completed_step_ids = (
-            derive_onboarding_progress(session, coordinator=coordinator)
-            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
-            else []
-        )
         await emit_onboarding_step_skipped_event(
             session,
             coordinator=coordinator,
             step_id=update.skip_onboarding_step,
-            completed_step_ids=completed_step_ids,
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     if update.reset_onboarding_step:
-        completed_step_ids = (
-            derive_onboarding_progress(session, coordinator=coordinator)
-            if next_state["mode"] == COORDINATOR_MODE_ONBOARDING
-            else []
-        )
         await emit_onboarding_step_reset_event(
             session,
             coordinator=coordinator,
             step_id=update.reset_onboarding_step,
-            completed_step_ids=completed_step_ids,
+            completed_step_ids=_completed_step_ids(),
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
+    if (
+        update.onboarding_step_completion is not None
+        and update.onboarding_step_completion.completed
+        and next_state.get("onboarding_active")
+    ):
+        emit_onboarding_step_completed_event_safe_sync(
+            session,
+            coordinator=coordinator,
+            step_id=update.onboarding_step_completion.step_id,
+            completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
     session.commit()
@@ -1767,7 +1824,7 @@ async def notify_onboarding_session_started_endpoint(
     """Fire the picker-resolution event so Unity opens the session.
 
     Best-effort: the emission is gated server-side on
-    ``Coordinator/State.mode == 'onboarding'``, so a stale picker
+    ``Coordinator/State.onboarding_active``, so a stale picker
     submit (e.g. the user already skipped onboarding in another
     tab) silently no-ops. The endpoint always returns 200; the
     response body carries an ``emitted`` flag the client can use
@@ -1787,6 +1844,38 @@ async def notify_onboarding_session_started_endpoint(
         info=OnboardingSessionStartedResponse(
             coordinator_id=str(coordinator.agent_id),
             emitted=emitted,
+        ),
+    )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/wakeup",
+    response_model=InfoResponse[CoordinatorWakeupResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Wake the Coordinator runtime early",
+    tags=["Assistant Management"],
+)
+async def wake_coordinator_endpoint(
+    coordinator_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CoordinatorWakeupResponse]:
+    """Start the Coordinator GKE job without waiting for a user action.
+
+    Best-effort: a transient adapters outage is logged and the endpoint
+    still returns 200 so Console can fire this during onboarding without
+    blocking navigation.
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    await wake_up_coordinator_best_effort(coordinator.agent_id)
+    return InfoResponse(
+        info=CoordinatorWakeupResponse(
+            coordinator_id=str(coordinator.agent_id),
+            attempted=not (settings.is_self_host or not comms_explicitly_configured()),
         ),
     )
 
@@ -6871,6 +6960,58 @@ def admin_update_assistant(
     )
 
 
+def _admin_list_has_contact_filter(
+    *,
+    phone: Optional[str],
+    user_phone: Optional[str],
+    email: Optional[str],
+    user_whatsapp_number: Optional[str],
+    assistant_whatsapp_number: Optional[str],
+) -> bool:
+    return any(
+        value is not None
+        for value in (
+            phone,
+            user_phone,
+            email,
+            user_whatsapp_number,
+            assistant_whatsapp_number,
+        )
+    )
+
+
+def _raise_if_ambiguous_universal_admin_contact_lookup(
+    *,
+    agent_id: Optional[int],
+    phone: Optional[str],
+    email: Optional[str],
+    assistant_whatsapp_number: Optional[str],
+) -> None:
+    if is_ambiguous_universal_admin_contact_lookup(
+        agent_id=agent_id,
+        email=email,
+        phone=phone,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=AMBIGUOUS_UNIVERSAL_ADMIN_LOOKUP_DETAIL,
+        )
+
+
+def _admin_list_uses_slim_hydration(
+    *,
+    requested_fields: Optional[set[str]],
+    has_contact_filter: bool,
+) -> bool:
+    """Skip expensive per-assistant hydration unless a full fleet read was requested."""
+    if has_contact_filter:
+        return True
+    if requested_fields is not None:
+        return True
+    return False
+
+
 @admin_router.get(
     "/assistant",
     summary="Admin: list all assistants",
@@ -6989,6 +7130,24 @@ def admin_list_all_assistants(
             s.strip() for s in secret_names.split(",") if s.strip()
         ] or None
 
+    has_contact_filter = _admin_list_has_contact_filter(
+        phone=phone,
+        user_phone=user_phone,
+        email=email,
+        user_whatsapp_number=user_whatsapp_number,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    )
+    _raise_if_ambiguous_universal_admin_contact_lookup(
+        agent_id=agent_id,
+        phone=phone,
+        email=email,
+        assistant_whatsapp_number=assistant_whatsapp_number,
+    )
+    use_slim_hydration = _admin_list_uses_slim_hydration(
+        requested_fields=requested_fields,
+        has_contact_filter=has_contact_filter,
+    )
+
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -7040,14 +7199,27 @@ def admin_list_all_assistants(
         skip_teams = requested_fields is not None and "team_ids" not in requested_fields
         skip_team_summaries = (
             requested_fields is not None and "team_summaries" not in requested_fields
-        )
+        ) or use_slim_hydration
         skip_contact_ids = requested_fields is not None and not (
             {"self_contact_id", "boss_contact_id"} & requested_fields
         )
-        skip_contact_identity_roots = (
-            requested_fields is not None
-            and "contact_identity_roots" not in requested_fields
+        skip_contact_identity_roots = use_slim_hydration and (
+            requested_fields is None or "contact_identity_roots" not in requested_fields
         )
+        resolve_slack_install = not use_slim_hydration or (
+            requested_fields is not None
+            and bool(
+                {"assistant_slack_bot_user_id", "assistant_slack_team_id"}
+                & requested_fields,
+            )
+        )
+        include_internal = not use_slim_hydration or (
+            requested_fields is not None
+            and ({"user_desktops", "user_desktop_filesync_keys"} & requested_fields)
+        )
+        if has_contact_filter and requested_fields is None:
+            skip_contact_ids = False
+            skip_teams = False
 
         # Batch-fetch contacts for all assistants (avoids N+1 queries)
         contact_dao = AssistantContactDAO(session)
@@ -7165,7 +7337,8 @@ def admin_list_all_assistants(
                     else None
                 ),
                 resolve_workspace_secrets=not skip_secrets,
-                include_internal=True,
+                resolve_slack_install=resolve_slack_install,
+                include_internal=include_internal,
             )
             for i, a in enumerate(assistants)
         ]
@@ -7238,6 +7411,13 @@ def admin_update_assistant_by_filter(
     )
     new_user_whatsapp_number = normalize_phone_parameter(
         new_user_whatsapp_number,
+    )
+
+    _raise_if_ambiguous_universal_admin_contact_lookup(
+        agent_id=None,
+        phone=phone,
+        email=email,
+        assistant_whatsapp_number=assistant_whatsapp_number,
     )
 
     # Find the assistant to update

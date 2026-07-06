@@ -428,6 +428,32 @@ class BucketService:
         blob.upload_from_string(file_content, content_type=content_type)
         return f"gs://{self.account_photo_bucket_name}/{object_path}"
 
+    def upload_user_voice_file(
+        self,
+        file_content: bytes,
+        user_id: str,
+        content_type: str = "audio/wav",
+    ) -> str:
+        """
+        Upload a user's voice-enrollment sample to the account photo bucket.
+
+        Stored under ``user-voice/{user_id}/{filename}`` — a separate prefix
+        from profile photos so photo cleanup never touches voice samples.
+
+        Returns:
+            The ``gs://`` URL of the uploaded object.
+        """
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"user-voice/{user_id}/{file_name}.wav"
+
+        blob = self.account_photo_bucket.blob(object_path)
+        blob.upload_from_string(file_content, content_type=content_type)
+        return f"gs://{self.account_photo_bucket_name}/{object_path}"
+
+    def delete_user_voice_samples(self, user_id: str) -> int:
+        """Delete all voice-enrollment samples for a user."""
+        return self._delete_account_photo_prefix(f"user-voice/{user_id}/")
+
     def upload_org_photo_file(
         self,
         file_content: bytes,

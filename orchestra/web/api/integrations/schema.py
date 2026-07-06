@@ -526,3 +526,19 @@ class IntegrationToolExecutionApprovalResponse(BaseModel):
     confirmation_token: Optional[str] = None
     expires_at: Optional[datetime] = None
     policy_updated: bool = False
+
+
+class IntegrationComposioFileUploadable(BaseModel):
+    """Composio ``FileUploadable`` metadata for tool arguments."""
+
+    name: str
+    mimetype: str
+    s3key: str
+
+
+class IntegrationComposioStageFileResponse(BaseModel):
+    """Result of staging a local file in Composio storage."""
+
+    status: Literal["ok", "error"] = "ok"
+    file: Optional[IntegrationComposioFileUploadable] = None
+    error: Optional[dict[str, Any]] = None
