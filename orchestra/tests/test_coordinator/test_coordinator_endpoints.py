@@ -752,6 +752,33 @@ async def test_coordinator_provisioning_seeds_initial_state_row(
     assert payload["completed_step_ids"] == []
 
 
+@pytest.mark.anyio
+async def test_coordinator_state_response_preserves_chip_metadata(
+    client: AsyncClient,
+) -> None:
+    """Integrations chips carry gallery hints through the public state schema."""
+    owner = await _create_user(client, "state-chip-metadata")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    response = await client.get(
+        f"/v0/assistant/{coordinator_id}/state",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    apps = _render_step(response.json()["info"]["onboarding"], "apps")
+    chips = {chip["id"]: chip for chip in apps["chips_chat"]}
+    assert chips["crm-sales"]["gallery_category"] == "crm_sales"
+    assert chips["crm-sales"]["search_query"] == "crm sales hubspot pipedrive"
+
+
 def _render_step_ids(render: dict) -> set[str]:
     return {step["id"] for step in render["steps"]}
 
@@ -1428,7 +1455,13 @@ async def test_coordinator_state_patch_manual_step_completion_allows_workspace_d
     }, create.json()
     coordinator_id = int(create.json()["coordinator_id"])
 
-    for step_id in ("workspace-mailbox", "workspace-drive", "workspace-calendar"):
+    for step_id in (
+        "workspace-mailbox",
+        "workspace-drive",
+        "workspace-calendar",
+        "integration-read",
+        "integration-action",
+    ):
         complete = await client.patch(
             f"/v0/assistant/{coordinator_id}/state",
             json={
@@ -2199,6 +2232,80 @@ async def test_onboarding_step_event_emits_task_chip_event(
     assert (
         extra["details"]["instruction"]
         == "In two minutes, check my inbox and text me anything urgent"
+    )
+
+
+@pytest.mark.anyio
+async def test_onboarding_step_event_emits_integration_connect_chip_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """An Integrations connect chip publishes a nudge event, not completion."""
+    owner = await _create_user(client, "step-event-integration-connect-chip")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={"step_id": "apps", "chip_id": "crm-sales"},
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    info = response.json()["info"]
+    assert info["emitted"] is True
+    assert info["chip_id"] == "crm-sales"
+    post.assert_awaited_once()
+    extra = post.await_args.kwargs["extra_event_fields"]
+    assert extra["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED
+    assert extra["details"]["step_id"] == "apps"
+    assert extra["details"]["gallery_category"] == "crm_sales"
+    assert extra["details"]["search_query"] == "crm sales hubspot pipedrive"
+
+
+@pytest.mark.anyio
+async def test_onboarding_step_event_emits_integration_demo_chip_event(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """An Integrations demo chip publishes its canonical demo instruction."""
+    owner = await _create_user(client, "step-event-integration-demo-chip")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    with patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post:
+        response = await client.post(
+            f"/v0/assistant/{coordinator_id}/onboarding-step-event",
+            json={
+                "step_id": "integration-action",
+                "chip_id": "take-concrete-action",
+            },
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    assert response.json()["info"]["emitted"] is True
+    post.assert_awaited_once()
+    extra = post.await_args.kwargs["extra_event_fields"]
+    assert extra["subtype"] == svc.SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED
+    assert extra["details"]["step_id"] == "integration-action"
+    assert extra["details"]["instruction"] == (
+        "Take one concrete action in a connected app and report back to me"
     )
 
 

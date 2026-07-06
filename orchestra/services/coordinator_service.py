@@ -1617,6 +1617,10 @@ SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # ``set_onboarding_task_state`` (see onboarding_graph.MANUAL_COMPLETION_STEP_IDS). The demo
 # is deliberately NOT auto-derived from the summary outbound.
 SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
+# Fired when the user clicks an Integrations demo row. Twin reads from or acts
+# with connected apps, sends the user-facing deliverable, then explicitly marks
+# the step complete via ``set_onboarding_task_state``.
+SUBTYPE_INTEGRATION_DEMO_REQUESTED = "integration_demo_requested"
 # Fired when a demo (or any non-auto-derived, non-Communication) step is marked
 # complete via the ``onboarding_step_completion`` PATCH — i.e. Twin finished the
 # task and set it done. Carries the freshly-derived render so Console reflects
@@ -1639,6 +1643,13 @@ SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 # rather than asking. The canonical instruction is resolved server-side from
 # the graph presentation (see onboarding_graph.chip_event_for).
 SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
+# Fired when the user clicks an Integrations connect-row chip. The click nudges
+# the user toward a use case in the gallery; the step still completes only when
+# a non-workspace app credential lands.
+SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED = "integration_connect_chip_requested"
+# Fired when the user clicks an Integrations demo chip. The chip is the canonical
+# demo instruction, resolved server-side from the graph.
+SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
 # Fired when the user clicks the Learning-phase beat row: it starts the guided
 # expenses-etl tutorial directly (no chips). Twin marks the step done explicitly
 # after the replay deliverable via ``set_onboarding_task_state``.
@@ -1683,8 +1694,11 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_ONBOARDING_RENDER_UPDATED,
         SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
         SUBTYPE_WORKSPACE_DEMO_REQUESTED,
+        SUBTYPE_INTEGRATION_DEMO_REQUESTED,
         SUBTYPE_TASK_BEAT_REQUESTED,
         SUBTYPE_TASK_CHIP_REQUESTED,
+        SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED,
+        SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
         SUBTYPE_LEARNING_BEAT_REQUESTED,
         SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
@@ -2255,8 +2269,11 @@ def onboarding_local_mode() -> bool:
     return settings.environment not in _HOSTED_ENVIRONMENTS
 
 
-def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, str]:
-    return {"id": chip.id, "label": chip.label}
+def _serialize_chip(chip: onboarding_graph.OnboardingChip) -> dict[str, Any]:
+    payload: dict[str, Any] = {"id": chip.id, "label": chip.label}
+    if chip.metadata:
+        payload.update(chip.metadata)
+    return payload
 
 
 def _serialize_onboarding_event(

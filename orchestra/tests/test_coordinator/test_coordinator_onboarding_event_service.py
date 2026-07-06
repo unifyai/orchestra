@@ -223,6 +223,37 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
     assert payload["extra_event_fields"]["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECTED
 
 
+@pytest.mark.parametrize(
+    "subtype",
+    [
+        svc.SUBTYPE_INTEGRATION_DEMO_REQUESTED,
+        svc.SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED,
+        svc.SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
+    ],
+)
+@pytest.mark.anyio
+async def test_integration_onboarding_subtypes_are_registered(subtype: str) -> None:
+    """New Integrations events must pass the closed subtype gate."""
+    coordinator = _fake_coordinator(agent_id=43)
+    with (
+        patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
+        patch.object(svc, "compute_onboarding_render", return_value=_RENDER),
+        patch.object(svc, "_post_unity_system_event", new=AsyncMock()) as post,
+    ):
+        result = await svc.notify_coordinator_onboarding_event(
+            session=MagicMock(),
+            coordinator=coordinator,
+            subtype=subtype,
+            message="integration event",
+            details={"step_id": "integration-read"},
+        )
+    assert result is True
+    assert post.await_args.kwargs["extra_event_fields"] == {
+        "subtype": subtype,
+        "details": {"step_id": "integration-read", "onboarding": _RENDER},
+    }
+
+
 @pytest.mark.anyio
 async def test_step_skipped_event_embeds_step_snapshots() -> None:
     """Skip events tell Unity which step was skipped and what is resolved so far."""

@@ -651,9 +651,9 @@ class CoordinatorWakeupResponse(BaseModel):
 class OnboardingStepEventRequest(BaseModel):
     """Request body for firing the graph-owned event attached to a step.
 
-    ``chip_id`` targets one of a Tasks-phase beat row's example chips: when
-    present the chip's canonical event is published instead of the row's own
-    event (see ``onboarding_graph.chip_event_for``).
+    ``chip_id`` targets one of the graph-owned example chips: when present the
+    chip's canonical event is published instead of the row's own event (see
+    ``onboarding_graph.chip_event_for``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -781,7 +781,13 @@ class CoordinatorStateUpdate(BaseModel):
 
 
 class OnboardingChip(BaseModel):
-    """A read-only suggestion chip shown under the act/schedule rows."""
+    """A read-only suggestion chip shown under an onboarding step row.
+
+    Graph-owned metadata is flattened onto the wire shape so Console can use it
+    without learning about the internal graph dataclass.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     id: str
     label: str
