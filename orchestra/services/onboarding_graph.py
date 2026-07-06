@@ -866,19 +866,37 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         nudge_voice="replying to the Slack message",
     ),
     OnboardingStep(
-        id="discord-connect",
-        title="Connect Discord",
+        id="discord-id",
+        title="Add your Discord ID",
         phase=PHASE_COMMUNICATION,
-        kind="connect",
+        kind="setup",
         depends_on={},
         can_skip=True,
         derivable=True,
         channel="discord",
         nudge_chat=(
+            "Have them click the 'Add your Discord ID' row in the Onboarding "
+            "checklist; it opens Account → Contact info so they can copy their "
+            "Discord user ID (Settings → Advanced → Developer Mode, then "
+            "click their name → Copy User ID) and save it."
+        ),
+        nudge_voice=(
+            "clicking the 'Add your Discord ID' row in the Onboarding checklist"
+        ),
+    ),
+    OnboardingStep(
+        id="discord-connect",
+        title="Connect Discord",
+        phase=PHASE_COMMUNICATION,
+        kind="connect",
+        depends_on={"discord-id": COMPLETED},
+        can_skip=True,
+        derivable=True,
+        channel="discord",
+        nudge_chat=(
             "Have them click the 'Connect Discord' row in the Onboarding checklist; "
-            "it walks them through copying their Discord user ID (Developer Mode) "
-            "and adding my public bot. Remind them the bot can only DM them once "
-            "they share a server with it."
+            "it walks them through adding my public bot. Remind them the bot can "
+            "only DM them once they share a server with it."
         ),
         nudge_voice="clicking the 'Connect Discord' row in the Onboarding checklist",
     ),
@@ -1237,9 +1255,12 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "Reply to T-W1N's Slack message with your guess.",
         "~1 min",
     ),
+    "discord-id": StepPresentation(
+        "Add your Discord user ID so T-W1N can DM you.",
+        "~1 min",
+    ),
     "discord-connect": StepPresentation(
-        "Add T-W1N's public Discord bot and share your Discord user ID so it "
-        "can DM you.",
+        "Add T-W1N's public Discord bot so it can DM you.",
         "~1 min",
     ),
     "discord-reference": StepPresentation(
@@ -1352,15 +1373,19 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "already, otherwise I just confirm it."
     ),
     "slack-message": "The user guesses the Slack clue.",
+    "discord-id": (
+        "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
+        "Walk them through it: in Discord, turn on Settings -> Advanced -> "
+        "Developer Mode, then click their own name and 'Copy User ID' and "
+        "paste that into the Discord ID field, then save."
+    ),
     "discord-connect": (
-        "Clicking the 'Connect Discord' row opens the Discord setup path. Walk "
-        "them through it: in Discord, turn on Settings -> Advanced -> Developer "
-        "Mode, then right-click their own name and 'Copy User ID' and paste that "
-        "into the setup dialog; then add T-W1N's public Discord bot from the "
-        "link in the same dialog. The thing that trips people up: the bot can "
-        "only DM them once they share a server with it, so if my first Discord "
-        "message never arrives that is almost always why -- have them add the "
-        "bot to a server they're in and try the clue again."
+        "Clicking the 'Connect Discord' row opens the Discord setup path so they "
+        "can add T-W1N's public Discord bot from the link in the dialog. The "
+        "thing that trips people up: the bot can only DM them once they share a "
+        "server with it, so if my first Discord message never arrives that is "
+        "almost always why -- have them add the bot to a server they're in and "
+        "try the clue again."
     ),
     "discord-reference": (
         "Clicking the 'Trigger Discord message from T-W1N' row tells me the "

@@ -1722,6 +1722,7 @@ ONBOARDING_STEP_SMS_MESSAGE = "sms-message"
 ONBOARDING_STEP_PHONE_CALL = "phone-call"
 ONBOARDING_STEP_SLACK_CONNECT = "slack-connect"
 ONBOARDING_STEP_SLACK_MESSAGE = "slack-message"
+ONBOARDING_STEP_DISCORD_ID = "discord-id"
 ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
 ONBOARDING_STEP_WORKSPACE = "workspace"
@@ -1744,6 +1745,7 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_PHONE_CALL,
     ONBOARDING_STEP_SLACK_CONNECT,
     ONBOARDING_STEP_SLACK_MESSAGE,
+    ONBOARDING_STEP_DISCORD_ID,
     ONBOARDING_STEP_DISCORD_CONNECT,
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
@@ -2249,6 +2251,11 @@ def _has_slack_install(scope: "_OnboardingProbeScope") -> bool:
     return install is not None
 
 
+def _has_user_discord_id(scope: "_OnboardingProbeScope") -> bool:
+    user = scope.user
+    return bool(user and user.discord_id and user.discord_id.strip())
+
+
 def _has_discord_connection(scope: "_OnboardingProbeScope") -> bool:
     user = scope.user
     if not user or not user.discord_id or not user.discord_id.strip():
@@ -2410,6 +2417,7 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
+        ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_app_secret,
