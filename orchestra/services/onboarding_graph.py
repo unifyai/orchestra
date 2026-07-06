@@ -135,8 +135,8 @@ PHASE_INTEGRATIONS = "Integrations"
 PHASE_TASKS = "Tasks"
 PHASE_LEARNING = "Learning"
 PHASE_CANVAS = "Canvas"
-PHASE_MY_COMPUTER = "My Computer"
-PHASE_YOUR_COMPUTER = "Your Computer"
+PHASE_MY_COMPUTER = "Your Computer"
+PHASE_YOUR_COMPUTER = "Their Computer"
 PHASE_TEAMS = "Teams"
 PHASE_HIRING = "Hiring"
 
@@ -364,17 +364,17 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         description="Use a shared visual workspace.",
     ),
     OnboardingPhase(
-        id="my-computer",
-        label=PHASE_MY_COMPUTER,
-        title="My Computer",
-        description="Ask me to operate from my computer.",
-        framing=MY_COMPUTER_FRAMING,
-    ),
-    OnboardingPhase(
         id="your-computer",
         label=PHASE_YOUR_COMPUTER,
-        title="Your Computer",
+        title="Their Computer",
         description="Let me help on your computer.",
+    ),
+    OnboardingPhase(
+        id="my-computer",
+        label=PHASE_MY_COMPUTER,
+        title="Your Computer",
+        description="Ask me to operate from my computer.",
+        framing=MY_COMPUTER_FRAMING,
     ),
     OnboardingPhase(
         id="teams",
