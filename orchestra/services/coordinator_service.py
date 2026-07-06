@@ -1024,6 +1024,7 @@ def _coordinator_state_entry(
     skipped_phase_ids: Sequence[str],
     manually_completed_step_ids: Sequence[str],
     onboarding_reset_at: dict[str, str] | None,
+    onboarding_dispatched_at: dict[str, str] | None,
     previous: dict[str, Any] | None,
     intro_watched: bool | None = None,
     pending_chat_intro: bool | None = None,
@@ -1075,6 +1076,7 @@ def _coordinator_state_entry(
         "skipped_phase_ids": list(skipped_phase_ids),
         "manually_completed_step_ids": list(manually_completed_step_ids),
         "onboarding_reset_at": dict(onboarding_reset_at or {}),
+        "onboarding_dispatched_at": dict(onboarding_dispatched_at or {}),
         "started_at": started_at,
         "ended_at": ended_at,
         "intro_watched": next_intro_watched,
@@ -1143,6 +1145,7 @@ def get_coordinator_state(
             "skipped_phase_ids": [],
             "manually_completed_step_ids": [],
             "onboarding_reset_at": {},
+            "onboarding_dispatched_at": {},
             "started_at": None,
             "ended_at": None,
             "intro_watched": False,
@@ -1164,6 +1167,9 @@ def get_coordinator_state(
         ),
         "onboarding_reset_at": normalize_onboarding_reset_at(
             row.get("onboarding_reset_at"),
+        ),
+        "onboarding_dispatched_at": normalize_onboarding_dispatched_at(
+            row.get("onboarding_dispatched_at"),
         ),
         "started_at": row.get("started_at"),
         "ended_at": row.get("ended_at"),
@@ -1209,6 +1215,7 @@ def seed_initial_coordinator_state(
         skipped_phase_ids=[],
         manually_completed_step_ids=[],
         onboarding_reset_at={},
+        onboarding_dispatched_at={},
         previous=None,
         intro_watched=intro_watched,
     )
@@ -1237,6 +1244,7 @@ def set_coordinator_state(
     pending_chat_intro: bool | None = None,
     onboarding_step_completion: tuple[str, bool] | None = None,
     onboarding_reset_at_updates: dict[str, str] | None = None,
+    onboarding_dispatched_at_updates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Append a new ``Coordinator/State`` row by merging with the latest.
 
@@ -1333,6 +1341,9 @@ def set_coordinator_state(
     reset_at = normalize_onboarding_reset_at(
         (previous or {}).get("onboarding_reset_at"),
     )
+    dispatched_at = normalize_onboarding_dispatched_at(
+        (previous or {}).get("onboarding_dispatched_at"),
+    )
     reset_step_ids: tuple[str, ...] = ()
     if reset_onboarding_step is not None:
         reset_step_ids = onboarding_graph.completion_coupled_steps(
@@ -1356,6 +1367,15 @@ def set_coordinator_state(
                 and _parse_onboarding_reset_at(timestamp) is not None
             ):
                 reset_at[step_id] = timestamp
+    if onboarding_dispatched_at_updates:
+        valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
+        for step_id, timestamp in onboarding_dispatched_at_updates.items():
+            if (
+                step_id in valid_step_ids
+                and isinstance(timestamp, str)
+                and _parse_onboarding_reset_at(timestamp) is not None
+            ):
+                dispatched_at[step_id] = timestamp
     next_onboarding_active = (
         bool(onboarding_active)
         if onboarding_active is not None
@@ -1384,6 +1404,8 @@ def set_coordinator_state(
             for step_id in SKIPPABLE_ONBOARDING_STEPS
             if step_id in skipped_step_set
         ]
+        for step_id in skipped_step_set:
+            dispatched_at.pop(step_id, None)
     if unskip_onboarding_step is not None:
         # Unskip mirrors skip: it re-offers the step and the descendants that were
         # only skipped because they depended on it, leaving prerequisites untouched.
@@ -1403,6 +1425,8 @@ def set_coordinator_state(
             for step_id in next_skipped_step_ids
             if step_id not in reset_step_set
         ]
+        for step_id in reset_step_set:
+            dispatched_at.pop(step_id, None)
     next_manually_completed_step_ids = normalize_onboarding_step_ids(
         (previous or {}).get("manually_completed_step_ids"),
     )
@@ -1460,6 +1484,7 @@ def set_coordinator_state(
                 for step in onboarding_graph.ONBOARDING_GRAPH
                 if step.id in manual_set
             ]
+            dispatched_at.pop(completion_step_id, None)
         else:
             next_manually_completed_step_ids = [
                 step_id
@@ -1498,6 +1523,7 @@ def set_coordinator_state(
         skipped_phase_ids=next_skipped_phase_ids,
         manually_completed_step_ids=next_manually_completed_step_ids,
         onboarding_reset_at=reset_at,
+        onboarding_dispatched_at=dispatched_at,
         previous=previous,
         intro_watched=intro_watched,
         pending_chat_intro=pending_chat_intro,
@@ -1808,6 +1834,20 @@ def _parse_onboarding_reset_at(value: str | None) -> datetime | None:
 
 def normalize_onboarding_reset_at(value: Any) -> dict[str, str]:
     """Return reset cutoffs keyed by valid onboarding step id."""
+    if not isinstance(value, dict):
+        return {}
+    valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
+    return {
+        step_id: timestamp
+        for step_id, timestamp in value.items()
+        if step_id in valid_step_ids
+        and isinstance(timestamp, str)
+        and _parse_onboarding_reset_at(timestamp) is not None
+    }
+
+
+def normalize_onboarding_dispatched_at(value: Any) -> dict[str, str]:
+    """Return dispatch timestamps keyed by valid onboarding step id."""
     if not isinstance(value, dict):
         return {}
     valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
@@ -2404,8 +2444,8 @@ def compute_onboarding_render(
       - ``phases``: the visible phase headers (id + label + title +
         description), in display order, already deployment-gated.
       - ``steps``: every visible graph step with a resolved ``status`` of
-        ``done`` / ``skipped`` / ``available`` / ``locked``, plus the
-        presentation copy (description, time estimate, suggestion chips)
+        ``done`` / ``skipped`` / ``in_progress`` / ``available`` / ``locked``,
+        plus the presentation copy (description, time estimate, suggestion chips)
         consumers render directly.
       - ``next_targets``: the steps the Coordinator may nudge toward
         right now (``status == available``), each carrying ready-to-use
@@ -2452,6 +2492,9 @@ def compute_onboarding_render(
     manually_completed: set[str] = set(
         normalize_onboarding_step_ids(state.get("manually_completed_step_ids")),
     )
+    dispatched_at = normalize_onboarding_dispatched_at(
+        state.get("onboarding_dispatched_at"),
+    )
     active = state.get("onboarding_step")
     active_id = active if isinstance(active, str) else None
     if active_id and _onboarding_step_phase(active_id) in skipped_phases:
@@ -2486,6 +2529,16 @@ def compute_onboarding_render(
             status = "done"
         elif step.id in skipped:
             status = "skipped"
+        elif (
+            step.id in onboarding_graph.MANUAL_COMPLETION_STEP_IDS
+            and step.id in dispatched_at
+            and onboarding_graph.dependencies_satisfied(
+                step.depends_on,
+                completed,
+                skipped,
+            )
+        ):
+            status = "in_progress"
         elif onboarding_graph.dependencies_satisfied(
             step.depends_on,
             completed,
@@ -2522,19 +2575,20 @@ def compute_onboarding_render(
                 },
             )
         step_statuses[step.id] = status
-        steps.append(
-            {
-                "id": step.id,
-                "title": step.title,
-                "phase": step.phase,
-                "status": status,
-                "can_skip": step.can_skip,
-                "manually_completed": step.id in manually_completed,
-                "dependencies": dependencies,
-                **_step_contract_fields(step),
-                **_step_presentation_fields(step.id, provider=provider),
-            },
-        )
+        step_payload: dict[str, Any] = {
+            "id": step.id,
+            "title": step.title,
+            "phase": step.phase,
+            "status": status,
+            "can_skip": step.can_skip,
+            "manually_completed": step.id in manually_completed,
+            "dependencies": dependencies,
+            **_step_contract_fields(step),
+            **_step_presentation_fields(step.id, provider=provider),
+        }
+        if status == "in_progress":
+            step_payload["dispatched_at"] = dispatched_at[step.id]
+        steps.append(step_payload)
         if status == "available" and step.phase not in skipped_phases:
             next_targets.append(
                 {
@@ -3332,6 +3386,8 @@ async def emit_onboarding_step_event(
             )
             return False
     phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
+    dispatch_timestamp = datetime.now(timezone.utc).isoformat()
+    dispatch_updates = {step.id: dispatch_timestamp}
     # Row triggers with a paired reply advance the active step before
     # publishing; chip events never carry a paired reply.
     if not chip_id and step.paired_reply:
@@ -3339,6 +3395,13 @@ async def emit_onboarding_step_event(
             session,
             coordinator=coordinator,
             onboarding_step=step.paired_reply,
+            onboarding_dispatched_at_updates=dispatch_updates,
+        )
+    else:
+        set_coordinator_state(
+            session,
+            coordinator=coordinator,
+            onboarding_dispatched_at_updates=dispatch_updates,
         )
     # Release the Coordinator/State advisory lock taken by the state
     # writes above before the adapter POST inside the notify below.
