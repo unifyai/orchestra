@@ -247,32 +247,58 @@ LEARNING_FRAMING = (
     f"{LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION} "
     "from the fixtures; numbers are genuinely computed, never asserted. "
     "Rule 5 — After the first act completes, send the naive result as a "
-    "unify_message tagged onboarding_learning_phase=first_attempt (see Rule 1). "
-    "State the naive total and explain the mistake in plain language (Rule 2b) — "
-    "never forward act tables or row-by-row math. Suggest this exact correction "
-    "text "
+    "unify_message (see Rule 1). State the naive total and explain the mistake "
+    "in plain language (Rule 2b) — never forward act tables or row-by-row math. "
+    "Suggest this exact correction text "
     f'for the user to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}" — '
     "then WAIT; never send the correction or proceed on their behalf. "
     "Rule 6 — After their correction: interject into the running persist act "
     "with the corrected algorithm and include this StorageCheck memoization "
     f"request verbatim: {learning_expenses_storage_check_nudge()} "
-    "Send the improved deliverable tagged "
-    f"onboarding_learning_phase=improved. The doing loop must not call store "
-    "tools — StorageCheck persists after the act completes; after StorageCheck "
-    f"finishes, cite the stored ids from its summary when nudging the user, then "
-    f"{_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
+    "Send the improved deliverable as a unify_message. The doing loop must not "
+    "call store tools — StorageCheck persists after the act completes; after "
+    f"StorageCheck finishes, cite the stored ids from its summary when nudging "
+    f"the user, then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
     f"Rule 6b — {learning_expenses_stop_act_for_storage_rule()} "
     "Rule 7 — Invite them to ask for next month's report and WAIT; replay only "
     f"once they ask ({LEARNING_EXPENSES_REPLAY_HINT}). "
     "Rule 8 — Replay: second act(persist=True) over month-N+1 files; send the "
-    "replay deliverable tagged onboarding_learning_phase=replay. "
-    "Brain nudges and attachment intro messages are not phase deliverables. "
-    f"Before and during each act run, {_ACTIONS_TAB_NUDGE}."
+    "replay deliverable as a unify_message. Brain nudges and attachment intro "
+    "messages are not deliverables. "
+    f"Before and during each act run, {_ACTIONS_TAB_NUDGE}. "
+    "Rule 9 — After sending the replay deliverable, mark the step done with "
+    "set_onboarding_task_state('learn-from-correction', True) — the checklist "
+    "does not auto-detect the tutorial."
 )
 
-# Interaction channel for Learning beat outbound tagging (mirrors workspace_demo
-# channel ids consumed by Unity ``consume_pending_onboarding_outbound``).
+# Interaction channel id stamped on the Learning beat event (Unity narration).
 LEARNING_BEAT_CHANNEL = "learning_beat"
+
+# The My Computer beat is a call-anchored live desktop demo on T-W1N's managed
+# VM. One constant so the phase framing and the beat event tell the same story.
+MY_COMPUTER_FRAMING = (
+    "The My Computer phase shows T-W1N has a real computer of its own — the user "
+    "just watched it use it on a call. "
+    "Rule 1 — Call-anchored: on an active call, run the demo now and tell the "
+    "user to click Show assistant screen so they watch live. Not on a call: do "
+    "not run the demo — invite them to start a call first (this one's worth "
+    "seeing live). "
+    "Rule 2 — Boot narration: the managed VM may take ~30–60s to boot; say so "
+    "plainly ('give me a moment — my computer is starting up'). The boot is part "
+    "of the demo — it proves a real machine. "
+    "Rule 3 — Default errand: navigate visibly to NASA's Astronomy Picture of "
+    "the Day, download today's image into the synced workspace, show it in the "
+    "filesystem, then send it over chat as a send_unify_message attachment. If "
+    "the user asks for something else mid-call, honor it as long as it keeps the "
+    "same shape (real site → download → deliver). "
+    "Rule 4 — Explicit completion: after the attachment is delivered, call "
+    "set_onboarding_task_state('my-computer-demo', True). The checklist does "
+    "not auto-detect anything. "
+    "Rule 5 — Scope: no shell/terminal showcase; nothing touching the user's own "
+    "machine (that is the separate Your Computer phase). One beat, one concept. "
+    "Rule 6 — Honest failure: if the VM won't come up or the site is unreachable, "
+    "say so, offer to retry later, and do not mark the step done."
+)
 
 
 @dataclass(frozen=True)
@@ -342,6 +368,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_MY_COMPUTER,
         title="My Computer",
         description="Ask me to operate from my computer.",
+        framing=MY_COMPUTER_FRAMING,
     ),
     OnboardingPhase(
         id="your-computer",
@@ -445,7 +472,7 @@ def _demo(
     Structurally a trigger (clicking it asks Twin to act now) but, unlike the
     reference-quiz triggers, it has no paired reply and is not auto-derived from
     an outbound: Twin performs the whole demo task, then explicitly marks the
-    step done via ``set_onboarding_task_state`` (see ``DEMO_STEP_IDS`` /
+    step done via ``set_onboarding_task_state`` (see ``MANUAL_COMPLETION_STEP_IDS`` /
     ``manual_completion_block_reason``). The ``workspace_demo`` interaction type
     lets Unity narrate it differently from a quiz clue.
     """
@@ -606,16 +633,17 @@ def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "Run act(persist=True) for the naive first pass "
             f"({LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION}; real computed "
             "numbers only). When that act completes, your SAME turn must send "
-            "the result tagged onboarding_learning_phase=first_attempt — never "
-            "a bare wait. Surface the mistake, suggest this correction for them "
+            "the result as a unify_message — never a bare wait. Surface the "
+            "mistake, suggest this correction for them "
             f'to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}", then WAIT. '
             "After their correction: revise, store Guidance and Function, send "
-            "improved tagged onboarding_learning_phase=improved, "
+            "the improved deliverable, "
             f"{learning_expenses_stop_act_for_storage_rule()} "
             f"then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
             f"Invite them to ask for next month's report and WAIT. Replay: "
-            f"{_LEARNING_REPLAY_HINT} Send replay tagged "
-            "onboarding_learning_phase=replay. "
+            f"{_LEARNING_REPLAY_HINT} Send the replay deliverable, then mark "
+            "the step done with set_onboarding_task_state('learn-from-correction', "
+            "True). "
             f"{_ACTIONS_TAB_NUDGE} before and during each act run. "
             f"Full contract: {LEARNING_FRAMING}"
         ),
@@ -629,6 +657,46 @@ def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "phase": PHASE_LEARNING,
             "phase_id": "learning",
             "phase_framing": LEARNING_FRAMING,
+            "interaction": interaction,
+        },
+    )
+
+
+def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks the My Computer beat row.
+
+    The click starts the call-anchored live desktop demo — browser on the managed
+    VM, download, filesystem proof, chat attachment — scripted end to end by
+    ``MY_COMPUTER_FRAMING``. There is no freeform mode and there are no chips.
+    """
+    interaction = {
+        "type": "my_computer_beat",
+        "trigger_step_id": step_id,
+        "instructions": MY_COMPUTER_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}'. "
+            "On an active call: run the live desktop demo now — tell them to click "
+            "Show assistant screen, narrate honestly if the VM is cold (~30–60s), "
+            "default errand is NASA Astronomy Picture of the Day → download "
+            "today's image → show it in the filesystem → send_unify_message "
+            "attachment, then set_onboarding_task_state('my-computer-demo', "
+            "True). Not on a call: do not run the demo — invite them to start a "
+            "call first. If the VM or site fails, say so and do not mark done. "
+            "This is a poll, not a request to repeat work already done: if the "
+            "demo is already finished, treat this as confirmation and do NOT "
+            "redo it. "
+            f"Full contract: {MY_COMPUTER_FRAMING}"
+        ),
+        subtype="my_computer_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "framing": MY_COMPUTER_FRAMING,
+            "phase": PHASE_MY_COMPUTER,
+            "phase_id": "my-computer",
+            "phase_framing": MY_COMPUTER_FRAMING,
             "interaction": interaction,
         },
     )
@@ -1052,7 +1120,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         kind="schedule",
         depends_on={},
         can_skip=True,
-        derivable=True,
+        derivable=False,
         nudge_chat=(
             "Have them click the 'Teach me by correcting me' row in the "
             "Onboarding checklist. It starts a guided tutorial where I make "
@@ -1069,7 +1137,30 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         ),
     ),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
-    _coming_soon("my-computer-coming-soon", PHASE_MY_COMPUTER),
+    OnboardingStep(
+        id="my-computer-demo",
+        title="Watch me work on my computer",
+        phase=PHASE_MY_COMPUTER,
+        kind="trigger",
+        depends_on={},
+        can_skip=True,
+        derivable=False,
+        paired_reply=None,
+        nudge_chat=(
+            "Have them click the 'Watch me work on my computer' row in the "
+            "Onboarding checklist on a call — I drive my managed desktop live, "
+            "fetch a file from the web, show it landing in my filesystem, and "
+            "send it to them in chat."
+        ),
+        nudge_voice=(
+            "clicking the 'Watch me work on my computer' row in the Onboarding "
+            "checklist"
+        ),
+        event=_my_computer_beat_event(
+            "my-computer-demo",
+            "Watch me work on my computer",
+        ),
+    ),
     _coming_soon("your-computer-coming-soon", PHASE_YOUR_COMPUTER),
     _coming_soon("teams-coming-soon", PHASE_TEAMS),
     _coming_soon("hiring-coming-soon", PHASE_HIRING),
@@ -1125,13 +1216,17 @@ DEMO_STEP_IDS: tuple[str, ...] = (
     "workspace-calendar",
 )
 
-# Channel → accepted outbound mediums for non-quiz onboarding beats. Unity
-# mirrors this map as a golden constant in
-# ``tests/conversation_manager/core/test_onboarding_outbound_media.py`` — a
-# change here must be applied there too, or the beat silently stops tagging.
-BEAT_CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
-    LEARNING_BEAT_CHANNEL: ("unify_message",),
-}
+# Steps Twin may mark done via ``set_onboarding_task_state`` / the
+# ``onboarding_step_completion`` PATCH. Workspace demos are trigger rows with
+# no paired reply and no transcript derivation; discord-connect sits in
+# Communication but has no inbound auto-derive signal; learn-from-correction
+# is an explicitly-completed tutorial beat.
+MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
+    *DEMO_STEP_IDS,
+    "discord-connect",
+    "learn-from-correction",
+    "my-computer-demo",
+)
 
 # Steps whose completion Orchestra derives from durable domain state.
 DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
@@ -1308,6 +1403,11 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "want it done, then prove it on the next one.",
         "~5 min",
     ),
+    "my-computer-demo": StepPresentation(
+        "T-W1N drives its own computer live on a call — it fetches a file from "
+        "the web, shows it landing in its filesystem, and sends it to you here.",
+        "~3 min",
+    ),
 }
 
 _EMPTY_PRESENTATION = StepPresentation()
@@ -1461,9 +1561,16 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "After they send it I revise, stop the persist act so StorageCheck can "
         "save the learning in Brain (Guidance and Functions), and invite them "
         "to ask me for next month's report — the replay runs only when they ask. "
-        "Completion is derived from the "
-        "tagged chat deliverables plus the stored learning and the replay — "
-        "not from the click alone."
+        "When the replay deliverable is sent, I mark the step done explicitly — "
+        "the checklist does not auto-detect the tutorial."
+    ),
+    "my-computer-demo": (
+        "Clicking the 'Watch me work on my computer' row starts the live desktop "
+        "demo on a call — T-W1N opens its browser on the managed VM, downloads "
+        "today's NASA Astronomy Picture of the Day, shows the file in its "
+        "filesystem, and sends it as a chat attachment; off-call the click is a "
+        "call invitation instead. When the attachment is delivered, I mark the "
+        "step done explicitly — nothing auto-completes."
     ),
 }
 
@@ -1706,12 +1813,7 @@ def manual_completion_block_reason(step_id: str) -> str | None:
         return "That onboarding step does not exist."
     if step.kind == "coming_soon":
         return "That onboarding step is not available yet."
-    if step_id == "discord-connect":
-        # Adding T-W1N's public Discord bot to a server is invisible to
-        # Orchestra — there is no inbound event to auto-derive from. The
-        # explicit user click on the connect row is the only completion
-        # signal, so allow it to be marked done manually even though it
-        # sits in the Communication phase.
+    if step_id in MANUAL_COMPLETION_STEP_IDS:
         return None
     if step.phase == PHASE_COMMUNICATION:
         return (
@@ -1719,10 +1821,6 @@ def manual_completion_block_reason(step_id: str) -> str | None:
             "are sent and received on each channel — I cannot mark them done "
             "manually."
         )
-    if step_id in DEMO_STEP_IDS:
-        # Workspace demos are the one trigger class Twin completes explicitly:
-        # it does the whole task, then marks the step done. Allow it here.
-        return None
     if step.kind == "trigger":
         return (
             "This step starts from the onboarding checklist (or when the user "
@@ -1733,13 +1831,6 @@ def manual_completion_block_reason(step_id: str) -> str | None:
         return (
             "This step completes when the user replies on the channel — "
             "I cannot mark it done manually."
-        )
-    if step.id == "learn-from-correction":
-        return (
-            "The Learning tutorial completes on its own once the correction "
-            "loop actually happens — first attempt, the user's correction, "
-            "the improved version, stored learning, and the replay — I "
-            "cannot mark it done without doing the work."
         )
     return None
 
