@@ -23,6 +23,10 @@ PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
 RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS = 90.0
 RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS = 3.0
 
+# Bound the reawaken fan-out so an owner with many assistants (e.g. a large
+# org connecting Slack) does not stampede the adapters service.
+SLACK_REAWAKEN_CONCURRENCY = 8
+
 
 def _safe_json(response: httpx.Response) -> dict[str, Any]:
     """Return response JSON when present, otherwise an empty object."""
@@ -1785,6 +1789,53 @@ async def reawaken_assistant(
     )
     response.raise_for_status()
     return response.json()
+
+
+async def reawaken_slack_owner_assistants(
+    session: Session,
+    *,
+    organization_id: int | None,
+    user_id: str | None,
+) -> None:
+    """Refresh live runtimes of an owner's assistants after a Slack install change.
+
+    A Slack install is owner-scoped (a Unify organization or a personal
+    user), not assistant-scoped, and its ``bot_user_id`` / ``slack_team_id``
+    are resolved into the assistant runtime only at wake time. When a
+    workspace is connected (or re-installed) mid-session, this pushes an
+    assistant update into every owner assistant so already-running sessions
+    pick up the freshly resolved Slack fields (and expose the Slack send
+    tools) without waiting for a restart or an inbound Slack event.
+
+    Best-effort: per-assistant failures are logged and never propagate, so
+    the install write stays durable.
+    """
+    from orchestra.db.models.orchestra_models import Assistant
+
+    query = session.query(Assistant.agent_id)
+    if organization_id is not None:
+        query = query.filter(Assistant.organization_id == organization_id)
+    else:
+        query = query.filter(
+            Assistant.user_id == user_id,
+            Assistant.organization_id.is_(None),
+        )
+    agent_ids = [row[0] for row in query.all()]
+
+    semaphore = asyncio.Semaphore(SLACK_REAWAKEN_CONCURRENCY)
+
+    async def _reawaken_one(agent_id: Any) -> None:
+        async with semaphore:
+            try:
+                await reawaken_assistant(str(agent_id))
+            except Exception as exc:
+                logging.warning(
+                    "Failed to reawaken assistant %s after Slack install change: %s",
+                    agent_id,
+                    exc,
+                )
+
+    await asyncio.gather(*(_reawaken_one(aid) for aid in agent_ids))
 
 
 async def delegate_to_colleague_runtime(
