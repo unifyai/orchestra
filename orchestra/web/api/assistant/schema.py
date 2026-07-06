@@ -831,11 +831,13 @@ class OnboardingStepDependency(BaseModel):
 class OnboardingStepStatus(BaseModel):
     """One onboarding step with its resolved status and presentation copy.
 
-    ``status`` is one of ``done`` / ``skipped`` / ``available`` /
-    ``locked`` — computed server-side from the canonical graph so
-    consumers never re-derive it. ``description`` / ``estimated_time`` /
-    ``chips_*`` carry the per-step display copy from the canonical graph so
-    Console renders straight from this payload without its own copy.
+    ``status`` is one of ``done`` / ``skipped`` / ``in_progress`` /
+    ``available`` / ``locked`` — computed server-side from the canonical graph so
+    consumers never re-derive it. Manual-completion steps that were clicked but
+    not yet finished render as ``in_progress`` with ``dispatched_at`` set.
+    ``description`` / ``estimated_time`` / ``chips_*`` carry the per-step display
+    copy from the canonical graph so Console renders straight from this payload
+    without its own copy.
     """
 
     id: str
@@ -845,6 +847,7 @@ class OnboardingStepStatus(BaseModel):
     kind: str = ""
     channel: Optional[str] = None
     paired_reply: Optional[str] = None
+    dispatched_at: Optional[str] = None
     nudge_chat: str = ""
     nudge_voice: str = ""
     phase_id: Optional[str] = None
