@@ -1746,7 +1746,6 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_SLACK_CONNECT,
     ONBOARDING_STEP_SLACK_MESSAGE,
     ONBOARDING_STEP_DISCORD_ID,
-    ONBOARDING_STEP_DISCORD_CONNECT,
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
     ONBOARDING_STEP_APPS,
@@ -2256,17 +2255,6 @@ def _has_user_discord_id(scope: "_OnboardingProbeScope") -> bool:
     return bool(user and user.discord_id and user.discord_id.strip())
 
 
-def _has_discord_connection(scope: "_OnboardingProbeScope") -> bool:
-    user = scope.user
-    if not user or not user.discord_id or not user.discord_id.strip():
-        return False
-    contact = AssistantContactDAO(scope.session).get_contact_by_assistant_and_type(
-        scope.coordinator.agent_id,
-        "discord",
-    )
-    return bool(contact and contact.contact_value and contact.contact_value.strip())
-
-
 def _has_user_transcript_message(
     scope: "_OnboardingProbeScope",
     *,
@@ -2418,7 +2406,6 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
-        ONBOARDING_STEP_DISCORD_CONNECT: _has_discord_connection,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_app_secret,
         ONBOARDING_STEP_CREATE_SCHEDULED_TASK: _has_scheduled_task,

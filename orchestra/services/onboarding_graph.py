@@ -891,7 +891,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         kind="connect",
         depends_on={"discord-id": COMPLETED},
         can_skip=True,
-        derivable=True,
+        derivable=False,
         channel="discord",
         nudge_chat=(
             "Have them click the 'Connect Discord' row in the Onboarding checklist; "
