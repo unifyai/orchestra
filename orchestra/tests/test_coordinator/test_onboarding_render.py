@@ -50,13 +50,15 @@ def test_workspace_demos_are_settable_triggers_that_never_auto_derive() -> None:
 def test_manual_completion_block_reason() -> None:
     """Communication and auto-triggered rows reject manual completion.
 
-    Workspace demos are the deliberate exception: they are multi-part tasks the
-    assistant finishes and then marks done explicitly, so they must be settable.
+    Explicitly-completed beats (workspace demos, discord-connect, learning) must
+    be settable; schedule rows with durable checks also fall through as allowed.
     """
     assert graph.manual_completion_block_reason("email-reference") is not None
     assert graph.manual_completion_block_reason("email-reply") is not None
     assert graph.manual_completion_block_reason("workspace-mailbox") is None
     assert graph.manual_completion_block_reason("workspace-drive") is None
     assert graph.manual_completion_block_reason("workspace-calendar") is None
+    assert graph.manual_completion_block_reason("learn-from-correction") is None
+    assert graph.manual_completion_block_reason("my-computer-demo") is None
     assert graph.manual_completion_block_reason("apps") is None
     assert graph.manual_completion_block_reason("create-scheduled-task") is None
