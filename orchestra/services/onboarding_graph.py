@@ -1300,11 +1300,12 @@ TRIGGER_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     for trigger_id, reply_id in TRIGGER_TO_REPLY.items()
 }
 
-# Workspace demo trigger rows have no paired reply and are deliberately NOT
-# auto-derived from an outbound: a single tagged summary must not complete a
-# multi-part task. The assistant performs the full demo task end to end, then
-# explicitly marks the step done via ``set_onboarding_task_state`` (permitted for
-# these ids by ``manual_completion_block_reason``), which records the step in
+# Workspace and Integrations demo trigger rows have no paired reply and are
+# deliberately NOT auto-derived from an outbound: a single tagged summary/report
+# must not complete a multi-part task. The assistant performs the full demo task
+# end to end, then explicitly marks the step done via
+# ``set_onboarding_task_state`` (permitted for these ids by
+# ``manual_completion_block_reason``), which records the step in
 # ``manually_completed_step_ids``. They are therefore absent from
 # ``TRIGGER_TO_OUTBOUND_MEDIUMS`` and are never picked up by
 # ``derive_onboarding_progress`` from transcript evidence.
@@ -1317,10 +1318,11 @@ DEMO_STEP_IDS: tuple[str, ...] = (
 )
 
 # Steps Twin may mark done via ``set_onboarding_task_state`` / the
-# ``onboarding_step_completion`` PATCH. Workspace demos are trigger rows with
-# no paired reply and no transcript derivation; discord-connect sits in
-# Communication but has no inbound auto-derive signal; learn-from-correction
-# is an explicitly-completed tutorial beat.
+# ``onboarding_step_completion`` PATCH. Demo ids are trigger rows with no paired
+# reply and no transcript derivation; discord-connect sits in Communication but
+# has no inbound auto-derive signal; learn-from-correction is an
+# explicitly-completed tutorial beat; my-computer-demo is completed after the
+# managed-desktop proof finishes.
 MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
     *DEMO_STEP_IDS,
     "discord-connect",
