@@ -1614,7 +1614,7 @@ SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 # Fired when the user clicks a workspace demo row (mailbox / Drive /
 # calendar). Twin reads that area of the connected workspace and performs the
 # whole demo task, then explicitly marks the step complete via
-# ``set_onboarding_task_state`` (see onboarding_graph.DEMO_STEP_IDS). The demo
+# ``set_onboarding_task_state`` (see onboarding_graph.MANUAL_COMPLETION_STEP_IDS). The demo
 # is deliberately NOT auto-derived from the summary outbound.
 SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 # Fired when a demo (or any non-auto-derived, non-Communication) step is marked
@@ -1640,10 +1640,13 @@ SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 # the graph presentation (see onboarding_graph.chip_event_for).
 SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
 # Fired when the user clicks the Learning-phase beat row: it starts the guided
-# expenses-etl tutorial directly (no chips). Completion is derived from tagged
-# unify_message deliverables plus stored Guidance or Functions (see
-# :func:`_learning_beat_complete`).
+# expenses-etl tutorial directly (no chips). Twin marks the step done explicitly
+# after the replay deliverable via ``set_onboarding_task_state``.
 SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
+# Fired when the user clicks the My Computer beat row: it starts the call-anchored
+# live desktop demo (no chips). Twin marks the step done explicitly after the
+# chat attachment via ``set_onboarding_task_state``.
+SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1683,6 +1686,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_TASK_BEAT_REQUESTED,
         SUBTYPE_TASK_CHIP_REQUESTED,
         SUBTYPE_LEARNING_BEAT_REQUESTED,
+        SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1729,12 +1733,7 @@ ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
 ONBOARDING_STEP_CREATE_SCHEDULED_TASK = "create-scheduled-task"
 ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK = "create-triggerable-task"
-ONBOARDING_STEP_LEARN_FROM_CORRECTION = "learn-from-correction"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
-ONBOARDING_LEARNING_PHASE_FIRST = "first_attempt"
-ONBOARDING_LEARNING_PHASE_IMPROVED = "improved"
-ONBOARDING_LEARNING_PHASE_REPLAY = "replay"
-ONBOARDING_LEARNING_PHASE_METADATA_KEY = "onboarding_learning_phase"
 DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_EMAIL_REPLY,
     ONBOARDING_STEP_WHATSAPP_NUMBER,
@@ -1751,7 +1750,6 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_APPS,
     ONBOARDING_STEP_CREATE_SCHEDULED_TASK,
     ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK,
-    ONBOARDING_STEP_LEARN_FROM_CORRECTION,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
     *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
@@ -1764,8 +1762,6 @@ SKIPPABLE_ONBOARDING_PHASES = (
 
 COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
 COORDINATOR_TASKS_CONTEXT = "Tasks"
-COORDINATOR_GUIDANCE_CONTEXT = "Guidance"
-COORDINATOR_FUNCTIONS_COMPOSITIONAL_CONTEXT = "Functions/Compositional"
 
 
 def normalize_onboarding_step_ids(value: Any) -> list[str]:
@@ -2024,207 +2020,6 @@ def _has_triggerable_task(scope: "_OnboardingProbeScope") -> bool:
     )
 
 
-def _tagged_assistant_transcript_at(
-    session: Session,
-    *,
-    project_id: int,
-    transcripts_context: Context,
-    trigger_step_id: str,
-    learning_phase: str | None = None,
-    after: datetime | None = None,
-) -> datetime | None:
-    """Earliest assistant unify_message tagged for one onboarding trigger/phase."""
-    query = (
-        project_scoped_log_events(
-            project_id,
-            LogEvent.created_at,
-            owner_key=single_owner_key(
-                transcripts_context.owner_scope,
-                transcripts_context.owner_id,
-            ),
-        )
-        .where(
-            LogEventContext.context_id == transcripts_context.id,
-            LogEvent.data["medium"].astext == COORDINATOR_CHAT_MEDIUM,
-            LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
-            LogEvent.data["receiver_ids"].contains([PERSONAL_BOSS_CONTACT_ID]),
-            LogEvent.data.has_key("metadata"),
-            LogEvent.data["metadata"].has_key("onboarding_trigger_step_id"),
-            LogEvent.data["metadata"]["onboarding_trigger_step_id"].astext
-            == trigger_step_id,
-        )
-        .order_by(LogEvent.created_at.asc())
-        .limit(1)
-    )
-    if learning_phase is not None:
-        query = query.where(
-            LogEvent.data["metadata"].has_key(ONBOARDING_LEARNING_PHASE_METADATA_KEY),
-            LogEvent.data["metadata"][ONBOARDING_LEARNING_PHASE_METADATA_KEY].astext
-            == learning_phase,
-        )
-    if after is not None:
-        query = query.where(LogEvent.created_at > after)
-    return session.scalar(query)
-
-
-def _user_transcript_first_after(
-    session: Session,
-    *,
-    project_id: int,
-    transcripts_context: Context,
-    after: datetime,
-) -> datetime | None:
-    """Earliest user unify_message strictly after ``after``."""
-    return session.scalar(
-        project_scoped_log_events(
-            project_id,
-            LogEvent.created_at,
-            owner_key=single_owner_key(
-                transcripts_context.owner_scope,
-                transcripts_context.owner_id,
-            ),
-        )
-        .where(
-            LogEventContext.context_id == transcripts_context.id,
-            LogEvent.data["medium"].astext == COORDINATOR_CHAT_MEDIUM,
-            LogEvent.data["sender_id"].astext == str(PERSONAL_BOSS_CONTACT_ID),
-            LogEvent.data["receiver_ids"].contains([PERSONAL_SELF_CONTACT_ID]),
-            LogEvent.created_at > after,
-        )
-        .order_by(LogEvent.created_at.asc())
-        .limit(1),
-    )
-
-
-def _earliest_coordinator_context_row_after(
-    session: Session,
-    *,
-    project_id: int,
-    coordinator: Assistant,
-    suffix: str,
-    after: datetime,
-) -> datetime | None:
-    """Earliest row timestamp in one coordinator personal context after ``after``."""
-    context = _get_context(
-        session,
-        project_id=project_id,
-        context_name=_coordinator_context_name(coordinator, suffix),
-    )
-    if context is None:
-        return None
-    return session.scalar(
-        project_scoped_log_events(
-            project_id,
-            LogEvent.created_at,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
-        )
-        .where(
-            LogEventContext.context_id == context.id,
-            LogEvent.created_at > after,
-        )
-        .order_by(LogEvent.created_at.asc())
-        .limit(1),
-    )
-
-
-def _learning_beat_complete(
-    scope: "_OnboardingProbeScope",
-    *,
-    beat_anchor: datetime,
-) -> bool:
-    """Learn-from-correction step: tagged correction loop + Brain storage + replay."""
-    if scope.transcripts_context is None:
-        return False
-    session = scope.session
-    project_id = scope.project.id
-    transcripts_context = scope.transcripts_context
-
-    first_attempt_at = _tagged_assistant_transcript_at(
-        session,
-        project_id=project_id,
-        transcripts_context=transcripts_context,
-        trigger_step_id=ONBOARDING_STEP_LEARN_FROM_CORRECTION,
-        learning_phase=ONBOARDING_LEARNING_PHASE_FIRST,
-        after=beat_anchor,
-    )
-    if first_attempt_at is None:
-        return False
-
-    correction_at = _user_transcript_first_after(
-        session,
-        project_id=project_id,
-        transcripts_context=transcripts_context,
-        after=first_attempt_at,
-    )
-    if correction_at is None:
-        return False
-
-    improved_at = _tagged_assistant_transcript_at(
-        session,
-        project_id=project_id,
-        transcripts_context=transcripts_context,
-        trigger_step_id=ONBOARDING_STEP_LEARN_FROM_CORRECTION,
-        learning_phase=ONBOARDING_LEARNING_PHASE_IMPROVED,
-        after=correction_at,
-    )
-    if improved_at is None:
-        return False
-
-    guidance_at = _earliest_coordinator_context_row_after(
-        session,
-        project_id=project_id,
-        coordinator=scope.coordinator,
-        suffix=COORDINATOR_GUIDANCE_CONTEXT,
-        after=correction_at,
-    )
-    function_at = _earliest_coordinator_context_row_after(
-        session,
-        project_id=project_id,
-        coordinator=scope.coordinator,
-        suffix=COORDINATOR_FUNCTIONS_COMPOSITIONAL_CONTEXT,
-        after=correction_at,
-    )
-    if guidance_at is None and function_at is None:
-        return False
-
-    storage_candidates = [
-        timestamp for timestamp in (guidance_at, function_at) if timestamp is not None
-    ]
-    storage_at = max(storage_candidates)
-
-    replay_at = _tagged_assistant_transcript_at(
-        session,
-        project_id=project_id,
-        transcripts_context=transcripts_context,
-        trigger_step_id=ONBOARDING_STEP_LEARN_FROM_CORRECTION,
-        learning_phase=ONBOARDING_LEARNING_PHASE_REPLAY,
-        after=storage_at,
-    )
-    return replay_at is not None
-
-
-def _ensure_onboarding_beat_anchor(
-    session: Session,
-    *,
-    coordinator: Assistant,
-    step_id: str,
-) -> None:
-    """Stamp onboarding_reset_at on first engagement for a beat step."""
-    if step_id != ONBOARDING_STEP_LEARN_FROM_CORRECTION:
-        return
-    state = get_coordinator_state(session, coordinator=coordinator)
-    reset_at = normalize_onboarding_reset_at(state.get("onboarding_reset_at"))
-    if step_id in reset_at:
-        return
-    set_coordinator_state(
-        session,
-        coordinator=coordinator,
-        onboarding_reset_at_updates={
-            step_id: datetime.now(timezone.utc).isoformat(),
-        },
-    )
-
-
 def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User | None:
     return session.get(User, coordinator.user_id)
 
@@ -2415,13 +2210,6 @@ def derive_onboarding_progress(
     for step in onboarding_graph.ONBOARDING_GRAPH:
         step_id = step.id
         reset_after = _parse_onboarding_reset_at(reset_at.get(step_id))
-        if step_id == ONBOARDING_STEP_LEARN_FROM_CORRECTION:
-            if reset_after is not None and _learning_beat_complete(
-                scope,
-                beat_anchor=reset_after,
-            ):
-                completed.append(step_id)
-            continue
         if step_id in onboarding_graph.TRIGGER_TO_OUTBOUND_MEDIUMS:
             if _has_trigger_outbound(
                 scope,
@@ -3526,11 +3314,6 @@ async def emit_onboarding_step_event(
                 step_id,
             )
             return False
-    _ensure_onboarding_beat_anchor(
-        session,
-        coordinator=coordinator,
-        step_id=step.id,
-    )
     phase = onboarding_graph.PHASE_BY_LABEL.get(step.phase)
     # Row triggers with a paired reply advance the active step before
     # publishing; chip events never carry a paired reply.

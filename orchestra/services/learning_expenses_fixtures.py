@@ -37,8 +37,7 @@ def learning_expenses_storage_check_nudge() -> str:
 def learning_expenses_stop_act_for_storage_rule() -> str:
     """CM must end the persist act after the improved deliverable to run StorageCheck."""
     return (
-        "After sending the improved deliverable tagged "
-        "onboarding_learning_phase=improved, call stop_* on the running "
+        "After sending the improved deliverable, call stop_* on the running "
         "persist act in the SAME turn — StorageCheck only starts once the "
         "persist session ends, not while it sits in awaiting_input. Tell the "
         "user in plain language that you are stopping the action so Brain can "
@@ -101,12 +100,11 @@ def learning_expenses_deliverable_handoff_rule() -> str:
     return (
         "Deliverable handoff (non-negotiable): the moment a demo act run "
         "completes and returns its result, my SAME turn must send that result "
-        "to the user as a unify_message tagged with the current "
-        "onboarding_learning_phase (first_attempt, improved, or replay). "
-        "Responding to a completed demo act with a bare wait and no tagged "
-        "message is a script violation — the tutorial stalls and the user "
-        "sees nothing. This applies after every act pass: the first naive "
-        "attempt, the improved revision, and the month-N+1 replay."
+        "to the user as a unify_message. Responding to a completed demo act "
+        "with a bare wait and no message is a script violation — the tutorial "
+        "stalls and the user sees nothing. This applies after every act pass: "
+        "the first naive attempt, the improved revision, and the month-N+1 "
+        "replay."
     )
 
 
