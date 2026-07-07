@@ -191,6 +191,7 @@ async def test_team_messages_post_and_history(
     assert payload["team_id"] == team["id"]
     assert payload["fanout_assistant_ids"] == []
     assert payload["assistant_event"]["body"] == "Hello team!"
+    assert payload["assistant_event"]["sender_kind"] == "user"
     assert payload["assistant_event"]["sender_user_id"] == owner["id"]
     assert payload["assistant_event"]["sender_email"] == "teamchat-owner@test.com"
 
@@ -209,7 +210,7 @@ async def test_team_messages_post_and_history(
 
 
 @pytest.mark.anyio
-async def test_assistant_team_reply_admin_endpoint(
+async def test_assistant_team_reply_fans_out_to_peers(
     client: AsyncClient,
     dbsession,
     org_chat_dispatch_mock: AsyncMock,
@@ -223,37 +224,54 @@ async def test_assistant_team_reply_admin_endpoint(
         name="AI Chat Team",
     )
 
-    from orchestra.db.models.orchestra_models import TeamAssistantMembership
+    from orchestra.db.models.orchestra_models import Assistant, TeamAssistantMembership
 
-    membership = (
-        dbsession.query(TeamAssistantMembership)
-        .filter(TeamAssistantMembership.team_id == team["id"])
-        .first()
+    # Two non-coordinator assistants on the team: the author and one peer.
+    author = Assistant(user_id=owner["id"], first_name="Ada", surname="Author")
+    peer = Assistant(user_id=owner["id"], first_name="Pat", surname="Peer")
+    dbsession.add_all([author, peer])
+    dbsession.flush()
+    dbsession.add_all(
+        [
+            TeamAssistantMembership(
+                team_id=team["id"],
+                assistant_id=author.agent_id,
+                added_by=owner["id"],
+            ),
+            TeamAssistantMembership(
+                team_id=team["id"],
+                assistant_id=peer.agent_id,
+                added_by=owner["id"],
+            ),
+        ],
     )
-    assert membership is not None
-    assistant_id = membership.assistant_id
+    dbsession.commit()
 
     reply_response = await client.post(
         f"/v0/admin/teams/{team['id']}/messages",
         headers=ADMIN_HEADERS,
-        json={"assistant_id": assistant_id, "content": "On it."},
+        json={"assistant_id": author.agent_id, "content": "On it."},
     )
     assert reply_response.status_code == status.HTTP_201_CREATED, reply_response.json()
     reply = reply_response.json()
     assert reply["sender_kind"] == "assistant"
-    assert reply["sender_assistant_id"] == assistant_id
+    assert reply["sender_assistant_id"] == author.agent_id
 
-    # Assistant replies publish to Console but never fan out to other
-    # assistant runtimes (loop prevention).
+    # Assistant replies fan out to peer assistants (waking them if needed),
+    # excluding the author, exactly like a human message.
     payload = org_chat_dispatch_mock.await_args.args[0]
     assert payload["kind"] == "team"
-    assert "fanout_assistant_ids" not in payload
+    assert payload["fanout_assistant_ids"] == [peer.agent_id]
+    assert payload["assistant_event"]["sender_kind"] == "assistant"
+    assert payload["assistant_event"]["sender_assistant_id"] == author.agent_id
+    assert payload["assistant_event"]["sender_name"] == "Ada Author"
+    assert payload["assistant_event"]["body"] == "On it."
 
     # A non-member assistant is rejected.
     bad_reply = await client.post(
         f"/v0/admin/teams/{team['id']}/messages",
         headers=ADMIN_HEADERS,
-        json={"assistant_id": assistant_id + 999999, "content": "Nope"},
+        json={"assistant_id": peer.agent_id + 999999, "content": "Nope"},
     )
     assert bad_reply.status_code in (
         status.HTTP_403_FORBIDDEN,

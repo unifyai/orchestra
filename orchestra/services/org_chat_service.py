@@ -15,12 +15,13 @@ assistant and are ambiguous in a multi-party room.
 
 Realtime delivery and assistant fan-out are delegated to the hosted
 communication layer (adapters ``POST /unify/org-chat``): one publish to the
-per-organization Pub/Sub topic for Console SSE, plus (for human-sent team
-messages) one standard ``unify_message`` envelope per non-coordinator team
-assistant — team chat is ordinary unify_message traffic fanned out to every
-team assistant, like a large email CC chain. Assistant replies are persisted
-and published but never fan out to other assistants, which mechanically
-prevents AI reply loops.
+per-organization Pub/Sub topic for Console SSE, plus one standard
+``unify_message`` envelope per non-coordinator team assistant — team chat is
+ordinary unify_message traffic fanned out to every team assistant, like a
+large email CC chain. Assistant-authored messages fan out the same way
+(excluding the author), so AI replies are part of every teammate's
+conversational context; whether to respond is each receiving brain's normal
+judgement, as on any other medium.
 """
 
 from __future__ import annotations
@@ -278,43 +279,62 @@ def team_chat_participants(
     return {"humans": humans, "assistants": assistants}
 
 
+def assistant_email(session: Session, assistant_id: int) -> str:
+    """The assistant's provisioned email address ("" when none).
+
+    Team-chat fan-out carries this as the sender identity for AI-authored
+    messages so receiving runtimes can resolve (or provision) a teammate
+    contact for the author.
+    """
+    from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+
+    for contact in AssistantContactDAO(session).get_active_contacts_for_assistant(
+        assistant_id,
+    ):
+        if contact.contact_type == "email" and contact.contact_value:
+            return contact.contact_value
+    return ""
+
+
 def build_team_dispatch_payload(
     session: Session,
     *,
     team: Team,
     message: dict[str, Any],
-    fan_out: bool,
     sender_email: str = "",
+    exclude_assistant_id: int | None = None,
 ) -> dict[str, Any]:
     """Build the adapters ``/unify/org-chat`` payload for one team message.
 
-    ``fan_out`` is True for human-sent messages — every non-coordinator team
-    assistant receives a copy on the standard ``unify_message`` thread (like
-    a large email CC chain) — and False for assistant replies (Console
-    publish only, so AI replies never re-trigger other runtimes).
+    Every team message — human- or assistant-authored — fans out to every
+    non-coordinator team assistant on the standard ``unify_message`` thread,
+    like a large email CC chain. ``exclude_assistant_id`` skips the authoring
+    assistant (it already has its own copy of what it said).
 
     ``sender_email`` lets each runtime resolve the sender against its own
     Contacts table when the sender is not that assistant's owner.
     """
-    payload: dict[str, Any] = {
+    participants = team_chat_participants(session, team=team)
+    return {
         "kind": "team",
         "organization_id": team.organization_id,
         "team_id": team.id,
         "message": message,
-    }
-    if fan_out:
-        participants = team_chat_participants(session, team=team)
-        payload["fanout_assistant_ids"] = [
-            entry["assistant_id"] for entry in participants["assistants"]
-        ]
-        payload["assistant_event"] = {
+        "fanout_assistant_ids": [
+            entry["assistant_id"]
+            for entry in participants["assistants"]
+            if entry["assistant_id"] != exclude_assistant_id
+        ],
+        "assistant_event": {
             "team_id": team.id,
             "team_name": team.name,
             "organization_id": team.organization_id,
             "body": message.get("content") or "",
             "group_message_id": message.get("message_id"),
+            "sender_kind": message.get("sender_kind") or SENDER_KIND_USER,
             "sender_user_id": message.get("sender_user_id") or "",
+            "sender_assistant_id": message.get("sender_assistant_id"),
             "sender_email": sender_email,
             "sender_name": message.get("sender_name") or "",
-        }
-    return payload
+        },
+    }

@@ -23,6 +23,7 @@ from orchestra.db.models.orchestra_models import Organization, Team, User
 from orchestra.services.org_chat_service import (
     SENDER_KIND_ASSISTANT,
     SENDER_KIND_USER,
+    assistant_email,
     build_team_dispatch_payload,
     list_team_messages,
     persist_team_message,
@@ -262,7 +263,6 @@ async def post_team_message(
         session,
         team=team,
         message=message,
-        fan_out=True,
         sender_email=sender.email or "",
     )
     await dispatch_org_chat_best_effort(payload)
@@ -281,9 +281,10 @@ async def post_team_message_as_assistant(
 ) -> TeamMessageResponse:
     """Assistant runtime posting a group-chat reply (admin auth).
 
-    The reply is persisted and published to the Console stream but never
-    fans out to other assistant runtimes — assistants only ever trigger on
-    human messages, which mechanically prevents AI reply loops.
+    The reply is persisted, published to the Console stream, and fanned out
+    to every other non-coordinator team assistant (the author is excluded —
+    it already knows what it said) so AI replies are part of every
+    teammate's conversational context, exactly like a human message.
     """
     team = TeamDAO(session).get(team_id)
     if not team:
@@ -335,7 +336,8 @@ async def post_team_message_as_assistant(
         session,
         team=team,
         message=message,
-        fan_out=False,
+        sender_email=assistant_email(session, assistant.agent_id),
+        exclude_assistant_id=assistant.agent_id,
     )
     await dispatch_org_chat_best_effort(payload)
     return TeamMessageResponse(**message)
