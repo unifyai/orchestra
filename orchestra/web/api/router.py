@@ -38,6 +38,7 @@ from orchestra.web.api.email import admin_router as email_admin_router
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.messages import admin_router as messages_admin_router
 from orchestra.web.api.messages import router as messages_router
+from orchestra.web.api.ms_teams_bot import admin_router as ms_teams_bot_admin_router
 from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.phone import admin_router as phone_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
@@ -214,6 +215,13 @@ api_router.include_router(
     slack_admin_router,
     prefix="/admin",
     tags=["Slack"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    ms_teams_bot_admin_router,
+    prefix="/admin",
+    tags=["MS Teams Bot"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

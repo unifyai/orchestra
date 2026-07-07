@@ -3856,3 +3856,197 @@ class SlackThreadRoute(Base):
         ),
         Index("ix_slack_thread_routes_expires", "expires_at"),
     )
+
+
+class MsTeamsBotInstall(Base):
+    """Per-tenant Microsoft Teams (Bot Framework) install.
+
+    The Teams-bot channel is the Bot-Framework analogue of the Slack app:
+    a single multi-tenant Azure bot (``bot_app_id``) that a company
+    installs from the Teams Store, after which inbound activities for that
+    Microsoft tenant fan out to the assistants of one Unify owner. The
+    routing unit is the Azure AD ``tenant_id`` (analogue of Slack's
+    ``slack_team_id``); tokens are minted on demand from the shared app id
+    + secret rather than stored per-tenant, so we persist the tenant's
+    ``service_url`` (region-specific Bot Framework endpoint) for outbound
+    proactive replies instead of a bot token.
+
+    Ownership is deferred, unlike Slack. A Teams Store install gives us the
+    ``tenant_id`` before we know which Unify organization it belongs to, so
+    a row is created *pending* (no owner, carrying a ``bind_nonce``) on the
+    first ``conversationUpdate`` and later bound to an owner via the
+    tenant-to-org handshake (Console → ``POST /admin/ms-teams-bot/bind``).
+    The owner column pair therefore allows the transient both-NULL state:
+
+    * pending — ``organization_id`` and ``user_id`` both NULL,
+      ``bind_nonce`` set, ``bound_at`` NULL. Dispatch drops traffic for a
+      pending install (nothing to route to yet).
+    * bound — exactly one of ``organization_id`` / ``user_id`` set,
+      ``bind_nonce`` NULL, ``bound_at`` populated. Routes like a Slack
+      install.
+
+    ``ck_ms_teams_bot_install_single_owner`` forbids *both* owners being
+    set at once (at most one owner) while permitting the pending state.
+
+    Uniqueness mirrors ``SlackInstall``:
+
+    * ``ux_ms_teams_bot_install_org_tenant`` — one row per
+      ``(organization_id, tenant_id)`` (org installs).
+    * ``ux_ms_teams_bot_install_user_tenant`` — one row per
+      ``(user_id, tenant_id)`` (personal installs).
+    * ``ux_ms_teams_bot_install_active_tenant`` — at most one *active*
+      (non-revoked) row per ``tenant_id``.
+    """
+
+    __tablename__ = "ms_teams_bot_installs"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    tenant_id = Column(String, nullable=False)
+    tenant_name = Column(String, nullable=True)
+    bot_app_id = Column(String, nullable=False)
+    service_url = Column(String, nullable=True)
+    installer_aad_object_id = Column(String, nullable=True)
+    bind_nonce = Column(String, nullable=True)
+    bound_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    scopes = Column(Text, nullable=True)
+    installed_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    revoked_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "NOT (organization_id IS NOT NULL AND user_id IS NOT NULL)",
+            name="ck_ms_teams_bot_install_single_owner",
+        ),
+        Index(
+            "ux_ms_teams_bot_install_org_tenant",
+            "organization_id",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("organization_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_ms_teams_bot_install_user_tenant",
+            "user_id",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "ux_ms_teams_bot_install_active_tenant",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_ms_teams_bot_installs_tenant_id", "tenant_id"),
+        Index("ix_ms_teams_bot_installs_bind_nonce", "bind_nonce"),
+    )
+
+
+class MsTeamsBotChannelBinding(Base):
+    """Default assistant for a Microsoft Teams channel.
+
+    Analogue of :class:`SlackChannelBinding`. ``channel_id`` is the Teams
+    channel identity (Bot Framework ``channelData.channel.id``, e.g.
+    ``19:...@thread.tacv2``), *not* a per-thread conversation id — a
+    binding sets the default recipient for untokened, un-routed traffic in
+    that channel. Coordinators need no binding; they are the owner-wide
+    fallback.
+    """
+
+    __tablename__ = "ms_teams_bot_channel_bindings"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("ms_teams_bot_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    channel_id = Column(String, nullable=False)
+    channel_name = Column(String, nullable=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    bound_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    install = relationship("MsTeamsBotInstall")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "channel_id",
+            name="uq_ms_teams_bot_channel_binding",
+        ),
+    )
+
+
+class MsTeamsBotConversationRoute(Base):
+    """Sticky routing for a single Microsoft Teams conversation.
+
+    Analogue of :class:`SlackThreadRoute`, collapsed onto the Bot
+    Framework ``conversation.id`` which already uniquely identifies a
+    conversation whether it is a 1:1 personal chat, a group chat, or a
+    channel reply thread (the channel thread id is encoded in the
+    conversation id). One row per ``(install, conversation_id)``.
+
+    ``conversation_reference`` stores the serialized Bot Framework
+    ConversationReference JSON (bot + user identities, ``service_url``,
+    ``conversation``, tenant) captured on inbound so the outbound path can
+    reply *proactively* into the same conversation without the user having
+    to message first. Rows expire after a TTL (default 14 days, refreshed
+    on every send/receive that hits the route).
+    """
+
+    __tablename__ = "ms_teams_bot_conversation_routes"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("ms_teams_bot_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    conversation_id = Column(String, nullable=False)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    conversation_reference = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_used_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+
+    install = relationship("MsTeamsBotInstall")
+    assistant = relationship("Assistant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "conversation_id",
+            name="uq_ms_teams_bot_conversation_route",
+        ),
+        Index("ix_ms_teams_bot_conversation_routes_expires", "expires_at"),
+    )
