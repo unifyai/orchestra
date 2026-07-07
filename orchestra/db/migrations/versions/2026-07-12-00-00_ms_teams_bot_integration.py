@@ -1,7 +1,7 @@
 """MS Teams bot tables: per-tenant install, channel bindings, conversation routes.
 
-Adds the Bot-Framework analogue of the Slack integration: a single
-multi-tenant Azure bot that a company installs from the Teams Store, after
+Adds the Bot-Framework analogue of the Slack integration: a single Azure
+bot registration that a company installs from the Teams Store, after
 which inbound activities for that Microsoft tenant fan out to the
 assistants of one Unify owner.
 

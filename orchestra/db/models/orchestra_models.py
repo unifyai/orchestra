@@ -3862,7 +3862,7 @@ class MsTeamsBotInstall(Base):
     """Per-tenant Microsoft Teams (Bot Framework) install.
 
     The Teams-bot channel is the Bot-Framework analogue of the Slack app:
-    a single multi-tenant Azure bot (``bot_app_id``) that a company
+    a single Azure bot registration (``bot_app_id``) that a company
     installs from the Teams Store, after which inbound activities for that
     Microsoft tenant fan out to the assistants of one Unify owner. The
     routing unit is the Azure AD ``tenant_id`` (analogue of Slack's
