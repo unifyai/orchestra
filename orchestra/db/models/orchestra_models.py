@@ -1962,6 +1962,10 @@ class Assistant(Base):
         index=True,
     )
     voice_provider = Column(String, nullable=True)
+    # Default LLM for the assistant runtime, as a unillm ``model@provider``
+    # endpoint plus a reasoning-effort level. NULL = platform default.
+    default_model = Column(String, nullable=True)
+    default_reasoning_effort = Column(String, nullable=True)
     is_local = Column(Boolean, nullable=False, default=False, server_default="false")
     is_coordinator = Column(
         Boolean,
