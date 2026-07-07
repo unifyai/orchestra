@@ -133,6 +133,11 @@ class TaskRunUpdateRequest(BaseModel):
         description="Assistant identifier that owns the run being updated.",
     )
     run_key: str = Field(description="Idempotency key for the run to update.")
+    source_task_log_id: Optional[int] = Field(
+        default=None,
+        description="Physical Tasks-row log id; resolves team-task runs to "
+        "their team surface (mirrors create-or-adopt resolution).",
+    )
     updates: Dict[str, Any] = Field(
         description="Partial field updates to merge into the run row payload.",
     )
@@ -250,6 +255,11 @@ class TaskOutboundOperationUpdateRequest(BaseModel):
     )
     operation_key: str = Field(
         description="Idempotency key for the outbound operation to update.",
+    )
+    source_task_log_id: Optional[int] = Field(
+        default=None,
+        description="Physical Tasks-row log id; resolves team-task operations "
+        "to their team surface (mirrors create-or-adopt resolution).",
     )
     updates: Dict[str, Any] = Field(
         description="Partial field updates to merge into the outbound operation row.",
