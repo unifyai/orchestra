@@ -1530,6 +1530,19 @@ class DefaultModelOptionRead(BaseModel):
         description="Human-readable label for the option.",
         example="GPT-5.5 (high thinking)",
     )
+    approx_credits_per_task: int = Field(
+        ...,
+        description=(
+            "Order-of-magnitude estimate of what one typical assistant task "
+            "costs at this option, in customer-facing credits. Display-only."
+        ),
+        example=475,
+    )
+    artificial_analysis_url: str = Field(
+        ...,
+        description="Artificial Analysis benchmark page for the model.",
+        example="https://artificialanalysis.ai/models/gpt-5-5",
+    )
 
 
 class VoiceCloneRequestData(BaseModel):

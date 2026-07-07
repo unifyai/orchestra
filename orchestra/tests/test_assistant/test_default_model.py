@@ -48,7 +48,29 @@ async def test_list_default_model_options(client: AsyncClient):
     assert ("gpt-5.5@openai", "high") in pairs
     assert ("claude-4.8-opus@anthropic", "medium") in pairs
     assert ("claude-fable-5@anthropic", "low") in pairs
+    assert ("claude-sonnet-5@anthropic", "high") in pairs
+    assert ("gemini-3-pro@vertex-ai", "medium") in pairs
     assert all(o["label"] for o in options)
+    assert all(o["approx_credits_per_task"] > 0 for o in options)
+    assert all(
+        o["artificial_analysis_url"].startswith("https://artificialanalysis.ai/models/")
+        for o in options
+    )
+
+
+@pytest.mark.anyio
+async def test_default_model_options_costs_rank_sensibly(client: AsyncClient):
+    """Within a model, higher effort costs more; the default is the cheapest."""
+    resp = await client.get("/v0/assistant/default-model-options", headers=HEADERS)
+    options = resp.json()["info"]
+    by_model: dict = {}
+    for o in options:
+        by_model.setdefault(o["model"], []).append(o["approx_credits_per_task"])
+    for model, costs in by_model.items():
+        assert costs == sorted(costs), model
+    assert options[0]["approx_credits_per_task"] == min(
+        o["approx_credits_per_task"] for o in options
+    )
 
 
 @pytest.mark.anyio

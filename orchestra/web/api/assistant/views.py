@@ -5160,6 +5160,8 @@ def list_default_model_options() -> InfoResponse[List[DefaultModelOptionRead]]:
                 model=option.model,
                 reasoning_effort=option.reasoning_effort,
                 label=option.label,
+                approx_credits_per_task=option.approx_credits_per_task,
+                artificial_analysis_url=option.artificial_analysis_url,
             )
             for option in DEFAULT_MODEL_OPTIONS
         ],
