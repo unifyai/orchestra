@@ -183,13 +183,16 @@ async def test_team_messages_post_and_history(
     assert [entry["content"] for entry in messages] == ["Hello team!"]
 
     # A human message dispatches with team fan-out enabled (empty here: the
-    # only team assistant is the coordinator, which is excluded).
+    # only team assistant is the coordinator, which is excluded). The
+    # assistant event is a standard unify_message payload with team context.
     org_chat_dispatch_mock.assert_awaited()
     payload = org_chat_dispatch_mock.await_args.args[0]
     assert payload["kind"] == "team"
     assert payload["team_id"] == team["id"]
     assert payload["fanout_assistant_ids"] == []
-    assert payload["assistant_event"]["message"]["content"] == "Hello team!"
+    assert payload["assistant_event"]["body"] == "Hello team!"
+    assert payload["assistant_event"]["sender_user_id"] == owner["id"]
+    assert payload["assistant_event"]["sender_email"] == "teamchat-owner@test.com"
 
     # An org member who is not on the team can neither read nor post.
     non_member_read = await client.get(

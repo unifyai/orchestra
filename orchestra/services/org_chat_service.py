@@ -16,9 +16,11 @@ assistant and are ambiguous in a multi-party room.
 Realtime delivery and assistant fan-out are delegated to the hosted
 communication layer (adapters ``POST /unify/org-chat``): one publish to the
 per-organization Pub/Sub topic for Console SSE, plus (for human-sent team
-messages) one ``unify_group_message`` envelope per non-coordinator team
-assistant. Assistant replies are persisted and published but never fan out
-to other assistants, which mechanically prevents AI reply loops.
+messages) one standard ``unify_message`` envelope per non-coordinator team
+assistant — team chat is ordinary unify_message traffic fanned out to every
+team assistant, like a large email CC chain. Assistant replies are persisted
+and published but never fan out to other assistants, which mechanically
+prevents AI reply loops.
 """
 
 from __future__ import annotations
@@ -55,11 +57,6 @@ ASSISTANTS_PROJECT_NAME = "Assistants"
 GROUP_CHAT_CONTEXT_SUFFIX = "GroupChat"
 GROUP_CHAT_UNIQUE_KEYS = {"message_id": "int"}
 GROUP_CHAT_AUTO_COUNTING = {"message_id": None}
-
-# How many prior thread messages are included in each assistant's
-# ``unify_group_message`` event so runtimes have conversational context
-# without a read path of their own.
-GROUP_CHAT_EVENT_HISTORY_LIMIT = 30
 
 SENDER_KIND_USER = "user"
 SENDER_KIND_ASSISTANT = "assistant"
@@ -287,15 +284,18 @@ def build_team_dispatch_payload(
     team: Team,
     message: dict[str, Any],
     fan_out: bool,
+    sender_email: str = "",
 ) -> dict[str, Any]:
     """Build the adapters ``/unify/org-chat`` payload for one team message.
 
-    ``fan_out`` is True for human-sent messages (every non-coordinator team
-    assistant receives a ``unify_group_message`` envelope) and False for
-    assistant replies (Console publish only — assistants see prior AI replies
-    as thread history on the next human message, never as a trigger).
+    ``fan_out`` is True for human-sent messages — every non-coordinator team
+    assistant receives a copy on the standard ``unify_message`` thread (like
+    a large email CC chain) — and False for assistant replies (Console
+    publish only, so AI replies never re-trigger other runtimes).
+
+    ``sender_email`` lets each runtime resolve the sender against its own
+    Contacts table when the sender is not that assistant's owner.
     """
-    participants = team_chat_participants(session, team=team)
     payload: dict[str, Any] = {
         "kind": "team",
         "organization_id": team.organization_id,
@@ -303,16 +303,7 @@ def build_team_dispatch_payload(
         "message": message,
     }
     if fan_out:
-        recent = list_team_messages(
-            session,
-            team=team,
-            limit=GROUP_CHAT_EVENT_HISTORY_LIMIT + 1,
-        )
-        history = [
-            item
-            for item in recent
-            if item.get("message_id") != message.get("message_id")
-        ][-GROUP_CHAT_EVENT_HISTORY_LIMIT:]
+        participants = team_chat_participants(session, team=team)
         payload["fanout_assistant_ids"] = [
             entry["assistant_id"] for entry in participants["assistants"]
         ]
@@ -320,8 +311,10 @@ def build_team_dispatch_payload(
             "team_id": team.id,
             "team_name": team.name,
             "organization_id": team.organization_id,
-            "message": message,
-            "participants": participants,
-            "recent_messages": history,
+            "body": message.get("content") or "",
+            "group_message_id": message.get("message_id"),
+            "sender_user_id": message.get("sender_user_id") or "",
+            "sender_email": sender_email,
+            "sender_name": message.get("sender_name") or "",
         }
     return payload

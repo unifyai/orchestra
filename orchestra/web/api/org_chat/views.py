@@ -4,7 +4,8 @@ The roster powers the Console top selector (humans + teams alongside the
 assistant list). Team messages persist to the ``Teams/{team_id}/GroupChat``
 log context and are delivered by the hosted communication layer (adapters
 ``/unify/org-chat``): a per-organization Pub/Sub topic for Console SSE plus
-``unify_group_message`` envelopes to every non-coordinator team assistant.
+standard ``unify_message`` envelopes to every non-coordinator team assistant
+(team chat is ordinary unify_message traffic, like a large email CC chain).
 DMs persist to Postgres and only publish the Console frame — no assistant is
 ever involved in a human-to-human DM.
 """
@@ -262,6 +263,7 @@ async def post_team_message(
         team=team,
         message=message,
         fan_out=True,
+        sender_email=sender.email or "",
     )
     await dispatch_org_chat_best_effort(payload)
     return TeamMessageResponse(**message)

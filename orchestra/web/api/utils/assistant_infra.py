@@ -1766,7 +1766,7 @@ async def dispatch_org_chat(payload: dict) -> dict:
 
     Adapters own all Pub/Sub work: ensuring the per-organization topic,
     publishing the Console frame, and (for human-sent team messages) fanning
-    out ``unify_group_message`` envelopes to each listed assistant runtime.
+    out standard ``unify_message`` envelopes to each listed assistant runtime.
     """
     url = _adapters_url() + "/unify/org-chat"
     client = get_async_client()
