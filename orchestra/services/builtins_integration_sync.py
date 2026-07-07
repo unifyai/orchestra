@@ -52,6 +52,10 @@ BUILTINS_INTEGRATION_TOOLS_CONTEXT = "Integrations/Tools"
 BUILTINS_INTEGRATION_META_CONTEXT = "Integrations/Meta"
 DEFAULT_BATCH_SIZE = 25
 DEFAULT_WORKERS = 4
+FORCE_OVERRIDE_ENV = "ORCHESTRA_BUILTINS_SYNC_FORCE_OVERRIDE"
+FORCE_TRUE_VALUES = {"1", "true", "yes", "on", "force", "forced"}
+FORCE_FALSE_VALUES = {"0", "false", "no", "off", "skip", "disabled", "disable"}
+FORCE_DEFAULT_VALUES = {"", "request", "payload", "auto", "default", "unset"}
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,12 @@ class BuiltinsSyncRequest:
             )
             if str(slug).strip()
         ]
+        force_override = _force_override_from_env(FORCE_OVERRIDE_ENV)
+        requested_force = bool(
+            payload.get("force")
+            or sync_payload.get("force")
+            or _env_flag("ORCHESTRA_BUILTINS_SYNC_FORCE"),
+        )
         return cls(
             backend_id=backend_id,
             environment=environment,
@@ -147,11 +157,7 @@ class BuiltinsSyncRequest:
                     or os.getenv("ORCHESTRA_BUILTINS_SYNC_WORKERS", DEFAULT_WORKERS),
                 ),
             ),
-            force=bool(
-                payload.get("force")
-                or sync_payload.get("force")
-                or _env_flag("ORCHESTRA_BUILTINS_SYNC_FORCE"),
-            ),
+            force=force_override if force_override is not None else requested_force,
         )
 
 
@@ -206,7 +212,20 @@ def _json_dumps(value: Any) -> str:
 
 
 def _env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv(name, "").strip().lower() in FORCE_TRUE_VALUES
+
+
+def _force_override_from_env(name: str) -> bool | None:
+    value = os.getenv(name, "").strip().lower()
+    if value in FORCE_DEFAULT_VALUES:
+        return None
+    if value in FORCE_TRUE_VALUES:
+        return True
+    if value in FORCE_FALSE_VALUES:
+        return False
+    raise ValueError(
+        f"{name} must be one of request/auto, true/on, or false/off; got {value!r}",
+    )
 
 
 def _stable_int_id(namespace: str, value: str) -> int:

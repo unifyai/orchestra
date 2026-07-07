@@ -270,6 +270,54 @@ def _ensure_builtins_project(
     session.commit()
 
 
+def test_builtins_sync_force_override_defaults_to_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ORCHESTRA_BUILTINS_SYNC_FORCE_OVERRIDE", raising=False)
+
+    request = BuiltinsSyncRequest.from_payload(
+        {
+            "backend_id": "composio",
+            "desired_hash": "desired-force",
+            "force": True,
+        },
+    )
+
+    assert request.force is True
+
+
+def test_builtins_sync_force_override_can_suppress_request_force(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORCHESTRA_BUILTINS_SYNC_FORCE_OVERRIDE", "false")
+
+    request = BuiltinsSyncRequest.from_payload(
+        {
+            "backend_id": "composio",
+            "desired_hash": "desired-force",
+            "force": True,
+        },
+    )
+
+    assert request.force is False
+
+
+def test_builtins_sync_force_override_can_force_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORCHESTRA_BUILTINS_SYNC_FORCE_OVERRIDE", "true")
+
+    request = BuiltinsSyncRequest.from_payload(
+        {
+            "backend_id": "composio",
+            "desired_hash": "desired-force",
+            "force": False,
+        },
+    )
+
+    assert request.force is True
+
+
 def test_builtins_context_upsert_updates_duplicate_function_id(
     dbsession: Session,
 ) -> None:
