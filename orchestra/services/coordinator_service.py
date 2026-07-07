@@ -1892,6 +1892,7 @@ class _OnboardingProbeScope:
         self._user_loaded = False
         self._secrets: dict[str, str] | None = None
         self._task_rows: list[LogEvent] | None = None
+        self._integration_connections: list[Any] | None = None
         self._trigger_outbound_at: dict[str, datetime | None] = {}
 
     @property
@@ -1921,6 +1922,22 @@ class _OnboardingProbeScope:
             )
         return self._task_rows
 
+    @property
+    def integration_connections(self) -> list[Any]:
+        if self._integration_connections is None:
+            from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
+            from orchestra.web.api.integrations.operations import OwnerContext
+
+            owner = OwnerContext(
+                owner_scope="assistant",
+                user_id=self.coordinator.user_id,
+                assistant_id=self.coordinator.agent_id,
+            )
+            self._integration_connections = IntegrationProviderDAO(
+                self.session,
+            ).list_connections(owner)
+        return self._integration_connections
+
     def trigger_outbound_created_at(
         self,
         step_id: str,
@@ -1942,7 +1959,11 @@ class _OnboardingProbeScope:
         return self._trigger_outbound_at[step_id]
 
 
-def _has_workspace_email(scope: "_OnboardingProbeScope") -> bool:
+def _has_workspace_email(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     """Workspace step: the user connected a workspace, via either signal.
 
     Two durable signals mark a connected workspace, and either counts:
@@ -2010,12 +2031,31 @@ def _connected_workspace(
     return None, frozenset()
 
 
-def _has_app_secret(scope: "_OnboardingProbeScope") -> bool:
-    """Apps step: any owned secret that is NOT a workspace OAuth token."""
-    return any(
-        not name.upper().startswith(_WORKSPACE_SECRET_PREFIXES)
-        for name in scope.secrets
-    )
+def _connection_updated_after(
+    updated_at: datetime | None,
+    reset_after: datetime | None,
+) -> bool:
+    if reset_after is None:
+        return True
+    if updated_at is None:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return updated_at > reset_after
+
+
+def _has_connected_integration(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """Apps step: at least one connected provider-backed integration."""
+    for conn in scope.integration_connections:
+        if conn.status != "connected":
+            continue
+        if _connection_updated_after(conn.updated_at, reset_after):
+            return True
+    return False
 
 
 def _coordinator_task_rows(
@@ -2047,7 +2087,11 @@ def _coordinator_task_rows(
     )
 
 
-def _has_scheduled_task(scope: "_OnboardingProbeScope") -> bool:
+def _has_scheduled_task(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     """Create-a-scheduled-task step: a schedule-bearing task exists.
 
     Completion proof for the "boomerang" beat — the user set up a task that
@@ -2055,40 +2099,60 @@ def _has_scheduled_task(scope: "_OnboardingProbeScope") -> bool:
     by matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
     so arming a triggerable task never ticks this row.
     """
-    return any(
-        isinstance(row.data, dict) and row.data.get("schedule")
-        for row in scope.task_rows
-    )
+    for row in scope.task_rows:
+        if not isinstance(row.data, dict) or not row.data.get("schedule"):
+            continue
+        if _connection_updated_after(row.created_at, reset_after):
+            return True
+    return False
 
 
-def _has_triggerable_task(scope: "_OnboardingProbeScope") -> bool:
+def _has_triggerable_task(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     """Create-a-triggerable-task step: a trigger-bearing task exists.
 
     Completion proof for the "triggerable task" beat — the user armed a task
     that fires on an event. Matches only tasks carrying a ``trigger`` so a
     purely scheduled task never ticks this row.
     """
-    return any(
-        isinstance(row.data, dict) and row.data.get("trigger")
-        for row in scope.task_rows
-    )
+    for row in scope.task_rows:
+        if not isinstance(row.data, dict) or not row.data.get("trigger"):
+            continue
+        if _connection_updated_after(row.created_at, reset_after):
+            return True
+    return False
 
 
 def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User | None:
     return session.get(User, coordinator.user_id)
 
 
-def _has_user_whatsapp_number(scope: "_OnboardingProbeScope") -> bool:
+def _has_user_whatsapp_number(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     user = scope.user
     return bool(user and user.whatsapp_number and user.whatsapp_number.strip())
 
 
-def _has_user_phone_number(scope: "_OnboardingProbeScope") -> bool:
+def _has_user_phone_number(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     user = scope.user
     return bool(user and user.phone_number and user.phone_number.strip())
 
 
-def _has_slack_install(scope: "_OnboardingProbeScope") -> bool:
+def _has_slack_install(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     dao = SlackDAO(scope.session)
     coordinator = scope.coordinator
     install = (
@@ -2099,7 +2163,11 @@ def _has_slack_install(scope: "_OnboardingProbeScope") -> bool:
     return install is not None
 
 
-def _has_user_discord_id(scope: "_OnboardingProbeScope") -> bool:
+def _has_user_discord_id(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
     user = scope.user
     return bool(user and user.discord_id and user.discord_id.strip())
 
@@ -2256,7 +2324,7 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
-        ONBOARDING_STEP_APPS: _has_app_secret,
+        ONBOARDING_STEP_APPS: _has_connected_integration,
         ONBOARDING_STEP_CREATE_SCHEDULED_TASK: _has_scheduled_task,
         ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK: _has_triggerable_task,
     }
@@ -2284,7 +2352,7 @@ def derive_onboarding_progress(
                 completed.append(step_id)
             continue
         check = durable_checks.get(step_id)
-        if check is not None and check(scope):
+        if check is not None and check(scope, reset_after=reset_after):
             completed.append(step_id)
     manual = normalize_onboarding_step_ids(state.get("manually_completed_step_ids"))
     return sorted(set(completed) | set(manual))
@@ -3181,6 +3249,49 @@ async def emit_onboarding_step_reset_event(
             "completed_step_ids": completed,
             "skipped_step_ids": skipped,
         },
+    )
+
+
+def onboarding_baseline_for_integration_connect(
+    session: Session,
+    *,
+    assistant_id: int | None,
+) -> list[str] | None:
+    """Capture derived onboarding progress before an integration connects."""
+    if assistant_id is None:
+        return None
+    coordinator = session.get(Assistant, assistant_id)
+    if coordinator is None or not coordinator.is_coordinator:
+        return None
+    state = get_coordinator_state(session, coordinator=coordinator)
+    if not state.get("onboarding_active"):
+        return None
+    return derive_onboarding_progress(
+        session,
+        coordinator=coordinator,
+        state=state,
+    )
+
+
+def notify_coordinator_onboarding_after_integration_connected(
+    session: Session,
+    *,
+    assistant_id: int | None,
+    canonical_app_slug: str,
+    baseline_completed_step_ids: list[str] | None,
+) -> None:
+    """Refresh onboarding render when a provider connection completes."""
+    if baseline_completed_step_ids is None or assistant_id is None:
+        return
+    coordinator = session.get(Assistant, assistant_id)
+    if coordinator is None or not coordinator.is_coordinator:
+        return
+    notify_onboarding_render_if_changed_sync(
+        session,
+        coordinator=coordinator,
+        baseline_completed_step_ids=baseline_completed_step_ids,
+        reason="integration_connected",
+        details={"canonical_app_slug": canonical_app_slug},
     )
 
 

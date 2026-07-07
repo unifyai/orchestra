@@ -1542,10 +1542,23 @@ def complete_connection(
     status: str,
     reconnect_reason: Optional[str] = None,
 ) -> IntegrationConnectionResponse:
+    from orchestra.services.coordinator_service import (
+        notify_coordinator_onboarding_after_integration_connected,
+        onboarding_baseline_for_integration_connect,
+    )
+
     dao = IntegrationProviderDAO(session)
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
+    baseline_completed = (
+        onboarding_baseline_for_integration_connect(
+            session,
+            assistant_id=conn.assistant_id,
+        )
+        if status == "connected"
+        else None
+    )
     updates = {
         "provider_connection_id": provider_connection_id
         or conn.provider_connection_id
@@ -1564,7 +1577,14 @@ def complete_connection(
         )
     dao.update_connection_fields(conn, **updates)
     session.commit()
-    return _connection_to_response(conn)
+    response = _connection_to_response(conn)
+    notify_coordinator_onboarding_after_integration_connected(
+        session,
+        assistant_id=conn.assistant_id,
+        canonical_app_slug=conn.canonical_app_slug,
+        baseline_completed_step_ids=baseline_completed,
+    )
+    return response
 
 
 def complete_connection_by_provider_connection_id(

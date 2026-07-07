@@ -170,8 +170,8 @@ WORKSPACE_FRAMING = (
     "delivers one short, plain-spoken summary to the user as a single "
     "unify_message — sent as an assistant message back to the user, not merely "
     "spoken on a call. Delivering that summary is the demo task; the checklist "
-    "does NOT auto-detect it, so once the summary is sent T-W1N marks the step "
-    "done explicitly by calling set_onboarding_task_state(step_id, True). "
+    "does NOT auto-detect it, so handling the demo is not finished until that "
+    "summary deliverable has been sent to the user as a unify_message. "
     "Afterwards T-W1N offers exactly one natural follow-up and only acts on it if "
     "the user says yes: draft a reply to a notable email, suggest a simple "
     "optional way to tidy a messy Drive, or flag a conflict or gap on the "
@@ -187,9 +187,8 @@ INTEGRATIONS_FRAMING = (
     "user-safe action across connected apps. For each live demo T-W1N chooses "
     "a connected app that fits the user's click or chip, explains any missing "
     "connection plainly, and never pretends an app is connected. The checklist "
-    "does NOT auto-detect read/action demos, so after the demo result is sent "
-    "T-W1N marks the step done explicitly with "
-    "set_onboarding_task_state(step_id, True)."
+    "does NOT auto-detect read/action demos, so handling each demo is not "
+    "finished until the demo result has been sent to the user as a unify_message."
 )
 
 
@@ -333,9 +332,8 @@ LEARNING_FRAMING = (
     "replay deliverable as a unify_message. Brain nudges and attachment intro "
     "messages are not deliverables. "
     f"Before and during each act run, {_ACTIONS_TAB_NUDGE}. "
-    "Rule 9 — After sending the replay deliverable, mark the step done with "
-    "set_onboarding_task_state('learn-from-correction', True) — the checklist "
-    "does not auto-detect the tutorial."
+    "Rule 9 — After sending the replay deliverable, the tutorial deliverable "
+    "contract is complete — the checklist does not auto-detect the tutorial."
 )
 
 # Interaction channel id stamped on the Learning beat event (Unity narration).
@@ -380,14 +378,12 @@ MY_COMPUTER_FRAMING = (
     "Rule 4 — Tutorial voice throughout: plain language, no tool names; explain "
     "what they're seeing as it happens; invite questions mid-demo and answer them "
     "(the persist act pauses naturally between substeps). "
-    "Rule 5 — Explicit completion: call "
-    "set_onboarding_task_state('my-computer-demo', True) only after the actor's "
-    "response confirms the attachment was delivered. The completion call, the "
-    "delivery, and the act stop are three separate moments — never batch "
-    "send_unify_message, set_onboarding_task_state, and stop act into one turn. "
-    "The CM never sends the attachment itself. If the actor reports the send "
-    "failed, that is Rule-7 territory: say so, retry or offer later, do not mark "
-    "done. The checklist does not auto-detect anything. "
+    "Rule 5 — Explicit completion: the demo is not finished until the actor's "
+    "response confirms the attachment was delivered. Marking the step done, stopping "
+    "act, and that delivery confirmation are three separate moments — never batch "
+    "them into one turn. The CM never sends the attachment itself. If the actor "
+    "reports the send failed, that is Rule-7 territory: say so, retry or offer "
+    "later, do not mark done. The checklist does not auto-detect anything. "
     "Rule 6 — Contextual wrap-up: after marking done, give a one-line recap of what "
     "they watched (real computer, real browser, real file, delivered to chat), name "
     "the next onboarding step from the live progress block, and offer both paths — "
@@ -589,9 +585,8 @@ def _demo(
             f"The user just clicked '{title}', so they want T-W1N to run this "
             f"{contract.domain} demo now: {contract.instruction}. "
             "The checklist does NOT auto-detect that "
-            "deliverable, so once it is sent T-W1N marks the step complete with "
-            "set_onboarding_task_state(step_id, completed=True) — handling the "
-            "demo is not finished until that call is made. Any reply, tidy-up, or "
+            "deliverable, so handling the demo is not finished until it has been "
+            "sent to the user as a unify_message. Any reply, tidy-up, or "
             "flag is an optional follow-up offered afterwards and never required "
             "to complete the step. This is a poll, not a request to repeat work "
             "already done: if the task is already finished, treat this as "
@@ -741,9 +736,8 @@ def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             f"{learning_expenses_stop_act_for_storage_rule()} "
             f"then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
             f"Invite them to ask for next month's report and WAIT. Replay: "
-            f"{_LEARNING_REPLAY_HINT} Send the replay deliverable, then mark "
-            "the step done with set_onboarding_task_state('learn-from-correction', "
-            "True). "
+            f"{_LEARNING_REPLAY_HINT} Send the replay deliverable — the tutorial "
+            "deliverable contract is then complete. "
             f"{_ACTIONS_TAB_NUDGE} before and during each act run. "
             f"Full contract: {LEARNING_FRAMING}"
         ),
@@ -790,13 +784,12 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "file-manager reveal; actor sends send_unify_message attachment via "
             "execute_code and confirms "
             "delivery plus the exact path. Never a terminal or shell xdg-open. After "
-            "the actor confirms delivery: set_onboarding_task_state('my-computer-demo', "
-            "True) in its own turn, then stop act, then wrap up from the live progress "
-            "block (recap, name next step, continue on call or message). Unanswered "
-            "ring: one ring-back invite; do not re-ring. On failure: say so, do not "
-            "mark done. This is a poll, not a request to repeat work already done: if "
-            "the demo is already finished, treat this as confirmation and do NOT redo "
-            "it. "
+            "the actor confirms delivery, mark the step done in its own turn, then "
+            "stop act, then wrap up from the live progress block (recap, name next "
+            "step, continue on call or message). Unanswered ring: one ring-back "
+            "invite; do not re-ring. On failure: say so, do not mark done. This is "
+            "a poll, not a request to repeat work already done: if the demo is "
+            "already finished, treat this as confirmation and do NOT redo it. "
             f"Full contract: {MY_COMPUTER_FRAMING}"
         ),
         subtype="my_computer_beat_requested",
@@ -1717,9 +1710,8 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "Clicking the 'Ask T-W1N to summarize your mailbox' row tells me the user wants a live "
         "demo of their connected mailbox: I read their recent mail with my own "
         "tools and deliver one short summary as a single unify_message. The "
-        "checklist does not auto-detect that summary, so once it is sent I mark "
-        "the step done with set_onboarding_task_state('workspace-mailbox', True) "
-        "— the demo is not finished until I make that call. Offering or drafting "
+        "checklist does not auto-detect that summary, so handling the demo is not "
+        "finished until that summary deliverable has been sent. Offering or drafting "
         "a reply to a notable thread is an optional follow-up I only act on if "
         "the user says yes; it never gates completion. If I have already finished "
         "the task I just confirm it rather than redoing the work."
@@ -1729,17 +1721,17 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "demo of their connected Drive or OneDrive: I read what's there and send "
         "one short summary as a single unify_message, then offer a simple, "
         "optional way to tidy things up if the files look disorganised (I only "
-        "reorganise if they say yes). Once the demo task is genuinely done I mark "
-        "it complete with set_onboarding_task_state('workspace-drive', True) — "
-        "the step does not auto-complete from the summary."
+        "reorganise if they say yes). Once the summary deliverable has been sent, "
+        "the demo task is genuinely done — the step does not auto-complete from "
+        "the summary alone."
     ),
     "workspace-calendar": (
         "Clicking the 'Check my upcoming calendar events within a week' row "
         "tells me the user wants a demo of their connected calendar: I read "
         "their events for the next week and send one short summary as a single "
-        "unify_message, flagging any conflicts or gaps. Once done I mark it "
-        "complete with set_onboarding_task_state('workspace-calendar', True) — "
-        "the step does not auto-complete from the summary."
+        "unify_message, flagging any conflicts or gaps. Once that summary "
+        "deliverable has been sent, the demo task is done — the step does not "
+        "auto-complete from the summary alone."
     ),
     "apps": (
         "Clicking the 'Connect T-W1N with your apps' row opens the Integrations "
@@ -1748,17 +1740,17 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "integration-read": (
         "Clicking the 'Ask T-W1N to read from your connected apps' row tells me "
         "the user wants a live demo with connected apps: I read from an app that "
-        "fits their request, send one short brief as a single unify_message, and "
-        "then mark it complete with set_onboarding_task_state('integration-read', "
-        "True). If no connected app fits, I say exactly what is missing and leave "
+        "fits their request, send one short brief as a single unify_message. "
+        "Handling the demo is not finished until that brief has been sent. "
+        "If no connected app fits, I say exactly what is missing and leave "
         "the step pending."
     ),
     "integration-action": (
         "Clicking the 'Ask T-W1N to take action across your apps' row tells me "
         "the user wants a live action demo: I take one concrete, user-safe action "
-        "with connected apps, send one short report as a single unify_message, "
-        "and then mark it complete with set_onboarding_task_state("
-        "'integration-action', True). If no connected app fits, I say exactly "
+        "with connected apps, send one short report as a single unify_message. "
+        "Handling the demo is not finished until that report has been sent. "
+        "If no connected app fits, I say exactly what is missing and leave "
         "what is missing and leave the step pending."
     ),
     "create-scheduled-task": (
@@ -1931,8 +1923,8 @@ def chip_event_for(step_id: str, chip_id: str) -> OnboardingEventSpec | None:
                 f'The user picked "{chip.label}" under "{step.title}". Treat '
                 "the chip label as the demo instruction: use connected app tools "
                 "to do it now, send one short user-facing deliverable as a "
-                "unify_message, and then mark the step complete with "
-                "set_onboarding_task_state(step_id, completed=True). If no "
+                "unify_message. Handling the demo is not finished until that "
+                "deliverable has been sent. If no "
                 "connected app fits, say exactly what connection is missing and "
                 "do not mark the step complete."
             ),
@@ -2065,6 +2057,23 @@ def completion_blocked_descendants(step_id: str) -> tuple[str, ...]:
     return tuple(descendants)
 
 
+def dependency_descendants(step_id: str) -> tuple[str, ...]:
+    """Steps downstream of ``step_id`` via any ``depends_on`` edge."""
+    reachable = {step_id}
+    descendants: list[str] = []
+    changed = True
+    while changed:
+        changed = False
+        for step in ONBOARDING_GRAPH:
+            if step.id in reachable:
+                continue
+            if any(dep_id in reachable for dep_id in step.depends_on):
+                reachable.add(step.id)
+                descendants.append(step.id)
+                changed = True
+    return tuple(descendants)
+
+
 def completion_required_ancestors(step_id: str) -> tuple[str, ...]:
     """Completion-required prerequisites for ``step_id``, nearest first."""
     ancestors: list[str] = []
@@ -2086,10 +2095,10 @@ def completion_required_ancestors(step_id: str) -> tuple[str, ...]:
 
 
 def completion_coupled_steps(step_id: str) -> tuple[str, ...]:
-    """Steps coupled by completed-only dependency edges around ``step_id``."""
+    """Steps reset together when ``step_id`` is reset in coordinator state."""
     coupled = {step_id, *completion_required_ancestors(step_id)}
     for coupled_id in tuple(coupled):
-        coupled.update(completion_blocked_descendants(coupled_id))
+        coupled.update(dependency_descendants(coupled_id))
     return tuple(step.id for step in ONBOARDING_GRAPH if step.id in coupled)
 
 
