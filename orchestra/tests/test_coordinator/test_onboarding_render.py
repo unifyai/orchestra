@@ -63,7 +63,7 @@ def test_integrations_phase_has_three_steps_and_chip_metadata() -> None:
     ]
     assert apps_chips[0].metadata == {
         "gallery_category": "productivity",
-        "search_query": "productivity calendar docs",
+        "search_query": "productivity|calendar|docs",
     }
     assert graph.STEP_BY_ID["integration-read"].event is not None
     assert graph.STEP_BY_ID["integration-read"].event.subtype == (
@@ -80,7 +80,7 @@ def test_integration_chip_events_resolve_server_side() -> None:
     assert connect is not None
     assert connect.subtype == "integration_connect_chip_requested"
     assert connect.details["gallery_category"] == "crm_sales"
-    assert connect.details["search_query"] == "crm sales hubspot pipedrive"
+    assert connect.details["search_query"] == "crm|sales|hubspot|pipedrive"
 
     demo = graph.chip_event_for("integration-read", "connected-app-brief")
     assert demo is not None

@@ -776,7 +776,7 @@ async def test_coordinator_state_response_preserves_chip_metadata(
     apps = _render_step(response.json()["info"]["onboarding"], "apps")
     chips = {chip["id"]: chip for chip in apps["chips_chat"]}
     assert chips["crm-sales"]["gallery_category"] == "crm_sales"
-    assert chips["crm-sales"]["search_query"] == "crm sales hubspot pipedrive"
+    assert chips["crm-sales"]["search_query"] == "crm|sales|hubspot|pipedrive"
 
 
 def _render_step_ids(render: dict) -> set[str]:
@@ -2268,7 +2268,7 @@ async def test_onboarding_step_event_emits_integration_connect_chip_event(
     assert extra["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED
     assert extra["details"]["step_id"] == "apps"
     assert extra["details"]["gallery_category"] == "crm_sales"
-    assert extra["details"]["search_query"] == "crm sales hubspot pipedrive"
+    assert extra["details"]["search_query"] == "crm|sales|hubspot|pipedrive"
 
 
 @pytest.mark.anyio

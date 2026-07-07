@@ -1374,7 +1374,7 @@ _INTEGRATION_CONNECT_CHIPS: tuple[OnboardingChip, ...] = (
         "Connect the apps you already check every day",
         {
             "gallery_category": "productivity",
-            "search_query": "productivity calendar docs",
+            "search_query": "productivity|calendar|docs",
         },
     ),
     OnboardingChip(
@@ -1382,13 +1382,13 @@ _INTEGRATION_CONNECT_CHIPS: tuple[OnboardingChip, ...] = (
         "Connect a CRM or sales tool — if you use one",
         {
             "gallery_category": "crm_sales",
-            "search_query": "crm sales hubspot pipedrive",
+            "search_query": "crm|sales|hubspot|pipedrive",
         },
     ),
     OnboardingChip(
         "dev-ops",
         "Connect a dev, HR, or ops tool — whatever fits",
-        {"gallery_category": "dev_ops", "search_query": "github linear jira hr ops"},
+        {"gallery_category": "dev_ops", "search_query": "github|linear|jira|hr|ops"},
     ),
 )
 
