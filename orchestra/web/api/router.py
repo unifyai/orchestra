@@ -39,6 +39,8 @@ from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.messages import admin_router as messages_admin_router
 from orchestra.web.api.messages import router as messages_router
 from orchestra.web.api.ms_teams_bot import admin_router as ms_teams_bot_admin_router
+from orchestra.web.api.org_chat import admin_router as org_chat_admin_router
+from orchestra.web.api.org_chat import router as org_chat_router
 from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.phone import admin_router as phone_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
@@ -330,6 +332,19 @@ api_router.include_router(
     teams.router,
     tags=["Teams & Resource Access"],
     dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    org_chat_router,
+    tags=["Org Chat"],
+    include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    org_chat_admin_router,
+    prefix="/admin",
+    tags=["Org Chat"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
     api_keys.router,

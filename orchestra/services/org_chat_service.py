@@ -1,0 +1,327 @@
+"""Org chat: team group-chat persistence and hosted dispatch.
+
+Team group-chat messages are stored in the log-backed
+``Teams/{team_id}/GroupChat`` context of the organization's ``Assistants``
+project. That placement is deliberate:
+
+* ``owner_scope='team'`` means the thread is purged with the rest of the
+  team's shared memory on team deletion (no extra cleanup path), and
+* team assistants can read the thread as ordinary shared team data.
+
+Sender identity is stored explicitly on each row (``sender_kind`` +
+``sender_user_id`` / ``sender_assistant_id`` + ``sender_name``) rather than
+via per-assistant contact ids, because contact ids are scoped to one
+assistant and are ambiguous in a multi-party room.
+
+Realtime delivery and assistant fan-out are delegated to the hosted
+communication layer (adapters ``POST /unify/org-chat``): one publish to the
+per-organization Pub/Sub topic for Console SSE, plus (for human-sent team
+messages) one ``unify_group_message`` envelope per non-coordinator team
+assistant. Assistant replies are persisted and published but never fan out
+to other assistants, which mechanically prevents AI reply loops.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.team_dao import TeamDAO
+from orchestra.db.log_queries import project_scoped_log_events
+from orchestra.db.models.orchestra_models import (
+    Context,
+    LogEvent,
+    LogEventContext,
+    Project,
+    Team,
+    User,
+)
+from orchestra.db.scope import resolve_owner, single_owner_key
+from orchestra.web.api.log.schema import CreateLogConfig
+from orchestra.web.api.log.utils.logging_utils import create_logs_internal
+
+logger = logging.getLogger(__name__)
+
+ASSISTANTS_PROJECT_NAME = "Assistants"
+GROUP_CHAT_CONTEXT_SUFFIX = "GroupChat"
+GROUP_CHAT_UNIQUE_KEYS = {"message_id": "int"}
+GROUP_CHAT_AUTO_COUNTING = {"message_id": None}
+
+# How many prior thread messages are included in each assistant's
+# ``unify_group_message`` event so runtimes have conversational context
+# without a read path of their own.
+GROUP_CHAT_EVENT_HISTORY_LIMIT = 30
+
+SENDER_KIND_USER = "user"
+SENDER_KIND_ASSISTANT = "assistant"
+
+
+def group_chat_context_name(team_id: int) -> str:
+    return f"Teams/{team_id}/{GROUP_CHAT_CONTEXT_SUFFIX}"
+
+
+def _resolve_org_assistants_project(
+    session: Session,
+    *,
+    organization_id: int,
+) -> Project:
+    project = session.scalar(
+        select(Project).where(
+            Project.organization_id == organization_id,
+            Project.name == ASSISTANTS_PROJECT_NAME,
+        ),
+    )
+    if project is None:
+        raise ValueError(
+            "Assistants project is required for team group chat "
+            f"(organization={organization_id}).",
+        )
+    return project
+
+
+def _ensure_group_chat_context(
+    session: Session,
+    *,
+    project_id: int,
+    team_id: int,
+) -> Context:
+    context_name = group_chat_context_name(team_id)
+    context = session.scalar(
+        select(Context).where(
+            Context.project_id == project_id,
+            Context.name == context_name,
+        ),
+    )
+    if context is not None:
+        return context
+
+    owner_scope, owner_id = resolve_owner(context_name)
+    context = Context(
+        project_id=project_id,
+        name=context_name,
+        is_versioned=False,
+        allow_duplicates=True,
+        unique_key_names=list(GROUP_CHAT_UNIQUE_KEYS.keys()),
+        unique_key_types=list(GROUP_CHAT_UNIQUE_KEYS.values()),
+        auto_counting=GROUP_CHAT_AUTO_COUNTING,
+        owner_scope=owner_scope,
+        owner_id=owner_id,
+    )
+    session.add(context)
+    session.flush()
+    return context
+
+
+def _build_project_dao(session: Session) -> ProjectDAO:
+    return ProjectDAO(
+        session,
+        organization_member_dao=OrganizationMemberDAO(session),
+        context_dao=ContextDAO(session),
+    )
+
+
+def persist_team_message(
+    session: Session,
+    *,
+    team: Team,
+    sender_kind: str,
+    sender_user_id: str | None,
+    sender_assistant_id: int | None,
+    sender_name: str,
+    content: str,
+    mentions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Append one message to the team's GroupChat thread.
+
+    Returns the stored message payload including the auto-assigned
+    ``message_id`` and timestamp.
+    """
+    project = _resolve_org_assistants_project(
+        session,
+        organization_id=team.organization_id,
+    )
+    context = _ensure_group_chat_context(
+        session,
+        project_id=project.id,
+        team_id=team.id,
+    )
+    entries = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "sender_kind": sender_kind,
+        "sender_name": sender_name,
+        "content": content,
+        "mentions": mentions or [],
+    }
+    # None-valued fields are omitted so field types are always inferred from
+    # real values (sender_user_id for humans, sender_assistant_id for AIs).
+    if sender_user_id is not None:
+        entries["sender_user_id"] = sender_user_id
+    if sender_assistant_id is not None:
+        entries["sender_assistant_id"] = sender_assistant_id
+    result = create_logs_internal(
+        request=CreateLogConfig(
+            project_name=ASSISTANTS_PROJECT_NAME,
+            context=context.name,
+            entries=entries,
+        ),
+        project_id=project.id,
+        context_id=context.id,
+        project_dao=_build_project_dao(session),
+        field_type_dao=FieldTypeDAO(session),
+        log_event_dao=LogEventDAO(session),
+        context_dao=ContextDAO(session),
+        context_obj=context,
+    )
+    if result.get("failed"):
+        first_error = result["failed"][0].get("error", "Message creation failed")
+        raise ValueError(str(first_error))
+    session.flush()
+
+    log_event_id = result["log_event_ids"][0]
+    stored = session.scalar(
+        select(LogEvent).where(
+            LogEvent.project_id == project.id,
+            LogEvent.id == log_event_id,
+        ),
+    )
+    payload = dict(stored.data)
+    payload["team_id"] = team.id
+    payload["organization_id"] = team.organization_id
+    return payload
+
+
+def list_team_messages(
+    session: Session,
+    *,
+    team: Team,
+    limit: int = 100,
+    before_message_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Most-recent-last page of a team's GroupChat thread."""
+    project = _resolve_org_assistants_project(
+        session,
+        organization_id=team.organization_id,
+    )
+    context = session.scalar(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == group_chat_context_name(team.id),
+        ),
+    )
+    if context is None:
+        return []
+
+    query = (
+        project_scoped_log_events(
+            context.project_id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
+        .where(LogEventContext.context_id == context.id)
+        .order_by(LogEvent.id.desc())
+        .limit(limit)
+    )
+    rows = session.scalars(query).all()
+    messages = []
+    for row in reversed(rows):
+        data = dict(row.data)
+        message_id = data.get("message_id")
+        if before_message_id is not None and (
+            not isinstance(message_id, int) or message_id >= before_message_id
+        ):
+            continue
+        data["team_id"] = team.id
+        data["organization_id"] = team.organization_id
+        messages.append(data)
+    return messages
+
+
+def team_chat_participants(
+    session: Session,
+    *,
+    team: Team,
+) -> dict[str, list[dict[str, Any]]]:
+    """Humans and non-coordinator assistants participating in a team chat."""
+    team_dao = TeamDAO(session)
+
+    member_user_ids = team_dao.get_team_members(team.id)
+    users = (
+        session.query(User).filter(User.id.in_(member_user_ids)).all()
+        if member_user_ids
+        else []
+    )
+    humans = [
+        {
+            "user_id": user.id,
+            "name": " ".join(part for part in [user.name, user.last_name] if part)
+            or user.email,
+        }
+        for user in users
+    ]
+
+    assistants = [
+        {
+            "assistant_id": assistant.agent_id,
+            "name": " ".join(
+                part for part in [assistant.first_name, assistant.surname] if part
+            )
+            or f"Assistant {assistant.agent_id}",
+        }
+        for _, assistant in team_dao.list_assistant_members(team.id)
+        if not assistant.is_coordinator
+    ]
+    return {"humans": humans, "assistants": assistants}
+
+
+def build_team_dispatch_payload(
+    session: Session,
+    *,
+    team: Team,
+    message: dict[str, Any],
+    fan_out: bool,
+) -> dict[str, Any]:
+    """Build the adapters ``/unify/org-chat`` payload for one team message.
+
+    ``fan_out`` is True for human-sent messages (every non-coordinator team
+    assistant receives a ``unify_group_message`` envelope) and False for
+    assistant replies (Console publish only — assistants see prior AI replies
+    as thread history on the next human message, never as a trigger).
+    """
+    participants = team_chat_participants(session, team=team)
+    payload: dict[str, Any] = {
+        "kind": "team",
+        "organization_id": team.organization_id,
+        "team_id": team.id,
+        "message": message,
+    }
+    if fan_out:
+        recent = list_team_messages(
+            session,
+            team=team,
+            limit=GROUP_CHAT_EVENT_HISTORY_LIMIT + 1,
+        )
+        history = [
+            item
+            for item in recent
+            if item.get("message_id") != message.get("message_id")
+        ][-GROUP_CHAT_EVENT_HISTORY_LIMIT:]
+        payload["fanout_assistant_ids"] = [
+            entry["assistant_id"] for entry in participants["assistants"]
+        ]
+        payload["assistant_event"] = {
+            "team_id": team.id,
+            "team_name": team.name,
+            "organization_id": team.organization_id,
+            "message": message,
+            "participants": participants,
+            "recent_messages": history,
+        }
+    return payload

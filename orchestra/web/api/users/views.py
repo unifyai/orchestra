@@ -33,6 +33,7 @@ from orchestra.db.dao.referral_dao import ReferralDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.user_dao import UserDAO
+from orchestra.db.dao.user_presence_dao import UserPresenceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.lib.referrals import ReferralError, attribute_referral
@@ -1466,6 +1467,23 @@ def get_query_logging_status(
         raise not_found("User")
 
     return QueryLoggingStatus(enabled=user.queries_enabled)
+
+
+@router.put("/user/presence")
+def touch_user_presence(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Heartbeat marking the authenticated user's Console session as active.
+
+    Console PUTs this every ~60s while its tab is visible. Other members'
+    online indicators are derived from these heartbeats (see the org roster
+    endpoint).
+    """
+    presence_dao = UserPresenceDAO(session)
+    presence_dao.touch(request.state.user_id)
+    session.commit()
+    return {"online": True}
 
 
 @router.get("/user/basic-info")

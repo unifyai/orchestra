@@ -931,6 +931,99 @@ class User(Base):
     )
 
 
+class UserPresence(Base):
+    """Last-seen heartbeat for a user's Console session.
+
+    A user is considered online when ``last_seen_at`` is within
+    ``PRESENCE_ONLINE_THRESHOLD_SECONDS`` of now. Rows are upserted by the
+    presence heartbeat endpoint; absence of a row means "never seen".
+    """
+
+    __tablename__ = "user_presence"
+
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    last_seen_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class DmThread(Base):
+    """A direct human-to-human conversation inside one organization.
+
+    The user pair is stored normalized (``user_a_id < user_b_id``
+    lexicographically) so one row exists per pair per organization.
+    """
+
+    __tablename__ = "dm_thread"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_a_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_b_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "user_a_id",
+            "user_b_id",
+            name="uq_dm_thread_org_pair",
+        ),
+        sa.CheckConstraint(
+            "user_a_id < user_b_id",
+            name="ck_dm_thread_normalized_pair",
+        ),
+    )
+
+
+class DmMessage(Base):
+    """One message inside a :class:`DmThread`."""
+
+    __tablename__ = "dm_message"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    thread_id = Column(
+        Integer,
+        ForeignKey("dm_thread.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sender_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    content = Column(Text, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (Index("ix_dm_message_thread_id_id", "thread_id", "id"),)
+
+
 # Account table (for external providers like Google, GitHub)
 # Each user can have multiple accounts
 class Account(Base):
