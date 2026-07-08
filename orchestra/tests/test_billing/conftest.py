@@ -282,6 +282,8 @@ def make_assistant(
     surname: str = "Bot",
     organization_id: int | None = None,
     demo_id: int | None = None,
+    *,
+    is_coordinator: bool = False,
 ) -> Assistant:
     """Create an :class:`Assistant`."""
     a = Assistant(
@@ -290,6 +292,7 @@ def make_assistant(
         surname=surname,
         organization_id=organization_id,
         demo_id=demo_id,
+        is_coordinator=is_coordinator,
     )
     dbsession.add(a)
     dbsession.flush()

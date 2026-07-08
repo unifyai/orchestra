@@ -801,9 +801,14 @@ def fetch_provider_catalog(
 
     # The tool phase never materializes app rows, so skip the (expensive) per-app
     # detail enrichment when fetching tools and only pay for it in the app phase.
+    include_all = (
+        body.include_all_managed_apps
+        if body.backend_id == "composio"
+        else body.include_all_apps
+    )
     app_entries = adapter.list_app_entries(
         app_slugs=body.app_slugs,
-        include_all=body.include_all_managed_apps,
+        include_all=include_all,
         create_auth_configs=body.create_auth_configs,
         include_detail=not body.sync_tools,
     )
@@ -828,6 +833,56 @@ def fetch_provider_catalog(
         )
 
     apps = [dict(entry) for entry in app_entries]
+    if body.backend_id == "pipedream":
+        from orchestra.integrations.provider_resolution import (
+            CatalogAppRef,
+            filter_pipedream_app_entries,
+            load_pipedream_allowlist,
+        )
+
+        composio_backend = IntegrationProviderDAO(session).get_backend("composio")
+        composio_config = (
+            composio_backend.config_json if composio_backend else {}
+        ) or {}
+        composio_adapter = get_provider_adapter(
+            "composio",
+            backend_config=composio_config,
+            backend_status=composio_backend.status if composio_backend else "enabled",
+            require_live=True,
+        )
+        composio_entries = [
+            dict(entry)
+            for entry in composio_adapter.list_app_entries(
+                include_all=True,
+                include_detail=False,
+                create_auth_configs=False,
+            )
+        ]
+        allowed = load_pipedream_allowlist()
+        if body.app_slugs:
+            allowed = {
+                CatalogAppRef.from_entry(
+                    {"canonical_app_slug": slug},
+                ).canonical_app_slug
+                for slug in body.app_slugs
+            } & allowed
+        kept_slugs = {
+            str(app.get("canonical_app_slug"))
+            for app in filter_pipedream_app_entries(
+                apps,
+                composio_entries=composio_entries,
+                allowlist=allowed,
+            )
+        }
+        for entry in apps:
+            slug = str(entry.get("canonical_app_slug") or "")
+            if slug and slug not in kept_slugs:
+                skipped_apps.append({"slug": slug, "reason": "composio_preferred"})
+        apps = [
+            entry
+            for entry in apps
+            if str(entry.get("canonical_app_slug") or "") in kept_slugs
+        ]
     tools: list[dict[str, Any]] = []
     if body.sync_tools and app_entries:
         tool_limit = body.tool_limit_per_app if body.tool_limit_per_app > 0 else None

@@ -115,7 +115,21 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         """
 
         self._reset_catalog_accounting()
+        from orchestra.integrations.provider_resolution import load_pipedream_allowlist
+
+        allowlist = load_pipedream_allowlist()
+        if not allowlist:
+            self.last_requested_app_slugs = []
+            return []
+
         requested = {slugify(slug) for slug in (app_slugs or []) if slug.strip()}
+        if requested:
+            requested &= allowlist
+        elif include_all:
+            requested = set(allowlist)
+        else:
+            self.last_requested_app_slugs = []
+            return []
         self.last_requested_app_slugs = sorted(requested)
         provider_apps = self.list_apps(has_components=True)
         self._app_by_canonical_slug = {}
@@ -306,6 +320,10 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         access_token, token_error = self._access_token()
         if token_error:
             raise ValueError(token_error["message"])
+        if not self.project_id:
+            raise ValueError(
+                "PIPEDREAM_PROJECT_ID is required to list Pipedream Connect components.",
+            )
 
         import requests
 
@@ -325,7 +343,7 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
             if query:
                 params["q"] = query
             response = requests.get(
-                f"{self.base_url}/components",
+                f"{self.base_url}/{self.project_id}/components",
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json",
@@ -653,6 +671,8 @@ def _pipedream_cursor_page(data: dict[str, Any]) -> CursorPage:
         )
         if total_count is None or count is None or count > 0:
             next_cursor = page_info.get("end_cursor") or page_info.get("endCursor")
+    # Pipedream page_info.total_count is the current page size, not the catalog
+    # total. Feeding it into collect_cursor_pages stops after the first page.
     return CursorPage(
         items=(
             [item for item in items if isinstance(item, dict)]
@@ -660,7 +680,5 @@ def _pipedream_cursor_page(data: dict[str, Any]) -> CursorPage:
             else []
         ),
         next_cursor=str(next_cursor) if next_cursor else None,
-        total_items=int_or_none(
-            page_info.get("total_count") or page_info.get("totalCount"),
-        ),
+        total_items=None,
     )

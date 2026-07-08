@@ -91,11 +91,28 @@ steps:
   - >-
     --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
   - '--region=$_JOB_REGION'
+  - '--update-env-vars=PIPEDREAM_ENVIRONMENT=production'
+  - >-
+    --update-secrets=COMPOSIO_API_KEY=COMPOSIO_API_KEY:latest,PIPEDREAM_CLIENT_ID=PIPEDREAM_CLIENT_ID:latest,PIPEDREAM_CLIENT_SECRET=PIPEDREAM_CLIENT_SECRET:latest,PIPEDREAM_PROJECT_ID=PIPEDREAM_PROJECT_ID:latest
   - '--quiet'
   id: Update builtins seed job image
   entrypoint: gcloud
   waitFor:
   - 'Push Orchestra'
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  args:
+  - run
+  - jobs
+  - add-iam-policy-binding
+  - $_BUILTINS_SEED_JOB_NAME
+  - '--region=$_JOB_REGION'
+  - '--member=serviceAccount:service-account@example.iam.gserviceaccount.com'
+  - '--role=roles/run.jobsExecutorWithOverrides'
+  - '--quiet'
+  id: Ensure builtins seed job IAM
+  entrypoint: gcloud
+  waitFor:
+  - 'Update builtins seed job image'
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run

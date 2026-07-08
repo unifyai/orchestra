@@ -198,6 +198,18 @@ class AssistantCreate(BaseModel):
         None,
         description="A list of chat messages from the pre-hire conversation to be logged.",
     )
+    owner_team_id: Optional[int] = Field(
+        None,
+        description=(
+            "Owning team for a team-owned assistant. The team becomes the "
+            "product-level owner: the assistant's only memory is the team's "
+            "shared root (no personal contexts), every team member can work "
+            "with it, and the caller is recorded merely as the hiring "
+            "member. Requires an organization API key and a team in that "
+            "organization."
+        ),
+        example=7,
+    )
     timezone: Optional[str] = Field(
         None,
         description="Timezone of the assistant in IANA format",

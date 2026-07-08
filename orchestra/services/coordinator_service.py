@@ -16,6 +16,7 @@ from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.ms_teams_bot_dao import MsTeamsBotDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -1766,6 +1767,7 @@ ONBOARDING_STEP_SMS_MESSAGE = "sms-message"
 ONBOARDING_STEP_PHONE_CALL = "phone-call"
 ONBOARDING_STEP_SLACK_CONNECT = "slack-connect"
 ONBOARDING_STEP_SLACK_MESSAGE = "slack-message"
+ONBOARDING_STEP_MS_TEAMS_CONNECT = "ms-teams-connect"
 ONBOARDING_STEP_DISCORD_ID = "discord-id"
 ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
@@ -1930,7 +1932,6 @@ class _OnboardingProbeScope:
 
             owner = OwnerContext(
                 owner_scope="assistant",
-                user_id=self.coordinator.user_id,
                 assistant_id=self.coordinator.agent_id,
             )
             self._integration_connections = IntegrationProviderDAO(
@@ -2031,6 +2032,12 @@ def _connected_workspace(
     return None, frozenset()
 
 
+def _normalize_utc_naive(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _connection_updated_after(
     updated_at: datetime | None,
     reset_after: datetime | None,
@@ -2039,9 +2046,7 @@ def _connection_updated_after(
         return True
     if updated_at is None:
         return False
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
-    return updated_at > reset_after
+    return _normalize_utc_naive(updated_at) > _normalize_utc_naive(reset_after)
 
 
 def _has_connected_integration(
@@ -2154,6 +2159,21 @@ def _has_slack_install(
     reset_after: datetime | None = None,
 ) -> bool:
     dao = SlackDAO(scope.session)
+    coordinator = scope.coordinator
+    install = (
+        dao.get_install_for_org(coordinator.organization_id)
+        if coordinator.organization_id is not None
+        else dao.get_install_for_user(coordinator.user_id)
+    )
+    return install is not None
+
+
+def _has_ms_teams_bot_install(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    dao = MsTeamsBotDAO(scope.session)
     coordinator = scope.coordinator
     install = (
         dao.get_install_for_org(coordinator.organization_id)
@@ -2322,6 +2342,7 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
+        ONBOARDING_STEP_MS_TEAMS_CONNECT: _has_ms_teams_bot_install,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_connected_integration,
@@ -3252,6 +3273,127 @@ async def emit_onboarding_step_reset_event(
     )
 
 
+def _onboarding_progress_step_diff(
+    baseline: Sequence[str],
+    completed_now: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    baseline_set = set(baseline)
+    completed_set = set(completed_now)
+    return (
+        sorted(completed_set - baseline_set),
+        sorted(baseline_set - completed_set),
+    )
+
+
+def _probe_connected_integration_count(
+    session: Session,
+    coordinator: Assistant,
+) -> int:
+    from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
+    from orchestra.web.api.integrations.operations import OwnerContext
+
+    owner = OwnerContext(
+        owner_scope="assistant",
+        assistant_id=coordinator.agent_id,
+    )
+    connections = IntegrationProviderDAO(session).list_connections(owner)
+    return sum(1 for connection in connections if connection.status == "connected")
+
+
+def _log_onboarding_render_decision(
+    *,
+    coordinator: Assistant,
+    reason: str,
+    baseline_completed: Sequence[str],
+    completed_now: Sequence[str],
+    newly_completed: Sequence[str],
+    newly_uncompleted: Sequence[str],
+    outcome: str,
+    probe_connection_count: int,
+) -> None:
+    logger.info(
+        "onboarding_render_decision coordinator_id=%s reason=%s "
+        "baseline_completed=%s completed_now=%s newly_completed=%s "
+        "newly_uncompleted=%s outcome=%s probe_connection_count=%d",
+        coordinator.agent_id,
+        reason,
+        list(baseline_completed),
+        list(completed_now),
+        list(newly_completed),
+        list(newly_uncompleted),
+        outcome,
+        probe_connection_count,
+    )
+
+
+def _prepare_onboarding_render_update(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    baseline_completed_step_ids: Sequence[str],
+    reason: str,
+    details: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    probe_connection_count = _probe_connected_integration_count(
+        session,
+        coordinator=coordinator,
+    )
+    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
+        _log_onboarding_render_decision(
+            coordinator=coordinator,
+            reason=reason,
+            baseline_completed=baseline_completed_step_ids,
+            completed_now=[],
+            newly_completed=[],
+            newly_uncompleted=[],
+            outcome="skipped_inactive",
+            probe_connection_count=probe_connection_count,
+        )
+        return None
+    state = get_coordinator_state(session, coordinator=coordinator)
+    completed_now = derive_onboarding_progress(
+        session,
+        coordinator=coordinator,
+        state=state,
+    )
+    newly_completed, newly_uncompleted = _onboarding_progress_step_diff(
+        baseline_completed_step_ids,
+        completed_now,
+    )
+    if set(completed_now) == set(baseline_completed_step_ids):
+        _log_onboarding_render_decision(
+            coordinator=coordinator,
+            reason=reason,
+            baseline_completed=baseline_completed_step_ids,
+            completed_now=completed_now,
+            newly_completed=newly_completed,
+            newly_uncompleted=newly_uncompleted,
+            outcome="skipped_unchanged",
+            probe_connection_count=probe_connection_count,
+        )
+        return None
+    merged_details = dict(details or {})
+    if reason:
+        merged_details["reason"] = reason
+    merged_details["completed_step_ids"] = completed_now
+    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
+        state.get("skipped_step_ids"),
+    )
+    merged_details["newly_completed_step_ids"] = newly_completed
+    merged_details["newly_uncompleted_step_ids"] = newly_uncompleted
+    _log_onboarding_render_decision(
+        coordinator=coordinator,
+        reason=reason,
+        baseline_completed=baseline_completed_step_ids,
+        completed_now=completed_now,
+        newly_completed=newly_completed,
+        newly_uncompleted=newly_uncompleted,
+        outcome="emitted",
+        probe_connection_count=probe_connection_count,
+    )
+    return merged_details
+
+
 def onboarding_baseline_for_integration_connect(
     session: Session,
     *,
@@ -3259,12 +3401,23 @@ def onboarding_baseline_for_integration_connect(
 ) -> list[str] | None:
     """Capture derived onboarding progress before an integration connects."""
     if assistant_id is None:
+        logger.info(
+            "onboarding_baseline_skipped assistant_id=None reason=assistant_id_none",
+        )
         return None
     coordinator = session.get(Assistant, assistant_id)
     if coordinator is None or not coordinator.is_coordinator:
+        logger.info(
+            "onboarding_baseline_skipped assistant_id=%s reason=not_coordinator",
+            assistant_id,
+        )
         return None
     state = get_coordinator_state(session, coordinator=coordinator)
     if not state.get("onboarding_active"):
+        logger.info(
+            "onboarding_baseline_skipped assistant_id=%s reason=onboarding_inactive",
+            assistant_id,
+        )
         return None
     return derive_onboarding_progress(
         session,
@@ -3295,6 +3448,28 @@ def notify_coordinator_onboarding_after_integration_connected(
     )
 
 
+def notify_coordinator_onboarding_after_integration_disconnected(
+    session: Session,
+    *,
+    assistant_id: int | None,
+    canonical_app_slug: str,
+    baseline_completed_step_ids: list[str] | None,
+) -> None:
+    """Refresh onboarding render when a provider connection disconnects."""
+    if baseline_completed_step_ids is None or assistant_id is None:
+        return
+    coordinator = session.get(Assistant, assistant_id)
+    if coordinator is None or not coordinator.is_coordinator:
+        return
+    notify_onboarding_render_if_changed_sync(
+        session,
+        coordinator=coordinator,
+        baseline_completed_step_ids=baseline_completed_step_ids,
+        reason="integration_disconnected",
+        details={"canonical_app_slug": canonical_app_slug},
+    )
+
+
 async def notify_onboarding_render_if_changed(
     session: Session,
     *,
@@ -3311,23 +3486,15 @@ async def notify_onboarding_render_if_changed(
     ``onboarding_render_updated`` with the attached render so Unity's prompt
     and Console's checklist can catch up without a poll.
     """
-    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
-        return False
-    state = get_coordinator_state(session, coordinator=coordinator)
-    completed_now = derive_onboarding_progress(
+    merged_details = _prepare_onboarding_render_update(
         session,
         coordinator=coordinator,
-        state=state,
+        baseline_completed_step_ids=baseline_completed_step_ids,
+        reason=reason,
+        details=details,
     )
-    if set(completed_now) == set(baseline_completed_step_ids):
+    if merged_details is None:
         return False
-    merged_details = dict(details or {})
-    if reason:
-        merged_details["reason"] = reason
-    merged_details["completed_step_ids"] = completed_now
-    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
-        state.get("skipped_step_ids"),
-    )
     return await notify_coordinator_onboarding_event(
         session,
         coordinator=coordinator,
@@ -3346,23 +3513,15 @@ def notify_onboarding_render_if_changed_sync(
     details: dict[str, Any] | None = None,
 ) -> bool:
     """Sync wrapper for :func:`notify_onboarding_render_if_changed`."""
-    if not _is_coordinator_in_onboarding(session, coordinator=coordinator):
-        return False
-    state = get_coordinator_state(session, coordinator=coordinator)
-    completed_now = derive_onboarding_progress(
+    merged_details = _prepare_onboarding_render_update(
         session,
         coordinator=coordinator,
-        state=state,
+        baseline_completed_step_ids=baseline_completed_step_ids,
+        reason=reason,
+        details=details,
     )
-    if set(completed_now) == set(baseline_completed_step_ids):
+    if merged_details is None:
         return False
-    merged_details = dict(details or {})
-    if reason:
-        merged_details["reason"] = reason
-    merged_details["completed_step_ids"] = completed_now
-    merged_details["skipped_step_ids"] = normalize_onboarding_step_ids(
-        state.get("skipped_step_ids"),
-    )
     return notify_coordinator_onboarding_event_safe_sync(
         session,
         coordinator=coordinator,

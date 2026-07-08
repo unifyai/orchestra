@@ -100,8 +100,13 @@ class CreditTransactionDAO:
         *,
         user_id: str | None = None,
         assistant_id: int | None = None,
+        assistant_ids: list[int] | None = None,
     ) -> dict[str, float]:
-        """Return ``{category: total_spend}`` for debits in the given window."""
+        """Return ``{category: total_spend}`` for debits in the given window.
+
+        ``assistant_ids`` scopes the aggregation to a set of assistants (used
+        for per-team attribution: every assistant owned by one team).
+        """
         q = (
             self.session.query(
                 CreditTransaction.category,
@@ -119,6 +124,10 @@ class CreditTransactionDAO:
             q = q.filter(CreditTransaction.user_id == user_id)
         if assistant_id is not None:
             q = q.filter(CreditTransaction.assistant_id == assistant_id)
+        if assistant_ids is not None:
+            if not assistant_ids:
+                return {}
+            q = q.filter(CreditTransaction.assistant_id.in_(assistant_ids))
 
         return {cat: float(total) for cat, total in q.all()}
 

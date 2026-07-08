@@ -133,6 +133,7 @@ class AssistantDAO:
         default_reasoning_effort: Optional[str] = None,
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
+        owner_team_id: Optional[int] = None,
         is_local: bool = False,
         is_coordinator: bool = False,
         job_title: Optional[str] = None,
@@ -147,6 +148,9 @@ class AssistantDAO:
             creator/lifecycle owner retained on the row.
         :param organization_id: Optional organization scope for org assistants.
             None means a personal assistant.
+        :param owner_team_id: When set, the team is the product-level owner:
+            the assistant lives entirely in the team's shared root and
+            ``user_id`` records only the hiring member.
         :return: The created Assistant.
         """
 
@@ -156,6 +160,7 @@ class AssistantDAO:
         assistant = Assistant(
             user_id=user_id,
             organization_id=organization_id,
+            owner_team_id=owner_team_id,
             first_name=first_name,
             surname=surname,
             job_title=job_title,
@@ -846,12 +851,27 @@ class AssistantDAO:
                 detail="Assistant not found.",
             )
 
-        # Verify ownership
+        # Verify management rights. Team-owned assistants are a team asset:
+        # any org member with assistant:write may manage the cap, not just
+        # the hiring member recorded in user_id.
         if assistant.user_id != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant not found.",
-            )
+            allowed = False
+            if (
+                assistant.owner_team_id is not None
+                and assistant.organization_id is not None
+            ):
+                from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+
+                allowed = ResourceAccessDAO(self.session).check_org_member_permission(
+                    user_id,
+                    assistant.organization_id,
+                    "assistant:write",
+                )
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Assistant not found.",
+                )
 
         new_limit = monthly_spending_cap
         parent_limit: Optional[float] = None
@@ -864,10 +884,14 @@ class AssistantDAO:
             org = org_dao.get(assistant.organization_id)
             member = org_member_dao.get_member(user_id, assistant.organization_id)
 
-            # Get applicable limits (member limit and org limit)
+            # Get applicable limits (member limit and org limit). Team-owned
+            # assistants bill the organization, not any individual member, so
+            # no member's personal cap bounds them — only the org cap.
             member_limit = (
                 float(member.monthly_spending_cap)
-                if member and member.monthly_spending_cap is not None
+                if assistant.owner_team_id is None
+                and member
+                and member.monthly_spending_cap is not None
                 else None
             )
             org_limit = (

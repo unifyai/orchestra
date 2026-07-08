@@ -116,6 +116,7 @@ REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
     "phone_call": "make_call_to_boss",
     "slack_message": "send_slack_message",
     "discord_message": "send_discord_message",
+    "ms_teams_message": "send_ms_teams_bot_message",
 }
 
 REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
@@ -126,6 +127,7 @@ REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
     "phone-call": "phone_call",
     "slack-message": "slack_message",
     "discord-message": "discord_message",
+    "ms-teams-message": "ms_teams_message",
 }
 
 
@@ -1036,6 +1038,56 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         nudge_voice="replying to the Slack message",
     ),
     OnboardingStep(
+        id="ms-teams-connect",
+        title="Connect Microsoft Teams",
+        phase=PHASE_COMMUNICATION,
+        kind="connect",
+        depends_on={},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        nudge_chat=(
+            "Have them click the 'Connect Microsoft Teams' row in the "
+            "Onboarding checklist; it opens the setup path for the Unify Teams "
+            "app. Heads up that many Microsoft 365 tenants need an admin to "
+            "approve the app, so if they're not an admin the install can sit "
+            "pending until an admin connects it."
+        ),
+        nudge_voice=(
+            "clicking the 'Connect Microsoft Teams' row in the Onboarding checklist"
+        ),
+    ),
+    _trigger(
+        "ms-teams-reference",
+        "Trigger Microsoft Teams message from T-W1N",
+        depends_on={"ms-teams-connect": COMPLETED},
+        channel="ms_teams",
+        paired_reply="ms-teams-message",
+        nudge_chat=(
+            "Invite them to click the 'Trigger Microsoft Teams message from "
+            "T-W1N' row in the Onboarding checklist to get a clue in Teams."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger Microsoft Teams message from T-W1N' row in "
+            "the Onboarding checklist"
+        ),
+    ),
+    OnboardingStep(
+        id="ms-teams-message",
+        title="Reply to Microsoft Teams message",
+        phase=PHASE_COMMUNICATION,
+        kind="reply",
+        depends_on={"ms-teams-reference": COMPLETED},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        nudge_chat=(
+            "Prompt them to reply with their guess to the Microsoft Teams "
+            "message you sent."
+        ),
+        nudge_voice="replying to the Microsoft Teams message",
+    ),
+    OnboardingStep(
         id="discord-id",
         title="Add your Discord ID",
         phase=PHASE_COMMUNICATION,
@@ -1321,6 +1373,7 @@ _CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "phone_call": ("phone_call",),
     "slack_message": ("slack_message", "slack_channel_message"),
     "discord_message": ("discord_message", "discord_channel_message"),
+    "ms_teams_message": ("ms_teams_bot_message",),
 }
 
 # Trigger row id -> transcript medium(s) that prove Twin sent the outbound.
@@ -1540,6 +1593,19 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "Reply to T-W1N's Slack message with your guess.",
         "~1 min",
     ),
+    "ms-teams-connect": StepPresentation(
+        "Install the Unify Microsoft Teams app to your organization so T-W1N "
+        "can message you there.",
+        "~1 min",
+    ),
+    "ms-teams-reference": StepPresentation(
+        "T-W1N sends the next reference clue in Microsoft Teams.",
+        "~10s",
+    ),
+    "ms-teams-message": StepPresentation(
+        "Reply to T-W1N's Microsoft Teams message with your guess.",
+        "~1 min",
+    ),
     "discord-id": StepPresentation(
         "Add your Discord user ID so T-W1N can DM you.",
         "~1 min",
@@ -1680,6 +1746,22 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "already, otherwise I just confirm it."
     ),
     "slack-message": "The user guesses the Slack clue.",
+    "ms-teams-connect": (
+        "Clicking the 'Connect Microsoft Teams' row opens the setup path for "
+        "the Unify Teams app. Walk them through installing it to their "
+        "organization and choosing where I should reach them. The usual snag "
+        "is tenant permissions: many Microsoft 365 tenants require an admin to "
+        "approve new apps, so if they aren't an admin the install can sit in a "
+        "'pending approval' state and the row won't complete until the app is "
+        "actually connected. Say that plainly, and if they can't approve it "
+        "themselves the cleanest path is to have a tenant admin do the connect."
+    ),
+    "ms-teams-reference": (
+        "Clicking the 'Trigger Microsoft Teams message from T-W1N' row tells me "
+        "the user is ready for the clue in Teams; I send my own clue if I "
+        "haven't already, otherwise I just confirm it."
+    ),
+    "ms-teams-message": "The user guesses the Microsoft Teams clue.",
     "discord-id": (
         "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
         "Walk them through it: in Discord, turn on Settings -> Developer -> "

@@ -571,10 +571,15 @@ async def delete_team(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="team_mutation_forbidden",
         )
-    except TeamCleanupConflictError:
+    except TeamCleanupConflictError as exc:
+        reason = str(exc)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="team_cleanup_in_progress",
+            detail=(
+                reason
+                if reason.startswith("team_owns_assistants")
+                else "team_cleanup_in_progress"
+            ),
         )
     except TeamCleanupFailure as exc:
         return JSONResponse(
@@ -986,6 +991,13 @@ async def remove_team_assistant_member(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
+        )
+    if assistant.owner_team_id == team_id:
+        # A team-owned assistant's entire memory is this team's shared root;
+        # membership in its owning team is structural, not optional.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="assistant_owned_by_team",
         )
 
     await purge_team_member_overlay(

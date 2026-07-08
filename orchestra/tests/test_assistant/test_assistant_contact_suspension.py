@@ -203,12 +203,15 @@ def _make_assistant(
     user_phone: str | None = None,
     assistant_whatsapp_number: str | None = None,
     user_whatsapp_number: str | None = None,
+    *,
+    is_coordinator: bool = False,
 ) -> Assistant:
     a = Assistant(
         user_id=user_id,
         first_name=first_name,
         surname=surname,
         organization_id=organization_id,
+        is_coordinator=is_coordinator,
     )
     dbsession.add(a)
     dbsession.flush()
@@ -744,6 +747,75 @@ class TestSuspensionNotifications:
 
 
 # ============================================================================
+# 3b. Coordinator exclusion
+# ============================================================================
+
+
+class TestCoordinatorExclusion:
+    """Coordinator (Twin) contacts are never warned or deprovisioned."""
+
+    @pytest.mark.anyio
+    async def test_coordinator_grace_contact_not_deleted_or_notified(
+        self,
+        dbsession: Session,
+        mock_external_calls,
+    ):
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
+        user = _make_user(dbsession, "coord_susp_u1", ba, email="coord@test.com")
+        coordinator = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="T-W1N",
+            surname="Coordinator",
+            is_coordinator=True,
+        )
+        c = _make_grace_contact(
+            dbsession,
+            coordinator.agent_id,
+            contact_value="+15559930099",
+            grace_days_ago=15,
+        )
+        dbsession.flush()
+
+        result = await suspend_overdue_contacts(session=dbsession)
+
+        assert result.contacts_deleted == 0
+        assert result.reminders_sent == 0
+        dbsession.refresh(c)
+        assert c.status == "active"
+        assert c.grace_period_started_at is None
+        mock_external_calls["send_emails"].assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_day7_warning_includes_assistant_name(
+        self,
+        dbsession: Session,
+        mock_external_calls,
+    ):
+        ba = _make_ba(dbsession, credits=-5, account_status="ACTIVE")
+        user = _make_user(dbsession, "susp_name_u1", ba)
+        asst = _make_assistant(
+            dbsession,
+            user.id,
+            first_name="RemBot",
+            surname="Named",
+        )
+        _make_grace_contact(
+            dbsession,
+            asst.agent_id,
+            contact_value="+15559930100",
+            grace_days_ago=8,
+        )
+        dbsession.flush()
+
+        await suspend_overdue_contacts(session=dbsession)
+
+        mock_external_calls["send_emails"].assert_awaited()
+        email_body = mock_external_calls["send_emails"].await_args[0][2]
+        assert "RemBot Named" in email_body
+
+
+# ============================================================================
 # 4. Edge cases
 # ============================================================================
 
@@ -1186,18 +1258,25 @@ class TestEmailHelpers:
 
     def test_build_warning_email_contains_key_info(self):
         """Warning email HTML includes days remaining and billing link."""
-        html = build_warning_email(days_remaining=7)
+        html = build_warning_email(
+            days_remaining=7,
+            assistant_names=["Alice Smith", "Bob Jones"],
+        )
 
         assert "7 day(s)" in html
         assert "billing settings" in html
         assert "cannot be recovered" in html
+        assert "Alice Smith" in html
+        assert "Bob Jones" in html
 
     def test_build_deletion_email_contains_key_info(self):
         """Deletion email HTML mentions deletion and billing link."""
-        html = build_deletion_email()
+        html = build_deletion_email(assistant_names=["Alice Smith"])
 
         assert "cannot be recovered" in html
         assert "billing settings" in html
+        assert "Alice Smith" in html
+        assert "had contact details deleted" in html
 
     def test_get_notification_emails_personal_user(self, dbsession: Session):
         """For a personal BA, the user's email is returned."""
