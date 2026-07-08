@@ -1486,12 +1486,36 @@ def start_connection(
     credential_storage = (
         "secret_manager" if chosen_auth_mode == "api_key" else "provider_vault"
     )
+    from orchestra.services.coordinator_service import (
+        notify_coordinator_onboarding_after_integration_connected,
+        onboarding_baseline_for_integration_connect,
+    )
+
+    baseline_completed = (
+        onboarding_baseline_for_integration_connect(
+            session,
+            assistant_id=owner.assistant_id,
+        )
+        if status == "connected"
+        else None
+    )
+    effective_user_id = owner.user_id
+    if (
+        owner.owner_scope == "assistant"
+        and not effective_user_id
+        and owner.assistant_id is not None
+    ):
+        from orchestra.db.models.orchestra_models import Assistant
+
+        coordinator = session.get(Assistant, owner.assistant_id)
+        if coordinator is not None:
+            effective_user_id = coordinator.user_id
     connection = dao.create_connection(
         {
             "owner_scope": owner.owner_scope,
             "org_id": owner.org_id,
             "team_id": owner.team_id,
-            "user_id": owner.user_id,
+            "user_id": effective_user_id,
             "assistant_id": owner.assistant_id,
             "canonical_app_slug": canonical_app_slug,
             "backend_id": resolved_backend_id,
@@ -1523,6 +1547,19 @@ def start_connection(
             redirect_url=redirect_url,
         )
         session.commit()
+    if status == "connected":
+        logger.info(
+            "onboarding_integration_mutation connection_id=%s assistant_id=%s status=connected canonical_app_slug=%s",
+            connection.connection_id,
+            connection.assistant_id,
+            connection.canonical_app_slug,
+        )
+        notify_coordinator_onboarding_after_integration_connected(
+            session,
+            assistant_id=connection.assistant_id,
+            canonical_app_slug=connection.canonical_app_slug,
+            baseline_completed_step_ids=baseline_completed,
+        )
     return (
         _connection_to_response(connection),
         connect_url,
@@ -1578,6 +1615,13 @@ def complete_connection(
     dao.update_connection_fields(conn, **updates)
     session.commit()
     response = _connection_to_response(conn)
+    logger.info(
+        "onboarding_integration_mutation connection_id=%s assistant_id=%s status=%s canonical_app_slug=%s",
+        conn.connection_id,
+        conn.assistant_id,
+        status,
+        conn.canonical_app_slug,
+    )
     notify_coordinator_onboarding_after_integration_connected(
         session,
         assistant_id=conn.assistant_id,
@@ -1627,17 +1671,39 @@ def disconnect_connection(
     session: Session,
     connection_id: str,
 ) -> IntegrationConnectionResponse:
+    from orchestra.services.coordinator_service import (
+        notify_coordinator_onboarding_after_integration_disconnected,
+        onboarding_baseline_for_integration_connect,
+    )
+
     dao = IntegrationProviderDAO(session)
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
+    baseline_completed = onboarding_baseline_for_integration_connect(
+        session,
+        assistant_id=conn.assistant_id,
+    )
     dao.update_connection_fields(
         conn,
         status="disconnected",
         reconnect_reason="user_disconnected",
     )
     session.commit()
-    return _connection_to_response(conn)
+    response = _connection_to_response(conn)
+    logger.info(
+        "onboarding_integration_mutation connection_id=%s assistant_id=%s status=disconnected canonical_app_slug=%s",
+        conn.connection_id,
+        conn.assistant_id,
+        conn.canonical_app_slug,
+    )
+    notify_coordinator_onboarding_after_integration_disconnected(
+        session,
+        assistant_id=conn.assistant_id,
+        canonical_app_slug=conn.canonical_app_slug,
+        baseline_completed_step_ids=baseline_completed,
+    )
+    return response
 
 
 def cancel_connection(

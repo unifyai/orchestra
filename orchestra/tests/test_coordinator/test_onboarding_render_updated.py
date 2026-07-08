@@ -73,4 +73,6 @@ async def test_render_updated_emits_when_completed_set_changes() -> None:
     details = kwargs["extra_event_fields"]["details"]
     assert details["reason"] == "contact_identity_updated"
     assert details["completed_step_ids"] == completed_now
+    assert details["newly_completed_step_ids"] == ["whatsapp-number"]
+    assert details["newly_uncompleted_step_ids"] == []
     assert details["onboarding"] == _RENDER

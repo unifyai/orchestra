@@ -100,3 +100,90 @@ def test_demo_event_messages_do_not_name_cm_completion_tool() -> None:
     demo = graph.chip_event_for("integration-read", "crm-pipeline-summary")
     assert demo is not None
     assert "set_onboarding_task_state" not in demo.message
+
+
+def test_integration_connections_probe_queries_by_assistant_id_only() -> None:
+    coordinator = SimpleNamespace(
+        agent_id=42,
+        user_id="user-1",
+        organization_id=None,
+    )
+    session = MagicMock()
+    connected = SimpleNamespace(
+        status="connected",
+        updated_at=datetime(2026, 7, 7, 13, 0, tzinfo=timezone.utc),
+        user_id=None,
+    )
+
+    with (
+        patch.object(
+            svc,
+            "_project_for_coordinator",
+            return_value=SimpleNamespace(id=1),
+        ),
+        patch.object(svc, "_get_context", return_value=None),
+        patch(
+            "orchestra.db.dao.integration_provider_dao.IntegrationProviderDAO",
+        ) as dao_cls,
+    ):
+        dao = dao_cls.return_value
+        dao.list_connections.return_value = [connected]
+        scope = svc._OnboardingProbeScope(session, coordinator=coordinator)
+        connections = scope.integration_connections
+
+    owner = dao.list_connections.call_args.args[0]
+    assert owner.owner_scope == "assistant"
+    assert owner.assistant_id == 42
+    assert owner.user_id is None
+    assert connections == [connected]
+
+
+def test_derive_onboarding_progress_includes_apps_for_null_user_id_connection() -> None:
+    coordinator = SimpleNamespace(
+        agent_id=42,
+        user_id="user-1",
+        organization_id=None,
+        is_coordinator=True,
+    )
+    connected = SimpleNamespace(
+        status="connected",
+        updated_at=datetime(2026, 7, 7, 13, 0, tzinfo=timezone.utc),
+        user_id=None,
+    )
+    session = MagicMock()
+    apps_only = (
+        graph.OnboardingStep(
+            id="apps",
+            title="Connect apps",
+            phase="Integrations",
+            kind="connect",
+            depends_on={},
+            can_skip=True,
+            derivable=True,
+        ),
+    )
+
+    with (
+        patch.object(graph, "ONBOARDING_GRAPH", apps_only),
+        patch.object(
+            svc,
+            "_project_for_coordinator",
+            return_value=SimpleNamespace(id=1),
+        ),
+        patch.object(svc, "_get_context", return_value=None),
+        patch(
+            "orchestra.db.dao.integration_provider_dao.IntegrationProviderDAO",
+        ) as dao_cls,
+        patch.object(
+            svc,
+            "get_coordinator_state",
+            return_value={"onboarding_active": True},
+        ),
+    ):
+        dao_cls.return_value.list_connections.return_value = [connected]
+        completed = svc.derive_onboarding_progress(
+            session,
+            coordinator=coordinator,
+        )
+
+    assert "apps" in completed
