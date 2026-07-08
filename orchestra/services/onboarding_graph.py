@@ -1593,6 +1593,19 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "Reply to T-W1N's Slack message with your guess.",
         "~1 min",
     ),
+    "ms-teams-connect": StepPresentation(
+        "Install the Unify Microsoft Teams app to your organization so T-W1N "
+        "can message you there.",
+        "~1 min",
+    ),
+    "ms-teams-reference": StepPresentation(
+        "T-W1N sends the next reference clue in Microsoft Teams.",
+        "~10s",
+    ),
+    "ms-teams-message": StepPresentation(
+        "Reply to T-W1N's Microsoft Teams message with your guess.",
+        "~1 min",
+    ),
     "discord-id": StepPresentation(
         "Add your Discord user ID so T-W1N can DM you.",
         "~1 min",
@@ -1733,6 +1746,22 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "already, otherwise I just confirm it."
     ),
     "slack-message": "The user guesses the Slack clue.",
+    "ms-teams-connect": (
+        "Clicking the 'Connect Microsoft Teams' row opens the setup path for "
+        "the Unify Teams app. Walk them through installing it to their "
+        "organization and choosing where I should reach them. The usual snag "
+        "is tenant permissions: many Microsoft 365 tenants require an admin to "
+        "approve new apps, so if they aren't an admin the install can sit in a "
+        "'pending approval' state and the row won't complete until the app is "
+        "actually connected. Say that plainly, and if they can't approve it "
+        "themselves the cleanest path is to have a tenant admin do the connect."
+    ),
+    "ms-teams-reference": (
+        "Clicking the 'Trigger Microsoft Teams message from T-W1N' row tells me "
+        "the user is ready for the clue in Teams; I send my own clue if I "
+        "haven't already, otherwise I just confirm it."
+    ),
+    "ms-teams-message": "The user guesses the Microsoft Teams clue.",
     "discord-id": (
         "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
         "Walk them through it: in Discord, turn on Settings -> Developer -> "

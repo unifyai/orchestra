@@ -16,6 +16,7 @@ from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.ms_teams_bot_dao import MsTeamsBotDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -1766,6 +1767,7 @@ ONBOARDING_STEP_SMS_MESSAGE = "sms-message"
 ONBOARDING_STEP_PHONE_CALL = "phone-call"
 ONBOARDING_STEP_SLACK_CONNECT = "slack-connect"
 ONBOARDING_STEP_SLACK_MESSAGE = "slack-message"
+ONBOARDING_STEP_MS_TEAMS_CONNECT = "ms-teams-connect"
 ONBOARDING_STEP_DISCORD_ID = "discord-id"
 ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
@@ -2162,6 +2164,21 @@ def _has_slack_install(
     return install is not None
 
 
+def _has_ms_teams_bot_install(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    dao = MsTeamsBotDAO(scope.session)
+    coordinator = scope.coordinator
+    install = (
+        dao.get_install_for_org(coordinator.organization_id)
+        if coordinator.organization_id is not None
+        else dao.get_install_for_user(coordinator.user_id)
+    )
+    return install is not None
+
+
 def _has_user_discord_id(
     scope: "_OnboardingProbeScope",
     *,
@@ -2321,6 +2338,7 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_WHATSAPP_NUMBER: _has_user_whatsapp_number,
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
+        ONBOARDING_STEP_MS_TEAMS_CONNECT: _has_ms_teams_bot_install,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_connected_integration,
