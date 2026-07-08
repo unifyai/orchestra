@@ -38,6 +38,7 @@ from orchestra.web.api.integrations.operations import (
     delete_custom_auth_config,
     deny_tool_execution,
     disconnect_connection,
+    download_provider_file,
     get_connection_tool_policy,
     list_connections,
     list_custom_auth_configs,
@@ -47,6 +48,7 @@ from orchestra.web.api.integrations.operations import (
     seed_default_provider_catalog,
     set_custom_auth_config,
     stage_composio_file,
+    stage_provider_file,
     start_connection,
     test_connection,
     update_connection,
@@ -72,7 +74,10 @@ from orchestra.web.api.integrations.schema import (
     IntegrationCustomAuthConfigListResponse,
     IntegrationCustomAuthConfigRequest,
     IntegrationCustomAuthConfigResponse,
+    IntegrationDownloadFileResponse,
     IntegrationHealthResponse,
+    IntegrationStagedFile,
+    IntegrationStageFileResponse,
     IntegrationToolExecutionApprovalRequest,
     IntegrationToolExecutionApprovalResponse,
     IntegrationToolPolicyPatchRequest,
@@ -899,10 +904,68 @@ def deny_integration_tool_execution(
 
 
 @router.post(
+    "/stage-file",
+    response_model=IntegrationStageFileResponse,
+)
+async def stage_integration_file(
+    file: UploadFile = File(...),
+    backend_id: str = Form(...),
+    toolkit_slug: str = Form(...),
+    tool_slug: str = Form(...),
+) -> IntegrationStageFileResponse:
+    """Stage a local file through the selected provider backend."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+    filename = file.filename or "upload.bin"
+    mimetype = file.content_type or "application/octet-stream"
+    result = stage_provider_file(
+        backend_id=backend_id,
+        content=content,
+        filename=filename,
+        mimetype=mimetype,
+        toolkit_slug=toolkit_slug,
+        tool_slug=tool_slug,
+    )
+    if result.get("status") != "ok":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(result.get("error") or {}).get("message") or "file staging failed",
+        )
+    raw_file = result.get("file") or {}
+    return IntegrationStageFileResponse(
+        status="ok",
+        backend_id=str(result.get("backend_id") or backend_id),
+        file=IntegrationStagedFile(**raw_file),
+    )
+
+
+@router.get(
+    "/download-file",
+    response_model=IntegrationDownloadFileResponse,
+)
+def download_integration_file(
+    backend_id: str = Query(...),
+    s3_key: str = Query(...),
+) -> IntegrationDownloadFileResponse:
+    """Download a provider-staged file by backend-specific storage key."""
+    result = download_provider_file(backend_id=backend_id, s3_key=s3_key)
+    if result.get("status") != "ok":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(result.get("error") or {}).get("message") or "file download failed",
+        )
+    return IntegrationDownloadFileResponse(**result)
+
+
+@router.post(
     "/composio/stage-file",
     response_model=IntegrationComposioStageFileResponse,
 )
-async def stage_provider_file(
+async def stage_composio_provider_file(
     file: UploadFile = File(...),
     toolkit_slug: str = Form(...),
     tool_slug: str = Form(...),
@@ -928,7 +991,17 @@ async def stage_provider_file(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=(result.get("error") or {}).get("message") or "file staging failed",
         )
-    return IntegrationComposioStageFileResponse(status="ok", file=result.get("file"))
+    raw_file = result.get("file") or {}
+    from orchestra.web.api.integrations.schema import IntegrationComposioFileUploadable
+
+    return IntegrationComposioStageFileResponse(
+        status="ok",
+        file=IntegrationComposioFileUploadable(
+            name=str(raw_file.get("name") or filename),
+            mimetype=str(raw_file.get("mimetype") or mimetype),
+            s3key=str(raw_file.get("s3key") or ""),
+        ),
+    )
 
 
 @router.post("/tools/{tool_id}/run")

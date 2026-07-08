@@ -536,6 +536,38 @@ class IntegrationComposioFileUploadable(BaseModel):
     s3key: str
 
 
+class IntegrationStagedFile(BaseModel):
+    """Provider-neutral staged file envelope."""
+
+    name: str
+    mimetype: str
+    s3key: Optional[str] = None
+    file_path: Optional[str] = None
+    stash_id: Optional[str] = None
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntegrationStageFileResponse(BaseModel):
+    """Result of staging a local file with a provider backend."""
+
+    status: Literal["ok", "error"] = "ok"
+    backend_id: str
+    file: Optional[IntegrationStagedFile] = None
+    error: Optional[dict[str, Any]] = None
+
+
+class IntegrationDownloadFileResponse(BaseModel):
+    """Result of downloading a provider-staged file."""
+
+    status: Literal["ok", "error"] = "ok"
+    backend_id: str
+    filename: Optional[str] = None
+    mimetype: Optional[str] = None
+    content_base64: Optional[str] = None
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[dict[str, Any]] = None
+
+
 class IntegrationComposioStageFileResponse(BaseModel):
     """Result of staging a local file in Composio storage."""
 
