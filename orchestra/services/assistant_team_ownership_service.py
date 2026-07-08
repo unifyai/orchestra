@@ -108,6 +108,7 @@ async def transfer_assistant_to_team_owned(
             FROM log_event_context lec
             JOIN context c ON c.id = lec.context_id
             WHERE le.id = lec.log_event_id
+              AND le.project_id = :project_id
               AND lec.project_id = :project_id
               AND c.project_id = :project_id
               AND (
