@@ -2274,7 +2274,7 @@ async def test_admin_list_assistant_team_ids_org_no_teams(client: AsyncClient):
 
     org_resp = await client.post(
         "/v0/organizations",
-        json={"name": "TeamIdsNoTeamsOrg"},
+        json={"name": "TeamIdsNoTeamsOrg", "data_sharing_mode": "private"},
         headers=owner["headers"],
     )
     assert org_resp.status_code in [200, 201]
@@ -2322,7 +2322,7 @@ async def test_admin_list_assistant_team_ids_with_membership(
 
     org_resp = await client.post(
         "/v0/organizations",
-        json={"name": "TeamIdsMemberOrg"},
+        json={"name": "TeamIdsMemberOrg", "data_sharing_mode": "private"},
         headers=owner["headers"],
     )
     assert org_resp.status_code in [200, 201]
