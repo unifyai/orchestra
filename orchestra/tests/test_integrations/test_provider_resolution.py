@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from orchestra.integrations.provider_resolution import (
     CatalogAppRef,
     composio_covered_keys,
     filter_pipedream_app_entries,
+    load_pipedream_allowlist,
     logical_app_key,
     resolve_public_catalog_apps,
     should_sync_pipedream_app,
@@ -114,3 +117,37 @@ def test_catalog_app_ref_logical_key_uses_display_name_when_needed() -> None:
         },
     )
     assert ref.logical_key == "acuity_scheduling"
+
+
+def test_load_pipedream_allowlist_reads_root_and_legacy_metadata_tables(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "root.toml"
+    root_path.write_text(
+        "\n".join(
+            [
+                "schema_version = 1",
+                'app_slugs = ["ably", "0codekit"]',
+                "",
+                "[metadata]",
+                "allowlist_count = 2",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    assert load_pipedream_allowlist(root_path) == {"ably", "0codekit"}
+
+    legacy_path = tmp_path / "legacy.toml"
+    legacy_path.write_text(
+        "\n".join(
+            [
+                "schema_version = 1",
+                "",
+                "[metadata]",
+                "allowlist_count = 1",
+                'app_slugs = ["apollo_io"]',
+            ],
+        ),
+        encoding="utf-8",
+    )
+    assert load_pipedream_allowlist(legacy_path) == {"apollo_io"}

@@ -173,13 +173,27 @@ def composio_covered_keys(
     return keys
 
 
+def _allowlist_slugs_from_toml(data: dict[str, Any]) -> list[str]:
+    root_slugs = data.get("app_slugs")
+    if isinstance(root_slugs, list) and root_slugs:
+        return [str(slug) for slug in root_slugs if str(slug).strip()]
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        nested_slugs = metadata.get("app_slugs")
+        if isinstance(nested_slugs, list) and nested_slugs:
+            return [str(slug) for slug in nested_slugs if str(slug).strip()]
+    return []
+
+
 def load_pipedream_allowlist(path: Path | None = None) -> set[str]:
     allowlist_path = path or DEFAULT_ALLOWLIST_PATH
     if not allowlist_path.is_file():
         return set()
     data = tomllib.loads(allowlist_path.read_text(encoding="utf-8"))
     return {
-        slugify(str(slug)) for slug in data.get("app_slugs") or [] if str(slug).strip()
+        slugify(str(slug))
+        for slug in _allowlist_slugs_from_toml(data)
+        if str(slug).strip()
     }
 
 
@@ -188,7 +202,7 @@ def pipedream_allowlist_enabled(path: Path | None = None) -> bool:
     if not allowlist_path.is_file():
         return False
     data = tomllib.loads(allowlist_path.read_text(encoding="utf-8"))
-    return bool(data.get("app_slugs"))
+    return bool(_allowlist_slugs_from_toml(data))
 
 
 def should_sync_pipedream_app(
