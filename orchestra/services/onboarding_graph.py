@@ -116,6 +116,7 @@ REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
     "phone_call": "make_call_to_boss",
     "slack_message": "send_slack_message",
     "discord_message": "send_discord_message",
+    "ms_teams_message": "send_ms_teams_bot_message",
 }
 
 REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
@@ -126,6 +127,7 @@ REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
     "phone-call": "phone_call",
     "slack-message": "slack_message",
     "discord-message": "discord_message",
+    "ms-teams-message": "ms_teams_message",
 }
 
 
@@ -1036,6 +1038,56 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         nudge_voice="replying to the Slack message",
     ),
     OnboardingStep(
+        id="ms-teams-connect",
+        title="Connect Microsoft Teams",
+        phase=PHASE_COMMUNICATION,
+        kind="connect",
+        depends_on={},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        nudge_chat=(
+            "Have them click the 'Connect Microsoft Teams' row in the "
+            "Onboarding checklist; it opens the setup path for the Unify Teams "
+            "app. Heads up that many Microsoft 365 tenants need an admin to "
+            "approve the app, so if they're not an admin the install can sit "
+            "pending until an admin connects it."
+        ),
+        nudge_voice=(
+            "clicking the 'Connect Microsoft Teams' row in the Onboarding checklist"
+        ),
+    ),
+    _trigger(
+        "ms-teams-reference",
+        "Trigger Microsoft Teams message from T-W1N",
+        depends_on={"ms-teams-connect": COMPLETED},
+        channel="ms_teams",
+        paired_reply="ms-teams-message",
+        nudge_chat=(
+            "Invite them to click the 'Trigger Microsoft Teams message from "
+            "T-W1N' row in the Onboarding checklist to get a clue in Teams."
+        ),
+        nudge_voice=(
+            "clicking the 'Trigger Microsoft Teams message from T-W1N' row in "
+            "the Onboarding checklist"
+        ),
+    ),
+    OnboardingStep(
+        id="ms-teams-message",
+        title="Reply to Microsoft Teams message",
+        phase=PHASE_COMMUNICATION,
+        kind="reply",
+        depends_on={"ms-teams-reference": COMPLETED},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        nudge_chat=(
+            "Prompt them to reply with their guess to the Microsoft Teams "
+            "message you sent."
+        ),
+        nudge_voice="replying to the Microsoft Teams message",
+    ),
+    OnboardingStep(
         id="discord-id",
         title="Add your Discord ID",
         phase=PHASE_COMMUNICATION,
@@ -1321,6 +1373,7 @@ _CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "phone_call": ("phone_call",),
     "slack_message": ("slack_message", "slack_channel_message"),
     "discord_message": ("discord_message", "discord_channel_message"),
+    "ms_teams_message": ("ms_teams_bot_message",),
 }
 
 # Trigger row id -> transcript medium(s) that prove Twin sent the outbound.
