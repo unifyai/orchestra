@@ -114,9 +114,7 @@ def get_assistant_names_for_contacts(
 
     assistant_ids = {contact.assistant_id for contact in contacts}
     assistants = (
-        session.query(Assistant)
-        .filter(Assistant.agent_id.in_(assistant_ids))
-        .all()
+        session.query(Assistant).filter(Assistant.agent_id.in_(assistant_ids)).all()
     )
     names = sorted({get_assistant_display_name(assistant) for assistant in assistants})
     return names
@@ -180,7 +178,7 @@ def _format_assistant_names_section(
         lead = f"The following assistant {action}:"
     else:
         items = "".join(f"<li>{name}</li>" for name in assistant_names)
-        names_html = f"<ul style=\"margin: 8px 0 0 0; padding-left: 20px;\">{items}</ul>"
+        names_html = f'<ul style="margin: 8px 0 0 0; padding-left: 20px;">{items}</ul>'
         lead = f"The following assistants {action}:"
 
     return f"<p>{lead}</p>{names_html}"
@@ -268,10 +266,12 @@ def build_deletion_email(
         <p>Your provisioned assistant contact details have been deleted due
         to insufficient credits on {account_label} after a 14-day grace period.</p>
 
-        {_format_assistant_names_section(
+        {
+        _format_assistant_names_section(
             assistant_names or [],
             action="had contact details deleted",
-        )}
+        )
+    }
 
         <p>The underlying resources (phone numbers, email addresses) have
         been released and <strong>cannot be recovered</strong>. If you need

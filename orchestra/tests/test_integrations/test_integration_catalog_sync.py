@@ -468,6 +468,10 @@ def test_pipedream_adapter_emits_raw_category_and_tag_candidates(
 
     adapter = PipedreamProviderAdapter(access_token="pipedream-token")
     monkeypatch.setattr(
+        "orchestra.integrations.provider_resolution.load_pipedream_allowlist",
+        lambda **_kwargs: {"hubspot"},
+    )
+    monkeypatch.setattr(
         adapter,
         "list_apps",
         lambda **kwargs: [
