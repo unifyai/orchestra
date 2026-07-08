@@ -160,7 +160,7 @@ async def _create_organization_with_owner_coordinator(
     name: str,
     owner_user_id: str,
     timezone: str | None,
-    data_sharing_mode: str = "private",
+    data_sharing_mode: str = "shared",
 ) -> dict:
     """Create an organization workspace and ensure owner Coordinator readiness."""
     org_dao = OrganizationDAO(session)

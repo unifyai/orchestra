@@ -13,13 +13,18 @@ DataSharingMode = Literal["private", "shared"]
 
 
 class OrganizationCreate(BaseModel):
-    """Schema for creating an organization."""
+    """Schema for creating an organization.
+
+    New organizations default to org-wide sharing: the managed "Org" team is
+    created up front and every current and future member is enrolled. Pass
+    ``data_sharing_mode="private"`` to opt out.
+    """
 
     name: SafeLabel
     timezone: Optional[str] = (
         None  # IANA timezone; defaults to owner's timezone if not set
     )
-    data_sharing_mode: DataSharingMode = "private"
+    data_sharing_mode: DataSharingMode = "shared"
 
     @field_validator("timezone")
     @classmethod
@@ -38,7 +43,7 @@ class AdminOrganizationCreate(BaseModel):
     name: SafeLabel
     creator_user_id: str
     timezone: Optional[str] = None
-    data_sharing_mode: DataSharingMode = "private"
+    data_sharing_mode: DataSharingMode = "shared"
 
     @field_validator("timezone")
     @classmethod
