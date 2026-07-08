@@ -255,10 +255,16 @@ class TestInstallDAO:
         org = _make_org(dbsession, user, "re")
         first = _make_install(dbsession, organization=org, tenant_id="tenant-re")
         dao.revoke_install(first.id)
-        # A fresh active install for the same tenant now clears the partial
-        # unique index (which only covers non-revoked rows).
-        second = _make_install(dbsession, organization=org, tenant_id="tenant-re")
-        assert second.id != first.id
+        # Per-owner uniqueness is permanent (only the active-tenant index is
+        # revoked-aware), so re-installing the same (owner, tenant) reuses the
+        # existing row and clears revoked_at to bring the install back live.
+        second = dao.upsert_install(
+            tenant_id="tenant-re",
+            bot_app_id="app-guid-001",
+            organization_id=org.id,
+        )
+        assert second.id == first.id
+        assert second.revoked_at is None
 
     def test_get_install_by_tenant_ignores_revoked(
         self,
