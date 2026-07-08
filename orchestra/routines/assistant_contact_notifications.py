@@ -22,6 +22,7 @@ from typing import Dict, List
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     AssistantContact,
     BillingAccount,
     Organization,
@@ -96,6 +97,41 @@ def get_notification_emails_for_ba(
     return emails
 
 
+def get_assistant_display_name(assistant: Assistant) -> str:
+    """Return a customer-facing label for an assistant."""
+    parts = [assistant.first_name, assistant.surname]
+    name = " ".join(part for part in parts if part)
+    return name or f"Assistant {assistant.agent_id}"
+
+
+def get_assistant_names_for_contacts(
+    session: Session,
+    contacts: List[AssistantContact],
+) -> List[str]:
+    """Return sorted, de-duplicated assistant names for the given contacts."""
+    if not contacts:
+        return []
+
+    assistant_ids = {contact.assistant_id for contact in contacts}
+    assistants = (
+        session.query(Assistant)
+        .filter(Assistant.agent_id.in_(assistant_ids))
+        .all()
+    )
+    names = sorted({get_assistant_display_name(assistant) for assistant in assistants})
+    return names
+
+
+def is_contact_billing_enforced(assistant: Assistant) -> bool:
+    """Return whether a contact may enter billing grace / deprovision flows.
+
+    Coordinator (Twin) assistants use shared platform pool resources and must
+    never be billed, warned, or deprovisioned by the contact levy / suspension
+    routines.
+    """
+    return not assistant.is_coordinator
+
+
 def get_account_label_for_ba(
     session: Session,
     ba: BillingAccount,
@@ -130,7 +166,31 @@ _FOOTER = (
 )
 
 
-def build_insufficient_credits_email(account_label: str = "your account") -> str:
+def _format_assistant_names_section(
+    assistant_names: List[str],
+    *,
+    action: str = "have contact details at risk",
+) -> str:
+    """Render the affected-assistants block for contact-billing emails."""
+    if not assistant_names:
+        return ""
+
+    if len(assistant_names) == 1:
+        names_html = f"<strong>{assistant_names[0]}</strong>"
+        lead = f"The following assistant {action}:"
+    else:
+        items = "".join(f"<li>{name}</li>" for name in assistant_names)
+        names_html = f"<ul style=\"margin: 8px 0 0 0; padding-left: 20px;\">{items}</ul>"
+        lead = f"The following assistants {action}:"
+
+    return f"<p>{lead}</p>{names_html}"
+
+
+def build_insufficient_credits_email(
+    account_label: str = "your account",
+    *,
+    assistant_names: List[str] | None = None,
+) -> str:
     """Day 1: sent by the levy when credits go negative."""
     return f"""
     <html>
@@ -139,6 +199,8 @@ def build_insufficient_credits_email(account_label: str = "your account") -> str
 
         <p>{account_label.capitalize()} has been charged for provisioned assistant contact
         details, but you do not have enough credits to cover the cost.</p>
+
+        {_format_assistant_names_section(assistant_names or [])}
 
         <p style="color: #d97706;">
             <strong>⚠️ Important:</strong> If you do not add credits within
@@ -159,6 +221,8 @@ def build_insufficient_credits_email(account_label: str = "your account") -> str
 def build_warning_email(
     days_remaining: int,
     account_label: str = "your account",
+    *,
+    assistant_names: List[str] | None = None,
 ) -> str:
     """Build the HTML email body for grace-period warnings/reminders."""
     return f"""
@@ -168,6 +232,8 @@ def build_warning_email(
 
         <p>{account_label.capitalize()} does not have enough credits to maintain your
         provisioned assistant contact details.</p>
+
+        {_format_assistant_names_section(assistant_names or [])}
 
         <p style="color: #d97706;">
             <strong>⚠️ Important:</strong> Your contact details will be
@@ -188,7 +254,11 @@ def build_warning_email(
     """
 
 
-def build_deletion_email(account_label: str = "your account") -> str:
+def build_deletion_email(
+    account_label: str = "your account",
+    *,
+    assistant_names: List[str] | None = None,
+) -> str:
     """Build the HTML email body for the deletion notification."""
     return f"""
     <html>
@@ -197,6 +267,11 @@ def build_deletion_email(account_label: str = "your account") -> str:
 
         <p>Your provisioned assistant contact details have been deleted due
         to insufficient credits on {account_label} after a 14-day grace period.</p>
+
+        {_format_assistant_names_section(
+            assistant_names or [],
+            action="had contact details deleted",
+        )}
 
         <p>The underlying resources (phone numbers, email addresses) have
         been released and <strong>cannot be recovered</strong>. If you need

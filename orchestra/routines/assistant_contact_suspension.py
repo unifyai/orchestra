@@ -45,6 +45,7 @@ from orchestra.routines.assistant_contact_notifications import (
     build_deletion_email,
     build_warning_email,
     get_account_label_for_ba,
+    get_assistant_names_for_contacts,
     get_last_notification_day,
     get_notification_emails_for_ba,
     send_notification_emails,
@@ -55,6 +56,36 @@ from orchestra.web.lifetime import get_engine
 logger = logging.getLogger(__name__)
 
 GRACE_PERIOD_DAYS = 14
+
+
+def _clear_coordinator_grace_periods(session: Session) -> int:
+    """Restore Coordinator contacts stuck in grace_period back to active.
+
+    Coordinator (Twin) assistants use shared platform pool resources and must
+    never be billed, warned, or deprovisioned by the contact suspension flow.
+    """
+    coordinator_grace_contacts: List[AssistantContact] = (
+        session.query(AssistantContact)
+        .join(Assistant, AssistantContact.assistant_id == Assistant.agent_id)
+        .filter(
+            AssistantContact.status == "grace_period",
+            Assistant.is_coordinator.is_(True),
+        )
+        .all()
+    )
+
+    for contact in coordinator_grace_contacts:
+        contact.status = "active"
+        contact.grace_period_started_at = None
+        set_last_notification_day(contact, 0)
+
+    if coordinator_grace_contacts:
+        logger.info(
+            "Cleared grace period on %d Coordinator contact(s).",
+            len(coordinator_grace_contacts),
+        )
+
+    return len(coordinator_grace_contacts)
 
 
 # ---------------------------------------------------------------------------
@@ -249,10 +280,16 @@ async def _suspend_in_session(session: Session) -> SuspensionResult:
     cutoff = now - _dt.timedelta(days=GRACE_PERIOD_DAYS)
 
     try:
+        _clear_coordinator_grace_periods(session)
+
         # 1. Fetch all contacts currently in grace_period.
         grace_contacts: List[AssistantContact] = (
             session.query(AssistantContact)
-            .filter(AssistantContact.status == "grace_period")
+            .join(Assistant, AssistantContact.assistant_id == Assistant.agent_id)
+            .filter(
+                AssistantContact.status == "grace_period",
+                Assistant.is_coordinator.is_(False),
+            )
             .all()
         )
 
@@ -468,7 +505,13 @@ async def _process_ba_grace_contacts(
             await send_notification_emails(
                 notification_emails,
                 DELETION_SUBJECT,
-                build_deletion_email(account_label),
+                build_deletion_email(
+                    account_label,
+                    assistant_names=get_assistant_names_for_contacts(
+                        session,
+                        overdue_contacts,
+                    ),
+                ),
             )
             ar.deletion_email_sent = True
         except Exception as e:
@@ -489,7 +532,14 @@ async def _process_ba_grace_contacts(
             await send_notification_emails(
                 notification_emails,
                 schedule_entry["subject"],
-                build_warning_email(schedule_entry["days_remaining"], account_label),
+                build_warning_email(
+                    schedule_entry["days_remaining"],
+                    account_label,
+                    assistant_names=get_assistant_names_for_contacts(
+                        session,
+                        notif_contacts,
+                    ),
+                ),
             )
 
             # Record that this notification day was sent

@@ -881,6 +881,61 @@ class TestLevyDay1Notification:
         mock_send.assert_not_called()
 
 
+class TestLevyCoordinatorExclusion:
+    """Coordinator (Twin) contacts are never billed or placed in grace period."""
+
+    def test_coordinator_contacts_excluded_from_levy(self, dbsession: Session):
+        ba = make_billing_account(dbsession, credits=2)
+        user = make_user(dbsession, "coord_u1", ba)
+        coordinator = make_assistant(
+            dbsession,
+            user.id,
+            first_name="T-W1N",
+            surname="Coordinator",
+            is_coordinator=True,
+        )
+        hired = make_assistant(dbsession, user.id, first_name="HiredBot")
+        coord_contact = make_contact(
+            dbsession,
+            coordinator.agent_id,
+            contact_type="whatsapp",
+            contact_value="+15553010010",
+            provider="twilio",
+            country_code=None,
+        )
+        hired_contact = make_contact(
+            dbsession,
+            hired.agent_id,
+            contact_type="whatsapp",
+            contact_value="+15553010011",
+            provider="twilio",
+            country_code=None,
+        )
+        dbsession.flush()
+
+        with patch(
+            "orchestra.routines.assistant_contact_levy.send_notification_emails_sync",
+        ) as mock_send:
+            result = levy_provisioned_resources(2026, 4, session=dbsession)
+
+        ar = [r for r in result.account_results if r.billing_account_id == ba.id]
+        assert len(ar) == 1
+        assert ar[0].contacts_billed == 1
+        assert ar[0].grace_period_contacts == 1
+        assert ar[0].at_risk_assistant_names == ["HiredBot Bot"]
+
+        dbsession.refresh(coord_contact)
+        dbsession.refresh(hired_contact)
+        assert coord_contact.status == "active"
+        assert coord_contact.grace_period_started_at is None
+        assert hired_contact.status == "grace_period"
+
+        mock_send.assert_called_once()
+        email_body = mock_send.call_args[0][2]
+        assert "HiredBot Bot" in email_body
+        assert "T-W1N Coordinator" not in email_body
+
+
 # ============================================================================
 # Levy: edge cases
 # ============================================================================

@@ -50,6 +50,7 @@ from orchestra.routines.assistant_contact_notifications import (
     LEVY_INSUFFICIENT_CREDITS_SUBJECT,
     build_insufficient_credits_email,
     get_account_label_for_ba,
+    get_assistant_names_for_contacts,
     get_notification_emails_for_ba,
     send_notification_emails_sync,
     set_last_notification_day,
@@ -83,6 +84,7 @@ class LevyAccountResult:
     marked_past_due: bool = False
     grace_period_contacts: int = 0
     insufficient_credits_notified: bool = False
+    at_risk_assistant_names: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -265,6 +267,7 @@ def _levy_in_session(
                 AssistantContact.status.in_(["active", "grace_period"]),
                 AssistantContact.provisioned_by == "platform",
                 Assistant.demo_id.is_(None),  # exclude demo assistants
+                Assistant.is_coordinator.is_(False),  # exclude Twin/Coordinator
                 or_(
                     AssistantContact.last_billed_month.is_(None),
                     AssistantContact.last_billed_month != billing_month,
@@ -484,16 +487,22 @@ def _process_billing_account(
     # Start grace period on active contacts if credits went negative
     if not is_metered and ba.credits < 0:
         now = _dt.datetime.now(_dt.timezone.utc)
+        grace_contacts: List[AssistantContact] = []
         for contact in contacts:
             if contact.status == "active":
                 contact.status = "grace_period"
                 contact.grace_period_started_at = now
                 set_last_notification_day(contact, 1)
                 ar.grace_period_contacts += 1
+                grace_contacts.append(contact)
 
         if ar.grace_period_contacts > 0:
             ar.marked_past_due = True
             ar.insufficient_credits_notified = True
+            ar.at_risk_assistant_names = get_assistant_names_for_contacts(
+                session,
+                grace_contacts,
+            )
 
             logger.warning(
                 "Billing account %d has negative credits after levy. "
@@ -525,7 +534,10 @@ def _send_day1_notification(
             send_notification_emails_sync(
                 recipients,
                 LEVY_INSUFFICIENT_CREDITS_SUBJECT,
-                build_insufficient_credits_email(get_account_label_for_ba(session, ba)),
+                build_insufficient_credits_email(
+                    get_account_label_for_ba(session, ba),
+                    assistant_names=account_result.at_risk_assistant_names,
+                ),
             )
             logger.info(
                 "Day-1 insufficient credits notification sent for BA %d " "to %s.",
