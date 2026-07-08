@@ -2032,6 +2032,12 @@ def _connected_workspace(
     return None, frozenset()
 
 
+def _normalize_utc_naive(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _connection_updated_after(
     updated_at: datetime | None,
     reset_after: datetime | None,
@@ -2040,9 +2046,7 @@ def _connection_updated_after(
         return True
     if updated_at is None:
         return False
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
-    return updated_at > reset_after
+    return _normalize_utc_naive(updated_at) > _normalize_utc_naive(reset_after)
 
 
 def _has_connected_integration(

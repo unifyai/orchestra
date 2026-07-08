@@ -23,6 +23,12 @@ def test_connection_updated_after_respects_reset_timestamp() -> None:
     assert svc._connection_updated_after(None, reset_at) is False
 
 
+def test_connection_updated_after_normalizes_naive_reset_and_aware_connection() -> None:
+    reset_at = datetime(2026, 7, 7, 12, 0)
+    updated_at = datetime(2026, 7, 7, 13, 0, tzinfo=timezone.utc)
+    assert svc._connection_updated_after(updated_at, reset_at) is True
+
+
 def test_has_connected_integration_ignores_pre_reset_connections() -> None:
     reset_at = datetime(2026, 7, 7, 12, 0, tzinfo=timezone.utc)
     scope = SimpleNamespace(
