@@ -100,7 +100,7 @@ async def add_coordinator_to_team(
         )
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
         result.refresh_payloads.extend(
-            membership_refresh_payloads(session, [assistant])
+            membership_refresh_payloads(session, [assistant]),
         )
     else:
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
@@ -133,7 +133,7 @@ def add_assistant_to_team(
         )
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
         result.refresh_payloads.extend(
-            membership_refresh_payloads(session, [assistant])
+            membership_refresh_payloads(session, [assistant]),
         )
     else:
         ensure_team_contact_memberships(session, [(assistant.agent_id, team.id)])
@@ -199,14 +199,18 @@ async def enable_org_wide_sharing(
     if team is None:
         existing = team_dao.get_by_name(ORG_WIDE_SHARING_TEAM_NAME, org.id)
         if existing is not None and not existing.is_org_wide_sharing:
-            raise OrgWideSharingConflictError("org_team_name_reserved")
-        team = existing or team_dao.create(
-            name=ORG_WIDE_SHARING_TEAM_NAME,
-            organization_id=org.id,
-            description=ORG_WIDE_SHARING_TEAM_DESCRIPTION,
-            is_org_wide_sharing=True,
-        )
-        team.is_org_wide_sharing = True
+            existing.is_org_wide_sharing = True
+            if not existing.description:
+                existing.description = ORG_WIDE_SHARING_TEAM_DESCRIPTION
+            team = existing
+        else:
+            team = existing or team_dao.create(
+                name=ORG_WIDE_SHARING_TEAM_NAME,
+                organization_id=org.id,
+                description=ORG_WIDE_SHARING_TEAM_DESCRIPTION,
+                is_org_wide_sharing=True,
+            )
+            team.is_org_wide_sharing = True
         org.org_wide_sharing_team_id = team.id
 
     org.org_wide_sharing_enabled = True
