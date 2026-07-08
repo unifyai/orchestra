@@ -8,6 +8,7 @@ from orchestra.db.models.core_models import Context
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     CONTACT_MEMBERSHIP_SCOPE_TEAM,
+    Assistant,
     ContactMembership,
 )
 from orchestra.tests.utils import create_test_user
@@ -86,13 +87,7 @@ async def test_transfer_org_assistant_to_team_owned(
     assert body["memory_root"] == f"Teams/{team_id}"
 
     dbsession.expire_all()
-    assistant = dbsession.get(
-        __import__(
-            "orchestra.db.models.orchestra_models",
-            fromlist=["Assistant"],
-        ).Assistant,
-        agent_id,
-    )
+    assistant = dbsession.get(Assistant, agent_id)
     assert assistant.owner_team_id == team_id
 
     personal_contexts = (

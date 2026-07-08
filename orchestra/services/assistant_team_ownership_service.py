@@ -159,7 +159,13 @@ async def transfer_assistant_to_team_owned(
     session.add(assistant)
 
     team_dao = TeamDAO(session)
-    if team_dao.get_assistant_membership(owner_team_id, assistant_id) is None:
+    if (
+        team_dao.get_assistant_membership(
+            team_id=owner_team_id,
+            assistant_id=assistant_id,
+        )
+        is None
+    ):
         add_assistant_to_team(
             session,
             team=team,
