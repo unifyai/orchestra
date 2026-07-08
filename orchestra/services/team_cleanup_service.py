@@ -372,6 +372,21 @@ async def delete_team(
     if team is None or team.organization_id != organization_id:
         raise TeamCleanupNotFoundError("team_not_found")
 
+    # A team that owns assistants cannot be deleted out from under them:
+    # their entire memory lives in this team's shared root. The owned
+    # assistants must be deleted (or transferred) first.
+    owned_assistant_ids = [
+        row[0]
+        for row in session.query(Assistant.agent_id)
+        .filter(Assistant.owner_team_id == team_id)
+        .all()
+    ]
+    if owned_assistant_ids:
+        raise TeamCleanupConflictError(
+            "team_owns_assistants:"
+            + ",".join(str(agent_id) for agent_id in sorted(owned_assistant_ids)),
+        )
+
     _lock_team_for_cleanup(session, team_id=team_id, user_id=user_id)
     member_assistant_ids = _member_assistant_ids(session, team_id=team_id)
     session.commit()

@@ -112,6 +112,7 @@ from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramServic
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.org_wide_sharing_service import (
+    add_assistant_to_team,
     enroll_assistant_in_org_wide_team,
 )
 from orchestra.services.personal_workspace_service import personal_workspace_is_disabled
@@ -768,6 +769,7 @@ def _build_assistant_read(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
         organization_id=a.organization_id,
+        owner_team_id=a.owner_team_id,
         first_name=a.first_name,
         surname=a.surname,
         job_title=a.job_title,
@@ -1089,6 +1091,27 @@ async def create_assistant(
                     detail="You do not have permission to create assistants in this organization.",
                 )
 
+        # Team-owned assistants require an org key and a team in that org.
+        owner_team = None
+        if assistant_in.owner_team_id is not None:
+            if organization_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "owner_team_id requires an organization API key; "
+                        "team-owned assistants live inside an organization."
+                    ),
+                )
+            owner_team = session.get(Team, assistant_in.owner_team_id)
+            if owner_team is None or owner_team.organization_id != organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        f"Team {assistant_in.owner_team_id} not found in "
+                        "this organization."
+                    ),
+                )
+
         if settings.charges_billing and total_creation_cost > 0:
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
@@ -1148,14 +1171,19 @@ async def create_assistant(
             default_reasoning_effort=assistant_in.default_reasoning_effort,
             timezone=assistant_in.timezone,
             organization_id=organization_id,
+            owner_team_id=assistant_in.owner_team_id,
             is_local=assistant_in.is_local or False,
             job_title=assistant_in.job_title,
         )
-        ensure_personal_contact_memberships(
-            session,
-            [assistant.agent_id],
-            repair_existing=False,
-        )
+        if assistant_in.owner_team_id is None:
+            # Team-owned assistants have no personal root: their contact
+            # overlays are the owning team's (created via team enrollment
+            # below), never personal self/boss rows.
+            ensure_personal_contact_memberships(
+                session,
+                [assistant.agent_id],
+                repair_existing=False,
+            )
 
         # Org assistants retain the creator in `user_id`; org access is granted
         # separately through resource access so other members can collaborate.
@@ -1275,13 +1303,24 @@ async def create_assistant(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="assistants_project_missing",
             )
-        ensure_owner_contact_row(
-            session,
-            assistant=assistant,
-            project=assistants_project,
-        )
+        if owner_team is None:
+            # Team-owned assistants never get a personal `{user}/{agent}`
+            # Contacts context; their contact surface is the owning team's.
+            ensure_owner_contact_row(
+                session,
+                assistant=assistant,
+                project=assistants_project,
+            )
 
         sharing_refresh_payloads = []
+        if owner_team is not None:
+            owning_result = add_assistant_to_team(
+                session,
+                team=owner_team,
+                assistant=assistant,
+                actor_user_id=user_id,
+            )
+            sharing_refresh_payloads.extend(owning_result.refresh_payloads)
         if organization_id is not None and not assistant.is_coordinator:
             org = session.get(Organization, organization_id)
             if org is not None and org.org_wide_sharing_enabled:

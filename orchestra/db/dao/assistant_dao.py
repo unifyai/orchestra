@@ -133,6 +133,7 @@ class AssistantDAO:
         default_reasoning_effort: Optional[str] = None,
         timezone: Optional[str] = None,
         organization_id: Optional[int] = None,
+        owner_team_id: Optional[int] = None,
         is_local: bool = False,
         is_coordinator: bool = False,
         job_title: Optional[str] = None,
@@ -147,6 +148,9 @@ class AssistantDAO:
             creator/lifecycle owner retained on the row.
         :param organization_id: Optional organization scope for org assistants.
             None means a personal assistant.
+        :param owner_team_id: When set, the team is the product-level owner:
+            the assistant lives entirely in the team's shared root and
+            ``user_id`` records only the hiring member.
         :return: The created Assistant.
         """
 
@@ -156,6 +160,7 @@ class AssistantDAO:
         assistant = Assistant(
             user_id=user_id,
             organization_id=organization_id,
+            owner_team_id=owner_team_id,
             first_name=first_name,
             surname=surname,
             job_title=job_title,

@@ -1987,8 +1987,13 @@ class AssistantUserDesktop(Base):
 class Assistant(Base):
     """Model class for the assistants table.
 
-    Assistants can be either personal (user_id set, organization_id NULL)
-    or organizational (organization_id set, user_id is the creator).
+    Assistants can be personal (user_id set, organization_id NULL),
+    organizational (organization_id set, user_id is the creator), or
+    team-owned (owner_team_id set): the team is the product-level owner,
+    the assistant's only memory is the team's shared root (no personal
+    ``{user}/{agent}`` contexts are ever provisioned), and ``user_id``
+    is demoted to the hiring member — a creator/billing/API-key anchor,
+    not a supervisor.
 
     Contact details (phone, email, WhatsApp) are stored in the
     ``assistant_contacts`` table (see :class:`AssistantContact`).
@@ -2006,6 +2011,15 @@ class Assistant(Base):
     organization_id = Column(
         Integer,
         ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    # Owning team for team-owned assistants (NULL = user-owned). RESTRICT:
+    # a team that owns assistants cannot be deleted until they are deleted
+    # or transferred.
+    owner_team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )
