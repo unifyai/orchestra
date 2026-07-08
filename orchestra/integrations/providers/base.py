@@ -205,3 +205,37 @@ class BaseIntegrationProviderAdapter(ABC):
         request: ProviderExecutionRequest,
     ) -> ProviderExecutionResult:
         """Check whether the provider connection is usable."""
+
+    def stage_file(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        mimetype: str,
+        toolkit_slug: str,
+        tool_slug: str,
+    ) -> dict[str, Any]:
+        """Stage bytes for provider-backed tool arguments that accept files."""
+
+        return {
+            "status": "error",
+            "error": {
+                "code": "provider_file_staging_not_supported",
+                "message": (
+                    f"{self.backend_id} does not support provider file staging."
+                ),
+            },
+        }
+
+    def download_file(self, *, s3_key: str) -> dict[str, Any]:
+        """Download a provider-staged file by backend-specific storage key."""
+
+        return {
+            "status": "error",
+            "error": {
+                "code": "provider_file_download_not_supported",
+                "message": (
+                    f"{self.backend_id} does not support provider file download."
+                ),
+            },
+        }

@@ -430,15 +430,21 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
             return ProviderExecutionResult(status="error", error=token_error)
 
         auth_prop_name = self.auth_prop_name or request.canonical_app_slug
+        arguments = dict(request.arguments or {})
+        stash_id = arguments.pop("stash_id", None)
+        if stash_id is None:
+            stash_id = arguments.pop("stashId", None)
         configured_props = {
             auth_prop_name: {"authProvisionId": request.provider_connection_id},
-            **request.arguments,
+            **arguments,
         }
-        payload = {
+        payload: dict[str, Any] = {
             "external_user_id": request.user_id or request.connection_id,
             "id": request.provider_tool_id,
             "configured_props": configured_props,
         }
+        if stash_id is not None:
+            payload["stash_id"] = stash_id
         try:
             response = requests.post(
                 f"{self.base_url}/{self.project_id}/actions/run",
@@ -462,7 +468,59 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
             )
         if not isinstance(data, dict):
             data = {"data": data}
+        exports = data.get("exports")
+        if isinstance(exports, dict) and "$filestash_uploads" in exports:
+            data.setdefault("filestash_uploads", exports["$filestash_uploads"])
+        if data.get("stash_id") is None and data.get("stashId") is not None:
+            data["stash_id"] = data.get("stashId")
         return ProviderExecutionResult(status="ok", result=data)
+
+    def download_file(self, *, s3_key: str) -> dict[str, Any]:
+        if not self.project_id:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "provider_endpoint_not_configured",
+                    "message": "PIPEDREAM_PROJECT_ID is required for File Stash download.",
+                },
+            }
+
+        import base64
+
+        import requests
+
+        access_token, token_error = self._access_token()
+        if token_error:
+            return {"status": "error", "error": token_error}
+        try:
+            response = requests.get(
+                f"{self.base_url}/{self.project_id}/file_stash/download",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "X-PD-Environment": self.environment,
+                },
+                params={"s3_key": s3_key},
+                timeout=max(self.timeout_seconds, 120),
+            )
+            response.raise_for_status()
+            content = response.content
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error": {
+                    "code": "provider_file_download_failed",
+                    "message": str(exc),
+                },
+            }
+        filename = s3_key.rsplit("/", 1)[-1] or "download.bin"
+        mimetype = response.headers.get("Content-Type", "application/octet-stream")
+        return {
+            "status": "ok",
+            "filename": filename,
+            "mimetype": mimetype,
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "provider_metadata": {"s3_key": s3_key},
+        }
 
     def health_check(
         self,

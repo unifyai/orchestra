@@ -11,6 +11,7 @@ from orchestra.integrations.provider_resolution import (
     load_pipedream_allowlist,
     logical_app_key,
     resolve_public_catalog_apps,
+    resolve_public_catalog_tools,
     should_sync_pipedream_app,
     slug_variants,
 )
@@ -151,3 +152,31 @@ def test_load_pipedream_allowlist_reads_root_and_legacy_metadata_tables(
         encoding="utf-8",
     )
     assert load_pipedream_allowlist(legacy_path) == {"apollo_io"}
+
+
+def _tool_row(
+    *,
+    backend_id: str,
+    app_slug: str,
+    tool_name: str,
+) -> dict:
+    return {
+        "name": f"primitives.integrations.{app_slug}.{tool_name}",
+        "metadata": {
+            "integration": {
+                "backend_id": backend_id,
+                "app_slug": app_slug,
+                "provider_tool_id": tool_name,
+            },
+        },
+    }
+
+
+def test_resolve_public_catalog_tools_prefers_composio() -> None:
+    tools = [
+        _tool_row(backend_id="pipedream", app_slug="slack", tool_name="send_message"),
+        _tool_row(backend_id="composio", app_slug="slack", tool_name="send_message"),
+    ]
+    resolved = resolve_public_catalog_tools(tools)
+    assert len(resolved) == 1
+    assert resolved[0]["metadata"]["integration"]["backend_id"] == "composio"

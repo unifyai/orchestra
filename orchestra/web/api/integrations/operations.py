@@ -2555,22 +2555,92 @@ def stage_composio_file(
     tool_slug: str,
 ) -> dict[str, Any]:
     """Stage a file in Composio storage for FileUploadable tool parameters."""
-    from orchestra.integrations.providers.composio import ComposioProviderAdapter
+    return stage_provider_file(
+        backend_id="composio",
+        content=content,
+        filename=filename,
+        mimetype=mimetype,
+        toolkit_slug=toolkit_slug,
+        tool_slug=tool_slug,
+    )
+
+
+def stage_provider_file(
+    *,
+    backend_id: str,
+    content: bytes,
+    filename: str,
+    mimetype: str,
+    toolkit_slug: str,
+    tool_slug: str,
+) -> dict[str, Any]:
+    """Stage a file through the selected provider adapter."""
+
     from orchestra.integrations.providers.registry import get_provider_adapter
 
-    adapter = get_provider_adapter("composio")
-    if not isinstance(adapter, ComposioProviderAdapter):
-        return {
-            "status": "error",
-            "error": {
-                "code": "provider_not_configured",
-                "message": "Composio backend is not configured for file staging.",
-            },
-        }
-    return adapter.stage_file(
+    adapter = get_provider_adapter(backend_id.strip().lower())
+    normalized_tool_slug = tool_slug.strip()
+    if backend_id.strip().lower() == "composio":
+        normalized_tool_slug = normalized_tool_slug.upper()
+    result = adapter.stage_file(
         content=content,
         filename=filename,
         mimetype=mimetype,
         toolkit_slug=toolkit_slug.strip().lower(),
-        tool_slug=tool_slug.strip().upper(),
+        tool_slug=normalized_tool_slug,
     )
+    if result.get("status") != "ok":
+        return result
+    raw_file = result.get("file") or {}
+    if not isinstance(raw_file, dict):
+        return {
+            "status": "error",
+            "error": {
+                "code": "provider_file_stage_failed",
+                "message": "Provider file staging returned an invalid payload.",
+            },
+        }
+    return {
+        "status": "ok",
+        "backend_id": backend_id.strip().lower(),
+        "file": {
+            "name": str(raw_file.get("name") or filename),
+            "mimetype": str(raw_file.get("mimetype") or mimetype),
+            "s3key": raw_file.get("s3key"),
+            "file_path": raw_file.get("file_path") or raw_file.get("filePath"),
+            "stash_id": raw_file.get("stash_id") or raw_file.get("stashId"),
+            "provider_metadata": {
+                key: value
+                for key, value in raw_file.items()
+                if key
+                not in {
+                    "name",
+                    "mimetype",
+                    "s3key",
+                    "file_path",
+                    "filePath",
+                    "stash_id",
+                    "stashId",
+                }
+            },
+        },
+    }
+
+
+def download_provider_file(*, backend_id: str, s3_key: str) -> dict[str, Any]:
+    """Download a provider-staged file through the selected adapter."""
+
+    from orchestra.integrations.providers.registry import get_provider_adapter
+
+    adapter = get_provider_adapter(backend_id.strip().lower())
+    result = adapter.download_file(s3_key=s3_key)
+    if result.get("status") != "ok":
+        return {**result, "backend_id": backend_id.strip().lower()}
+    return {
+        "status": "ok",
+        "backend_id": backend_id.strip().lower(),
+        "filename": result.get("filename"),
+        "mimetype": result.get("mimetype"),
+        "content_base64": result.get("content_base64"),
+        "provider_metadata": result.get("provider_metadata") or {},
+    }
