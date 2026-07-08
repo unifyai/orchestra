@@ -113,7 +113,7 @@ async def test_list_teams(client: AsyncClient):
     # Create organization
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "Team List Org"},
+        json={"name": "Team List Org", "data_sharing_mode": "private"},
         headers=owner["headers"],
     )
     org_id = org_response.json()["id"]

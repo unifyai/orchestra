@@ -147,18 +147,24 @@ async def create_test_org(
     client: AsyncClient,
     owner: Dict[str, Any],
     org_name: str,
+    data_sharing_mode: str = "private",
 ) -> Dict[str, Any]:
     """
     Create a test organization and return its metadata including the org API key.
 
+    Defaults to a private org (no managed "Org" sharing team) so tests that
+    assert exact team memberships keep a clean slate; production defaults to
+    org-wide sharing.
+
     :param client: Test client.
     :param owner: Owner dict returned by ``create_test_user``.
     :param org_name: Name for the new organization.
+    :param data_sharing_mode: "private" or "shared".
     :return: Dict with ``id``, ``name``, ``api_key``, and ``headers`` (org-scoped).
     """
     response = await client.post(
         "/v0/organizations",
-        json={"name": org_name},
+        json={"name": org_name, "data_sharing_mode": data_sharing_mode},
         headers=owner["headers"],
     )
     assert response.status_code == status.HTTP_201_CREATED, response.json()

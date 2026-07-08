@@ -22,7 +22,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.context_naming import is_team_context_name
+from orchestra.db.context_naming import TEAM_CONTEXT_PREFIX, is_team_context_name
 from orchestra.db.dao.context_dao import delete_orphaned_log_events
 from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.db.log_queries import log_event_context_join, owner_scope_clause
@@ -1123,13 +1123,23 @@ def update_task_run(
     assistant_id: str | None,
     run_key: str,
     updates: Mapping[str, Any],
+    source_task_log_id: int | None = None,
 ) -> LogEvent:
-    """Apply a partial update to an existing task run row."""
+    """Apply a partial update to an existing task run row.
+
+    Resolution mirrors :func:`create_task_run_if_absent`: the run row lives
+    under its task's own surface (a team task's runs live in
+    ``Teams/{id}/Tasks/Runs``), so ``source_task_log_id`` takes precedence
+    over assistant derivation. Updates that arrive without it (older
+    runtimes) fall back to locating the row by its globally-unique
+    ``run_key`` across team task surfaces.
+    """
 
     tasks_context_name = resolve_tasks_context_name(
         session=session,
         project_id=project_id,
         assistant_id=assistant_id,
+        source_task_log_id=source_task_log_id,
     )
     context_ids = ensure_task_machine_contexts(
         session=session,
@@ -1148,6 +1158,14 @@ def update_task_run(
             project_id=project_id,
             legacy_context_name=TASK_RUNS_CONTEXT_NAME,
             nested_context_id=context_ids.runs_context_id,
+            unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+            unique_field_value=run_key,
+        )
+    if existing is None:
+        existing = _find_machine_row_in_team_surfaces(
+            session=session,
+            project_id=project_id,
+            leaf_name=_TASK_RUNS_CONTEXT_LEAF,
             unique_field_name=_TASK_RUN_UNIQUE_FIELD,
             unique_field_value=run_key,
         )
@@ -1326,13 +1344,21 @@ def update_task_outbound_operation(
     assistant_id: str | None,
     operation_key: str,
     updates: Mapping[str, Any],
+    source_task_log_id: int | None = None,
 ) -> LogEvent:
-    """Apply a partial update to an existing outbound operation row."""
+    """Apply a partial update to an existing outbound operation row.
+
+    Resolution mirrors :func:`create_task_outbound_operation_if_absent`:
+    ``source_task_log_id`` takes precedence so team-task rows resolve to the
+    team surface, with a key-based fallback for updates that arrive without
+    it (older runtimes).
+    """
 
     tasks_context_name = resolve_tasks_context_name(
         session=session,
         project_id=project_id,
         assistant_id=assistant_id,
+        source_task_log_id=source_task_log_id,
     )
     context_ids = ensure_task_machine_contexts(
         session=session,
@@ -1351,6 +1377,14 @@ def update_task_outbound_operation(
             project_id=project_id,
             legacy_context_name=TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME,
             nested_context_id=context_ids.outbound_operations_context_id,
+            unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
+            unique_field_value=operation_key,
+        )
+    if existing is None:
+        existing = _find_machine_row_in_team_surfaces(
+            session=session,
+            project_id=project_id,
+            leaf_name=_TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF,
             unique_field_name=_TASK_OUTBOUND_OPERATION_UNIQUE_FIELD,
             unique_field_value=operation_key,
         )
@@ -2110,6 +2144,46 @@ def _delete_machine_row_by_unique_field(
     )
     session.flush()
     return True
+
+
+def _find_machine_row_in_team_surfaces(
+    session: Session,
+    *,
+    project_id: int,
+    leaf_name: str,
+    unique_field_name: str,
+    unique_field_value: int | str,
+) -> LogEvent | None:
+    """Locate a machine row by its unique key across team task surfaces.
+
+    Run/operation keys are idempotency keys — globally unique by
+    construction (team destinations are baked into the key) — so when the
+    assistant-derived context misses, the row can only live under a
+    ``Teams/{id}/Tasks/{leaf}`` surface. This covers updates from runtimes
+    that do not send ``source_task_log_id``.
+    """
+
+    team_context_ids = [
+        context_id
+        for (context_id,) in session.query(Context.id)
+        .filter(
+            Context.project_id == project_id,
+            Context.name.like(
+                f"{TEAM_CONTEXT_PREFIX}%/{TASKS_CONTEXT_NAME}/{leaf_name}",
+            ),
+        )
+        .all()
+    ]
+    for context_id in team_context_ids:
+        row = _get_machine_row_by_unique_field(
+            session=session,
+            context_id=context_id,
+            unique_field_name=unique_field_name,
+            unique_field_value=unique_field_value,
+        )
+        if row is not None:
+            return row
+    return None
 
 
 def _get_machine_row_by_unique_field(

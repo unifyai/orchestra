@@ -986,6 +986,108 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_team_task_run_lifecycle_stays_on_team_surface(
+    client: AsyncClient,
+    dbsession,
+):
+    """Team-task runs are created AND updated under ``Teams/{id}/Tasks/Runs``.
+
+    Creation resolves the runs context from the task's own surface via
+    ``source_task_log_id``; updates must resolve the same row whether or not
+    they carry ``source_task_log_id`` (older runtimes omit it — the
+    key-based team-surface fallback covers them).
+    """
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    team = _make_team_member(dbsession, assistant=assistant)
+    team_tasks_context = f"Teams/{team.id}/Tasks"
+    entries = _assistant_scoped_scheduled_entries(
+        user_id=PRIMARY_USER_ID,
+        assistant_id=assistant.agent_id,
+        task_id=321,
+    )
+    entries["assistant_id"] = str(assistant.agent_id)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=team_tasks_context,
+        entries=entries,
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+
+    run_key = f"offline:scheduled:{assistant.agent_id}:team:{team.id}:321:rev-1"
+    create_response = await client.post(
+        "/v0/admin/task-run/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": run_key,
+            "assistant_id": str(assistant.agent_id),
+            "task_id": 321,
+            "source_task_log_id": source_task_log_id,
+            "source_type": "scheduled",
+            "execution_mode": "offline",
+            "destination": f"team:{team.id}",
+            "state": "running",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+
+    # The run row lives on the team surface, where Console's team Activity
+    # view reads it — not in the executor's personal root.
+    team_runs = await _get_context_logs(
+        client,
+        context_name=f"{team_tasks_context}/Runs",
+    )
+    assert [log["entries"]["run_key"] for log in team_runs] == [run_key]
+
+    # Update WITHOUT source_task_log_id (older runtime): the key-based
+    # team-surface fallback must find the row.
+    fallback_update = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant.agent_id),
+            "run_key": run_key,
+            "updates": {"state": "running", "progress_summary": "halfway"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert fallback_update.status_code == 200, fallback_update.json()
+    assert fallback_update.json()["run"]["progress_summary"] == "halfway"
+
+    # Update WITH source_task_log_id (current runtimes): direct resolution.
+    direct_update = await client.post(
+        "/v0/admin/task-run/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant.agent_id),
+            "run_key": run_key,
+            "source_task_log_id": source_task_log_id,
+            "updates": {
+                "state": "succeeded",
+                "completed_at": "2026-04-10T09:05:00+00:00",
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert direct_update.status_code == 200, direct_update.json()
+    assert direct_update.json()["run"]["state"] == "succeeded"
+
+    # Both updates mutated the single team-surface row in place.
+    team_runs_after = await _get_context_logs(
+        client,
+        context_name=f"{team_tasks_context}/Runs",
+    )
+    assert len(team_runs_after) == 1
+    final_run = team_runs_after[0]["entries"]
+    assert final_run["state"] == "succeeded"
+    assert final_run["progress_summary"] == "halfway"
+
+
+@pytest.mark.anyio
 async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     """The internal run API should merge partial updates into an existing row."""
 

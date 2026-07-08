@@ -244,7 +244,7 @@ async def test_member_removal_removes_from_teams(client: AsyncClient, dbsession)
     # Create organization
     org_resp = await client.post(
         "/v0/organizations",
-        json={"name": "Team Cleanup Org"},
+        json={"name": "Team Cleanup Org", "data_sharing_mode": "private"},
         headers=owner["headers"],
     )
     org_id = org_resp.json()["id"]

@@ -88,7 +88,7 @@ def _resolve_assistants_project(
     return project
 
 
-def _ensure_context(
+def ensure_context(
     session: Session,
     *,
     project_id: int,
@@ -285,7 +285,7 @@ def ensure_owner_contact_row(
         assistant=assistant,
     )
     context_name = _assistant_context_name(assistant, CONTACTS_CONTEXT_SUFFIX)
-    context = _ensure_context(
+    context = ensure_context(
         session,
         project_id=resolved_project.id,
         context_name=context_name,

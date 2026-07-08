@@ -12,6 +12,7 @@ from pydantic import (
 )
 from pydantic.generics import GenericModel
 
+from orchestra.web.api.assistant.default_models import is_valid_default_model
 from orchestra.web.api.utils.safe_text import (
     MAX_LABEL_LENGTH,
     OptionalSafeLabel,
@@ -155,6 +156,24 @@ class AssistantCreate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
+    default_model: Optional[str] = Field(
+        None,
+        description=(
+            "Default LLM for the assistant runtime as a unillm "
+            "'model@provider' endpoint. Must be a catalog option "
+            "(see GET /assistant/default-model-options). NULL means the "
+            "platform default applies."
+        ),
+        example="gpt-5.5@openai",
+    )
+    default_reasoning_effort: Optional[str] = Field(
+        None,
+        description=(
+            "Reasoning-effort level paired with 'default_model'. Must match "
+            "the selected catalog option."
+        ),
+        example="high",
+    )
     create_infra: Optional[bool] = Field(
         True,
         description="Whether to create the infrastructure for the assistant (pubsub, VM, etc.)",
@@ -220,6 +239,23 @@ class AssistantCreate(BaseModel):
                 "'is_coordinator' is not accepted on this endpoint. "
                 "Use POST /user/{user_id}/coordinator instead.",
             )
+        # Catalog validation applies only to create payloads: reads must keep
+        # rendering assistants whose stored option was later removed from the
+        # catalog.
+        if self.__class__.__name__ == "AssistantCreate":
+            if self.default_reasoning_effort is not None and self.default_model is None:
+                raise ValueError(
+                    "'default_reasoning_effort' requires 'default_model'.",
+                )
+            if self.default_model is not None and not is_valid_default_model(
+                self.default_model,
+                self.default_reasoning_effort,
+            ):
+                raise ValueError(
+                    f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
+                    "is not a valid default model option. See "
+                    "GET /assistant/default-model-options.",
+                )
         return self
 
     model_config = ConfigDict(
@@ -1225,6 +1261,24 @@ class AssistantUpdate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
+    default_model: Optional[str] = Field(
+        None,
+        description=(
+            "Default LLM for the assistant runtime as a unillm "
+            "'model@provider' endpoint. Must be a catalog option "
+            "(see GET /assistant/default-model-options). Send null to reset "
+            "to the platform default."
+        ),
+        example="gpt-5.5@openai",
+    )
+    default_reasoning_effort: Optional[str] = Field(
+        None,
+        description=(
+            "Reasoning-effort level paired with 'default_model'. Must match "
+            "the selected catalog option."
+        ),
+        example="high",
+    )
     timezone: Optional[str] = Field(
         None,
         description="Timezone of the assistant in IANA format",
@@ -1287,6 +1341,40 @@ class AssistantUpdate(BaseModel):
                 raise ValueError(
                     "'voice_provider' cannot be null when setting a voice.",
                 )
+
+        return self
+
+    @model_validator(mode="after")
+    def check_default_model_fields_on_update(cls, self):
+        """Validate default-model fields for PATCH operations."""
+        provided = self.__pydantic_fields_set__
+
+        has_model = "default_model" in provided
+        has_effort = "default_reasoning_effort" in provided
+
+        if not any([has_model, has_effort]):
+            return self
+
+        # Clearing back to the platform default via "default_model": null.
+        if has_model and self.default_model is None:
+            self.default_reasoning_effort = None
+            return self
+
+        if not has_model:
+            raise ValueError(
+                "'default_reasoning_effort' cannot be updated without "
+                "'default_model'.",
+            )
+
+        if not is_valid_default_model(
+            self.default_model,
+            self.default_reasoning_effort,
+        ):
+            raise ValueError(
+                f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
+                "is not a valid default model option. See "
+                "GET /assistant/default-model-options.",
+            )
 
         return self
 
@@ -1419,6 +1507,42 @@ class VoiceRead(VoiceCreate):
                 "is_preset": True,
             },
         }
+
+
+class DefaultModelOptionRead(BaseModel):
+    """One selectable per-assistant default LLM option."""
+
+    model: str = Field(
+        ...,
+        description="unillm 'model@provider' endpoint.",
+        example="gpt-5.5@openai",
+    )
+    reasoning_effort: Optional[str] = Field(
+        None,
+        description=(
+            "Reasoning-effort level for the option. Null keeps the runtime's "
+            "per-call-site effort defaults."
+        ),
+        example="high",
+    )
+    label: str = Field(
+        ...,
+        description="Human-readable label for the option.",
+        example="GPT-5.5 (high thinking)",
+    )
+    approx_credits_per_task: int = Field(
+        ...,
+        description=(
+            "Order-of-magnitude estimate of what one typical assistant task "
+            "costs at this option, in customer-facing credits. Display-only."
+        ),
+        example=475,
+    )
+    artificial_analysis_url: str = Field(
+        ...,
+        description="Artificial Analysis benchmark page for the model.",
+        example="https://artificialanalysis.ai/models/gpt-5-5",
+    )
 
 
 class VoiceCloneRequestData(BaseModel):

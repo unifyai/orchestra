@@ -245,6 +245,7 @@ def patch_task_run(
         assistant_id=request.assistant_id,
         run_key=request.run_key,
         updates=request.updates,
+        source_task_log_id=request.source_task_log_id,
     )
     return {"run": dict(run.data or {})}
 
@@ -327,6 +328,7 @@ def patch_task_outbound_operation(
             assistant_id=request.assistant_id,
             operation_key=request.operation_key,
             updates=request.updates,
+            source_task_log_id=request.source_task_log_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
