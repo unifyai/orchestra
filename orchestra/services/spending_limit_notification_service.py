@@ -204,7 +204,12 @@ class SpendingLimitNotificationService:
         entity_id: str,
         entity_name: Optional[str],
     ) -> tuple[List[NotificationRecipient], str]:
-        """Get recipients for assistant limit notification."""
+        """Get recipients for assistant limit notification.
+
+        User-owned assistants notify their owner. Team-owned assistants are a
+        team asset billed to the organization, so the org's Owner/Admin
+        members are notified alongside the hiring member.
+        """
         recipients: List[NotificationRecipient] = []
         resolved_name = entity_name or "Unknown"
 
@@ -218,11 +223,46 @@ class SpendingLimitNotificationService:
                         NotificationRecipient(user_id=user.id, email=user.email),
                     )
 
+            if (
+                assistant.owner_team_id is not None
+                and assistant.organization_id is not None
+            ):
+                seen_user_ids = {recipient.user_id for recipient in recipients}
+                for admin_user_id, admin_email in self._org_admin_contacts(
+                    assistant.organization_id,
+                ):
+                    if admin_user_id in seen_user_ids:
+                        continue
+                    seen_user_ids.add(admin_user_id)
+                    recipients.append(
+                        NotificationRecipient(
+                            user_id=admin_user_id,
+                            email=admin_email,
+                        ),
+                    )
+
             if not entity_name or entity_name == "Unknown":
                 name_parts = [assistant.first_name or "", assistant.surname or ""]
                 resolved_name = " ".join(name_parts).strip() or "Assistant"
 
         return recipients, resolved_name
+
+    def _org_admin_contacts(self, organization_id: int) -> List[tuple[str, str]]:
+        """Return (user_id, email) for the org's Owner/Admin members."""
+        from orchestra.db.models.orchestra_models import OrganizationMember, Role, User
+
+        rows = (
+            self.session.query(User.id, User.email)
+            .join(OrganizationMember, OrganizationMember.user_id == User.id)
+            .join(Role, Role.id == OrganizationMember.role_id)
+            .filter(
+                OrganizationMember.organization_id == organization_id,
+                Role.name.in_(("Owner", "Admin")),
+                User.email.isnot(None),
+            )
+            .all()
+        )
+        return [(row[0], row[1]) for row in rows]
 
     def _get_user_recipients(
         self,

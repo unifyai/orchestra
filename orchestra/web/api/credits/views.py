@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import BillingAccount
+from orchestra.db.models.orchestra_models import Assistant, BillingAccount, Team
 from orchestra.lib.billing import get_billing_entity, grant_promo_credits
 from orchestra.web.api.credits.schema import (
     AggregatedTransactionHistoryResponse,
@@ -470,6 +470,13 @@ def get_spending_breakdown(
     month: Optional[str] = Query(None, regex=r"^\d{4}-\d{2}$"),
     assistant_id: Optional[int] = Query(None),
     filter_user_id: Optional[str] = Query(None, alias="user_id"),
+    team_id: Optional[int] = Query(
+        None,
+        description=(
+            "Scope spending to assistants owned by this team (per-team "
+            "attribution for team-owned assistants)."
+        ),
+    ),
     session=Depends(get_db_session),
 ) -> SpendingBreakdownResponse:
     """Monthly spending breakdown by category, queried from the credit ledger.
@@ -477,7 +484,8 @@ def get_spending_breakdown(
     Uses the composite index ``(billing_account_id, category, at)``
     so aggregation only touches relevant rows.
 
-    Use ``user_id`` to see spending by a specific member in an org context.
+    Use ``user_id`` to see spending by a specific member in an org context,
+    or ``team_id`` to see spending attributed to a team's owned assistants.
     """
     from orchestra.db.dao.credit_transaction_dao import CreditTransactionDAO
 
@@ -490,6 +498,23 @@ def get_spending_breakdown(
         billing_entity = get_billing_entity(session, user_id, organization_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    team_assistant_ids: Optional[list[int]] = None
+    if team_id is not None:
+        if organization_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="team_id requires an organization API key",
+            )
+        team = session.get(Team, team_id)
+        if team is None or team.organization_id != organization_id:
+            raise HTTPException(status_code=404, detail="Team not found")
+        team_assistant_ids = [
+            row[0]
+            for row in session.query(Assistant.agent_id)
+            .filter(Assistant.owner_team_id == team_id)
+            .all()
+        ]
 
     if month is None:
         month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -508,6 +533,7 @@ def get_spending_breakdown(
         month_end,
         assistant_id=assistant_id,
         user_id=filter_user_id,
+        assistant_ids=team_assistant_ids,
     )
     total = sum(breakdown.values())
 

@@ -7848,9 +7848,15 @@ async def get_assistant_spending_limit(
         org_member_dao = OrganizationMemberDAO(session)
 
         org = org_dao.get(assistant.organization_id)
-        owner_member = org_member_dao.get_member(
-            assistant.user_id,
-            assistant.organization_id,
+        owner_member = (
+            org_member_dao.get_member(
+                assistant.user_id,
+                assistant.organization_id,
+            )
+            # Team-owned assistants bill the organization; the hiring
+            # member's personal cap does not bound them.
+            if assistant.owner_team_id is None
+            else None
         )
 
         parent_limits = []
