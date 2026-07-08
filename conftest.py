@@ -7,7 +7,14 @@ from dotenv import load_dotenv
 
 # Look for .env in repo root
 _repo_root = Path(__file__).resolve().parent
+# Tests create and DROP their database per run, but the repo .env points
+# ORCHESTRA_DB_BASE at the developer's live local database. Loading it with
+# override=True would therefore make pytest drop the live `orchestra` DB.
+# Preserve any explicit shell/CI value, and otherwise pin the dedicated test
+# base — never the .env one.
+_explicit_db_base = os.environ.get("ORCHESTRA_DB_BASE")
 load_dotenv(_repo_root / ".env", override=True)
+os.environ["ORCHESTRA_DB_BASE"] = _explicit_db_base or "orchestra_test"
 
 
 # ---------------------------------------------------------------------------
