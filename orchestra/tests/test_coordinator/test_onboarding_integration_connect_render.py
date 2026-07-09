@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy.exc import OperationalError
+
 from orchestra.db.models.integration_provider_models import IntegrationConnection
 from orchestra.services import coordinator_service as svc
 from orchestra.web.api.integrations.operations import (
@@ -61,6 +63,60 @@ def test_complete_connection_notifies_onboarding_render_when_progress_changes() 
     baseline.assert_called_once_with(session, assistant_id=42)
     notify.assert_called_once()
     assert notify.call_args.kwargs["canonical_app_slug"] == "clickup"
+    dao.update_connection_fields.assert_called_once()
+    session.commit.assert_called()
+
+
+def test_complete_connection_persists_when_onboarding_baseline_lock_times_out() -> None:
+    """OAuth complete must not fail when assistants is locked for onboarding."""
+    session = MagicMock()
+    conn = IntegrationConnection(
+        connection_id="conn-lock-1",
+        owner_scope="assistant",
+        assistant_id=42,
+        canonical_app_slug="github",
+        backend_id="composio",
+        provider_app_id="GITHUB",
+        status="pending",
+        credential_storage="provider_vault",
+    )
+    lock_err = OperationalError(
+        "SELECT",
+        {},
+        Exception("canceling statement due to lock timeout"),
+    )
+
+    with (
+        patch(
+            "orchestra.web.api.integrations.operations.IntegrationProviderDAO",
+        ) as dao_cls,
+        patch.object(
+            svc,
+            "onboarding_baseline_for_integration_connect",
+            side_effect=lock_err,
+        ),
+        patch.object(
+            svc,
+            "notify_coordinator_onboarding_after_integration_connected",
+        ) as notify,
+    ):
+        dao = dao_cls.return_value
+        dao.get_connection.return_value = conn
+        response = complete_connection(
+            session,
+            connection_id="conn-lock-1",
+            provider_connection_id="provider-1",
+            granted_scopes=["repo"],
+            external_account_label="acct",
+            status="connected",
+        )
+
+    assert response.connection_id == "conn-lock-1"
+    session.rollback.assert_called()
+    dao.update_connection_fields.assert_called_once()
+    session.commit.assert_called()
+    notify.assert_called_once()
+    assert notify.call_args.kwargs["baseline_completed_step_ids"] is None
 
 
 def test_notify_after_integration_connected_emits_when_apps_newly_complete() -> None:

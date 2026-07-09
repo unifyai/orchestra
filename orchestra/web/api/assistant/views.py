@@ -1151,7 +1151,7 @@ async def create_assistant(
                     detail="Billing is not set up. Please add a payment method first.",
                 )
             if not billing_entity.has_sufficient_credits(
-                total_creation_cost + managed_desktop_upfront,
+                Decimal(str(total_creation_cost)) + managed_desktop_upfront,
             ):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -1363,6 +1363,17 @@ async def create_assistant(
                     actor_user_id=user_id,
                 )
                 sharing_refresh_payloads.extend(sharing_result.refresh_payloads)
+
+        if assistant_in.desktop_mode in MANAGED_DESKTOP_MODES:
+            billing_entity = get_billing_entity(session, user_id, organization_id)
+            charge_managed_desktop_first_month(
+                session,
+                assistant=assistant,
+                desktop_mode=assistant_in.desktop_mode,
+                billing_entity=billing_entity,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
