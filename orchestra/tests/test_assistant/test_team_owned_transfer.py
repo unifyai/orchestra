@@ -4,6 +4,9 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.models.core_models import Context
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
@@ -11,7 +14,15 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     ContactMembership,
 )
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import create_test_user, ensure_assistants_project
+
+_SHARED_TEAM_SHELLS = (
+    "Contacts",
+    "Guidance",
+    "Knowledge",
+    "Secrets",
+    "Transcripts",
+)
 
 
 async def _create_org_with_team(
@@ -59,6 +70,51 @@ async def _hire_org_assistant(
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     return response.json()["info"]
+
+
+def _assistants_project_id(dbsession, org_id: int) -> int:
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    org_projects = project_dao.filter(
+        organization_id=org_id,
+        name="Assistants",
+    )
+    assert org_projects
+    return org_projects[0][0].id
+
+
+def _seed_empty_team_shells(
+    dbsession,
+    *,
+    project_id: int,
+    team_id: int,
+) -> None:
+    context_dao = ContextDAO(dbsession)
+    for table_name in _SHARED_TEAM_SHELLS:
+        context_dao.create(project_id, f"Teams/{team_id}/{table_name}")
+    dbsession.commit()
+
+
+async def _write_personal_logs(
+    client: AsyncClient,
+    org_headers: dict,
+    *,
+    personal_prefix: str,
+    contexts: list[str],
+) -> None:
+    for context_suffix in contexts:
+        context_name = f"{personal_prefix}/{context_suffix}"
+        log_resp = await client.post(
+            "/v0/logs",
+            json={
+                "project_name": "Assistants",
+                "context": context_name,
+                "entries": [{"message": f"log in {context_suffix}"}],
+            },
+            headers=org_headers,
+        )
+        assert log_resp.status_code == status.HTTP_200_OK, log_resp.json()
 
 
 @pytest.mark.anyio
@@ -122,3 +178,105 @@ async def test_transfer_org_assistant_to_team_owned(
         .count()
     )
     assert team_overlays >= 1
+
+
+@pytest.mark.anyio
+async def test_transfer_succeeds_when_team_has_empty_shared_shells(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "team_owned_empty_shells@test.com")
+    org_id, org_headers, team_id = await _create_org_with_team(
+        client,
+        owner,
+        org_name="Team Owned Empty Shells Org",
+    )
+    await ensure_assistants_project(client, org_headers)
+    info = await _hire_org_assistant(client, org_headers)
+    agent_id = int(info["agent_id"])
+    dbsession.expire_all()
+    assistant = dbsession.get(Assistant, agent_id)
+    personal_prefix = f"{assistant.user_id}/{agent_id}"
+
+    project_id = _assistants_project_id(dbsession, org_id)
+    context_dao = ContextDAO(dbsession)
+    _seed_empty_team_shells(dbsession, project_id=project_id, team_id=team_id)
+    await _write_personal_logs(
+        client,
+        org_headers,
+        personal_prefix=personal_prefix,
+        contexts=["Contacts", "Tasks"],
+    )
+    dbsession.expire_all()
+    assert context_dao.subtree_has_logs(
+        project_id,
+        f"{personal_prefix}/Contacts",
+    )
+    assert context_dao.subtree_has_logs(project_id, f"{personal_prefix}/Tasks")
+
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={"owner_team_id": team_id},
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+
+    dbsession.expire_all()
+    personal_contexts = (
+        dbsession.query(Context)
+        .filter(Context.name.like(f"{personal_prefix}%"))
+        .count()
+    )
+    assert personal_contexts == 0
+
+    dbsession.expire_all()
+    assert context_dao.subtree_has_logs(project_id, f"Teams/{team_id}/Contacts")
+    assert context_dao.subtree_has_logs(project_id, f"Teams/{team_id}/Tasks")
+
+
+@pytest.mark.anyio
+async def test_transfer_rejects_both_sides_have_data(
+    client: AsyncClient,
+    dbsession,
+):
+    owner = await create_test_user(client, "team_owned_collision@test.com")
+    org_id, org_headers, team_id = await _create_org_with_team(
+        client,
+        owner,
+        org_name="Team Owned Collision Org",
+    )
+    await ensure_assistants_project(client, org_headers)
+    info = await _hire_org_assistant(client, org_headers)
+    agent_id = int(info["agent_id"])
+    dbsession.expire_all()
+    assistant = dbsession.get(Assistant, agent_id)
+    personal_prefix = f"{assistant.user_id}/{agent_id}"
+
+    project_id = _assistants_project_id(dbsession, org_id)
+    _seed_empty_team_shells(dbsession, project_id=project_id, team_id=team_id)
+
+    await _write_personal_logs(
+        client,
+        org_headers,
+        personal_prefix=personal_prefix,
+        contexts=["Contacts"],
+    )
+    team_contacts = f"Teams/{team_id}/Contacts"
+    team_log_resp = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "Assistants",
+            "context": team_contacts,
+            "entries": [{"message": "team contact log"}],
+        },
+        headers=org_headers,
+    )
+    assert team_log_resp.status_code == status.HTTP_200_OK, team_log_resp.json()
+
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={"owner_team_id": team_id},
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT, response.json()
+    assert response.json()["detail"].startswith("team_memory_collision_both_have_data")

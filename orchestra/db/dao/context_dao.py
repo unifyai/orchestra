@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -3067,11 +3067,73 @@ class ContextDAO:
         else:
             raise ValueError(f"Context with id {id} not found")
 
+    def subtree_has_logs(self, project_id: int, context_name: str) -> bool:
+        """Return whether a context or any descendant has log associations."""
+        row = self.session.execute(
+            text(
+                """
+                SELECT 1
+                FROM log_event_context lec
+                JOIN context c ON c.id = lec.context_id
+                WHERE lec.project_id = :project_id
+                  AND c.project_id = :project_id
+                  AND (
+                        c.name = :context_name
+                        OR c.name LIKE :context_like
+                  )
+                LIMIT 1
+                """,
+            ),
+            {
+                "project_id": project_id,
+                "context_name": context_name,
+                "context_like": f"{context_name}/%",
+            },
+        ).first()
+        return row is not None
+
+    def list_context_subtree(self, project_id: int, prefix: str) -> List[Context]:
+        """Return every context row whose name equals or extends ``prefix``."""
+        rows = self.session.execute(
+            select(Context).where(
+                Context.project_id == project_id,
+                or_(
+                    Context.name == prefix,
+                    Context.name.like(f"{prefix}/%"),
+                ),
+            ),
+        )
+        return list(rows.scalars().all())
+
+    def delete_context_subtree_if_empty(
+        self,
+        project_id: int,
+        context_name: str,
+    ) -> bool:
+        """Delete a context subtree when it has no logs.
+
+        Context rows are removed deepest-first without committing the session.
+        """
+        if self.subtree_has_logs(project_id, context_name):
+            return False
+
+        contexts = self.list_context_subtree(project_id, context_name)
+        if not contexts:
+            return False
+
+        contexts.sort(key=lambda ctx: ctx.name.count("/"), reverse=True)
+        for context in contexts:
+            self.session.delete(context)
+        self.session.flush()
+        return True
+
     def rename_with_children(
         self,
         project_id: int,
         old_prefix: str,
         new_prefix: str,
+        *,
+        commit: bool = True,
     ) -> int:
         """Rename a context and all its children by replacing the name prefix.
 
@@ -3105,7 +3167,10 @@ class ContextDAO:
         parent_result = self.session.execute(parent_stmt)
 
         total = child_result.rowcount + parent_result.rowcount
-        self.session.commit()
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
         return total
 
     def delete(self, id: int, skip_embedding_cleanup: bool = False) -> None:

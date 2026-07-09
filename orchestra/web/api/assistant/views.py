@@ -4821,13 +4821,18 @@ async def transfer_assistant_to_team_owned_endpoint(
         if detail in {
             "assistant_already_team_owned",
             "coordinator_cannot_be_team_owned",
-        }:
+        } or detail.startswith("team_memory_collision_both_have_data"):
             status_code = status.HTTP_409_CONFLICT
         elif detail in {
             "assistant_not_in_organization",
             "team_not_in_organization",
         }:
             status_code = status.HTTP_400_BAD_REQUEST
+        elif detail in {
+            "team_memory_transfer_incomplete",
+            "team_memory_collision_unresolved",
+        }:
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise HTTPException(status_code=status_code, detail=detail) from exc
     except Exception as exc:
         session.rollback()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import or_, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -31,6 +32,76 @@ ASSISTANTS_PROJECT_NAME = "Assistants"
 
 class TeamOwnershipTransferError(Exception):
     """Raised when an assistant cannot be converted to team-owned."""
+
+
+def _transfer_target_name(
+    personal_name: str,
+    *,
+    old_prefix: str,
+    new_prefix: str,
+) -> str:
+    if personal_name == old_prefix:
+        return new_prefix
+    return new_prefix + personal_name[len(old_prefix) :]
+
+
+def _reconcile_transfer_collisions(
+    context_dao: ContextDAO,
+    *,
+    project_id: int,
+    old_prefix: str,
+    new_prefix: str,
+) -> None:
+    personal_contexts = context_dao.list_context_subtree(project_id, old_prefix)
+    team_names = {
+        context.name
+        for context in context_dao.list_context_subtree(project_id, new_prefix)
+    }
+
+    for personal_context in sorted(
+        personal_contexts,
+        key=lambda context: context.name.count("/"),
+        reverse=True,
+    ):
+        personal_name = personal_context.name
+        team_name = _transfer_target_name(
+            personal_name,
+            old_prefix=old_prefix,
+            new_prefix=new_prefix,
+        )
+        if team_name not in team_names:
+            continue
+
+        personal_has = context_dao.subtree_has_logs(project_id, personal_name)
+        team_has = context_dao.subtree_has_logs(project_id, team_name)
+
+        if personal_has and team_has:
+            raise TeamOwnershipTransferError(
+                f"team_memory_collision_both_have_data: {team_name}",
+            )
+        if personal_has:
+            context_dao.delete_context_subtree_if_empty(project_id, team_name)
+        elif team_has:
+            context_dao.delete_context_subtree_if_empty(project_id, personal_name)
+        else:
+            context_dao.delete_context_subtree_if_empty(project_id, team_name)
+
+
+def _postflight_transfer_cleanup(
+    context_dao: ContextDAO,
+    *,
+    project_id: int,
+    old_prefix: str,
+) -> None:
+    remaining = context_dao.list_context_subtree(project_id, old_prefix)
+    for context in sorted(
+        remaining,
+        key=lambda row: row.name.count("/"),
+        reverse=True,
+    ):
+        if context_dao.subtree_has_logs(project_id, context.name):
+            raise TeamOwnershipTransferError("team_memory_transfer_incomplete")
+        context_dao.delete_context_subtree_if_empty(project_id, context.name)
 
 
 async def transfer_assistant_to_team_owned(
@@ -76,10 +147,30 @@ async def transfer_assistant_to_team_owned(
 
     old_prefix = f"{assistant.user_id}/{assistant_id}"
     new_prefix = f"Teams/{owner_team_id}"
-    renamed_count = context_dao.rename_with_children(
-        project_id,
-        old_prefix,
-        new_prefix,
+
+    _reconcile_transfer_collisions(
+        context_dao,
+        project_id=project_id,
+        old_prefix=old_prefix,
+        new_prefix=new_prefix,
+    )
+
+    try:
+        renamed_count = context_dao.rename_with_children(
+            project_id,
+            old_prefix,
+            new_prefix,
+            commit=False,
+        )
+    except IntegrityError as exc:
+        raise TeamOwnershipTransferError(
+            "team_memory_collision_unresolved",
+        ) from exc
+
+    _postflight_transfer_cleanup(
+        context_dao,
+        project_id=project_id,
+        old_prefix=old_prefix,
     )
 
     session.execute(
