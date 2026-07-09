@@ -74,7 +74,6 @@ logger = logging.getLogger(__name__)
 ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
-COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 COORDINATOR_DEFAULT_FIRST_NAME = "T-W1N"
 COORDINATOR_DEFAULT_JOB_TITLE = "Coordinator"
 COORDINATOR_STATE_CONTEXT = "Coordinator/State"
@@ -104,12 +103,6 @@ def _ensure_coordinator_default_nationality(assistant: Assistant) -> None:
     """Ensure Coordinator rows carry the nationality required for runtime startup."""
     if assistant.nationality is None:
         assistant.nationality = COORDINATOR_DEFAULT_NATIONALITY
-
-
-def _ensure_coordinator_default_desktop_mode(assistant: Assistant) -> None:
-    """Ensure Coordinator rows request a managed desktop when unset."""
-    if not assistant.desktop_mode:
-        assistant.desktop_mode = COORDINATOR_DEFAULT_DESKTOP_MODE
 
 
 def get_workspace_coordinator(
@@ -221,7 +214,7 @@ def create_coordinator_assistant(
         nationality=COORDINATOR_DEFAULT_NATIONALITY,
         profile_photo=None,
         profile_video=None,
-        desktop_mode=COORDINATOR_DEFAULT_DESKTOP_MODE,
+        desktop_mode=None,
         about="",
         weekly_limit=None,
         max_parallel=None,
@@ -341,7 +334,6 @@ def _repair_existing_coordinator_state(
 ) -> None:
     """Repair Coordinator defaults and required owner-facing overlays."""
     _ensure_coordinator_default_nationality(coordinator)
-    _ensure_coordinator_default_desktop_mode(coordinator)
     ensure_personal_contact_memberships(session, [coordinator.agent_id])
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
     ensure_coordinator_universal_email_contact(session, coordinator=coordinator)

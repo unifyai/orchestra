@@ -541,6 +541,14 @@ class AssistantRead(AssistantCreate):
         description="Monthly spending limit in dollars for this assistant.",
         example=100.00,
     )
+    managed_desktop_status: Optional[str] = Field(
+        None,
+        description="Managed Computer Use billing status: active, grace_period, disabled.",
+    )
+    managed_desktop_monthly_cost: Optional[float] = Field(
+        None,
+        description="Monthly Computer Use cost in credits when the add-on is active.",
+    )
     demo_id: Optional[int] = Field(
         None,
         description="ID of demo metadata if this is a demo assistant, None for regular assistants.",
@@ -1887,6 +1895,41 @@ class ReplicatePredictionResponse(BaseModel):
     class Config:
         orm_mode = True
         from_attributes = True
+
+
+class ManagedDesktopEnable(BaseModel):
+    """Enable managed Computer Use for an assistant."""
+
+    desktop_mode: Literal["ubuntu", "windows"] = Field(
+        ...,
+        description="Managed desktop OS to provision (ubuntu or windows).",
+        example="ubuntu",
+    )
+
+
+class ManagedDesktopStatusRead(BaseModel):
+    """Managed Computer Use billing state for an assistant."""
+
+    desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
+        None,
+        description="Configured managed desktop OS, or null when disabled.",
+    )
+    managed_desktop_status: Optional[str] = Field(
+        None,
+        description="Billing lifecycle: active, grace_period, disabled, or null.",
+    )
+    monthly_cost: Optional[float] = Field(
+        None,
+        description="Current monthly Computer Use cost in credits.",
+    )
+    managed_desktop_enabled_at: Optional[datetime] = Field(
+        None,
+        description="When Computer Use was last enabled.",
+    )
+    managed_desktop_grace_period_started_at: Optional[datetime] = Field(
+        None,
+        description="When the unpaid grace period started, if applicable.",
+    )
 
 
 class AssistantContactRemoval(BaseModel):

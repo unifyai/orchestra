@@ -410,6 +410,7 @@ async def get_features() -> dict[str, bool]:
         # via Secret Manager on Orchestra only and pulled down by the gateway's
         # shared-pool sync, so availability is derived here rather than probed.
         "contact_discord": bool(get_universal_unity_discord_bot()),
+        "managed_desktop": bool(channels.get("managed_desktop", False)),
     }
 
 

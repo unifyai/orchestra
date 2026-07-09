@@ -114,6 +114,13 @@ from orchestra.services.coordinator_service import (
 )
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
+from orchestra.services.managed_desktop_service import (
+    MANAGED_DESKTOP_MODES,
+    charge_managed_desktop_first_month,
+    disable_managed_desktop,
+    get_managed_desktop_monthly_cost,
+    managed_desktop_entitled,
+)
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.org_wide_sharing_service import (
     add_assistant_to_team,
@@ -184,6 +191,8 @@ from orchestra.web.api.assistant.schema import (
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
     InfoResponse,
+    ManagedDesktopEnable,
+    ManagedDesktopStatusRead,
     OnboardingCatalog,
     OnboardingSessionStarted,
     OnboardingSessionStartedResponse,
@@ -823,6 +832,12 @@ def _build_assistant_read(
             if a.monthly_spending_cap is not None
             else None
         ),
+        managed_desktop_status=a.managed_desktop_status,
+        managed_desktop_monthly_cost=(
+            float(a.managed_desktop_monthly_cost)
+            if a.managed_desktop_monthly_cost is not None
+            else None
+        ),
         desktop_filesync_sshkey=(
             a.desktop_filesync_sshkey if include_internal else None
         ),
@@ -1076,6 +1091,12 @@ async def create_assistant(
     # Base creation cost (contact provisioning costs are handled separately
     # via the dedicated POST /assistant/{id}/contact endpoint).
     total_creation_cost = settings.assistant_creation_cost
+    managed_desktop_upfront = Decimal("0")
+    if assistant_in.desktop_mode in MANAGED_DESKTOP_MODES:
+        managed_desktop_upfront = get_managed_desktop_monthly_cost(
+            session,
+            assistant_in.desktop_mode,
+        )
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
@@ -1118,7 +1139,9 @@ async def create_assistant(
                     ),
                 )
 
-        if settings.charges_billing and total_creation_cost > 0:
+        if settings.charges_billing and (
+            total_creation_cost > 0 or managed_desktop_upfront > 0
+        ):
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -1126,7 +1149,9 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Billing is not set up. Please add a payment method first.",
                 )
-            if not billing_entity.has_sufficient_credits(total_creation_cost):
+            if not billing_entity.has_sufficient_credits(
+                total_creation_cost + managed_desktop_upfront,
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -2250,6 +2275,209 @@ def list_assistants(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Error fetching assistants",
         )
+
+
+def _require_assistant_write_access(
+    session: Session,
+    *,
+    request: Request,
+    assistant: Assistant,
+    assistant_id: int,
+) -> None:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_permission = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+
+def _build_managed_desktop_status_read(
+    session: Session,
+    assistant: Assistant,
+) -> ManagedDesktopStatusRead:
+    monthly_cost = None
+    if assistant.desktop_mode in MANAGED_DESKTOP_MODES:
+        monthly_cost = float(
+            get_managed_desktop_monthly_cost(session, assistant.desktop_mode),
+        )
+    elif assistant.managed_desktop_monthly_cost is not None:
+        monthly_cost = float(assistant.managed_desktop_monthly_cost)
+    return ManagedDesktopStatusRead(
+        desktop_mode=assistant.desktop_mode,
+        managed_desktop_status=assistant.managed_desktop_status,
+        monthly_cost=monthly_cost,
+        managed_desktop_enabled_at=assistant.managed_desktop_enabled_at,
+        managed_desktop_grace_period_started_at=(
+            assistant.managed_desktop_grace_period_started_at
+        ),
+    )
+
+
+@router.get(
+    "/assistant/{assistant_id}/managed-desktop",
+    response_model=InfoResponse[ManagedDesktopStatusRead],
+    tags=["Assistant Management"],
+)
+def get_managed_desktop_status(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ManagedDesktopStatusRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    return InfoResponse(info=_build_managed_desktop_status_read(session, assistant))
+
+
+@router.post(
+    "/assistant/{assistant_id}/managed-desktop",
+    response_model=InfoResponse[AssistantRead],
+    tags=["Assistant Management"],
+)
+async def enable_managed_desktop_endpoint(
+    assistant_id: int,
+    payload: ManagedDesktopEnable,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    _require_assistant_write_access(
+        session,
+        request=request,
+        assistant=assistant,
+        assistant_id=assistant_id,
+    )
+    if managed_desktop_entitled(assistant):
+        if assistant.desktop_mode == payload.desktop_mode:
+            return InfoResponse(info=_build_assistant_read(assistant, session))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Disable Computer Use before switching desktop mode.",
+        )
+
+    billing_entity = get_billing_entity(session, user_id, organization_id)
+    charge_managed_desktop_first_month(
+        session,
+        assistant=assistant,
+        desktop_mode=payload.desktop_mode,
+        billing_entity=billing_entity,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    session.commit()
+
+    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+
+    try:
+        await reawaken_assistant(str(assistant_id))
+    except Exception as exc:
+        logging.warning(
+            "Failed to reawaken assistant %s after enabling Computer Use: %s",
+            assistant_id,
+            exc,
+        )
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    return InfoResponse(info=_build_assistant_read(assistant, session))
+
+
+@router.delete(
+    "/assistant/{assistant_id}/managed-desktop",
+    response_model=InfoResponse[AssistantRead],
+    tags=["Assistant Management"],
+)
+async def disable_managed_desktop_endpoint(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    _require_assistant_write_access(
+        session,
+        request=request,
+        assistant=assistant,
+        assistant_id=assistant_id,
+    )
+    if not assistant.managed_desktop_status and assistant.desktop_mode is None:
+        return InfoResponse(info=_build_assistant_read(assistant, session))
+
+    disable_managed_desktop(assistant)
+    session.commit()
+
+    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+
+    try:
+        await reawaken_assistant(str(assistant_id))
+    except Exception as exc:
+        logging.warning(
+            "Failed to reawaken assistant %s after disabling Computer Use: %s",
+            assistant_id,
+            exc,
+        )
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    return InfoResponse(info=_build_assistant_read(assistant, session))
 
 
 @router.delete(
