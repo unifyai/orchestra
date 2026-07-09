@@ -384,7 +384,7 @@ MY_COMPUTER_FRAMING = (
     "`.press_key(...)` only as fallbacks when high-level act fails or is clearly "
     "the wrong tool. Before every major visual action (opening the browser, "
     "navigating, Save Image As, closing the browser, opening Thunar, opening "
-    "Ristretto, sending the attachment), call `notify({\"message\": ...})` first "
+    'Ristretto, sending the attachment), call `notify({"message": ...})` first '
     "so the user hears a coherent narration of what is about to happen, then "
     "perform the action. "
     "Fixed substeps: (1) open a visible browser and navigate to NASA's Astronomy "
