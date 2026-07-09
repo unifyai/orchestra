@@ -378,19 +378,24 @@ MY_COMPUTER_FRAMING = (
     "voice via guide_voice_agent and interject the next substep. Never batch the "
     "whole demo into one act request. Fixed substeps: (1) verify the desktop session "
     "and take an orienting screenshot; (2) open a visible browser and navigate to "
-    "NASA's Astronomy Picture of the Day; (3) download today's image into the synced "
-    "workspace folder — keep the default filename; leave it in the download folder "
-    "and do not move it into a subfolder; (4) open the GUI file manager at that folder "
-    "so the file is "
-    "visibly there (the filesystem reveal) — never a terminal, never shell commands "
-    "like xdg-open; (5) the actor sends the attachment itself: instruct it to run "
-    "execute_code with "
+    "NASA's Astronomy Picture of the Day; (3) save today's image with the browser GUI "
+    "only — right-click the main image → Save Image As… → confirm Save in the dialog "
+    "(keep the default filename; leave it in the dialog's default folder, normally "
+    "/Unity/Downloads — do not create a subfolder). Never urllib, curl, wget, "
+    "Python HTTP download, or any other headless/programmatic save; (4) close the "
+    "browser window, open Thunar (the GUI file manager) from the dock, and navigate "
+    "to the folder used in the Save dialog (default /Unity/Downloads) so the saved "
+    "file is visibly listed — never a terminal, never shell commands like xdg-open; "
+    "(5) in Thunar, right-click the saved image → Open With → Ristretto (the image "
+    "viewer) so the user sees the picture open on the desktop; (6) the actor sends "
+    "the attachment itself: instruct it to run execute_code with "
     "await primitives.comms.send_unify_message(content=<one short caption>, "
-    "attachment_filepath=<the exact downloaded path>), then respond confirming "
-    "delivery and the exact path it sent. If a substep is dragging (~2 minutes), "
-    "simplify it or move on honestly — never grind silently. If the user asks for "
-    "something else mid-call, honor it as long as it keeps the same shape (real "
-    "site → download → filesystem reveal → deliver). "
+    "attachment_filepath=<the exact saved path from the Save dialog>), then respond "
+    "confirming delivery and the exact path it sent. If a substep is dragging "
+    "(~2 minutes), simplify it or move on honestly — never grind silently. If the "
+    "user asks for something else mid-call, honor it as long as it keeps the same "
+    "shape (real site → GUI Save Image As → Thunar reveal → Ristretto open → "
+    "deliver). "
     "Rule 4 — Tutorial voice throughout: plain language, no tool names; explain "
     "what they're seeing as it happens; invite questions mid-demo and answer them "
     "(the persist act pauses naturally between substeps). "
@@ -401,7 +406,8 @@ MY_COMPUTER_FRAMING = (
     "reports the send failed, that is Rule-7 territory: say so, retry or offer "
     "later, do not mark done. The checklist does not auto-detect anything. "
     "Rule 6 — Contextual wrap-up: after marking done, give a one-line recap of what "
-    "they watched (real computer, real browser, real file, delivered to chat), name "
+    "they watched (real computer, Save Image As, Thunar, Ristretto, delivered to "
+    "chat), name "
     "the next onboarding step from the live progress block, and offer both paths — "
     "continue on this call or 'I'll message you the next step' — then respect their "
     "choice (gated hang-up if they're done). "
@@ -776,8 +782,9 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     """Event fired when the user clicks the My Computer beat row.
 
     The click starts the call-anchored live desktop demo — persist-act substeps
-    on the managed VM, filesystem reveal, chat attachment — scripted by
-    ``MY_COMPUTER_FRAMING``. There is no freeform mode and there are no chips.
+    on the managed VM (GUI Save Image As, Thunar reveal, Ristretto open, chat
+    attachment) — scripted by ``MY_COMPUTER_FRAMING``. There is no freeform mode
+    and there are no chips.
     """
     interaction = {
         "type": "my_computer_beat",
@@ -796,13 +803,14 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "ring only after the desktop-ready notification. Launch act(persist=True) "
             "during the ring. On-call: call prepare_desktop if needed; if ready, start "
             "the persist-act demo immediately and tell them to click Show assistant "
-            "screen; if warming, narrate the boot then start when ready. Drive five "
+            "screen; if warming, narrate the boot then start when ready. Drive six "
             "substeps one at a time — act "
             "response → one guide_voice_agent line → interject next substep: verify "
-            "desktop and screenshot; browser to NASA APOD; download today's image "
-            "with the default filename (leave name as-is, no subfolder move); GUI "
-            "file-manager reveal; actor sends send_unify_message attachment via "
-            "execute_code and confirms "
+            "desktop and screenshot; browser to NASA APOD; GUI Save Image As… into "
+            "the dialog default folder (normally /Unity/Downloads; keep default "
+            "filename; no programmatic download); close browser, open Thunar, "
+            "navigate to that folder; right-click → Open With → Ristretto; actor "
+            "sends send_unify_message attachment via execute_code and confirms "
             "delivery plus the exact path. Never a terminal or shell xdg-open. After "
             "the actor confirms delivery, mark the step done in its own turn, then "
             "stop act, then wrap up from the live progress block (recap, name next "
@@ -1707,8 +1715,9 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~5 min",
     ),
     "my-computer-demo": StepPresentation(
-        "T-W1N drives its own computer live on a call — it fetches a file from "
-        "the web, shows it landing in its filesystem, and sends it to you here.",
+        "T-W1N drives its own computer live on a call — it saves a file from the "
+        "web with Save Image As, shows it in Thunar, opens it in Ristretto, and "
+        "sends it to you here.",
         "~3 min",
     ),
 }
@@ -1910,11 +1919,12 @@ STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "my-computer-demo": (
         "Clicking the 'Watch me work on my computer' row starts the live desktop "
-        "demo on a call — T-W1N opens its browser on the managed VM, downloads "
-        "today's NASA Astronomy Picture of the Day, shows the file in its "
-        "filesystem, and sends it as a chat attachment; off-call the click is a "
-        "call invitation instead. When the attachment is delivered, I mark the "
-        "step done explicitly — nothing auto-completes."
+        "demo on a call — T-W1N opens its browser on the managed VM, saves today's "
+        "NASA Astronomy Picture of the Day via Save Image As, shows the file in "
+        "Thunar under /Unity/Downloads, opens it in Ristretto, and sends it as a "
+        "chat attachment; off-call the click is a call invitation instead. When "
+        "the attachment is delivered, I mark the step done explicitly — nothing "
+        "auto-completes."
     ),
 }
 
