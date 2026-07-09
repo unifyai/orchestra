@@ -24,7 +24,9 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.slack_dao import DEFAULT_THREAD_ROUTE_TTL_DAYS, SlackDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import SlackInstall
+from orchestra.services.slack_app import uninstall_slack_app
 from orchestra.services.slack_dispatcher import resolve_inbound
+from orchestra.settings import settings
 
 admin_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -340,11 +342,19 @@ def get_install(
 
 
 @admin_router.delete("/slack/install/{install_id}")
-def revoke_install(
+async def revoke_install(
     install_id: int,
     session: Session = Depends(get_db_session),
 ):
-    """Mark a Slack install as revoked and drop its routing state."""
+    """Revoke a Slack install: uninstall the app from the workspace, then
+    drop local routing state.
+
+    When the app's client credentials are configured, we call Slack's
+    ``apps.uninstall`` so the bot is genuinely removed from the workspace
+    (not just muted locally). The soft-revoke always proceeds regardless of
+    the Slack call's outcome, so a disconnect never wedges on Slack being
+    unreachable; ``apps.uninstall`` is idempotent for an already-gone app.
+    """
     dao = SlackDAO(session)
     install = dao.revoke_install(install_id)
     if install is None:
@@ -352,8 +362,22 @@ def revoke_install(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Slack install not found.",
         )
+
+    # The soft-revoke keeps the row (audit trail), so the bot token is still
+    # readable here for the provider-side uninstall.
+    uninstalled = False
+    client_id = (settings.slack_client_id or "").strip()
+    client_secret = (settings.slack_client_secret or "").strip()
+    bot_token = (install.bot_access_token or "").strip()
+    if bot_token and client_id and client_secret:
+        uninstalled = await uninstall_slack_app(
+            bot_token=bot_token,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
     session.commit()
-    return {"id": install.id, "revoked": True}
+    return {"id": install.id, "revoked": True, "uninstalled": uninstalled}
 
 
 # ---------------------------------------------------------------------------

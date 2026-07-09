@@ -541,6 +541,14 @@ class AssistantRead(AssistantCreate):
         description="Monthly spending limit in dollars for this assistant.",
         example=100.00,
     )
+    managed_desktop_status: Optional[str] = Field(
+        None,
+        description="Managed Computer Use billing status: active, grace_period, disabled.",
+    )
+    managed_desktop_monthly_cost: Optional[float] = Field(
+        None,
+        description="Monthly Computer Use cost in credits when the add-on is active.",
+    )
     demo_id: Optional[int] = Field(
         None,
         description="ID of demo metadata if this is a demo assistant, None for regular assistants.",
@@ -1889,6 +1897,41 @@ class ReplicatePredictionResponse(BaseModel):
         from_attributes = True
 
 
+class ManagedDesktopEnable(BaseModel):
+    """Enable managed Computer Use for an assistant."""
+
+    desktop_mode: Literal["ubuntu", "windows"] = Field(
+        ...,
+        description="Managed desktop OS to provision (ubuntu or windows).",
+        example="ubuntu",
+    )
+
+
+class ManagedDesktopStatusRead(BaseModel):
+    """Managed Computer Use billing state for an assistant."""
+
+    desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = Field(
+        None,
+        description="Configured managed desktop OS, or null when disabled.",
+    )
+    managed_desktop_status: Optional[str] = Field(
+        None,
+        description="Billing lifecycle: active, grace_period, disabled, or null.",
+    )
+    monthly_cost: Optional[float] = Field(
+        None,
+        description="Current monthly Computer Use cost in credits.",
+    )
+    managed_desktop_enabled_at: Optional[datetime] = Field(
+        None,
+        description="When Computer Use was last enabled.",
+    )
+    managed_desktop_grace_period_started_at: Optional[datetime] = Field(
+        None,
+        description="When the unpaid grace period started, if applicable.",
+    )
+
+
 class AssistantContactRemoval(BaseModel):
     """
     Schema for removing a contact method from an assistant.
@@ -2266,6 +2309,15 @@ class AssistantTransferToTeamOwnedRequest(BaseModel):
         ),
         example=11,
     )
+    merge_memory: bool = Field(
+        False,
+        description=(
+            "When the team tree already holds data for a table the assistant "
+            "also has data in, merge the assistant's rows into the team table "
+            "(key values are re-numbered above the team's). Without this flag "
+            "such collisions abort the transfer with 409."
+        ),
+    )
 
 
 class AssistantTransferToTeamOwnedResponse(BaseModel):
@@ -2277,6 +2329,22 @@ class AssistantTransferToTeamOwnedResponse(BaseModel):
     contexts_renamed: int = Field(
         ...,
         description="Number of contexts moved under the team root.",
+    )
+    contexts_merged: int = Field(
+        0,
+        description=(
+            "Number of populated context pairs merged into existing team "
+            "tables (merge_memory only)."
+        ),
+    )
+    duplicate_contacts: list = Field(
+        default_factory=list,
+        description=(
+            "Suspected same-person rows in the merged team contact book "
+            "(exact email/phone match between the assistant's and team's "
+            "books). Reported for operator review — never auto-merged. Each "
+            "entry: matched_on, existing_contact_id, merged_contact_id."
+        ),
     )
     memory_root: str = Field(
         ...,

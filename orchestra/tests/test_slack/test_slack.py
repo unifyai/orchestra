@@ -2756,7 +2756,160 @@ class TestAdminEndpoints:
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.json() == {"id": install_id, "revoked": True}
+        # No Slack app credentials configured in the test env, so the
+        # provider-side uninstall is skipped and this degrades to a
+        # local soft-revoke.
+        assert resp.json() == {
+            "id": install_id,
+            "revoked": True,
+            "uninstalled": False,
+        }
+
+        follow = await client.get(
+            "/v0/admin/slack/install",
+            params={"slack_team_id": "T01TEAM"},
+            headers=ADMIN_HEADERS,
+        )
+        assert follow.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_revoke_install_uninstalls_when_configured(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        slack_world: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With client credentials set, revoke calls Slack ``apps.uninstall``
+        (with the workspace bot token) and reports it uninstalled."""
+        dbsession.commit()
+        install_id = slack_world["install"].id
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.settings.slack_client_id",
+            "client-id",
+        )
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.settings.slack_client_secret",
+            "client-secret",
+        )
+        calls: list[dict] = []
+
+        async def _fake_uninstall(**kwargs: object) -> bool:
+            calls.append(kwargs)
+            return True
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.uninstall_slack_app",
+            _fake_uninstall,
+        )
+
+        resp = await client.delete(
+            f"/v0/admin/slack/install/{install_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json() == {
+            "id": install_id,
+            "revoked": True,
+            "uninstalled": True,
+        }
+        assert calls == [
+            {
+                "bot_token": "xoxb-test",
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+            },
+        ]
+
+        follow = await client.get(
+            "/v0/admin/slack/install",
+            params={"slack_team_id": "T01TEAM"},
+            headers=ADMIN_HEADERS,
+        )
+        assert follow.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_revoke_install_skips_uninstall_when_unconfigured(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        slack_world: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without client credentials, Slack is never contacted; the install
+        is still soft-revoked."""
+        dbsession.commit()
+        install_id = slack_world["install"].id
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.settings.slack_client_id",
+            None,
+        )
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.settings.slack_client_secret",
+            None,
+        )
+        called = False
+
+        async def _fake_uninstall(**_kwargs: object) -> bool:
+            nonlocal called
+            called = True
+            return True
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.uninstall_slack_app",
+            _fake_uninstall,
+        )
+
+        resp = await client.delete(
+            f"/v0/admin/slack/install/{install_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json() == {
+            "id": install_id,
+            "revoked": True,
+            "uninstalled": False,
+        }
+        assert called is False
+
+    async def test_revoke_install_soft_revokes_when_uninstall_fails(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        slack_world: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed provider-side uninstall must not block the local revoke."""
+        dbsession.commit()
+        install_id = slack_world["install"].id
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.settings.slack_client_id",
+            "client-id",
+        )
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.settings.slack_client_secret",
+            "client-secret",
+        )
+
+        async def _fake_uninstall(**_kwargs: object) -> bool:
+            return False
+
+        monkeypatch.setattr(
+            "orchestra.web.api.slack.views.uninstall_slack_app",
+            _fake_uninstall,
+        )
+
+        resp = await client.delete(
+            f"/v0/admin/slack/install/{install_id}",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json() == {
+            "id": install_id,
+            "revoked": True,
+            "uninstalled": False,
+        }
 
         follow = await client.get(
             "/v0/admin/slack/install",
@@ -2996,3 +3149,137 @@ class TestAdminEndpoints:
         )
         assert pruned.status_code == status.HTTP_200_OK
         assert pruned.json()["deleted"] >= 1
+
+
+# ============================================================================
+# Slack app-level uninstall helper
+# ============================================================================
+
+
+class _FakeSlackResponse:
+    def __init__(self, status_code: int, payload: object) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> object:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+class _FakeSlackClient:
+    """Stand-in for ``httpx.AsyncClient`` capturing one ``post`` call."""
+
+    def __init__(self, response=None, exc: Exception | None = None) -> None:
+        self._response = response
+        self._exc = exc
+        self.calls: list[dict] = []
+
+    async def __aenter__(self) -> "_FakeSlackClient":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    async def post(self, url: str, **kwargs: object):
+        self.calls.append({"url": url, **kwargs})
+        if self._exc is not None:
+            raise self._exc
+        return self._response
+
+
+class TestSlackAppUninstall:
+    """Response-branch coverage for ``uninstall_slack_app``."""
+
+    async def test_ok_true_reports_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from orchestra.services import slack_app
+
+        fake = _FakeSlackClient(response=_FakeSlackResponse(200, {"ok": True}))
+        monkeypatch.setattr(slack_app.httpx, "AsyncClient", lambda: fake)
+
+        result = await slack_app.uninstall_slack_app(
+            bot_token="xoxb-1",
+            client_id="cid",
+            client_secret="secret",
+        )
+        assert result is True
+        assert fake.calls[0]["url"].endswith("/apps.uninstall")
+        assert fake.calls[0]["params"] == {
+            "client_id": "cid",
+            "client_secret": "secret",
+        }
+        assert fake.calls[0]["headers"] == {"Authorization": "Bearer xoxb-1"}
+
+    async def test_already_gone_error_is_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An already-uninstalled app must read as success (idempotent)."""
+        from orchestra.services import slack_app
+
+        fake = _FakeSlackClient(
+            response=_FakeSlackResponse(200, {"ok": False, "error": "invalid_auth"}),
+        )
+        monkeypatch.setattr(slack_app.httpx, "AsyncClient", lambda: fake)
+
+        result = await slack_app.uninstall_slack_app(
+            bot_token="xoxb-1",
+            client_id="cid",
+            client_secret="secret",
+        )
+        assert result is True
+
+    async def test_other_error_is_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from orchestra.services import slack_app
+
+        fake = _FakeSlackClient(
+            response=_FakeSlackResponse(200, {"ok": False, "error": "ratelimited"}),
+        )
+        monkeypatch.setattr(slack_app.httpx, "AsyncClient", lambda: fake)
+
+        result = await slack_app.uninstall_slack_app(
+            bot_token="xoxb-1",
+            client_id="cid",
+            client_secret="secret",
+        )
+        assert result is False
+
+    async def test_transport_error_is_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from orchestra.services import slack_app
+
+        fake = _FakeSlackClient(exc=RuntimeError("boom"))
+        monkeypatch.setattr(slack_app.httpx, "AsyncClient", lambda: fake)
+
+        result = await slack_app.uninstall_slack_app(
+            bot_token="xoxb-1",
+            client_id="cid",
+            client_secret="secret",
+        )
+        assert result is False
+
+    async def test_non_json_body_is_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from orchestra.services import slack_app
+
+        fake = _FakeSlackClient(
+            response=_FakeSlackResponse(500, ValueError("not json")),
+        )
+        monkeypatch.setattr(slack_app.httpx, "AsyncClient", lambda: fake)
+
+        result = await slack_app.uninstall_slack_app(
+            bot_token="xoxb-1",
+            client_id="cid",
+            client_secret="secret",
+        )
+        assert result is False

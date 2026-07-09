@@ -282,66 +282,75 @@ def _levy_in_session(
                 "Resource levy for %s: no billable contacts found.",
                 billing_month,
             )
-            return result
+        else:
+            # -----------------------------------------------------------------
+            # 2. Group by billing account.
+            # -----------------------------------------------------------------
+            groups = _group_contacts_by_billing_account(session, active_contacts)
 
-        # -----------------------------------------------------------------
-        # 2. Group by billing account.
-        # -----------------------------------------------------------------
-        groups = _group_contacts_by_billing_account(session, active_contacts)
-
-        # -----------------------------------------------------------------
-        # 3. Process each billing account independently.
-        #    Each account gets its own commit so a failure on one does not
-        #    roll back billing for the others.
-        # -----------------------------------------------------------------
-        for ba_id, (ba, contacts) in groups.items():
-            try:
-                account_result = _process_billing_account(
-                    session,
-                    ba,
-                    contacts,
-                    billing_month,
-                )
-                session.commit()
-
-                result.account_results.append(account_result)
-                result.total_contacts_billed += account_result.contacts_billed
-                result.total_amount += account_result.total_amount
-                result.accounts_processed += 1
-                if account_result.marked_past_due:
-                    result.accounts_marked_past_due += 1
-                if account_result.insufficient_credits_notified:
-                    result.notifications_sent += 1
-
-                if account_result.marked_past_due:
-                    _send_day1_notification(session, account_result)
-
-            except Exception as _levy_err:
-                session.rollback()
-                result.accounts_failed += 1
-                logger.exception(
-                    {
-                        "message": "Resource levy failed for billing account",
-                        "billing_account_id": ba_id,
-                        "billing_month": billing_month,
-                    },
-                )
+            # -----------------------------------------------------------------
+            # 3. Process each billing account independently.
+            # -----------------------------------------------------------------
+            for ba_id, (ba, contacts) in groups.items():
                 try:
-                    from orchestra.routines.billing_notifications import (
-                        notify_billing_event_failure,
+                    account_result = _process_billing_account(
+                        session,
+                        ba,
+                        contacts,
+                        billing_month,
                     )
+                    session.commit()
 
-                    notify_billing_event_failure(
-                        "contact_levy",
-                        error=str(_levy_err),
-                        context_id=f"ba_{ba_id}_{billing_month}",
-                        billing_account_id=ba_id,
+                    result.account_results.append(account_result)
+                    result.total_contacts_billed += account_result.contacts_billed
+                    result.total_amount += account_result.total_amount
+                    result.accounts_processed += 1
+                    if account_result.marked_past_due:
+                        result.accounts_marked_past_due += 1
+                    if account_result.insufficient_credits_notified:
+                        result.notifications_sent += 1
+
+                    if account_result.marked_past_due:
+                        _send_day1_notification(session, account_result)
+
+                except Exception as _levy_err:
+                    session.rollback()
+                    result.accounts_failed += 1
+                    logger.exception(
+                        {
+                            "message": "Resource levy failed for billing account",
+                            "billing_account_id": ba_id,
+                            "billing_month": billing_month,
+                        },
                     )
-                except Exception:
-                    logger.warning(
-                        "Failed to send billing event notification",
-                        exc_info=True,
-                    )
+                    try:
+                        from orchestra.routines.billing_notifications import (
+                            notify_billing_event_failure,
+                        )
+
+                        notify_billing_event_failure(
+                            "contact_levy",
+                            error=str(_levy_err),
+                            context_id=f"ba_{ba_id}_{billing_month}",
+                            billing_account_id=ba_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to send billing event notification",
+                            exc_info=True,
+                        )
+
+        from orchestra.routines.assistant_managed_desktop_levy import (
+            levy_managed_desktops,
+        )
+
+        desktop_result = levy_managed_desktops(session, billing_month=billing_month)
+        result.total_contacts_billed += desktop_result.total_desktops_billed
+        result.total_amount += desktop_result.total_amount
+        result.accounts_processed += desktop_result.accounts_processed
+        result.accounts_failed += desktop_result.accounts_failed
+        result.accounts_marked_past_due += desktop_result.accounts_marked_past_due
+        result.notifications_sent += desktop_result.notifications_sent
 
         logger.info(
             {
@@ -355,6 +364,8 @@ def _levy_in_session(
                 "notifications_sent": result.notifications_sent,
             },
         )
+
+        return result
 
     except Exception:
         session.rollback()

@@ -114,6 +114,16 @@ class MsTeamsBotInboundResolution:
     org-Coordinator routing rather than dropping the activity.
     """
 
+    sender_is_owner: bool = False
+    """True when the inbound sender is the human owner (boss) of the resolved
+    assistant: a personal-install 1:1, or an org sender whose resolved identity
+    maps to the member who owns the resolved workspace assistant. Lets the
+    runtime attribute the message to the durable boss contact instead of
+    minting a per-display-name contact (Teams activities carry no stable
+    contact key, so name matching would otherwise spawn a fresh contact per
+    inbound).
+    """
+
 
 def _resolve_addressing(
     session: Session,
@@ -242,7 +252,7 @@ def resolve_inbound(
     )
 
     if is_personal:
-        return _resolve_personal(
+        resolution = _resolve_personal(
             session=session,
             dao=dao,
             install=install,
@@ -250,17 +260,26 @@ def resolve_inbound(
             conversation_reference=conversation_reference,
             identity=identity,
         )
+    else:
+        resolution = _resolve_group_or_channel(
+            session=session,
+            dao=dao,
+            install=install,
+            conversation_id=conversation_id,
+            channel_id=channel_id,
+            rest=rest,
+            conversation_reference=conversation_reference,
+            identity=identity,
+        )
 
-    return _resolve_group_or_channel(
-        session=session,
-        dao=dao,
-        install=install,
-        conversation_id=conversation_id,
-        channel_id=channel_id,
-        rest=rest,
-        conversation_reference=conversation_reference,
-        identity=identity,
-    )
+    if resolution is not None:
+        resolution.sender_is_owner = _sender_is_owner(
+            session,
+            install,
+            resolution.assistant_id,
+            identity,
+        )
+    return resolution
 
 
 def _normalize_name(name: str) -> str:
@@ -321,6 +340,36 @@ def _resolve_member_user_id(
         if len(matches) == 1:
             return matches[0]
     return None
+
+
+def _sender_is_owner(
+    session: Session,
+    install: MsTeamsBotInstall,
+    assistant_agent_id: int,
+    identity: SenderIdentity,
+) -> bool:
+    """Whether the inbound sender is the owner (boss) of the resolved assistant.
+
+    A personal install has a single human — the account owner — so every 1:1
+    inbound is boss-authored. For an org install the sender is the owner only
+    when their resolved identity maps to the member who owns the resolved
+    workspace assistant. When identity is unresolved (or maps elsewhere) we
+    return ``False`` so the sender is treated as a distinct third party rather
+    than mis-attributed to the boss.
+    """
+    if install.organization_id is None:
+        return True
+    if not identity.provided:
+        return False
+    member_user_id = _resolve_member_user_id(
+        session,
+        install.organization_id,
+        identity,
+    )
+    if member_user_id is None:
+        return False
+    assistant = AssistantDAO(session).get_assistant_by_agent_id(assistant_agent_id)
+    return assistant is not None and assistant.user_id == member_user_id
 
 
 def _resolve_coordinator(

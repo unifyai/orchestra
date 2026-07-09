@@ -111,10 +111,12 @@ from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
 
 from .task_machine_admin import router as task_machine_admin_router
+from .task_machine_user import router as task_machine_user_router
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+router.include_router(task_machine_user_router)
 
 # Admin router for protected endpoints
 admin_router = APIRouter()

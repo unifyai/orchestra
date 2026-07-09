@@ -354,37 +354,53 @@ LEARNING_BEAT_CHANNEL = "learning_beat"
 MY_COMPUTER_FRAMING = (
     "The My Computer phase shows T-W1N has a real computer of its own — the user "
     "just watched it use it on a call. "
-    "Rule 1 — Boot-then-ring (off-call click): call prepare_desktop immediately. "
-    "Send ONE chat message: a 2-sentence tutorial intro (this step shows I have a "
-    "real computer of my own; you'll watch me use it live) plus 'booting my computer "
-    "now — I'll ring you the moment it's up.' Ring via start_unify_meet only when "
-    "the desktop-ready notification lands (my computer is ready). Opener = "
-    "tutorial-esque intro spoken naturally (what they'll watch, questions welcome "
-    "anytime); briefing = the full demo script below. Unanswered ring: ONE chat line "
-    "inviting a ring-back; do not re-ring. "
-    "Rule 2 — On-call click: if the desktop is not ready, call prepare_desktop and "
-    "narrate the boot honestly (~30–60s; the boot is part of the demo — it proves a "
-    "real machine). If ready, start the demo directly and tell them to click Show "
-    "assistant screen so they watch live. "
+    "Rule 1 — Off-call click: in the same turn, send ONE short ack (tutorial intro: "
+    "this step shows I have a real computer of my own; you'll watch me use it live) "
+    "and call start_unify_meet immediately. Do not warm or wait on a separate "
+    "desktop-prep tool — ring now. Opener = tutorial-esque intro spoken naturally "
+    "(what they'll watch, questions welcome anytime); briefing = the full demo "
+    "script below. Unanswered ring: ONE chat line inviting a ring-back; do not "
+    "re-ring. "
+    "Rule 2 — On-call click: start the demo immediately and tell them to click "
+    "Show assistant screen so they watch live. "
     "Rule 3 — Narrated persist-act demo: launch act(persist=True) during the ring "
     "(the actor's setup pass overlaps the user answering). Drive it substep by "
     "substep: send one substep, and when the act responds, narrate ONE short line on "
     "voice via guide_voice_agent and interject the next substep. Never batch the "
-    "whole demo into one act request. Fixed substeps: (1) verify the desktop session "
-    "and take an orienting screenshot; (2) open a visible browser and navigate to "
-    "NASA's Astronomy Picture of the Day; (3) download today's image into the synced "
-    "workspace folder — keep the default filename; leave it in the download folder "
-    "and do not move it into a subfolder; (4) open the GUI file manager at that folder "
-    "so the file is "
-    "visibly there (the filesystem reveal) — never a terminal, never shell commands "
-    "like xdg-open; (5) the actor sends the attachment itself: instruct it to run "
-    "execute_code with "
+    "whole demo into one act request. Do NOT start with a desktop-health / orienting "
+    "screenshot substep — go straight into the visible work. "
+    "Actor execution style (instruct the actor in every substep): prefer "
+    "`await primitives.computer.desktop.act(..., verify=False)` (or the matching "
+    "web-session `act(..., verify=False)`) for GUI work so each action stays fast; "
+    "use low-level primitives like `.click(x, y)`, `.type_text(...)`, "
+    "`.press_key(...)` only as fallbacks when high-level act fails or is clearly "
+    "the wrong tool. Before every major visual action (opening the browser, "
+    "navigating, Save Image As, closing the browser, opening Thunar, opening "
+    "Ristretto, sending the attachment), call the top-level "
+    "`send_notification(message=...)` tool first so the user hears a coherent "
+    "narration of what is about to happen, then perform the action "
+    "(via `execute_function` / `execute_code`). Do not rely on sandbox-only "
+    "`notify(...)` unless the whole beat already runs inside one `execute_code` "
+    "block. "
+    "Fixed substeps: (1) open a visible browser and navigate to NASA's Astronomy "
+    "Picture of the Day; (2) save today's image with the browser GUI only — "
+    "right-click the main image → Save Image As… → confirm Save in the dialog "
+    "(keep the default filename; leave it in the dialog's default folder, normally "
+    "/Unity/Downloads — do not create a subfolder). Never urllib, curl, wget, "
+    "Python HTTP download, or any other headless/programmatic save; (3) close the "
+    "browser window, open Thunar (the GUI file manager) from the dock, and navigate "
+    "to the folder used in the Save dialog (default /Unity/Downloads) so the saved "
+    "file is visibly listed — never a terminal, never shell commands like xdg-open; "
+    "(4) in Thunar, right-click the saved image → Open With → Ristretto (the image "
+    "viewer) so the user sees the picture open on the desktop; (5) the actor sends "
+    "the attachment itself: instruct it to run execute_code with "
     "await primitives.comms.send_unify_message(content=<one short caption>, "
-    "attachment_filepath=<the exact downloaded path>), then respond confirming "
-    "delivery and the exact path it sent. If a substep is dragging (~2 minutes), "
-    "simplify it or move on honestly — never grind silently. If the user asks for "
-    "something else mid-call, honor it as long as it keeps the same shape (real "
-    "site → download → filesystem reveal → deliver). "
+    "attachment_filepath=<the exact saved path from the Save dialog>), then respond "
+    "confirming delivery and the exact path it sent. If a substep is dragging "
+    "(~2 minutes), simplify it or move on honestly — never grind silently. If the "
+    "user asks for something else mid-call, honor it as long as it keeps the same "
+    "shape (real site → GUI Save Image As → Thunar reveal → Ristretto open → "
+    "deliver). "
     "Rule 4 — Tutorial voice throughout: plain language, no tool names; explain "
     "what they're seeing as it happens; invite questions mid-demo and answer them "
     "(the persist act pauses naturally between substeps). "
@@ -395,7 +411,8 @@ MY_COMPUTER_FRAMING = (
     "reports the send failed, that is Rule-7 territory: say so, retry or offer "
     "later, do not mark done. The checklist does not auto-detect anything. "
     "Rule 6 — Contextual wrap-up: after marking done, give a one-line recap of what "
-    "they watched (real computer, real browser, real file, delivered to chat), name "
+    "they watched (real computer, Save Image As, Thunar, Ristretto, delivered to "
+    "chat), name "
     "the next onboarding step from the live progress block, and offer both paths — "
     "continue on this call or 'I'll message you the next step' — then respect their "
     "choice (gated hang-up if they're done). "
@@ -770,8 +787,9 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     """Event fired when the user clicks the My Computer beat row.
 
     The click starts the call-anchored live desktop demo — persist-act substeps
-    on the managed VM, filesystem reveal, chat attachment — scripted by
-    ``MY_COMPUTER_FRAMING``. There is no freeform mode and there are no chips.
+    on the managed VM (GUI Save Image As, Thunar reveal, Ristretto open, chat
+    attachment) — scripted by ``MY_COMPUTER_FRAMING``. There is no freeform mode
+    and there are no chips.
     """
     interaction = {
         "type": "my_computer_beat",
@@ -782,18 +800,19 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
         event_type="coordinator_onboarding_event",
         message=(
             f"The user just clicked '{title}'. "
-            "Off-call: call prepare_desktop immediately, send ONE tutorial intro chat "
-            "line ('booting my computer now — I'll ring you the moment it's up'), then "
-            "ring via start_unify_meet only after the desktop-ready notification; "
-            "launch act(persist=True) during the ring. On-call: call prepare_desktop "
-            "if the VM is cold, otherwise start the persist-act demo; tell them to "
-            "click Show assistant screen. Drive five substeps one at a time — act "
-            "response → one guide_voice_agent line → interject next substep: verify "
-            "desktop and screenshot; browser to NASA APOD; download today's image "
-            "with the default filename (leave name as-is, no subfolder move); GUI "
-            "file-manager reveal; actor sends send_unify_message attachment via "
-            "execute_code and confirms "
-            "delivery plus the exact path. Never a terminal or shell xdg-open. After "
+            "Off-call: short ack + start_unify_meet in the same turn — ring "
+            "immediately. Launch act(persist=True) during the ring. On-call: start "
+            "the persist-act demo immediately and tell them to click Show assistant "
+            "screen. Drive five substeps one at a time — act "
+            "response → one guide_voice_agent line → interject next substep: browser "
+            "to NASA APOD; GUI Save Image As… into the dialog default folder "
+            "(normally /Unity/Downloads; keep default filename; no programmatic "
+            "download); close browser, open Thunar, navigate to that folder; "
+            "right-click → Open With → Ristretto; actor sends send_unify_message "
+            "attachment via execute_code and confirms delivery plus the exact path. "
+            "No orienting desktop screenshot. Prefer act(..., verify=False); "
+            "low-level click/type only as fallback; send_notification(...) before "
+            "each major visual action. Never a terminal or shell xdg-open. After "
             "the actor confirms delivery, mark the step done in its own turn, then "
             "stop act, then wrap up from the live progress block (recap, name next "
             "step, continue on call or message). Unanswered ring: one ring-back "
@@ -1094,7 +1113,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     OnboardingStep(
         id="ms-teams-message",
-        title="Guess T-W1N's Microsoft Teams clue",
+        title="Wait for T-W1N's reply in Teams",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"ms-teams-reference": COMPLETED},
@@ -1102,10 +1121,10 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="ms_teams",
         nudge_chat=(
-            "Once they've said hello on Teams, reply with a sci-fi reference "
-            "clue there, then prompt them to guess it in Teams."
+            "Once they've said hello on Teams, reply to them there so they "
+            "see Twin answer inside Teams. This step completes on that reply."
         ),
-        nudge_voice="guessing the Microsoft Teams clue",
+        nudge_voice="replying to them in Microsoft Teams",
     ),
     OnboardingStep(
         id="discord-id",
@@ -1623,7 +1642,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "ms-teams-message": StepPresentation(
-        "T-W1N replies with a reference clue in Microsoft Teams — guess it " "there.",
+        "T-W1N replies to your hello inside Microsoft Teams.",
         "~1 min",
     ),
     "discord-id": StepPresentation(
@@ -1697,8 +1716,9 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~5 min",
     ),
     "my-computer-demo": StepPresentation(
-        "T-W1N drives its own computer live on a call — it fetches a file from "
-        "the web, shows it landing in its filesystem, and sends it to you here.",
+        "T-W1N drives its own computer live on a call — it saves a file from the "
+        "web with Save Image As, shows it in Thunar, opens it in Ristretto, and "
+        "sends it to you here.",
         "~3 min",
     ),
 }
@@ -1786,9 +1806,11 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "with an api or unify message stand-in."
     ),
     "ms-teams-message": (
-        "After the user's first Teams message I reply there with a sci-fi "
-        "reference clue and they guess it in Teams. This step completes on "
-        "their guess."
+        "The Unify Teams bot is reply-only, so once the user's first Teams "
+        "message has opened the channel I reply to them inside Teams. This "
+        "step completes on that reply landing on Teams; never claim to have "
+        "replied before the reply actually goes out, and never fake it with "
+        "an api or unify message stand-in."
     ),
     "discord-id": (
         "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
@@ -1898,11 +1920,12 @@ STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "my-computer-demo": (
         "Clicking the 'Watch me work on my computer' row starts the live desktop "
-        "demo on a call — T-W1N opens its browser on the managed VM, downloads "
-        "today's NASA Astronomy Picture of the Day, shows the file in its "
-        "filesystem, and sends it as a chat attachment; off-call the click is a "
-        "call invitation instead. When the attachment is delivered, I mark the "
-        "step done explicitly — nothing auto-completes."
+        "demo on a call — T-W1N opens its browser on the managed VM, saves today's "
+        "NASA Astronomy Picture of the Day via Save Image As, shows the file in "
+        "Thunar under /Unity/Downloads, opens it in Ristretto, and sends it as a "
+        "chat attachment; off-call the click is a call invitation instead. When "
+        "the attachment is delivered, I mark the step done explicitly — nothing "
+        "auto-completes."
     ),
 }
 

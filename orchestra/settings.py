@@ -475,6 +475,13 @@ class Settings(BaseSettings):
         "UNITY_COORDINATOR_DISCORD_TOKEN",
     ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_TOKEN")
 
+    # Slack app credentials, needed to fully uninstall the app from a
+    # workspace (``apps.uninstall``) when an install is revoked. Optional:
+    # when unset, revoke degrades to a local soft-revoke. Same app whose
+    # client id/secret Console holds for the OAuth flow.
+    slack_client_id: Optional[str] = os.environ.get("SLACK_CLIENT_ID")
+    slack_client_secret: Optional[str] = os.environ.get("SLACK_CLIENT_SECRET")
+
     # Assistant photo generation
     photo_generation_cost: float = (
         0.05  # /img. See https://replicate.com/black-forest-labs/flux-1.1-pro

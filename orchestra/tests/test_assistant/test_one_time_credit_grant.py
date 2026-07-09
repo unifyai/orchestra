@@ -845,3 +845,45 @@ async def test_unlimited_link_accepts_many_claims(client: AsyncClient):
     assert found is not None
     assert found["claim_count"] == 5
     assert found["max_claims"] is None
+
+
+# ===========================================================================
+# Unify-staff-gated user-key creation route (POST /credit-grant-link)
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_credit_grant_link_user_route_allows_unify_staff(client: AsyncClient):
+    """A @unify.ai member can mint grants with their own user API key."""
+    staff = await create_test_user(client, "grant_staff@unify.ai")
+    resp = await client.post(
+        "/v0/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 10.0},
+        headers=staff["headers"],
+    )
+    assert resp.status_code == status.HTTP_201_CREATED, resp.json()
+    assert "token" in resp.json()
+    assert resp.json()["credit_amount"] == 10.0
+
+
+@pytest.mark.anyio
+async def test_credit_grant_link_user_route_rejects_customer(client: AsyncClient):
+    """An ordinary customer must NOT be able to mint their own credits."""
+    customer = await create_test_user(client, "grant_customer@example.com")
+    resp = await client.post(
+        "/v0/credit-grant-link",
+        json={"expires_in_days": 1, "credit_amount": 10.0},
+        headers=customer["headers"],
+    )
+    assert resp.status_code == status.HTTP_403_FORBIDDEN, resp.json()
+
+
+@pytest.mark.anyio
+async def test_credit_grant_link_user_route_allows_admin_key(client: AsyncClient):
+    """The platform/system key is also accepted on the user-key route."""
+    resp = await client.post(
+        "/v0/credit-grant-link",
+        json={"expires_in_days": 1},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_201_CREATED, resp.json()

@@ -920,6 +920,20 @@ class SharedPoolDAO:
     # Call permission
     # ------------------------------------------------------------------
 
+    def get_route_assistant_id(
+        self,
+        pool_number: str,
+        contact_number: str,
+    ) -> int | None:
+        """Return the assistant that owns the route for one pool/contact pair.
+
+        Used by ownership-scoped API routes to verify that the authenticated
+        caller's assistant actually owns the route before reading or mutating
+        per-route state (e.g. pending call intents).
+        """
+        route = self._get_route_by_numbers(pool_number, contact_number)
+        return route.assistant_id if route is not None else None
+
     def _get_route_by_numbers(
         self,
         pool_number: str,

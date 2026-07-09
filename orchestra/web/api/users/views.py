@@ -63,6 +63,7 @@ from orchestra.web.api.assistant.schema import (
     SpendingLimitReachedRequest,
     SpendingLimitReachedResponse,
 )
+from orchestra.web.api.dependencies import require_unify_staff
 from orchestra.web.api.users.schema import (
     AccountDeletionConfirmation,
     AccountDeletionResponse,
@@ -2108,27 +2109,11 @@ def list_referrals(
     return ReferralListResponse(referrals=items)
 
 
-@admin_router.post(
-    "/credit-grant-link",
-    response_model=CreditGrantLinkResponse,
-    status_code=201,
-)
-@admin_router.post(
-    "/assistant-hiring-one-time-link",  # backward-compat alias
-    response_model=CreditGrantLinkResponse,
-    status_code=201,
-)
-def create_credit_grant_link(
+def _create_credit_grant_link_core(
     payload: CreditGrantLinkCreateRequest,
-    session: Session = Depends(get_db_session),
-):
-    """
-    Create a credit grant link.
-
-    When a user claims this link, they receive the specified credit_amount.
-    If credit_amount is not provided, defaults to assistant_creation_cost.
-    Set max_claims > 1 to allow the link to be shared with multiple users.
-    """
+    session: Session,
+) -> CreditGrantLinkResponse:
+    """Shared credit-grant-link creation used by admin and Unify-staff routes."""
     token_dao = OneTimeCreditGrantLinkDAO(session)
     if payload.expires_in_days <= 0:
         raise HTTPException(status_code=400, detail="Expiration days must be positive.")
@@ -2155,6 +2140,53 @@ def create_credit_grant_link(
         max_claims=link.max_claims,
         claim_count=len(link.claims),
     )
+
+
+@admin_router.post(
+    "/credit-grant-link",
+    response_model=CreditGrantLinkResponse,
+    status_code=201,
+)
+@admin_router.post(
+    "/assistant-hiring-one-time-link",  # backward-compat alias
+    response_model=CreditGrantLinkResponse,
+    status_code=201,
+)
+def create_credit_grant_link(
+    payload: CreditGrantLinkCreateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Create a credit grant link.
+
+    When a user claims this link, they receive the specified credit_amount.
+    If credit_amount is not provided, defaults to assistant_creation_cost.
+    Set max_claims > 1 to allow the link to be shared with multiple users.
+    """
+    return _create_credit_grant_link_core(payload, session)
+
+
+@router.post(
+    "/credit-grant-link",
+    response_model=CreditGrantLinkResponse,
+    status_code=201,
+)
+def create_credit_grant_link_as_staff(
+    payload: CreditGrantLinkCreateRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Create a credit grant link, authenticated with a user API key.
+
+    Gated to internal Unify staff (``@unify.ai`` member, ``AdminUser``, or the
+    system key) via :func:`require_unify_staff` -- credit grants mint credits,
+    so ownership scoping is insufficient and ordinary customers must not be able
+    to top up their own accounts. Lets internal callers (e.g. the brain
+    operator, a Unify-org assistant) create grants with their own UNIFY_KEY
+    instead of the shared platform admin key.
+    """
+    require_unify_staff(request)
+    return _create_credit_grant_link_core(payload, session)
 
 
 @admin_router.get(

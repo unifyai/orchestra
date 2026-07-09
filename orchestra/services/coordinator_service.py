@@ -74,7 +74,6 @@ logger = logging.getLogger(__name__)
 ASSISTANTS_PROJECT_NAME = "Assistants"
 COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
-COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 COORDINATOR_DEFAULT_FIRST_NAME = "T-W1N"
 COORDINATOR_DEFAULT_JOB_TITLE = "Coordinator"
 COORDINATOR_STATE_CONTEXT = "Coordinator/State"
@@ -104,12 +103,6 @@ def _ensure_coordinator_default_nationality(assistant: Assistant) -> None:
     """Ensure Coordinator rows carry the nationality required for runtime startup."""
     if assistant.nationality is None:
         assistant.nationality = COORDINATOR_DEFAULT_NATIONALITY
-
-
-def _ensure_coordinator_default_desktop_mode(assistant: Assistant) -> None:
-    """Ensure Coordinator rows request a managed desktop when unset."""
-    if not assistant.desktop_mode:
-        assistant.desktop_mode = COORDINATOR_DEFAULT_DESKTOP_MODE
 
 
 def get_workspace_coordinator(
@@ -221,7 +214,7 @@ def create_coordinator_assistant(
         nationality=COORDINATOR_DEFAULT_NATIONALITY,
         profile_photo=None,
         profile_video=None,
-        desktop_mode=COORDINATOR_DEFAULT_DESKTOP_MODE,
+        desktop_mode=None,
         about="",
         weekly_limit=None,
         max_parallel=None,
@@ -341,7 +334,6 @@ def _repair_existing_coordinator_state(
 ) -> None:
     """Repair Coordinator defaults and required owner-facing overlays."""
     _ensure_coordinator_default_nationality(coordinator)
-    _ensure_coordinator_default_desktop_mode(coordinator)
     ensure_personal_contact_memberships(session, [coordinator.agent_id])
     _ensure_coordinator_owner_contact_row(session, coordinator=coordinator)
     ensure_coordinator_universal_email_contact(session, coordinator=coordinator)
@@ -2343,30 +2335,25 @@ def _has_inbound_ms_teams_message(
     )
 
 
-def _has_ms_teams_reference_reply(
+def _has_ms_teams_twin_reply(
     scope: "_OnboardingProbeScope",
     *,
     reset_after: datetime | None = None,
 ) -> bool:
-    """The user has guessed Twin's Teams reference clue.
+    """Twin has replied to the user inside the Unify Teams bot.
 
-    With the reply-first Teams flow there is no proactive trigger outbound to
-    anchor the reply against, so the guess is derived from a user inbound that
-    lands strictly after Twin's first Teams reply (the clue).
+    The bot is reply-only, so an assistant-authored Teams outbound can only
+    exist once the user's first inbound has opened the channel. The
+    ``ms-teams-message`` step therefore completes as soon as that reply lands
+    (self -> boss); there is no separate guess turn to wait for.
     """
-    mediums = (onboarding_graph.MS_TEAMS_BOT_MEDIUM,)
-    clue_created_at = _assistant_transcript_created_at(
-        scope,
-        mediums=mediums,
-        reset_after=reset_after,
-    )
-    if clue_created_at is None:
-        return False
-    return _has_user_transcript_message(
-        scope,
-        mediums=mediums,
-        after=clue_created_at,
-        reset_after=reset_after,
+    return (
+        _assistant_transcript_created_at(
+            scope,
+            mediums=(onboarding_graph.MS_TEAMS_BOT_MEDIUM,),
+            reset_after=reset_after,
+        )
+        is not None
     )
 
 
@@ -2397,7 +2384,7 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
         ONBOARDING_STEP_MS_TEAMS_CONNECT: _has_ms_teams_bot_install,
         ONBOARDING_STEP_MS_TEAMS_REFERENCE: _has_inbound_ms_teams_message,
-        ONBOARDING_STEP_MS_TEAMS_MESSAGE: _has_ms_teams_reference_reply,
+        ONBOARDING_STEP_MS_TEAMS_MESSAGE: _has_ms_teams_twin_reply,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_connected_integration,

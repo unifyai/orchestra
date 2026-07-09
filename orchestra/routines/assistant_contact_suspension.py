@@ -320,6 +320,15 @@ async def _suspend_in_session(session: Session) -> SuspensionResult:
             if ar.deletion_email_sent:
                 result.deletion_emails_sent += 1
 
+        from orchestra.routines.assistant_managed_desktop_suspension import (
+            suspend_overdue_managed_desktops,
+        )
+
+        desktop_result = await suspend_overdue_managed_desktops(session)
+        result.accounts_processed += desktop_result.accounts_processed
+        result.reminders_sent += desktop_result.reminders_sent
+        result.deletion_emails_sent += desktop_result.deletion_emails_sent
+
         session.commit()
 
         logger.info(

@@ -41,7 +41,7 @@ from orchestra.services.coordinator_service import (
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 EXPECTED_COORDINATOR_DEFAULT_NATIONALITY = "United States"
-EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
+EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE = None
 
 
 @pytest.fixture(autouse=True)

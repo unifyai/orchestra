@@ -203,6 +203,44 @@ def auth_admin_key(
     raise admin_not_authorized
 
 
+def require_unify_staff(request_fastapi: Request) -> None:
+    """Allow only internal Unify staff callers on a user-authenticated route.
+
+    Intended to gate value-minting operations (e.g. credit-grant links) that
+    must never be callable by an ordinary customer even though the customer
+    holds a valid user API key. Ownership scoping is insufficient here because
+    every customer owns their own assistant/account.
+
+    Runs after :func:`auth_api_key` (which populates ``request.state``). Permits:
+    the platform admin/system key, any ``@unify.ai`` member, or a registered
+    ``AdminUser``. Raises 403 otherwise.
+    """
+    state = getattr(request_fastapi, "state", None)
+    if state is not None and getattr(state, "is_system_api_key", False):
+        return
+
+    email = getattr(state, "user_email", None)
+    if _is_unify_member(email):
+        return
+
+    user_id = getattr(state, "user_id", None)
+    if user_id:
+        try:
+            with _ro_session() as session:
+                is_admin = (
+                    session.query(AdminUser)
+                    .filter(AdminUser.user_id == user_id)
+                    .first()
+                    is not None
+                )
+                if is_admin:
+                    return
+        except Exception as e:
+            logger.error(f"Error checking Unify staff status: {e}")
+
+    raise admin_not_authorized
+
+
 _FREEZE_EXEMPT_PATHS = frozenset(
     {
         "/v0/billing/account-info",

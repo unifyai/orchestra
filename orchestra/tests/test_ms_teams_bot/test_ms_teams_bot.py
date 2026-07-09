@@ -455,6 +455,10 @@ class TestDispatcher:
         assert result.assistant_id == coord.agent_id
         assert result.routing_metadata["reason"] == "initial_chat"
         assert result.route_persisted is True
+        # Personal install: the lone human in a 1:1 is the account owner, so
+        # the inbound is boss-authored (attributed to the boss contact, not a
+        # freshly minted per-name contact).
+        assert result.sender_is_owner is True
         dao = MsTeamsBotDAO(dbsession)
         assert dao.get_conversation_route(install.id, "conv-p") is not None
 
@@ -483,6 +487,8 @@ class TestDispatcher:
         assert result is not None
         assert result.assistant_id == other.agent_id
         assert result.assistant_id != coord.agent_id
+        # Owner attribution holds on the established-route path too.
+        assert result.sender_is_owner is True
 
     def test_group_token_addressed_unique(self, dbsession: Session) -> None:
         user = _make_user(dbsession, "tok")
@@ -679,6 +685,9 @@ class TestDispatcher:
         assert first.assistant_id == coord1.agent_id
         assert first.needs_sender_identity is True
         assert first.route_persisted is False
+        # Identity not yet resolved, so we can't claim the provisional
+        # coordinator's owner is the sender.
+        assert first.sender_is_owner is False
 
         second = resolve_inbound(
             dbsession,
@@ -695,6 +704,9 @@ class TestDispatcher:
         assert second is not None
         assert second.assistant_id == coord2.agent_id
         assert second.needs_sender_identity is False
+        # The sender maps to owner2, who owns coord2 — so relative to the
+        # resolved workspace assistant the sender is the owner (boss).
+        assert second.sender_is_owner is True
 
 
 # ============================================================================

@@ -114,6 +114,13 @@ from orchestra.services.coordinator_service import (
 )
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
+from orchestra.services.managed_desktop_service import (
+    MANAGED_DESKTOP_MODES,
+    charge_managed_desktop_first_month,
+    disable_managed_desktop,
+    get_managed_desktop_monthly_cost,
+    managed_desktop_entitled,
+)
 from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.org_wide_sharing_service import (
     add_assistant_to_team,
@@ -184,6 +191,8 @@ from orchestra.web.api.assistant.schema import (
     DemoAssistantMetaRead,
     GrantedFeaturesResponse,
     InfoResponse,
+    ManagedDesktopEnable,
+    ManagedDesktopStatusRead,
     OnboardingCatalog,
     OnboardingSessionStarted,
     OnboardingSessionStartedResponse,
@@ -220,6 +229,7 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_assistant,
     wake_up_coordinator_best_effort,
 )
+from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 
 ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
 ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
@@ -823,6 +833,12 @@ def _build_assistant_read(
             if a.monthly_spending_cap is not None
             else None
         ),
+        managed_desktop_status=a.managed_desktop_status,
+        managed_desktop_monthly_cost=(
+            float(a.managed_desktop_monthly_cost)
+            if a.managed_desktop_monthly_cost is not None
+            else None
+        ),
         desktop_filesync_sshkey=(
             a.desktop_filesync_sshkey if include_internal else None
         ),
@@ -1076,6 +1092,12 @@ async def create_assistant(
     # Base creation cost (contact provisioning costs are handled separately
     # via the dedicated POST /assistant/{id}/contact endpoint).
     total_creation_cost = settings.assistant_creation_cost
+    managed_desktop_upfront = Decimal("0")
+    if assistant_in.desktop_mode in MANAGED_DESKTOP_MODES:
+        managed_desktop_upfront = get_managed_desktop_monthly_cost(
+            session,
+            assistant_in.desktop_mode,
+        )
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
@@ -1118,7 +1140,9 @@ async def create_assistant(
                     ),
                 )
 
-        if settings.charges_billing and total_creation_cost > 0:
+        if settings.charges_billing and (
+            total_creation_cost > 0 or managed_desktop_upfront > 0
+        ):
             try:
                 billing_entity = get_billing_entity(session, user_id, organization_id)
             except ValueError:
@@ -1126,7 +1150,9 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Billing is not set up. Please add a payment method first.",
                 )
-            if not billing_entity.has_sufficient_credits(total_creation_cost):
+            if not billing_entity.has_sufficient_credits(
+                total_creation_cost + managed_desktop_upfront,
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -2250,6 +2276,209 @@ def list_assistants(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Error fetching assistants",
         )
+
+
+def _require_assistant_write_access(
+    session: Session,
+    *,
+    request: Request,
+    assistant: Assistant,
+    assistant_id: int,
+) -> None:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_permission = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
+
+
+def _build_managed_desktop_status_read(
+    session: Session,
+    assistant: Assistant,
+) -> ManagedDesktopStatusRead:
+    monthly_cost = None
+    if assistant.desktop_mode in MANAGED_DESKTOP_MODES:
+        monthly_cost = float(
+            get_managed_desktop_monthly_cost(session, assistant.desktop_mode),
+        )
+    elif assistant.managed_desktop_monthly_cost is not None:
+        monthly_cost = float(assistant.managed_desktop_monthly_cost)
+    return ManagedDesktopStatusRead(
+        desktop_mode=assistant.desktop_mode,
+        managed_desktop_status=assistant.managed_desktop_status,
+        monthly_cost=monthly_cost,
+        managed_desktop_enabled_at=assistant.managed_desktop_enabled_at,
+        managed_desktop_grace_period_started_at=(
+            assistant.managed_desktop_grace_period_started_at
+        ),
+    )
+
+
+@router.get(
+    "/assistant/{assistant_id}/managed-desktop",
+    response_model=InfoResponse[ManagedDesktopStatusRead],
+    tags=["Assistant Management"],
+)
+def get_managed_desktop_status(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ManagedDesktopStatusRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    return InfoResponse(info=_build_managed_desktop_status_read(session, assistant))
+
+
+@router.post(
+    "/assistant/{assistant_id}/managed-desktop",
+    response_model=InfoResponse[AssistantRead],
+    tags=["Assistant Management"],
+)
+async def enable_managed_desktop_endpoint(
+    assistant_id: int,
+    payload: ManagedDesktopEnable,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    _require_assistant_write_access(
+        session,
+        request=request,
+        assistant=assistant,
+        assistant_id=assistant_id,
+    )
+    if managed_desktop_entitled(assistant):
+        if assistant.desktop_mode == payload.desktop_mode:
+            return InfoResponse(info=_build_assistant_read(assistant, session))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Disable Computer Use before switching desktop mode.",
+        )
+
+    billing_entity = get_billing_entity(session, user_id, organization_id)
+    charge_managed_desktop_first_month(
+        session,
+        assistant=assistant,
+        desktop_mode=payload.desktop_mode,
+        billing_entity=billing_entity,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    session.commit()
+
+    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+
+    try:
+        await reawaken_assistant(str(assistant_id))
+    except Exception as exc:
+        logging.warning(
+            "Failed to reawaken assistant %s after enabling Computer Use: %s",
+            assistant_id,
+            exc,
+        )
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    return InfoResponse(info=_build_assistant_read(assistant, session))
+
+
+@router.delete(
+    "/assistant/{assistant_id}/managed-desktop",
+    response_model=InfoResponse[AssistantRead],
+    tags=["Assistant Management"],
+)
+async def disable_managed_desktop_endpoint(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    _require_assistant_write_access(
+        session,
+        request=request,
+        assistant=assistant,
+        assistant_id=assistant_id,
+    )
+    if not assistant.managed_desktop_status and assistant.desktop_mode is None:
+        return InfoResponse(info=_build_assistant_read(assistant, session))
+
+    disable_managed_desktop(assistant)
+    session.commit()
+
+    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+
+    try:
+        await reawaken_assistant(str(assistant_id))
+    except Exception as exc:
+        logging.warning(
+            "Failed to reawaken assistant %s after disabling Computer Use: %s",
+            assistant_id,
+            exc,
+        )
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    return InfoResponse(info=_build_assistant_read(assistant, session))
 
 
 @router.delete(
@@ -3670,6 +3899,26 @@ async def update_workspace_file_policy(
     )
 
 
+def _collect_workspace_file_access(
+    session: Session,
+    assistant_id: int,
+) -> InfoResponse[WorkspaceFileAccessAdminResponse]:
+    """Aggregate every provider's file-access policy for one assistant."""
+    dao = AssistantWorkspaceFileAccessDAO(session)
+    policies: list[WorkspaceFilePolicy] = []
+    for provider in ("google", "microsoft"):
+        row = dao.get(assistant_id, provider)
+        if row:
+            policies.append(
+                WorkspaceFilePolicy(
+                    provider=provider,
+                    default_allow=row.default_allow,
+                    decisions=row.decisions or [],
+                ),
+            )
+    return InfoResponse(info=WorkspaceFileAccessAdminResponse(policies=policies))
+
+
 @admin_router.get(
     "/assistant/{assistant_id}/workspace-file-access",
     response_model=InfoResponse[WorkspaceFileAccessAdminResponse],
@@ -3685,19 +3934,79 @@ async def admin_get_workspace_file_access(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[WorkspaceFileAccessAdminResponse]:
-    dao = AssistantWorkspaceFileAccessDAO(session)
-    policies: list[WorkspaceFilePolicy] = []
-    for provider in ("google", "microsoft"):
-        row = dao.get(assistant_id, provider)
-        if row:
-            policies.append(
-                WorkspaceFilePolicy(
-                    provider=provider,
-                    default_allow=row.default_allow,
-                    decisions=row.decisions or [],
-                ),
-            )
-    return InfoResponse(info=WorkspaceFileAccessAdminResponse(policies=policies))
+    return _collect_workspace_file_access(session, assistant_id)
+
+
+@router.get(
+    "/assistant/{assistant_id}/workspace-file-access",
+    response_model=InfoResponse[WorkspaceFileAccessAdminResponse],
+    summary="Read all file-access policies for an owned assistant",
+    description=(
+        "Ownership-scoped equivalent of the admin aggregate read. Returns "
+        "every configured per-provider file-access allowlist for the "
+        "assistant. Used by the assistant runtime to mirror the allowlist "
+        "into its enforcement layer."
+    ),
+    tags=["Assistant Management"],
+)
+async def get_workspace_file_access(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[WorkspaceFileAccessAdminResponse]:
+    require_owned_assistant(request, assistant_id, session)
+    return _collect_workspace_file_access(session, assistant_id)
+
+
+@router.get(
+    "/assistant/{assistant_id}/secrets",
+    summary="Read all secrets for an owned assistant",
+    description=(
+        "Ownership-scoped equivalent of the admin fleet read with "
+        "``from_fields=secrets``: returns the assistant's full secrets map. "
+        "Used by the assistant runtime to hydrate its secret manager."
+    ),
+    tags=["Assistant Management"],
+    include_in_schema=False,
+)
+async def get_assistant_secrets(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    require_owned_assistant(request, assistant_id, session)
+    secret_dao = AssistantSecretDAO(session)
+    return {"secrets": secret_dao.get_all(assistant_id)}
+
+
+@router.get(
+    "/assistant/{assistant_id}/desktop-filesync-key",
+    summary="Read desktop file-sync SSH keys for an owned assistant",
+    description=(
+        "Ownership-scoped read of the assistant desktop file-sync private "
+        "key plus the per-user desktop key map (keyed by owner_user_id). "
+        "Used by the assistant runtime's file-sync layer instead of the "
+        "admin fleet read."
+    ),
+    tags=["Assistant Management"],
+    include_in_schema=False,
+)
+async def get_assistant_desktop_filesync_keys(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assistant = require_owned_assistant(request, assistant_id, session)
+    desktop_dao = DesktopDAO(session)
+    user_desktop_filesync_keys = {
+        link.owner_user_id: link.filesync_sshkey
+        for link, _desktop in desktop_dao.list_links_for_assistant(assistant.agent_id)
+        if link.filesync_sshkey
+    }
+    return {
+        "desktop_filesync_sshkey": assistant.desktop_filesync_sshkey,
+        "user_desktop_filesync_keys": user_desktop_filesync_keys,
+    }
 
 
 # =========================================================================
@@ -4813,6 +5122,7 @@ async def transfer_assistant_to_team_owned_endpoint(
             assistant_id=assistant_id,
             owner_team_id=transfer_request.owner_team_id,
             actor_user_id=user_id,
+            merge_memory=transfer_request.merge_memory,
         )
     except TeamOwnershipTransferError as exc:
         session.rollback()
@@ -4821,13 +5131,27 @@ async def transfer_assistant_to_team_owned_endpoint(
         if detail in {
             "assistant_already_team_owned",
             "coordinator_cannot_be_team_owned",
-        }:
+        } or detail.startswith(
+            (
+                "team_memory_collision_both_have_data",
+                "team_memory_merge_schema_mismatch",
+                "team_memory_merge_secret_conflict",
+                "team_memory_merge_function_conflict",
+                "team_memory_merge_unique_key_conflict",
+                "team_memory_merge_versioned_context",
+            ),
+        ):
             status_code = status.HTTP_409_CONFLICT
         elif detail in {
             "assistant_not_in_organization",
             "team_not_in_organization",
         }:
             status_code = status.HTTP_400_BAD_REQUEST
+        elif detail in {
+            "team_memory_transfer_incomplete",
+            "team_memory_collision_unresolved",
+        }:
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise HTTPException(status_code=status_code, detail=detail) from exc
     except Exception as exc:
         session.rollback()
@@ -4846,6 +5170,8 @@ async def transfer_assistant_to_team_owned_endpoint(
             agent_id=int(result["agent_id"]),
             owner_team_id=int(result["owner_team_id"]),
             contexts_renamed=int(result["contexts_renamed"]),
+            contexts_merged=int(result["contexts_merged"]),
+            duplicate_contacts=list(result["duplicate_contacts"]),
             memory_root=str(result["memory_root"]),
         ),
     )
@@ -6943,8 +7269,6 @@ def admin_update_user_by_assistant(
     For org assistants: finds the org member by email and updates their profile.
     """
     assistant_dao = AssistantDAO(session)
-    user_dao = UserDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
 
     # Get assistant without user/org context (admin bypass)
     assistant = assistant_dao.get_assistant_by_agent_id(request_body.assistant_id)
@@ -6953,6 +7277,44 @@ def admin_update_user_by_assistant(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Assistant with id {request_body.assistant_id} not found.",
         )
+
+    return _update_user_via_assistant(session, assistant, request_body)
+
+
+@router.post(
+    "/assistant/update-user",
+    response_model=AdminUpdateUserByAssistantResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update user details via an owned assistant",
+    description="Ownership-scoped equivalent of the admin route: updates a "
+    "user's profile (timezone, bio) by looking up an assistant the caller "
+    "owns. For personal assistants, updates the owner. For org assistants, "
+    "finds the member by email and updates them.",
+    tags=["Assistants"],
+    include_in_schema=False,
+)
+def update_user_by_owned_assistant(
+    request_body: AdminUpdateUserByAssistant,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> AdminUpdateUserByAssistantResponse:
+    assistant = require_owned_assistant(
+        request,
+        request_body.assistant_id,
+        session,
+        write=True,
+    )
+    return _update_user_via_assistant(session, assistant, request_body)
+
+
+def _update_user_via_assistant(
+    session: Session,
+    assistant: Assistant,
+    request_body: AdminUpdateUserByAssistant,
+) -> AdminUpdateUserByAssistantResponse:
+    """Resolve the target user through ``assistant`` and apply the update."""
+    user_dao = UserDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
 
     target_user_id = None
     assistant_type = "personal"
@@ -7080,6 +7442,38 @@ def admin_update_assistant(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Assistant with id {assistant_id} not found.",
         )
+
+    return _apply_assistant_runtime_update(session, assistant, request_body)
+
+
+@router.patch(
+    "/assistant/{assistant_id}/runtime-profile",
+    response_model=AdminUpdateAssistantResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update runtime profile fields for an owned assistant",
+    description="Ownership-scoped equivalent of the admin assistant PATCH: "
+    "updates timezone, about, job_title, desktop_filesync_sshkey, and "
+    "console_config for an assistant the caller owns.",
+    tags=["Assistants"],
+    include_in_schema=False,
+)
+def update_assistant_runtime_profile(
+    assistant_id: int,
+    request_body: AdminUpdateAssistant,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> AdminUpdateAssistantResponse:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    return _apply_assistant_runtime_update(session, assistant, request_body)
+
+
+def _apply_assistant_runtime_update(
+    session: Session,
+    assistant: Assistant,
+    request_body: AdminUpdateAssistant,
+) -> AdminUpdateAssistantResponse:
+    """Apply the runtime-profile field updates shared by admin and user routes."""
+    assistant_id = assistant.agent_id
 
     # Build update dict and track updated fields
     updated_fields = []
@@ -8468,8 +8862,40 @@ async def list_demo_assistant_meta(
 
 
 # ---------------------------------------------------------------------------
-# Inactivity follow-up admin endpoints
+# Inactivity follow-up endpoints (admin + ownership-scoped runtime routes)
 # ---------------------------------------------------------------------------
+
+
+def _touch_assistant_activity(session: Session, assistant_id: int) -> dict:
+    """Stamp fresh correspondence activity and clear any pending follow-up."""
+    from datetime import datetime, timezone
+
+    dao = AssistantDAO(session)
+    rows = dao.touch_last_correspondence_at(assistant_id, datetime.now(timezone.utc))
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {assistant_id} not found.",
+        )
+    session.commit()
+    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+
+
+def _set_assistant_followup_opt_out(
+    session: Session,
+    assistant_id: int,
+    opted_out: bool,
+) -> dict:
+    """Toggle the inactivity follow-up opt-out flag for one assistant."""
+    dao = AssistantDAO(session)
+    rows = dao.set_inactivity_followup_opt_out(assistant_id, opted_out)
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {assistant_id} not found.",
+        )
+    session.commit()
+    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
 
 
 @admin_router.post(
@@ -8488,17 +8914,28 @@ def admin_touch_assistant_activity(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
-    from datetime import datetime, timezone
+    return _touch_assistant_activity(session, assistant_id)
 
-    dao = AssistantDAO(session)
-    rows = dao.touch_last_correspondence_at(assistant_id, datetime.now(timezone.utc))
-    if rows == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant with id {assistant_id} not found.",
-        )
-    session.commit()
-    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+
+@router.post(
+    "/assistant/{assistant_id}/touch-activity",
+    status_code=status.HTTP_200_OK,
+    summary="Record correspondence activity for an owned assistant",
+    description=(
+        "Ownership-scoped equivalent of the admin route: stamps "
+        "``last_correspondence_at = now()`` and clears "
+        "``last_followup_sent_at`` for an assistant the caller owns."
+    ),
+    tags=["Assistants"],
+    include_in_schema=False,
+)
+def touch_assistant_activity(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    require_owned_assistant(request, assistant_id, session, write=True)
+    return _touch_assistant_activity(session, assistant_id)
 
 
 @admin_router.post(
@@ -8518,15 +8955,28 @@ def admin_opt_out_assistant_followups(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
-    dao = AssistantDAO(session)
-    rows = dao.set_inactivity_followup_opt_out(assistant_id, True)
-    if rows == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant with id {assistant_id} not found.",
-        )
-    session.commit()
-    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+    return _set_assistant_followup_opt_out(session, assistant_id, True)
+
+
+@router.post(
+    "/assistant/{assistant_id}/opt-out-followups",
+    status_code=status.HTTP_200_OK,
+    summary="Opt an owned assistant out of inactivity follow-ups",
+    description=(
+        "Ownership-scoped equivalent of the admin route: sets "
+        "``inactivity_followup_opted_out = true`` for an assistant the "
+        "caller owns."
+    ),
+    tags=["Assistants"],
+    include_in_schema=False,
+)
+def opt_out_assistant_followups(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    require_owned_assistant(request, assistant_id, session, write=True)
+    return _set_assistant_followup_opt_out(session, assistant_id, True)
 
 
 @admin_router.post(
@@ -8545,12 +8995,24 @@ def admin_opt_in_assistant_followups(
     assistant_id: int,
     session: Session = Depends(get_db_session),
 ) -> dict:
-    dao = AssistantDAO(session)
-    rows = dao.set_inactivity_followup_opt_out(assistant_id, False)
-    if rows == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant with id {assistant_id} not found.",
-        )
-    session.commit()
-    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+    return _set_assistant_followup_opt_out(session, assistant_id, False)
+
+
+@router.post(
+    "/assistant/{assistant_id}/opt-in-followups",
+    status_code=status.HTTP_200_OK,
+    summary="Re-enable inactivity follow-ups for an owned assistant",
+    description=(
+        "Ownership-scoped equivalent of the admin route: clears "
+        "``inactivity_followup_opted_out`` for an assistant the caller owns."
+    ),
+    tags=["Assistants"],
+    include_in_schema=False,
+)
+def opt_in_assistant_followups(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    require_owned_assistant(request, assistant_id, session, write=True)
+    return _set_assistant_followup_opt_out(session, assistant_id, False)

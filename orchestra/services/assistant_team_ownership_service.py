@@ -1,8 +1,14 @@
-"""Transfer an existing org assistant to team-owned scope."""
+"""Transfer an existing org assistant to team-owned scope.
+
+The context/log mechanics — collision reconciliation, populated-table
+merging, rename, FK re-rooting, ownership rebrand — are the generic tree
+operations in :mod:`orchestra.services.context_merge_service`; this service
+adds the assistant-specific semantics (validation, contact overlays, team
+membership) and the transfer API's error vocabulary.
+"""
 
 from __future__ import annotations
 
-from sqlalchemy import or_, text, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -10,7 +16,6 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.models.core_models import Context
 from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
     ContactMembership,
@@ -20,6 +25,11 @@ from orchestra.db.scope import OwnerScope, owner_key
 from orchestra.services.contact_membership_service import (
     ensure_team_contact_memberships,
 )
+from orchestra.services.context_merge_service import (
+    ContextMergeError,
+    merge_context_trees,
+    update_tree_ownership,
+)
 from orchestra.services.org_wide_sharing_service import add_assistant_to_team
 from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
@@ -28,9 +38,28 @@ from orchestra.services.team_membership_refresh_service import (
 
 ASSISTANTS_PROJECT_NAME = "Assistants"
 
+# Generic tree-merge error codes -> this API's detail vocabulary.
+_MERGE_ERROR_DETAILS = {
+    "collision_both_have_data": "team_memory_collision_both_have_data",
+    "schema_mismatch": "team_memory_merge_schema_mismatch",
+    "secret_conflict": "team_memory_merge_secret_conflict",
+    "function_conflict": "team_memory_merge_function_conflict",
+    "unique_key_conflict": "team_memory_merge_unique_key_conflict",
+    "versioned_context": "team_memory_merge_versioned_context",
+    "collision_unresolved": "team_memory_collision_unresolved",
+    "source_not_drained": "team_memory_transfer_incomplete",
+}
+
 
 class TeamOwnershipTransferError(Exception):
     """Raised when an assistant cannot be converted to team-owned."""
+
+
+def _transfer_detail(exc: ContextMergeError) -> str:
+    detail = _MERGE_ERROR_DETAILS[exc.code]
+    if exc.subject and exc.code != "source_not_drained":
+        return f"{detail}: {exc.subject}"
+    return detail
 
 
 async def transfer_assistant_to_team_owned(
@@ -39,6 +68,7 @@ async def transfer_assistant_to_team_owned(
     assistant_id: int,
     owner_team_id: int,
     actor_user_id: str,
+    merge_memory: bool = False,
 ) -> dict[str, object]:
     """Convert an org assistant from personal memory to team-owned scope.
 
@@ -46,6 +76,11 @@ async def transfer_assistant_to_team_owned(
     following the same shared-root convention team-owned assistants use at hire
     time. Personal contact overlays are removed; the owning team becomes the
     assistant's only memory root.
+
+    When the team tree already holds data for a table the assistant also has
+    data in, the transfer refuses by default; with ``merge_memory`` the
+    assistant's rows are merged into the team table (key values re-numbered
+    above the team's).
     """
     assistant_dao = AssistantDAO(session)
     assistant = assistant_dao.get_assistant_by_agent_id(assistant_id)
@@ -74,81 +109,28 @@ async def transfer_assistant_to_team_owned(
     assistants_project = org_projects[0][0]
     project_id = assistants_project.id
 
-    old_prefix = f"{assistant.user_id}/{assistant_id}"
-    new_prefix = f"Teams/{owner_team_id}"
-    renamed_count = context_dao.rename_with_children(
-        project_id,
-        old_prefix,
-        new_prefix,
-    )
+    personal_prefix = f"{assistant.user_id}/{assistant_id}"
+    team_prefix = f"Teams/{owner_team_id}"
 
-    session.execute(
-        update(Context)
-        .where(
-            Context.project_id == project_id,
-            or_(
-                Context.name == new_prefix,
-                Context.name.like(f"{new_prefix}/%"),
-            ),
+    try:
+        merge_result = merge_context_trees(
+            session,
+            context_dao,
+            project_id=project_id,
+            source_prefix=personal_prefix,
+            target_prefix=team_prefix,
+            merge_populated=merge_memory,
         )
-        .values(
-            owner_scope=OwnerScope.TEAM.value,
-            owner_id=owner_team_id,
-        ),
-    )
-    session.flush()
+    except ContextMergeError as exc:
+        raise TeamOwnershipTransferError(_transfer_detail(exc)) from exc
 
-    new_owner_key = owner_key(OwnerScope.TEAM, owner_team_id)
-    old_owner_key = owner_key(OwnerScope.ASSISTANT, assistant_id)
-    session.execute(
-        text(
-            """
-            UPDATE log_event le
-            SET owner_key = :new_owner_key
-            FROM log_event_context lec
-            JOIN context c ON c.id = lec.context_id
-            WHERE le.id = lec.log_event_id
-              AND le.project_id = :project_id
-              AND lec.project_id = :project_id
-              AND c.project_id = :project_id
-              AND (
-                    c.name = :new_prefix
-                    OR c.name LIKE :new_prefix_like
-              )
-              AND le.owner_key = :old_owner_key
-            """,
-        ),
-        {
-            "project_id": project_id,
-            "new_prefix": new_prefix,
-            "new_prefix_like": f"{new_prefix}/%",
-            "new_owner_key": new_owner_key,
-            "old_owner_key": old_owner_key,
-        },
-    )
-    session.execute(
-        text(
-            """
-            UPDATE log_event_context lec
-            SET owner_key = :new_owner_key
-            FROM context c
-            WHERE c.id = lec.context_id
-              AND lec.project_id = :project_id
-              AND c.project_id = :project_id
-              AND (
-                    c.name = :new_prefix
-                    OR c.name LIKE :new_prefix_like
-              )
-              AND lec.owner_key = :old_owner_key
-            """,
-        ),
-        {
-            "project_id": project_id,
-            "new_prefix": new_prefix,
-            "new_prefix_like": f"{new_prefix}/%",
-            "new_owner_key": new_owner_key,
-            "old_owner_key": old_owner_key,
-        },
+    update_tree_ownership(
+        session,
+        project_id=project_id,
+        prefix=team_prefix,
+        owner_scope=OwnerScope.TEAM,
+        owner_id=owner_team_id,
+        previous_owner_key=owner_key(OwnerScope.ASSISTANT, assistant_id),
     )
 
     session.query(ContactMembership).filter(
@@ -183,6 +165,8 @@ async def transfer_assistant_to_team_owned(
     return {
         "agent_id": assistant_id,
         "owner_team_id": owner_team_id,
-        "contexts_renamed": renamed_count,
-        "memory_root": new_prefix,
+        "contexts_renamed": merge_result.contexts_renamed,
+        "contexts_merged": merge_result.contexts_merged,
+        "duplicate_contacts": merge_result.duplicate_contacts,
+        "memory_root": team_prefix,
     }

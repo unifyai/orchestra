@@ -2031,6 +2031,14 @@ class Assistant(Base):
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
     desktop_mode = Column(String, nullable=True)
+    managed_desktop_status = Column(String, nullable=True)
+    managed_desktop_monthly_cost = Column(Numeric, nullable=True)
+    managed_desktop_last_billed_month = Column(String, nullable=True)
+    managed_desktop_grace_period_started_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )
+    managed_desktop_enabled_at = Column(TIMESTAMP(timezone=True), nullable=True)
     desktop_filesync_sshkey = Column(String, nullable=True)
     about = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
@@ -2352,7 +2360,7 @@ class AssistantContactCost(Base):
             name="uq_contact_cost",
         ),
         sa.CheckConstraint(
-            "contact_type IN ('phone', 'email', 'whatsapp', 'discord')",
+            "contact_type IN ('phone', 'email', 'whatsapp', 'discord', 'managed_desktop')",
             name="ck_contact_type_cost_type",
         ),
     )
