@@ -3188,6 +3188,7 @@ class _FakeSlackClient:
         return self._response
 
 
+@pytest.mark.anyio
 class TestSlackAppUninstall:
     """Response-branch coverage for ``uninstall_slack_app``."""
 
