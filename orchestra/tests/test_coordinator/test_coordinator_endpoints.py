@@ -1581,6 +1581,110 @@ async def test_coordinator_state_patch_reset_clears_manual_completion(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("step_id", "field", "value"),
+    [
+        ("whatsapp-number", "whatsapp_number", "+15550100200"),
+        ("phone-number", "phone_number", "+15550100201"),
+        ("discord-id", "discord_id", "999888777666555444"),
+    ],
+)
+async def test_coordinator_state_reset_clears_user_contact_field(
+    client: AsyncClient,
+    dbsession: Session,
+    step_id: str,
+    field: str,
+    value: str,
+) -> None:
+    """Resetting a contact-setup step nulls the backing ``User`` field.
+
+    These steps derive live from the ``User`` row (``whatsapp_number`` /
+    ``phone_number`` / ``discord_id``), so the only way the reset can
+    genuinely un-tick them is to clear the field. Regression guard for
+    Discord in particular, whose field was previously left set (so the
+    step immediately re-derived as done).
+    """
+    owner = await _create_user(client, f"reset-field-{field}")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    user = dbsession.get(User, owner["id"])
+    assert user is not None
+    setattr(user, field, value)
+    dbsession.flush()
+
+    coordinator = dbsession.get(Assistant, coordinator_id)
+    assert coordinator is not None
+    assert step_id in svc.derive_onboarding_progress(
+        dbsession,
+        coordinator=coordinator,
+        state={"onboarding_active": True},
+    )
+
+    reset = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": step_id},
+        headers=owner["headers"],
+    )
+    assert reset.status_code == status.HTTP_200_OK, reset.json()
+    assert step_id not in reset.json()["info"]["completed_step_ids"]
+
+    dbsession.expire_all()
+    user = dbsession.get(User, owner["id"])
+    assert getattr(user, field) is None
+
+
+@pytest.mark.anyio
+async def test_coordinator_state_reset_child_step_clears_discord_id(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Resetting a downstream Discord beat cascades up and clears ``discord_id``.
+
+    ``discord-connect`` depends on ``discord-id`` (COMPLETED), so the reset
+    cascade pulls the setup step in — mirroring how resetting a WhatsApp beat
+    already rewinds ``whatsapp-number``. The saved Discord ID must be cleared
+    so the step does not immediately re-derive.
+    """
+    owner = await _create_user(client, "reset-discord-cascade")
+    create = await client.post(
+        f"/v0/user/{owner['id']}/coordinator",
+        headers=owner["headers"],
+    )
+    assert create.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    }, create.json()
+    coordinator_id = int(create.json()["coordinator_id"])
+
+    user = dbsession.get(User, owner["id"])
+    assert user is not None
+    user.discord_id = "123456789012345678"
+    dbsession.flush()
+
+    reset = await client.patch(
+        f"/v0/assistant/{coordinator_id}/state",
+        json={"reset_onboarding_step": "discord-connect"},
+        headers=owner["headers"],
+    )
+    assert reset.status_code == status.HTTP_200_OK, reset.json()
+    completed = reset.json()["info"]["completed_step_ids"]
+    assert "discord-id" not in completed
+    assert "discord-connect" not in completed
+
+    dbsession.expire_all()
+    user = dbsession.get(User, owner["id"])
+    assert user.discord_id is None
+
+
+@pytest.mark.anyio
 async def test_coordinator_state_patch_resume_clears_ended_at(
     client: AsyncClient,
     dbsession: Session,

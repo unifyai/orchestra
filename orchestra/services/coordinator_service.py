@@ -1359,6 +1359,8 @@ def set_coordinator_state(
                 user.whatsapp_number = None
             if ONBOARDING_STEP_PHONE_NUMBER in reset_step_ids:
                 user.phone_number = None
+            if ONBOARDING_STEP_DISCORD_ID in reset_step_ids:
+                user.discord_id = None
     if onboarding_reset_at_updates:
         valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
         for step_id, timestamp in onboarding_reset_at_updates.items():
