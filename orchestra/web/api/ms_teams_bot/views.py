@@ -166,6 +166,14 @@ class DispatchResponse(BaseModel):
             "is pinned to the sender's own workspace Coordinator."
         ),
     )
+    sender_is_owner: bool = Field(
+        False,
+        description=(
+            "True when the sender is the human owner (boss) of the resolved "
+            "assistant. The runtime attributes the message to the durable boss "
+            "contact instead of minting a per-display-name Teams contact."
+        ),
+    )
 
 
 class ChannelBindingRequest(BaseModel):
@@ -454,6 +462,7 @@ def dispatch_inbound(
             route_persisted=resolution.route_persisted,
             routing_metadata=resolution.routing_metadata,
             needs_sender_identity=resolution.needs_sender_identity,
+            sender_is_owner=resolution.sender_is_owner,
         )
     except Exception:
         # The Bot Connector retries non-2xx responses, so a routing fault
