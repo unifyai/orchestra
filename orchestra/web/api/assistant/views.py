@@ -4813,6 +4813,7 @@ async def transfer_assistant_to_team_owned_endpoint(
             assistant_id=assistant_id,
             owner_team_id=transfer_request.owner_team_id,
             actor_user_id=user_id,
+            merge_memory=transfer_request.merge_memory,
         )
     except TeamOwnershipTransferError as exc:
         session.rollback()
@@ -4821,7 +4822,16 @@ async def transfer_assistant_to_team_owned_endpoint(
         if detail in {
             "assistant_already_team_owned",
             "coordinator_cannot_be_team_owned",
-        } or detail.startswith("team_memory_collision_both_have_data"):
+        } or detail.startswith(
+            (
+                "team_memory_collision_both_have_data",
+                "team_memory_merge_schema_mismatch",
+                "team_memory_merge_secret_conflict",
+                "team_memory_merge_function_conflict",
+                "team_memory_merge_unique_key_conflict",
+                "team_memory_merge_versioned_context",
+            ),
+        ):
             status_code = status.HTTP_409_CONFLICT
         elif detail in {
             "assistant_not_in_organization",
@@ -4851,6 +4861,8 @@ async def transfer_assistant_to_team_owned_endpoint(
             agent_id=int(result["agent_id"]),
             owner_team_id=int(result["owner_team_id"]),
             contexts_renamed=int(result["contexts_renamed"]),
+            contexts_merged=int(result["contexts_merged"]),
+            duplicate_contacts=list(result["duplicate_contacts"]),
             memory_root=str(result["memory_root"]),
         ),
     )

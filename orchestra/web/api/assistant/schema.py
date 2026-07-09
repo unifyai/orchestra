@@ -2266,6 +2266,15 @@ class AssistantTransferToTeamOwnedRequest(BaseModel):
         ),
         example=11,
     )
+    merge_memory: bool = Field(
+        False,
+        description=(
+            "When the team tree already holds data for a table the assistant "
+            "also has data in, merge the assistant's rows into the team table "
+            "(key values are re-numbered above the team's). Without this flag "
+            "such collisions abort the transfer with 409."
+        ),
+    )
 
 
 class AssistantTransferToTeamOwnedResponse(BaseModel):
@@ -2277,6 +2286,22 @@ class AssistantTransferToTeamOwnedResponse(BaseModel):
     contexts_renamed: int = Field(
         ...,
         description="Number of contexts moved under the team root.",
+    )
+    contexts_merged: int = Field(
+        0,
+        description=(
+            "Number of populated context pairs merged into existing team "
+            "tables (merge_memory only)."
+        ),
+    )
+    duplicate_contacts: list = Field(
+        default_factory=list,
+        description=(
+            "Suspected same-person rows in the merged team contact book "
+            "(exact email/phone match between the assistant's and team's "
+            "books). Reported for operator review — never auto-merged. Each "
+            "entry: matched_on, existing_contact_id, merged_contact_id."
+        ),
     )
     memory_root: str = Field(
         ...,
