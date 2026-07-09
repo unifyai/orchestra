@@ -1760,9 +1760,23 @@ def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None
             ) from exc
 
 
+def _is_task_enabled(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row may arm scheduled/trigger activations.
+
+    Missing ``enabled`` is treated as True so legacy rows without the column
+    remain activatable.
+    """
+
+    if "enabled" not in data:
+        return True
+    return _coerce_bool(data.get("enabled"))
+
+
 def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
     """Return True when a task row is the current armed scheduled activation."""
 
+    if not _is_task_enabled(data):
+        return False
     schedule = data.get("schedule")
     trigger = data.get("trigger")
     if trigger not in (None, {}):
@@ -1778,6 +1792,8 @@ def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
 def _is_trigger_activation_candidate(data: Mapping[str, Any]) -> bool:
     """Return True when a task row is the current armed trigger activation."""
 
+    if not _is_task_enabled(data):
+        return False
     schedule = data.get("schedule")
     trigger = data.get("trigger")
     if schedule not in (None, {}):

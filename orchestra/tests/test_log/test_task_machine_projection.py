@@ -740,6 +740,109 @@ async def test_task_update_clears_activation_when_row_stops_being_armed(
 
 
 @pytest.mark.anyio
+async def test_disabled_scheduled_task_does_not_project_activation(
+    client: AsyncClient,
+):
+    """enabled=False scheduled tasks must not arm Tasks/Activations."""
+
+    await _ensure_task_machine_project(client)
+    entries = _scheduled_task_entries(task_id=260)
+    entries["enabled"] = False
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 260 for log in activations)
+
+
+@pytest.mark.anyio
+async def test_disabled_trigger_task_does_not_project_activation(
+    client: AsyncClient,
+):
+    """enabled=False triggerable tasks must not arm Tasks/Activations."""
+
+    await _ensure_task_machine_project(client)
+    entries = _trigger_task_entries(task_id=261)
+    entries["enabled"] = False
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 261 for log in activations)
+
+
+@pytest.mark.anyio
+async def test_disabling_scheduled_task_clears_activation(
+    client: AsyncClient,
+):
+    """Toggling enabled=False on an armed scheduled task clears its activation."""
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=262),
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    assert any(log["entries"]["task_id"] == 262 for log in activations)
+
+    response = await _update_logs(
+        client,
+        [log_id],
+        {"enabled": False},
+        context=TASKS_CONTEXT,
+        overwrite=True,
+    )
+    assert response.status_code == 200, response.json()
+
+    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 262 for log in activations)
+
+
+def test_is_task_enabled_defaults_missing_to_true():
+    """Legacy rows without an enabled column remain activatable."""
+
+    assert task_machine_state_service._is_task_enabled({}) is True
+    assert task_machine_state_service._is_task_enabled({"enabled": True}) is True
+    assert task_machine_state_service._is_task_enabled({"enabled": False}) is False
+    assert task_machine_state_service._is_task_enabled({"enabled": "false"}) is False
+    assert (
+        task_machine_state_service._is_scheduled_activation_candidate(
+            {
+                "status": "scheduled",
+                "schedule": {"start_at": "2026-04-10T09:00:00+00:00"},
+                "enabled": False,
+            },
+        )
+        is False
+    )
+    assert (
+        task_machine_state_service._is_trigger_activation_candidate(
+            {
+                "status": "triggerable",
+                "trigger": {"medium": "email"},
+                "enabled": False,
+            },
+        )
+        is False
+    )
+
+
+@pytest.mark.anyio
 async def test_task_create_projects_offline_agentic_activation(
     client: AsyncClient,
     materialization_calls,
