@@ -5,7 +5,7 @@ from typing import Callable
 from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 import orchestra.db.models.coordinator_voice  # noqa: F401 — register ORM listeners
@@ -23,6 +23,22 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store the engine instance
 _engine = None
+
+# Cap abandoned transactions so they cannot hold ACCESS SHARE on hot tables
+# (e.g. assistants) long enough to queue ACCESS EXCLUSIVE DDL and wedge reads.
+_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS = 60_000
+
+
+def _configure_session_timeouts(dbapi_connection, connection_record) -> None:
+    """Apply per-connection Postgres timeouts for both psycopg2 and pg8000."""
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute(
+            f"SET idle_in_transaction_session_timeout = "
+            f"'{_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS}ms'",
+        )
+    finally:
+        cursor.close()
 
 
 def _setup_db(app: FastAPI) -> None:  # pragma: no cover
@@ -78,6 +94,8 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
             "postgresql+pg8000://",
             creator=get_conn,
         )
+
+    event.listen(engine, "connect", _configure_session_timeouts)
 
     session_factory = sessionmaker(
         engine,
