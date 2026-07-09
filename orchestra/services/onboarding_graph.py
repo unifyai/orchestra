@@ -108,6 +108,16 @@ class OnboardingChip:
     metadata: dict[str, Any] | None = None
 
 
+# Transcript medium for Unify's org-owned Microsoft Teams bot. Used by the
+# reply-first Teams onboarding derivation (the bot is reply-only: it cannot
+# open a Teams conversation, so its onboarding steps derive from the user's
+# own inbound message and Twin's reply into that conversation, never from a
+# proactive outbound).
+MS_TEAMS_BOT_MEDIUM = "ms_teams_bot_message"
+
+# Proactive reference-quiz channels: Twin sends the clue first (the row is a
+# ``_trigger``). Microsoft Teams is deliberately absent — its bot is reply-only,
+# so its clue exchange is modelled reply-first (see the ms-teams steps below).
 REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
     "email": "send_email",
     "whatsapp_message": "send_whatsapp",
@@ -116,7 +126,6 @@ REFERENCE_QUIZ_TOOL_BY_CHANNEL = {
     "phone_call": "make_call_to_boss",
     "slack_message": "send_slack_message",
     "discord_message": "send_discord_message",
-    "ms_teams_message": "send_ms_teams_bot_message",
 }
 
 REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
@@ -127,7 +136,6 @@ REFERENCE_QUIZ_CHANNEL_BY_REPLY_STEP = {
     "phone-call": "phone_call",
     "slack-message": "slack_message",
     "discord-message": "discord_message",
-    "ms-teams-message": "ms_teams_message",
 }
 
 
@@ -1057,24 +1065,36 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "clicking the 'Connect Microsoft Teams' row in the Onboarding checklist"
         ),
     ),
-    _trigger(
-        "ms-teams-reference",
-        "Trigger Microsoft Teams message from T-W1N",
+    # The Unify Teams bot is reply-only: it cannot open a conversation, so
+    # unlike every other reference-quiz channel Twin cannot send the first
+    # clue. This step is therefore user-initiated — clicking it opens the
+    # Teams chat (via a deep link in Console) so the user sends Twin a first
+    # message, which seeds the conversation reference and lets Twin reply.
+    # Completion derives from that inbound message, not a Twin outbound.
+    OnboardingStep(
+        id="ms-teams-reference",
+        title="Send your first message to Twin on Teams",
+        phase=PHASE_COMMUNICATION,
+        kind="setup",
         depends_on={"ms-teams-connect": COMPLETED},
+        can_skip=True,
+        derivable=True,
         channel="ms_teams",
-        paired_reply="ms-teams-message",
         nudge_chat=(
-            "Invite them to click the 'Trigger Microsoft Teams message from "
-            "T-W1N' row in the Onboarding checklist to get a clue in Teams."
+            "Have them click the 'Send your first message to Twin on Teams' "
+            "row in the Onboarding checklist; it opens the Teams chat with the "
+            "Unify bot (adding it for them first if needed) so they can say a "
+            "quick hello. That first message is what opens the channel so I can "
+            "reply — the Teams bot can't message first."
         ),
         nudge_voice=(
-            "clicking the 'Trigger Microsoft Teams message from T-W1N' row in "
-            "the Onboarding checklist"
+            "clicking the 'Send your first message to Twin on Teams' row in the "
+            "Onboarding checklist and saying hello"
         ),
     ),
     OnboardingStep(
         id="ms-teams-message",
-        title="Reply to Microsoft Teams message",
+        title="Guess T-W1N's Microsoft Teams clue",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"ms-teams-reference": COMPLETED},
@@ -1082,10 +1102,10 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="ms_teams",
         nudge_chat=(
-            "Prompt them to reply with their guess to the Microsoft Teams "
-            "message you sent."
+            "Once they've said hello on Teams, reply with a sci-fi reference "
+            "clue there, then prompt them to guess it in Teams."
         ),
-        nudge_voice="replying to the Microsoft Teams message",
+        nudge_voice="guessing the Microsoft Teams clue",
     ),
     OnboardingStep(
         id="discord-id",
@@ -1373,7 +1393,6 @@ _CHANNEL_TO_OUTBOUND_MEDIUMS: dict[str, tuple[str, ...]] = {
     "phone_call": ("phone_call",),
     "slack_message": ("slack_message", "slack_channel_message"),
     "discord_message": ("discord_message", "discord_channel_message"),
-    "ms_teams_message": ("ms_teams_bot_message",),
 }
 
 # Trigger row id -> transcript medium(s) that prove Twin sent the outbound.
@@ -1599,11 +1618,12 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "ms-teams-reference": StepPresentation(
-        "T-W1N sends the next reference clue in Microsoft Teams.",
-        "~10s",
+        "Open Teams and send Twin a quick hello. The Unify bot can only reply, "
+        "so your first message is what opens the channel.",
+        "~1 min",
     ),
     "ms-teams-message": StepPresentation(
-        "Reply to T-W1N's Microsoft Teams message with your guess.",
+        "T-W1N replies with a reference clue in Microsoft Teams — guess it " "there.",
         "~1 min",
     ),
     "discord-id": StepPresentation(
@@ -1757,11 +1777,19 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "themselves the cleanest path is to have a tenant admin do the connect."
     ),
     "ms-teams-reference": (
-        "Clicking the 'Trigger Microsoft Teams message from T-W1N' row tells me "
-        "the user is ready for the clue in Teams; I send my own clue if I "
-        "haven't already, otherwise I just confirm it."
+        "Clicking the 'Send your first message to Twin on Teams' row opens the "
+        "Teams chat with the Unify bot (adding it for the user first if "
+        "needed). The Unify Teams bot is reply-only — it can't send the first "
+        "message — so the user has to say hello there before I can do anything. "
+        "This step completes when their first Teams message arrives; never "
+        "claim to have messaged them on Teams before that, and never fake it "
+        "with an api or unify message stand-in."
     ),
-    "ms-teams-message": "The user guesses the Microsoft Teams clue.",
+    "ms-teams-message": (
+        "After the user's first Teams message I reply there with a sci-fi "
+        "reference clue and they guess it in Teams. This step completes on "
+        "their guess."
+    ),
     "discord-id": (
         "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
         "Walk them through it: in Discord, turn on Settings -> Developer -> "
