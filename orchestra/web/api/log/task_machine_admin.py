@@ -194,15 +194,10 @@ def reproject_task_activation(
     }
 
 
-@router.post(
-    "/task-run/create-or-adopt",
-    response_model=TaskRunMutationResponse,
-)
-def create_or_adopt_task_run(
+def create_or_adopt_task_run_core(
+    session,
     request: TaskRunCreateOrAdoptRequest,
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
+) -> dict:
     """Create a task run by run_key if absent, otherwise return the existing row."""
 
     project = _get_internal_project_or_404(
@@ -223,15 +218,7 @@ def create_or_adopt_task_run(
     return {"run": dict(run.data or {}), "created": created}
 
 
-@router.post(
-    "/task-run/update",
-    response_model=TaskRunMutationResponse,
-)
-def patch_task_run(
-    request: TaskRunUpdateRequest,
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
+def patch_task_run_core(session, request: TaskRunUpdateRequest) -> dict:
     """Apply a partial payload update to an existing task run row."""
 
     project = _get_internal_project_or_404(
@@ -250,15 +237,7 @@ def patch_task_run(
     return {"run": dict(run.data or {})}
 
 
-@router.post(
-    "/task-run/latest",
-    response_model=TaskRunLatestResponse,
-)
-def get_latest_task_run(
-    request: TaskRunLatestRequest,
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
+def get_latest_task_run_core(session, request: TaskRunLatestRequest) -> dict:
     """Return the most recently updated task run for one assistant/task pair."""
 
     project = _get_internal_project_or_404(
@@ -276,15 +255,10 @@ def get_latest_task_run(
     return {"run": dict(run.data or {}) if run is not None else None}
 
 
-@router.post(
-    "/task-outbound-operation/create-or-adopt",
-    response_model=TaskOutboundOperationMutationResponse,
-)
-def create_or_adopt_task_outbound_operation(
+def create_or_adopt_task_outbound_operation_core(
+    session,
     request: TaskOutboundOperationCreateOrAdoptRequest,
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
+) -> dict:
     """Create an outbound operation by operation_key if absent, otherwise adopt it."""
 
     project = _get_internal_project_or_404(
@@ -305,15 +279,10 @@ def create_or_adopt_task_outbound_operation(
     return {"operation": dict(operation.data or {}), "created": created}
 
 
-@router.post(
-    "/task-outbound-operation/update",
-    response_model=TaskOutboundOperationMutationResponse,
-)
-def patch_task_outbound_operation(
+def patch_task_outbound_operation_core(
+    session,
     request: TaskOutboundOperationUpdateRequest,
-    session=Depends(get_db_session),
-    _=Depends(auth_admin_key),
-):
+) -> dict:
     """Apply a partial payload update to an existing outbound operation row."""
 
     project = _get_internal_project_or_404(
@@ -333,3 +302,73 @@ def patch_task_outbound_operation(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"operation": dict(operation.data or {})}
+
+
+@router.post(
+    "/task-run/create-or-adopt",
+    response_model=TaskRunMutationResponse,
+)
+def create_or_adopt_task_run(
+    request: TaskRunCreateOrAdoptRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Create a task run by run_key if absent, otherwise return the existing row."""
+
+    return create_or_adopt_task_run_core(session, request)
+
+
+@router.post(
+    "/task-run/update",
+    response_model=TaskRunMutationResponse,
+)
+def patch_task_run(
+    request: TaskRunUpdateRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Apply a partial payload update to an existing task run row."""
+
+    return patch_task_run_core(session, request)
+
+
+@router.post(
+    "/task-run/latest",
+    response_model=TaskRunLatestResponse,
+)
+def get_latest_task_run(
+    request: TaskRunLatestRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Return the most recently updated task run for one assistant/task pair."""
+
+    return get_latest_task_run_core(session, request)
+
+
+@router.post(
+    "/task-outbound-operation/create-or-adopt",
+    response_model=TaskOutboundOperationMutationResponse,
+)
+def create_or_adopt_task_outbound_operation(
+    request: TaskOutboundOperationCreateOrAdoptRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Create an outbound operation by operation_key if absent, otherwise adopt it."""
+
+    return create_or_adopt_task_outbound_operation_core(session, request)
+
+
+@router.post(
+    "/task-outbound-operation/update",
+    response_model=TaskOutboundOperationMutationResponse,
+)
+def patch_task_outbound_operation(
+    request: TaskOutboundOperationUpdateRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Apply a partial payload update to an existing outbound operation row."""
+
+    return patch_task_outbound_operation_core(session, request)

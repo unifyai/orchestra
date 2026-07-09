@@ -41,6 +41,7 @@ from orchestra.web.api.org_chat.schema import (
     TeamMessagesPage,
 )
 from orchestra.web.api.utils.assistant_infra import dispatch_org_chat_best_effort
+from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -269,17 +270,15 @@ async def post_team_message(
     return TeamMessageResponse(**message)
 
 
-@admin_router.post(
-    "/teams/{team_id}/messages",
-    response_model=TeamMessageResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def post_team_message_as_assistant(
+async def _post_team_message_from_assistant(
+    session: Session,
+    *,
     team_id: int,
-    body: AssistantTeamMessageCreate,
-    session: Session = Depends(get_db_session),
+    assistant_id: int,
+    content: str,
+    mentions: list,
 ) -> TeamMessageResponse:
-    """Assistant runtime posting a group-chat reply (admin auth).
+    """Persist and fan out one assistant-authored team group-chat message.
 
     The reply is persisted, published to the Console stream, and fanned out
     to every other non-coordinator team assistant (the author is excluded —
@@ -295,14 +294,14 @@ async def post_team_message_as_assistant(
     team_dao = TeamDAO(session)
     membership = team_dao.get_assistant_membership(
         team_id=team_id,
-        assistant_id=body.assistant_id,
+        assistant_id=assistant_id,
     )
     if membership is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Assistant is not a member of this team",
         )
-    assistant = team_dao.get_assistant(body.assistant_id)
+    assistant = team_dao.get_assistant(assistant_id)
     if assistant is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -321,8 +320,8 @@ async def post_team_message_as_assistant(
             sender_user_id=None,
             sender_assistant_id=assistant.agent_id,
             sender_name=sender_name,
-            content=body.content,
-            mentions=[mention.model_dump() for mention in body.mentions],
+            content=content,
+            mentions=[mention.model_dump() for mention in mentions],
         )
         session.commit()
     except ValueError as exc:
@@ -341,6 +340,54 @@ async def post_team_message_as_assistant(
     )
     await dispatch_org_chat_best_effort(payload)
     return TeamMessageResponse(**message)
+
+
+@admin_router.post(
+    "/teams/{team_id}/messages",
+    response_model=TeamMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_team_message_as_assistant(
+    team_id: int,
+    body: AssistantTeamMessageCreate,
+    session: Session = Depends(get_db_session),
+) -> TeamMessageResponse:
+    """Assistant runtime posting a group-chat reply (admin auth)."""
+    return await _post_team_message_from_assistant(
+        session,
+        team_id=team_id,
+        assistant_id=body.assistant_id,
+        content=body.content,
+        mentions=body.mentions,
+    )
+
+
+@router.post(
+    "/assistant/{agent_id}/teams/{team_id}/messages",
+    response_model=TeamMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_team_message_as_owned_assistant(
+    request_fastapi: Request,
+    agent_id: int,
+    team_id: int,
+    body: TeamMessageCreate,
+    session: Session = Depends(get_db_session),
+) -> TeamMessageResponse:
+    """Assistant runtime posting a group-chat reply (ownership-scoped auth).
+
+    User-API-key equivalent of the admin route: the caller must own the
+    assistant identified in the path; the assistant must still be a member
+    of the target team.
+    """
+    require_owned_assistant(request_fastapi, agent_id, session, write=True)
+    return await _post_team_message_from_assistant(
+        session,
+        team_id=team_id,
+        assistant_id=agent_id,
+        content=body.content,
+        mentions=body.mentions,
+    )
 
 
 def _require_dm_counterpart(

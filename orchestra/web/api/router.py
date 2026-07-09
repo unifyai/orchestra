@@ -53,6 +53,7 @@ from orchestra.web.api.tasks import router as tasks_router
 from orchestra.web.api.utils.assistant_infra import fetch_comms_features
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 from orchestra.web.api.whatsapp import admin_router as whatsapp_admin_router
+from orchestra.web.api.whatsapp import router as whatsapp_router
 
 API_KEY_AUTH = [
     Depends(auth_api_key),
@@ -191,6 +192,12 @@ api_router.include_router(
     tags=["WhatsApp"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    whatsapp_router,
+    tags=["WhatsApp"],
+    include_in_schema=False,
+    dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
     email_admin_router,

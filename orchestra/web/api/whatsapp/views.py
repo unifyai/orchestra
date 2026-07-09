@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -20,8 +20,10 @@ from orchestra.db.models.orchestra_models import (
     CommunicationCallSession,
     OrganizationMember,
 )
+from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 
 admin_router = APIRouter()
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
@@ -674,6 +676,144 @@ def clear_pending_call_intent(
     session: Session = Depends(get_db_session),
 ):
     dao = SharedPoolDAO(session)
+    cleared = dao.clear_pending_whatsapp_call_context(pool_number, contact_number)
+    if not cleared:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No route found for this pool/contact pair.",
+        )
+    session.commit()
+    return {"cleared": True}
+
+
+# ---------------------------------------------------------------------------
+# Ownership-scoped pending-call-intent endpoints (assistant runtime)
+# ---------------------------------------------------------------------------
+
+
+def _require_route_owned_by_assistant(
+    dao: SharedPoolDAO,
+    *,
+    agent_id: int,
+    pool_number: str,
+    contact_number: str,
+) -> None:
+    """Reject access when the pool/contact route belongs to another assistant."""
+    route_assistant_id = dao.get_route_assistant_id(pool_number, contact_number)
+    if route_assistant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No route found for this pool/contact pair.",
+        )
+    if route_assistant_id != agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Route does not belong to this assistant.",
+        )
+
+
+@router.post(
+    "/assistant/{agent_id}/whatsapp/pending-call-intent",
+    include_in_schema=False,
+)
+def store_pending_call_intent_for_assistant(
+    agent_id: int,
+    body: PendingWhatsAppCallIntentRequest,
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> PendingWhatsAppCallIntentResponse:
+    """Ownership-scoped equivalent of the admin pending-call-intent store."""
+    require_owned_assistant(request_fastapi, agent_id, session, write=True)
+    dao = SharedPoolDAO(session)
+
+    # Reject before mutating when the route already belongs to another
+    # assistant; the universal-pool path below may lazily create the route.
+    existing_owner = dao.get_route_assistant_id(body.pool_number, body.contact_number)
+    if existing_owner is not None and existing_owner != agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Route does not belong to this assistant.",
+        )
+
+    route = dao.set_pending_whatsapp_call_context(
+        body.pool_number,
+        body.contact_number,
+        body.context,
+    )
+    if route is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No route found for this pool/contact pair.",
+        )
+    if route.assistant_id != agent_id:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Route does not belong to this assistant.",
+        )
+    session.commit()
+    return PendingWhatsAppCallIntentResponse(
+        pool_number=body.pool_number,
+        contact_number=body.contact_number,
+        context=body.context,
+        created_at=_dt(route.pending_whatsapp_call_context_at),
+    )
+
+
+@router.get(
+    "/assistant/{agent_id}/whatsapp/pending-call-intent",
+    include_in_schema=False,
+)
+def get_pending_call_intent_for_assistant(
+    agent_id: int,
+    request_fastapi: Request,
+    pool_number: str = Query(..., description="Pool number (E.164)."),
+    contact_number: str = Query(..., description="Contact number (E.164)."),
+    session: Session = Depends(get_db_session),
+) -> PendingWhatsAppCallIntentResponse:
+    """Ownership-scoped equivalent of the admin pending-call-intent read."""
+    require_owned_assistant(request_fastapi, agent_id, session)
+    dao = SharedPoolDAO(session)
+    _require_route_owned_by_assistant(
+        dao,
+        agent_id=agent_id,
+        pool_number=pool_number,
+        contact_number=contact_number,
+    )
+    intent = dao.get_pending_whatsapp_call_context(pool_number, contact_number)
+    if intent is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No pending WhatsApp call intent for this pool/contact pair.",
+        )
+    return PendingWhatsAppCallIntentResponse(
+        pool_number=intent["pool_number"],
+        contact_number=intent["contact_number"],
+        context=intent["context"],
+        created_at=_dt(intent["created_at"]),
+    )
+
+
+@router.delete(
+    "/assistant/{agent_id}/whatsapp/pending-call-intent",
+    include_in_schema=False,
+)
+def clear_pending_call_intent_for_assistant(
+    agent_id: int,
+    request_fastapi: Request,
+    pool_number: str = Query(..., description="Pool number (E.164)."),
+    contact_number: str = Query(..., description="Contact number (E.164)."),
+    session: Session = Depends(get_db_session),
+):
+    """Ownership-scoped equivalent of the admin pending-call-intent clear."""
+    require_owned_assistant(request_fastapi, agent_id, session, write=True)
+    dao = SharedPoolDAO(session)
+    _require_route_owned_by_assistant(
+        dao,
+        agent_id=agent_id,
+        pool_number=pool_number,
+        contact_number=contact_number,
+    )
     cleared = dao.clear_pending_whatsapp_call_context(pool_number, contact_number)
     if not cleared:
         raise HTTPException(

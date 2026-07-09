@@ -4,12 +4,14 @@ import os
 
 from fastapi import Depends, File, Form, HTTPException, Path, UploadFile, status
 from fastapi.routing import APIRouter
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from orchestra.db.dao.api_message_dao import ApiMessageDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import ApiMessage
 from orchestra.services.bucket_service import create_bucket_service
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.messages.schema import (
@@ -17,6 +19,7 @@ from orchestra.web.api.messages.schema import (
     MessageSend,
     MessageStatus,
 )
+from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 from orchestra.web.api.utils.gcp import parse_gcs_url
 from orchestra.web.api.utils.http_client import get_async_client
 
@@ -310,6 +313,58 @@ async def complete_message(
         else None
     )
 
+    api_message_dao = ApiMessageDAO(session)
+    api_message = api_message_dao.complete(
+        message_id=message_id,
+        response=body.response,
+        response_tags=body.tags or None,
+        response_attachments=attachments_dicts,
+    )
+    if not api_message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found.",
+        )
+
+    return InfoResponse(info=_to_status(api_message))
+
+
+@router.put(
+    "/messages/{message_id}/complete",
+    status_code=status.HTTP_200_OK,
+    response_model=InfoResponse[MessageStatus],
+    tags=["Messages"],
+    summary="Mark a message as completed (assistant-scoped)",
+    description=(
+        "Assistant-scoped equivalent of the admin complete endpoint. The caller "
+        "authenticates with the assistant's own API key and may only complete "
+        "messages addressed to an assistant it owns."
+    ),
+)
+async def complete_message_as_assistant(
+    message_id: str,
+    body: MessageComplete,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[MessageStatus]:
+    # Ownership is by the message's target assistant, not the message sender:
+    # a programmatic message may be sent by a different user than the
+    # assistant's owner, so we scope on assistant_id.
+    existing = session.execute(
+        select(ApiMessage).where(ApiMessage.id == message_id),
+    ).scalar_one_or_none()
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found.",
+        )
+    require_owned_assistant(request, existing.assistant_id, session, write=True)
+
+    attachments_dicts = (
+        [att.model_dump(exclude_none=True) for att in body.attachments]
+        if body.attachments
+        else None
+    )
     api_message_dao = ApiMessageDAO(session)
     api_message = api_message_dao.complete(
         message_id=message_id,
