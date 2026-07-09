@@ -91,6 +91,91 @@ EXPIRED_STATUSES = {"expired", "revoked", "error"}
 logger = logging.getLogger(__name__)
 
 
+def _integration_onboarding_baseline(
+    session: Session,
+    *,
+    assistant_id: int | None,
+    connection_id: str | None = None,
+) -> list[str] | None:
+    """Snapshot onboarding progress before a connection mutation.
+
+    Best-effort: lock timeouts / DB errors must not fail connect/disconnect.
+    Rolls the session back on failure so the caller can still persist the
+    connection change on a clean transaction.
+    """
+    from orchestra.services.coordinator_service import (
+        onboarding_baseline_for_integration_connect,
+    )
+
+    try:
+        return onboarding_baseline_for_integration_connect(
+            session,
+            assistant_id=assistant_id,
+        )
+    except Exception:
+        logger.exception(
+            "onboarding_baseline_failed connection_id=%s assistant_id=%s",
+            connection_id,
+            assistant_id,
+        )
+        session.rollback()
+        return None
+
+
+def _notify_integration_onboarding_connected(
+    session: Session,
+    *,
+    assistant_id: int | None,
+    canonical_app_slug: str,
+    baseline_completed_step_ids: list[str] | None,
+    connection_id: str | None = None,
+) -> None:
+    from orchestra.services.coordinator_service import (
+        notify_coordinator_onboarding_after_integration_connected,
+    )
+
+    try:
+        notify_coordinator_onboarding_after_integration_connected(
+            session,
+            assistant_id=assistant_id,
+            canonical_app_slug=canonical_app_slug,
+            baseline_completed_step_ids=baseline_completed_step_ids,
+        )
+    except Exception:
+        logger.exception(
+            "onboarding_notify_connected_failed connection_id=%s assistant_id=%s",
+            connection_id,
+            assistant_id,
+        )
+
+
+def _notify_integration_onboarding_disconnected(
+    session: Session,
+    *,
+    assistant_id: int | None,
+    canonical_app_slug: str,
+    baseline_completed_step_ids: list[str] | None,
+    connection_id: str | None = None,
+) -> None:
+    from orchestra.services.coordinator_service import (
+        notify_coordinator_onboarding_after_integration_disconnected,
+    )
+
+    try:
+        notify_coordinator_onboarding_after_integration_disconnected(
+            session,
+            assistant_id=assistant_id,
+            canonical_app_slug=canonical_app_slug,
+            baseline_completed_step_ids=baseline_completed_step_ids,
+        )
+    except Exception:
+        logger.exception(
+            "onboarding_notify_disconnected_failed connection_id=%s assistant_id=%s",
+            connection_id,
+            assistant_id,
+        )
+
+
 class ProviderConnectError(Exception):
     """A connect attempt failed for a reason worth surfacing to the caller.
 
@@ -1486,13 +1571,8 @@ def start_connection(
     credential_storage = (
         "secret_manager" if chosen_auth_mode == "api_key" else "provider_vault"
     )
-    from orchestra.services.coordinator_service import (
-        notify_coordinator_onboarding_after_integration_connected,
-        onboarding_baseline_for_integration_connect,
-    )
-
     baseline_completed = (
-        onboarding_baseline_for_integration_connect(
+        _integration_onboarding_baseline(
             session,
             assistant_id=owner.assistant_id,
         )
@@ -1507,7 +1587,15 @@ def start_connection(
     ):
         from orchestra.db.models.orchestra_models import Assistant
 
-        coordinator = session.get(Assistant, owner.assistant_id)
+        try:
+            coordinator = session.get(Assistant, owner.assistant_id)
+        except Exception:
+            logger.exception(
+                "assistant_user_id_lookup_failed assistant_id=%s",
+                owner.assistant_id,
+            )
+            session.rollback()
+            coordinator = None
         if coordinator is not None:
             effective_user_id = coordinator.user_id
     connection = dao.create_connection(
@@ -1554,11 +1642,12 @@ def start_connection(
             connection.assistant_id,
             connection.canonical_app_slug,
         )
-        notify_coordinator_onboarding_after_integration_connected(
+        _notify_integration_onboarding_connected(
             session,
             assistant_id=connection.assistant_id,
             canonical_app_slug=connection.canonical_app_slug,
             baseline_completed_step_ids=baseline_completed,
+            connection_id=connection.connection_id,
         )
     return (
         _connection_to_response(connection),
@@ -1579,23 +1668,24 @@ def complete_connection(
     status: str,
     reconnect_reason: Optional[str] = None,
 ) -> IntegrationConnectionResponse:
-    from orchestra.services.coordinator_service import (
-        notify_coordinator_onboarding_after_integration_connected,
-        onboarding_baseline_for_integration_connect,
-    )
-
     dao = IntegrationProviderDAO(session)
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
     baseline_completed = (
-        onboarding_baseline_for_integration_connect(
+        _integration_onboarding_baseline(
             session,
             assistant_id=conn.assistant_id,
+            connection_id=connection_id,
         )
         if status == "connected"
         else None
     )
+    # Re-load after a possible baseline rollback so the update runs on a
+    # clean session (baseline failures must not strand OAuth completion).
+    conn = dao.get_connection(connection_id)
+    if not conn:
+        raise ValueError(f"Unknown connection: {connection_id}")
     updates = {
         "provider_connection_id": provider_connection_id
         or conn.provider_connection_id
@@ -1622,12 +1712,14 @@ def complete_connection(
         status,
         conn.canonical_app_slug,
     )
-    notify_coordinator_onboarding_after_integration_connected(
-        session,
-        assistant_id=conn.assistant_id,
-        canonical_app_slug=conn.canonical_app_slug,
-        baseline_completed_step_ids=baseline_completed,
-    )
+    if status == "connected":
+        _notify_integration_onboarding_connected(
+            session,
+            assistant_id=conn.assistant_id,
+            canonical_app_slug=conn.canonical_app_slug,
+            baseline_completed_step_ids=baseline_completed,
+            connection_id=conn.connection_id,
+        )
     return response
 
 
@@ -1671,19 +1763,18 @@ def disconnect_connection(
     session: Session,
     connection_id: str,
 ) -> IntegrationConnectionResponse:
-    from orchestra.services.coordinator_service import (
-        notify_coordinator_onboarding_after_integration_disconnected,
-        onboarding_baseline_for_integration_connect,
-    )
-
     dao = IntegrationProviderDAO(session)
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
-    baseline_completed = onboarding_baseline_for_integration_connect(
+    baseline_completed = _integration_onboarding_baseline(
         session,
         assistant_id=conn.assistant_id,
+        connection_id=connection_id,
     )
+    conn = dao.get_connection(connection_id)
+    if not conn:
+        raise ValueError(f"Unknown connection: {connection_id}")
     dao.update_connection_fields(
         conn,
         status="disconnected",
@@ -1697,11 +1788,12 @@ def disconnect_connection(
         conn.assistant_id,
         conn.canonical_app_slug,
     )
-    notify_coordinator_onboarding_after_integration_disconnected(
+    _notify_integration_onboarding_disconnected(
         session,
         assistant_id=conn.assistant_id,
         canonical_app_slug=conn.canonical_app_slug,
         baseline_completed_step_ids=baseline_completed,
+        connection_id=conn.connection_id,
     )
     return response
 
