@@ -2343,30 +2343,25 @@ def _has_inbound_ms_teams_message(
     )
 
 
-def _has_ms_teams_reference_reply(
+def _has_ms_teams_twin_reply(
     scope: "_OnboardingProbeScope",
     *,
     reset_after: datetime | None = None,
 ) -> bool:
-    """The user has guessed Twin's Teams reference clue.
+    """Twin has replied to the user inside the Unify Teams bot.
 
-    With the reply-first Teams flow there is no proactive trigger outbound to
-    anchor the reply against, so the guess is derived from a user inbound that
-    lands strictly after Twin's first Teams reply (the clue).
+    The bot is reply-only, so an assistant-authored Teams outbound can only
+    exist once the user's first inbound has opened the channel. The
+    ``ms-teams-message`` step therefore completes as soon as that reply lands
+    (self -> boss); there is no separate guess turn to wait for.
     """
-    mediums = (onboarding_graph.MS_TEAMS_BOT_MEDIUM,)
-    clue_created_at = _assistant_transcript_created_at(
-        scope,
-        mediums=mediums,
-        reset_after=reset_after,
-    )
-    if clue_created_at is None:
-        return False
-    return _has_user_transcript_message(
-        scope,
-        mediums=mediums,
-        after=clue_created_at,
-        reset_after=reset_after,
+    return (
+        _assistant_transcript_created_at(
+            scope,
+            mediums=(onboarding_graph.MS_TEAMS_BOT_MEDIUM,),
+            reset_after=reset_after,
+        )
+        is not None
     )
 
 
@@ -2397,7 +2392,7 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
         ONBOARDING_STEP_MS_TEAMS_CONNECT: _has_ms_teams_bot_install,
         ONBOARDING_STEP_MS_TEAMS_REFERENCE: _has_inbound_ms_teams_message,
-        ONBOARDING_STEP_MS_TEAMS_MESSAGE: _has_ms_teams_reference_reply,
+        ONBOARDING_STEP_MS_TEAMS_MESSAGE: _has_ms_teams_twin_reply,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_connected_integration,

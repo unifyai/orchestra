@@ -1094,7 +1094,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     OnboardingStep(
         id="ms-teams-message",
-        title="Guess T-W1N's Microsoft Teams clue",
+        title="Wait for T-W1N's reply in Teams",
         phase=PHASE_COMMUNICATION,
         kind="reply",
         depends_on={"ms-teams-reference": COMPLETED},
@@ -1102,10 +1102,10 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="ms_teams",
         nudge_chat=(
-            "Once they've said hello on Teams, reply with a sci-fi reference "
-            "clue there, then prompt them to guess it in Teams."
+            "Once they've said hello on Teams, reply to them there so they "
+            "see Twin answer inside Teams. This step completes on that reply."
         ),
-        nudge_voice="guessing the Microsoft Teams clue",
+        nudge_voice="replying to them in Microsoft Teams",
     ),
     OnboardingStep(
         id="discord-id",
@@ -1623,7 +1623,7 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "~1 min",
     ),
     "ms-teams-message": StepPresentation(
-        "T-W1N replies with a reference clue in Microsoft Teams — guess it " "there.",
+        "T-W1N replies to your hello inside Microsoft Teams.",
         "~1 min",
     ),
     "discord-id": StepPresentation(
@@ -1786,9 +1786,11 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "with an api or unify message stand-in."
     ),
     "ms-teams-message": (
-        "After the user's first Teams message I reply there with a sci-fi "
-        "reference clue and they guess it in Teams. This step completes on "
-        "their guess."
+        "The Unify Teams bot is reply-only, so once the user's first Teams "
+        "message has opened the channel I reply to them inside Teams. This "
+        "step completes on that reply landing on Teams; never claim to have "
+        "replied before the reply actually goes out, and never fake it with "
+        "an api or unify message stand-in."
     ),
     "discord-id": (
         "Clicking the 'Add your Discord ID' row opens Account -> Contact info. "
