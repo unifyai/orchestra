@@ -1359,6 +1359,8 @@ def set_coordinator_state(
                 user.whatsapp_number = None
             if ONBOARDING_STEP_PHONE_NUMBER in reset_step_ids:
                 user.phone_number = None
+            if ONBOARDING_STEP_DISCORD_ID in reset_step_ids:
+                user.discord_id = None
     if onboarding_reset_at_updates:
         valid_step_ids = {step.id for step in onboarding_graph.ONBOARDING_GRAPH}
         for step_id, timestamp in onboarding_reset_at_updates.items():
@@ -1768,6 +1770,8 @@ ONBOARDING_STEP_PHONE_CALL = "phone-call"
 ONBOARDING_STEP_SLACK_CONNECT = "slack-connect"
 ONBOARDING_STEP_SLACK_MESSAGE = "slack-message"
 ONBOARDING_STEP_MS_TEAMS_CONNECT = "ms-teams-connect"
+ONBOARDING_STEP_MS_TEAMS_REFERENCE = "ms-teams-reference"
+ONBOARDING_STEP_MS_TEAMS_MESSAGE = "ms-teams-message"
 ONBOARDING_STEP_DISCORD_ID = "discord-id"
 ONBOARDING_STEP_DISCORD_CONNECT = "discord-connect"
 ONBOARDING_STEP_DISCORD_MESSAGE = "discord-message"
@@ -1786,6 +1790,9 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_PHONE_CALL,
     ONBOARDING_STEP_SLACK_CONNECT,
     ONBOARDING_STEP_SLACK_MESSAGE,
+    ONBOARDING_STEP_MS_TEAMS_CONNECT,
+    ONBOARDING_STEP_MS_TEAMS_REFERENCE,
+    ONBOARDING_STEP_MS_TEAMS_MESSAGE,
     ONBOARDING_STEP_DISCORD_ID,
     ONBOARDING_STEP_DISCORD_MESSAGE,
     ONBOARDING_STEP_WORKSPACE,
@@ -2317,6 +2324,52 @@ def _has_reply_to_trigger(
     )
 
 
+def _has_inbound_ms_teams_message(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """The user has sent Twin a message on the Unify Teams bot.
+
+    The bot is reply-only (it cannot open a conversation), so the reframed
+    ``ms-teams-reference`` step is user-initiated: it completes as soon as the
+    user's first inbound Teams message lands, which is also what seeds the
+    conversation reference Twin needs to reply.
+    """
+    return _has_user_transcript_message(
+        scope,
+        mediums=(onboarding_graph.MS_TEAMS_BOT_MEDIUM,),
+        reset_after=reset_after,
+    )
+
+
+def _has_ms_teams_reference_reply(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """The user has guessed Twin's Teams reference clue.
+
+    With the reply-first Teams flow there is no proactive trigger outbound to
+    anchor the reply against, so the guess is derived from a user inbound that
+    lands strictly after Twin's first Teams reply (the clue).
+    """
+    mediums = (onboarding_graph.MS_TEAMS_BOT_MEDIUM,)
+    clue_created_at = _assistant_transcript_created_at(
+        scope,
+        mediums=mediums,
+        reset_after=reset_after,
+    )
+    if clue_created_at is None:
+        return False
+    return _has_user_transcript_message(
+        scope,
+        mediums=mediums,
+        after=clue_created_at,
+        reset_after=reset_after,
+    )
+
+
 def derive_onboarding_progress(
     session: Session,
     *,
@@ -2343,6 +2396,8 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_PHONE_NUMBER: _has_user_phone_number,
         ONBOARDING_STEP_SLACK_CONNECT: _has_slack_install,
         ONBOARDING_STEP_MS_TEAMS_CONNECT: _has_ms_teams_bot_install,
+        ONBOARDING_STEP_MS_TEAMS_REFERENCE: _has_inbound_ms_teams_message,
+        ONBOARDING_STEP_MS_TEAMS_MESSAGE: _has_ms_teams_reference_reply,
         ONBOARDING_STEP_DISCORD_ID: _has_user_discord_id,
         ONBOARDING_STEP_WORKSPACE: _has_workspace_email,
         ONBOARDING_STEP_APPS: _has_connected_integration,

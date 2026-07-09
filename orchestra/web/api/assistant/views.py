@@ -80,6 +80,10 @@ from orchestra.services.assistant_cleanup_service import (
     process_assistant_cleanup_tasks,
     purge_assistant_owner,
 )
+from orchestra.services.assistant_team_ownership_service import (
+    TeamOwnershipTransferError,
+    transfer_assistant_to_team_owned,
+)
 from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.contact_membership_service import (
@@ -154,6 +158,8 @@ from orchestra.web.api.assistant.schema import (
     AssistantTransferResponse,
     AssistantTransferToOrgRequest,
     AssistantTransferToPersonalRequest,
+    AssistantTransferToTeamOwnedRequest,
+    AssistantTransferToTeamOwnedResponse,
     AssistantUpdate,
     AssistantUserDesktopLink,
     AssistantVideoUploadResponse,
@@ -4738,6 +4744,111 @@ async def transfer_assistant_to_org(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to transfer assistant",
         )
+
+
+@router.post(
+    "/assistant/{assistant_id}/transfer/to-team-owned",
+    response_model=InfoResponse[AssistantTransferToTeamOwnedResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Convert assistant to team-owned scope",
+    description=(
+        "Moves an organizational assistant's memory from its personal "
+        "{user}/{agent} root to Teams/{team}/... and records the team as "
+        "the product-level owner."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Assistant converted successfully"},
+        403: {"description": "Permission denied"},
+        404: {"description": "Assistant or team not found"},
+        400: {"description": "Invalid transfer request"},
+        409: {"description": "Assistant already team-owned or blocked"},
+    },
+)
+async def transfer_assistant_to_team_owned_endpoint(
+    assistant_id: int,
+    transfer_request: AssistantTransferToTeamOwnedRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantTransferToTeamOwnedResponse]:
+    """Convert an org assistant to team-owned memory scope."""
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    if organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "owner_team_id conversion requires an organization API key; "
+                "team-owned assistants live inside an organization."
+            ),
+        )
+
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "assistant:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update assistants in this organization.",
+        )
+
+    assistant_dao = AssistantDAO(session)
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found in this organization.",
+        )
+
+    try:
+        result = await transfer_assistant_to_team_owned(
+            session,
+            assistant_id=assistant_id,
+            owner_team_id=transfer_request.owner_team_id,
+            actor_user_id=user_id,
+        )
+    except TeamOwnershipTransferError as exc:
+        session.rollback()
+        detail = str(exc)
+        status_code = status.HTTP_404_NOT_FOUND
+        if detail in {
+            "assistant_already_team_owned",
+            "coordinator_cannot_be_team_owned",
+        }:
+            status_code = status.HTTP_409_CONFLICT
+        elif detail in {
+            "assistant_not_in_organization",
+            "team_not_in_organization",
+        }:
+            status_code = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        session.rollback()
+        logging.error(
+            f"Failed to convert assistant {assistant_id} to team-owned: {exc}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to convert assistant to team-owned scope",
+        ) from exc
+
+    return InfoResponse(
+        info=AssistantTransferToTeamOwnedResponse(
+            message="Assistant converted to team-owned scope successfully.",
+            agent_id=int(result["agent_id"]),
+            owner_team_id=int(result["owner_team_id"]),
+            contexts_renamed=int(result["contexts_renamed"]),
+            memory_root=str(result["memory_root"]),
+        ),
+    )
 
 
 @router.post(

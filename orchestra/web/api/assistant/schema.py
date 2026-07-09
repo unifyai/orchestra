@@ -2254,6 +2254,36 @@ class AssistantTransferToOrgRequest(BaseModel):
         }
 
 
+class AssistantTransferToTeamOwnedRequest(BaseModel):
+    """Schema for converting an org assistant to team-owned scope."""
+
+    owner_team_id: int = Field(
+        ...,
+        description=(
+            "Owning team in the assistant's organization. The assistant's "
+            "memory moves from its personal root to Teams/{team_id}/... and "
+            "every team member can work with it."
+        ),
+        example=11,
+    )
+
+
+class AssistantTransferToTeamOwnedResponse(BaseModel):
+    """Response schema for team-owned conversion."""
+
+    message: str = Field(..., description="Success message.")
+    agent_id: int = Field(..., description="Converted assistant id.")
+    owner_team_id: int = Field(..., description="Owning team id.")
+    contexts_renamed: int = Field(
+        ...,
+        description="Number of contexts moved under the team root.",
+    )
+    memory_root: str = Field(
+        ...,
+        description="New team memory root prefix.",
+    )
+
+
 class AssistantTransferToPersonalRequest(BaseModel):
     """
     Schema for transferring an assistant from organizational to personal workspace.
