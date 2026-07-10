@@ -1797,8 +1797,22 @@ SKIPPABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
+# Phase-level skip is reserved for optional capability areas the user may
+# not have (workspace OAuth, app integrations, computer-use opt-in). Always-
+# doable phases (Tasks, Learning, …) and Communication (skipped per channel
+# via step cascade) are intentionally excluded.
 SKIPPABLE_ONBOARDING_PHASES = (
-    *(phase.label for phase in onboarding_graph.ONBOARDING_PHASES),
+    onboarding_graph.PHASE_WORKSPACE,
+    onboarding_graph.PHASE_INTEGRATIONS,
+    onboarding_graph.PHASE_MY_COMPUTER,
+    onboarding_graph.PHASE_YOUR_COMPUTER,
+)
+# Canonical step order for normalizing any persisted step-id list (skipped,
+# manually completed, …). Broader than SKIPPABLE_ONBOARDING_STEPS so
+# non-skippable beats still round-trip correctly.
+_ONBOARDING_STEP_ID_ORDER = (
+    *(step.id for step in onboarding_graph.ONBOARDING_GRAPH),
+    ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 
 COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
@@ -1810,7 +1824,7 @@ def normalize_onboarding_step_ids(value: Any) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     seen = {str(item) for item in value if isinstance(item, str)}
-    return [step_id for step_id in SKIPPABLE_ONBOARDING_STEPS if step_id in seen]
+    return [step_id for step_id in _ONBOARDING_STEP_ID_ORDER if step_id in seen]
 
 
 def normalize_onboarding_phase_ids(value: Any) -> list[str]:

@@ -1302,7 +1302,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         phase=PHASE_TASKS,
         kind="schedule",
         depends_on={},
-        can_skip=True,
+        can_skip=False,
         derivable=True,
         nudge_chat=(
             "Have them click the 'Create a scheduled task' row in the "
@@ -1322,7 +1322,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         phase=PHASE_TASKS,
         kind="schedule",
         depends_on={"create-scheduled-task": ADDRESSED},
-        can_skip=True,
+        can_skip=False,
         derivable=True,
         nudge_chat=(
             "Have them click the 'Create a triggerable task' row in the "
@@ -1342,7 +1342,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         phase=PHASE_LEARNING,
         kind="schedule",
         depends_on={},
-        can_skip=True,
+        can_skip=False,
         derivable=False,
         nudge_chat=(
             "Have them click the 'Teach me by correcting me' row in the "
