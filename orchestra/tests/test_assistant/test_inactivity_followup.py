@@ -715,12 +715,15 @@ class TestEmailTemplates:
         body = build_coordinator_inactivity_followup_email(owner_first_name="Olivia")
         normalized = re.sub(r"\s+", " ", body.lower())
 
-        assert "haven't heard from you" in FOLLOWUP_SUBJECT.lower()
+        assert FOLLOWUP_SUBJECT == "All good?"
         assert "haven't heard from you in a while" in normalized
+        assert "all good on your end" in normalized
         assert "anything i can help with" in normalized
-        assert "hi olivia," in normalized
-        assert "https://console.unify.ai/" in body
-        assert "— t-w1n" in normalized
+        assert "just reply to this email" in normalized
+        assert "helloooo olivia," in normalized
+        assert "friendly neighbourhood t-w1n" in normalized
+        assert "https://console.unify.ai/" not in body
+        assert "automated message" not in normalized
         for banned in ("delet", "suspend", "billing", "terminat", "account will"):
             assert banned not in normalized
 
@@ -731,7 +734,7 @@ class TestEmailTemplates:
 
         body = build_coordinator_inactivity_followup_email(owner_first_name=None)
         normalized = re.sub(r"\s+", " ", body.lower())
-        assert "hi," in normalized
+        assert "helloooo," in normalized
 
 
 class TestWelcomeSendHelper:

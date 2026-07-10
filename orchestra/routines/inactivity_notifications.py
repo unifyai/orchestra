@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 WELCOME_SUBJECT = "Welcome to Unify — I'm T-W1N, your coordinator"
-FOLLOWUP_SUBJECT = "Haven't heard from you in a while — anything I can help with?"
+FOLLOWUP_SUBJECT = "All good?"
 
 _CONSOLE_URL = "https://console.unify.ai/"
 _FOOTER = (
@@ -42,6 +42,12 @@ def _salutation(owner_first_name: Optional[str]) -> str:
     if owner_first_name and owner_first_name.strip():
         return f"Hi {owner_first_name.strip()},"
     return "Hi,"
+
+
+def _followup_salutation(owner_first_name: Optional[str]) -> str:
+    if owner_first_name and owner_first_name.strip():
+        return f"Helloooo {owner_first_name.strip()},"
+    return "Helloooo,"
 
 
 # ---------------------------------------------------------------------------
@@ -92,33 +98,27 @@ def build_coordinator_inactivity_followup_email(
 ) -> str:
     """Build the HTML body for a soft inactivity re-engagement email.
 
-    First-person T-W1N check-in. No account deletion, suspension, or
-    billing language — contact lifecycle stays with the billing
-    suspension routine.
+    First-person T-W1N check-in that invites a reply (inbound email
+    wakes the coordinator). No console link, and no account deletion,
+    suspension, or billing language — contact lifecycle stays with the
+    billing suspension routine.
     """
-    salutation = _salutation(owner_first_name)
+    salutation = _followup_salutation(owner_first_name)
     return f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <p>{salutation}</p>
 
-        <p>
-            Haven't heard from you in a while — anything I can help with?
-            I'm T-W1N, your personal coordinator on Unify, and I'm ready
-            whenever you are.
-        </p>
+        <p>Haven't heard from you in a while — all good on your end?</p>
+
+        <p>Anything I can help with?</p>
 
         <p>
-            Hop back into the console and tell me what's on your plate:
+            Just reply to this email if there's anything on your plate
+            for me to pick up!
         </p>
 
-        <p><a href="{_CONSOLE_URL}">{_CONSOLE_URL}</a></p>
-
-        <p>
-            Looking forward to catching up,<br/>— T-W1N
-        </p>
-
-        {_FOOTER}
+        <p>Your friendly neighbourhood T-W1N</p>
     </body>
     </html>
     """
