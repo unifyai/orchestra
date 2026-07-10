@@ -422,6 +422,53 @@ MY_COMPUTER_FRAMING = (
     "Your Computer phase). One beat, one concept."
 )
 
+# The Their Computer phase (phase id ``your-computer``, label "Their Computer")
+# reaches into the *user's own* machine over the desktop link their app opened:
+# T-W1N lists real files on their Desktop, names a few, pulls one small safe
+# file, and sends it back as a chat attachment. Read-only SFTP over the tunnel -
+# no GUI input, no boot, no ring. One constant so the phase framing and the beat
+# event tell the same story.
+YOUR_COMPUTER_FRAMING = (
+    "The Their Computer phase proves T-W1N can reach into the user's OWN "
+    "machine over the secure link their desktop app opened - it reads real "
+    "files on their Desktop, names a few, and sends one back to them here. "
+    "Rule 1 - Channel-agnostic, no ring, no boot: the click works from chat or "
+    "mid-call. On a call, narrate the beats via guide_voice_agent; off-call, "
+    "send short narrated chat beats. Either way the attachment goes to chat as "
+    "the durable proof. Never call start_unify_meet from this beat - both modes "
+    "carry the complete script (workspace-demo pattern, not My Computer's call "
+    "anchor). "
+    "Rule 2 - Narrated persist-act, two substeps. Substep 1: call "
+    "primitives.computer.user_desktop.list_linked() to verify the link and "
+    'filesys_available, then files.list("Desktop") (fall back to the home root '
+    "if Desktop is empty or absent - Windows / localized homes) and respond "
+    "with the listing; the CM then sends the reveal line naming 2-3 real files. "
+    "Substep 2: the twin itself picks one small, safe file (prefer a document "
+    "or image; never anything huge) and the actor sends the attachment from "
+    "inside the act - execute_code -> primitives.comms.send_unify_message("
+    "content=<one short caption>, attachment_filepath=<the staged pull path>) - "
+    "then responds confirming delivery and the exact path (pulled files stage "
+    "under ~/Unity/Remote/<user_id>/...). "
+    "Rule 3 - Twin picks the file, offers a follow-up. After delivery, offer "
+    'once: "want me to grab a specific file instead?" - optional, never gates '
+    "completion. "
+    "Rule 4 - Explicit completion, never batched: call "
+    "set_onboarding_task_state('your-computer-demo', True) in its own turn, only "
+    "after the actor confirms delivery. Delivery, the completion call, and "
+    "stopping the act are three separate moments. "
+    "Rule 5 - Honest failure: if filesys_available is false (device offline / "
+    "tunnel down), access was revoked mid-demo, or the pull/send fails, say so "
+    "plainly, point at the fix (open the app on their machine / re-enable the "
+    "filesystem toggle), and do NOT mark the step done. "
+    "Rule 6 - Tutorial voice: plain language, no tool names; land the concept - "
+    "\"this is your actual Desktop I'm reading, live, over the secure link your "
+    'desktop app opened". '
+    "Rule 7 - Scope fence: no GUI input on the user's machine, no macOS unlock "
+    "flow, no execute_code on the user-desktop surface, no files.push. "
+    "Read-only fetch, one beat, one concept. My Computer's managed-VM demo is "
+    "the separate my-computer phase."
+)
+
 
 @dataclass(frozen=True)
 class OnboardingPhase:
@@ -491,6 +538,7 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
         label=PHASE_YOUR_COMPUTER,
         title="Their Computer",
         description="Let me help on your computer.",
+        framing=YOUR_COMPUTER_FRAMING,
     ),
     OnboardingPhase(
         id="my-computer",
@@ -828,6 +876,63 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "phase": PHASE_MY_COMPUTER,
             "phase_id": "my-computer",
             "phase_framing": MY_COMPUTER_FRAMING,
+            "interaction": interaction,
+        },
+    )
+
+
+def _your_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks the Their Computer beat row.
+
+    The click starts the filesystem fetch-and-return demo - T-W1N lists the
+    user's own Desktop over the existing SFTP tunnel, names real files it can
+    see, picks one small safe file itself, and the actor sends it back as a chat
+    attachment - scripted by ``YOUR_COMPUTER_FRAMING``. It works from chat or
+    mid-call with no ring and no boot (workspace-demo pattern, not My Computer's
+    call anchor); there is no freeform mode and there are no chips. Unlike the
+    reference-quiz triggers there is no outbound tagging: nothing arms
+    ``set_pending_onboarding_outbound`` for this beat.
+    """
+    interaction = {
+        "type": "your_computer_beat",
+        "trigger_step_id": step_id,
+        "instructions": YOUR_COMPUTER_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}'. Reach into their OWN computer "
+            "over the secure link and show it - no ring, no boot; the click "
+            "works from chat or mid-call. On a call, narrate each beat via "
+            "guide_voice_agent; off-call, send short narrated chat beats. Either "
+            "way the attachment lands in chat as the durable proof; never call "
+            "start_unify_meet from this beat. Run a narrated persist-act in two "
+            "substeps: (1) list_linked() to verify the link and filesys_available, "
+            'then files.list("Desktop") (fall back to the home root if Desktop '
+            "is empty or absent), respond with the listing, then send the reveal "
+            "line naming 2-3 real files; (2) pick one small safe file yourself "
+            "(document or image, never huge), and have the actor send it from "
+            "inside the act via execute_code -> send_unify_message("
+            "attachment_filepath=<staged pull path>), then confirm delivery and "
+            "the exact path. After delivery, offer once to grab a specific file "
+            "instead - optional, never gates completion. Then, in its own turn, "
+            "mark the step done with set_onboarding_task_state('your-computer-demo', "
+            "True); delivery, the completion call, and stopping the act are three "
+            "separate moments. On failure (device offline, filesys_available "
+            "false, revoked mid-demo, or the pull/send fails): say so, point at "
+            "the fix, do NOT mark done. Read-only fetch - no GUI input, no "
+            "unlock, no files.push. This is a poll, not a request to repeat work "
+            "already done: if the demo is already finished, treat this as "
+            "confirmation and do NOT redo it. "
+            f"Full contract: {YOUR_COMPUTER_FRAMING}"
+        ),
+        subtype="your_computer_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "framing": YOUR_COMPUTER_FRAMING,
+            "phase": PHASE_YOUR_COMPUTER,
+            "phase_id": "your-computer",
+            "phase_framing": YOUR_COMPUTER_FRAMING,
             "interaction": interaction,
         },
     )
@@ -1361,6 +1466,70 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     ),
     _coming_soon("canvas-coming-soon", PHASE_CANVAS),
     OnboardingStep(
+        id="your-computer-link",
+        title="Connect your computer",
+        phase=PHASE_YOUR_COMPUTER,
+        kind="connect",
+        depends_on={},
+        can_skip=True,
+        derivable=True,
+        nudge_chat=(
+            "Have them click the 'Connect your computer' row in the Onboarding "
+            "checklist; it opens the desktop-linker dialog so they can install "
+            "the Unify desktop app and link their computer, letting me reach it "
+            "over the secure tunnel."
+        ),
+        nudge_voice=(
+            "clicking the 'Connect your computer' row in the Onboarding checklist"
+        ),
+    ),
+    OnboardingStep(
+        id="your-computer-filesys",
+        title="Turn on filesystem access",
+        phase=PHASE_YOUR_COMPUTER,
+        kind="setup",
+        depends_on={"your-computer-link": COMPLETED},
+        can_skip=True,
+        derivable=True,
+        nudge_chat=(
+            "Have them click the 'Turn on filesystem access' row in the "
+            "Onboarding checklist; it opens the same desktop-linker dialog, where "
+            "they flip the filesystem-access toggle so I can read files from "
+            "their home folder on request."
+        ),
+        nudge_voice=(
+            "clicking the 'Turn on filesystem access' row in the Onboarding checklist"
+        ),
+    ),
+    OnboardingStep(
+        id="your-computer-demo",
+        title="Watch me fetch a file from your computer",
+        phase=PHASE_YOUR_COMPUTER,
+        kind="trigger",
+        depends_on={
+            "your-computer-link": COMPLETED,
+            "your-computer-filesys": COMPLETED,
+        },
+        can_skip=True,
+        derivable=False,
+        paired_reply=None,
+        nudge_chat=(
+            "Once their computer is linked and filesystem access is on, invite "
+            "them to click the 'Watch me fetch a file from your computer' row in "
+            "the Onboarding checklist - I look at the files on their computer, "
+            "name what I can see, and send one back to them here, fetched "
+            "straight from their machine."
+        ),
+        nudge_voice=(
+            "clicking the 'Watch me fetch a file from your computer' row in the "
+            "Onboarding checklist"
+        ),
+        event=_your_computer_beat_event(
+            "your-computer-demo",
+            "Watch me fetch a file from your computer",
+        ),
+    ),
+    OnboardingStep(
         id="my-computer-demo",
         title="Watch me work on my computer",
         phase=PHASE_MY_COMPUTER,
@@ -1384,7 +1553,6 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "Watch me work on my computer",
         ),
     ),
-    _coming_soon("your-computer-coming-soon", PHASE_YOUR_COMPUTER),
     _coming_soon("teams-coming-soon", PHASE_TEAMS),
     _coming_soon("hiring-coming-soon", PHASE_HIRING),
 )
@@ -1447,12 +1615,26 @@ DEMO_STEP_IDS: tuple[str, ...] = (
 # reply and no transcript derivation; discord-connect sits in Communication but
 # has no inbound auto-derive signal; learn-from-correction is an
 # explicitly-completed tutorial beat; my-computer-demo is completed after the
-# managed-desktop proof finishes.
+# managed-desktop proof finishes; your-computer-demo is completed after the
+# filesystem fetch-and-return proof finishes.
 MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
     *DEMO_STEP_IDS,
     "discord-connect",
     "learn-from-correction",
     "my-computer-demo",
+    "your-computer-demo",
+)
+
+# Steps whose completion comes ONLY from durable domain state and never from a
+# manual PATCH. The Their Computer link/filesys rows are driven entirely by the
+# desktop-linker dialog (the registered ``assistant_user_desktops`` row and its
+# ``filesys_sync`` toggle); Twin must never mark them done by hand, since a
+# hand-set tick would claim a link/toggle that isn't really there and stall the
+# gated demo. (The derivation probes that tick them live are wired in the
+# follow-up Their Computer derivation ticket.)
+DERIVATION_ONLY_STEP_IDS: tuple[str, ...] = (
+    "your-computer-link",
+    "your-computer-filesys",
 )
 
 # Steps whose completion Orchestra derives from durable domain state.
@@ -1715,6 +1897,21 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "want it done, then prove it on the next one.",
         "~5 min",
     ),
+    "your-computer-link": StepPresentation(
+        "Install the Unify desktop app and link your computer so T-W1N can "
+        "reach it.",
+        "~3 min",
+    ),
+    "your-computer-filesys": StepPresentation(
+        "Flip the filesystem-access toggle so T-W1N can read files from your "
+        "home folder on request.",
+        "~10s",
+    ),
+    "your-computer-demo": StepPresentation(
+        "T-W1N looks at the files on your computer, names what it can see, and "
+        "sends one back to you here — fetched straight from your machine.",
+        "~1 min",
+    ),
     "my-computer-demo": StepPresentation(
         "T-W1N drives its own computer live on a call — it saves a file from the "
         "web with Save Image As, shows it in Thunar, opens it in Ristretto, and "
@@ -1917,6 +2114,26 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "to ask me for next month's report — the replay runs only when they ask. "
         "When the replay deliverable is sent, I mark the step done explicitly — "
         "the checklist does not auto-detect the tutorial."
+    ),
+    "your-computer-link": (
+        "Clicking the 'Connect your computer' row opens the desktop-linker "
+        "dialog so the user can install the Unify desktop app and link their "
+        "computer; the row ticks automatically once that link is registered."
+    ),
+    "your-computer-filesys": (
+        "Clicking the 'Turn on filesystem access' row opens the same "
+        "desktop-linker dialog, where flipping the filesystem-access toggle lets "
+        "me read files from the user's home folder on request; the row ticks "
+        "automatically once the toggle is on."
+    ),
+    "your-computer-demo": (
+        "Clicking the 'Watch me fetch a file from your computer' row runs the "
+        "fetch now on the active channel — I list the user's Desktop over the "
+        "secure link, name a few real files, pick one small safe file, pull it, "
+        "and send it back here as a chat attachment, then mark the step done "
+        "explicitly. Nothing auto-completes; off-call it runs as narrated chat "
+        "beats, on-call I narrate by voice while the attachment still lands in "
+        "chat — there is no ring and no boot."
     ),
     "my-computer-demo": (
         "Clicking the 'Watch me work on my computer' row starts the live desktop "
@@ -2248,6 +2465,11 @@ def manual_completion_block_reason(step_id: str) -> str | None:
         return "That onboarding step is not available yet."
     if step_id in MANUAL_COMPLETION_STEP_IDS:
         return None
+    if step_id in DERIVATION_ONLY_STEP_IDS:
+        return (
+            "This step completes automatically once your computer is linked and "
+            "filesystem access is turned on - I cannot mark it done manually."
+        )
     if step.phase == PHASE_COMMUNICATION:
         return (
             "Communication checklist steps complete automatically when messages "
