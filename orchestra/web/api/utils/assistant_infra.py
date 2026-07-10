@@ -445,6 +445,23 @@ async def delete_phone_number(phone_number: str):
     Returns:
         JSON response from the phone deletion endpoint
     """
+    from orchestra.services.universal_unity_phone import is_universal_unity_phone_number
+
+    # Shared universal Coordinator numbers are used by every Coordinator at
+    # once, so releasing one during a single assistant's teardown would tear the
+    # number down platform-wide. Refuse here as an unconditional backstop for
+    # every caller; the caller still drops the assistant's own contact row.
+    if is_universal_unity_phone_number(phone_number):
+        logging.warning(
+            "Refusing to release shared universal Coordinator number %s",
+            phone_number,
+        )
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "universal_unity_shared_number",
+        }
+
     comms_url = _comms_url()
     client = get_async_client()
     response = await client.request(

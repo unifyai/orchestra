@@ -151,6 +151,19 @@ async def _deprovision_contact(contact: AssistantContact) -> None:
 
     if contact.contact_type == "phone":
         if contact.contact_value:
+            from orchestra.services.universal_unity_phone import (
+                is_shared_platform_phone_number,
+            )
+
+            if is_shared_platform_phone_number(session, contact.contact_value):
+                logger.info(
+                    "Skipping deprovision for shared universal phone %s "
+                    "(contact %d): shared Coordinator pool number, released "
+                    "only when retired platform-wide.",
+                    contact.contact_value,
+                    contact.id,
+                )
+                return
             await delete_phone_number(contact.contact_value)
             logger.info(
                 "Deprovisioned phone %s (contact %d)",

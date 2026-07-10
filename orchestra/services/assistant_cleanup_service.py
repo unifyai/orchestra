@@ -196,6 +196,7 @@ async def deprovision_assistant_contacts(
     ``AssistantContact`` rows are marked deleted in the same transaction.
     """
     from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+    from orchestra.services.universal_unity_phone import is_shared_platform_phone_number
 
     shared_pool_dao = SharedPoolDAO(session)
     errors: list[str] = []
@@ -224,6 +225,17 @@ async def deprovision_assistant_contacts(
                         logger.info(
                             "Skipping external deprovision for BYOD phone "
                             "%s on assistant %s",
+                            contact.contact_value,
+                            spec.assistant_id,
+                        )
+                    elif is_shared_platform_phone_number(
+                        session,
+                        contact.contact_value,
+                    ):
+                        logger.info(
+                            "Skipping external deprovision for shared universal "
+                            "phone %s on assistant %s (shared Coordinator pool "
+                            "number; released only when retired platform-wide)",
                             contact.contact_value,
                             spec.assistant_id,
                         )
