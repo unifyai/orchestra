@@ -1119,6 +1119,8 @@ class AssistantDAO:
         eligible. A follow-up already sent after the latest activity is
         not repeated. Coordinators whose owner has opted out
         (``inactivity_followup_opted_out``) are excluded entirely.
+        Owners without a non-empty ``User.email`` are excluded (the
+        templated email path has nowhere to send).
 
         :param followup_cutoff: Activity older than this triggers a
             follow-up.
@@ -1142,10 +1144,13 @@ class AssistantDAO:
         stmt = (
             select(Assistant)
             .join(activity_subq, activity_subq.c.user_id == Assistant.user_id)
+            .join(User, User.id == Assistant.user_id)
             .where(
                 Assistant.is_coordinator.is_(True),
                 Assistant.organization_id.is_(None),
                 Assistant.inactivity_followup_opted_out.is_(False),
+                User.email.isnot(None),
+                User.email != "",
                 activity_subq.c.last_activity.isnot(None),
                 activity_subq.c.last_activity < followup_cutoff,
                 or_(

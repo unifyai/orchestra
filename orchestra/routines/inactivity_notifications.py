@@ -1,20 +1,20 @@
-"""Email template + helper for the Coordinator welcome message.
+"""Coordinator-voiced emails from the shared twin@ mailbox.
 
-The **welcome** email is sent once, the moment a user's personal
-Coordinator is provisioned at signup (see the signup paths in
-``orchestra.web.api.auth.views`` / ``orchestra.web.api.users.views``).
-It introduces the Coordinator and points the user at the console.
+Two messages live here:
 
-It is sent **from the shared Coordinator mailbox** (the
+- **Welcome** — sent once when a personal Coordinator is provisioned at
+  signup (see signup paths in ``orchestra.web.api.auth.views`` /
+  ``orchestra.web.api.users.views``).
+- **Inactivity re-engagement** — sent by
+  :mod:`orchestra.routines.inactivity_followup` when a user has been
+  quiet for ``settings.inactivity_followup_days``. Soft check-in only;
+  never deletion, suspension, or billing language.
+
+Both are sent **from the shared Coordinator mailbox** (the
 ``UNITY_COORDINATOR_EMAIL_ADDRESS`` setting, surfaced via
 :func:`orchestra.services.universal_unity_email.get_universal_unity_email_address`)
 rather than the general ``hello@unify.ai`` outbound address, so the
 message lands in the user's inbox as if their Coordinator wrote it.
-
-The inactivity *re-engagement* nudge is **not** templated here: that
-message is composed and sent by the Coordinator brain after
-:mod:`orchestra.routines.inactivity_followup` wakes the Coordinator (see
-``unity.conversation_manager.domains.inactivity``).
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 WELCOME_SUBJECT = "Welcome to Unify — I'm T-W1N, your coordinator"
+FOLLOWUP_SUBJECT = "Haven't heard from you in a while — anything I can help with?"
 
 _CONSOLE_URL = "https://console.unify.ai/"
 _FOOTER = (
@@ -77,6 +78,44 @@ def build_coordinator_welcome_email(*, owner_first_name: Optional[str]) -> str:
 
         <p>
             Looking forward to working together,<br/>— T-W1N
+        </p>
+
+        {_FOOTER}
+    </body>
+    </html>
+    """
+
+
+def build_coordinator_inactivity_followup_email(
+    *,
+    owner_first_name: Optional[str],
+) -> str:
+    """Build the HTML body for a soft inactivity re-engagement email.
+
+    First-person T-W1N check-in. No account deletion, suspension, or
+    billing language — contact lifecycle stays with the billing
+    suspension routine.
+    """
+    salutation = _salutation(owner_first_name)
+    return f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <p>{salutation}</p>
+
+        <p>
+            Haven't heard from you in a while — anything I can help with?
+            I'm T-W1N, your personal coordinator on Unify, and I'm ready
+            whenever you are.
+        </p>
+
+        <p>
+            Hop back into the console and tell me what's on your plate:
+        </p>
+
+        <p><a href="{_CONSOLE_URL}">{_CONSOLE_URL}</a></p>
+
+        <p>
+            Looking forward to catching up,<br/>— T-W1N
         </p>
 
         {_FOOTER}
@@ -158,4 +197,26 @@ async def send_coordinator_welcome_email(
         [recipient_email],
         WELCOME_SUBJECT,
         build_coordinator_welcome_email(owner_first_name=owner_first_name),
+    )
+
+
+async def send_coordinator_inactivity_followup_email(
+    *,
+    recipient_email: Optional[str],
+    owner_first_name: Optional[str],
+) -> bool:
+    """Best-effort inactivity re-engagement send from the shared mailbox.
+
+    Returns ``False`` when there is no recipient or the mailbox is
+    unconfigured. Callers must only stamp ``last_followup_sent_at`` after
+    a ``True`` return.
+    """
+    if not recipient_email:
+        return False
+    return await send_coordinator_emails(
+        [recipient_email],
+        FOLLOWUP_SUBJECT,
+        build_coordinator_inactivity_followup_email(
+            owner_first_name=owner_first_name,
+        ),
     )

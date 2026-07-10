@@ -1,31 +1,28 @@
-"""Per-user re-engagement follow-up driven by a user's personal Coordinator.
+"""Per-user re-engagement follow-up via Orchestra-templated email.
 
 Single-stage routine, run twice a day:
 
     Find users who have not interacted with **any** of their assistants
     (the Coordinator included) for ``settings.inactivity_followup_days``,
     and whose personal Coordinator has not already followed up since
-    their last activity (and has not opted out). For each, wake the
-    Coordinator via the communication-adapter webhook so the **brain
-    composes and sends a personalised re-engagement message** (inspecting
-    transcript history to pick the right variant), then stamp
-    ``last_followup_sent_at`` on the Coordinator row so we don't re-fire
-    on the next run (a fresh interaction re-arms the follow-up).
+    their last activity (and has not opted out). For each, send a soft
+    check-in email from the shared Coordinator mailbox (``twin@``) to
+    the owner's ``User.email``, then stamp ``last_followup_sent_at`` on
+    the Coordinator row so we don't re-fire on the next run (a fresh
+    interaction re-arms the follow-up).
 
-Orchestra only decides *who* and *when*; the message wording and
-delivery live in the Coordinator brain (see
-``unity.conversation_manager.domains.inactivity``). The adapter decides
-whether to cold-start a pod or publish a live system event.
+Delivery is Orchestra-templated (see
+:mod:`orchestra.routines.inactivity_notifications`) — no GKE cold-start
+and no Coordinator brain wake. Owners without an email are skipped
+without stamping so a later email add can re-arm.
 
-If the boss tells the Coordinator to stop following up, the brain opts
-the Coordinator out (``inactivity_followup_opted_out``) and this routine
-skips it until the user opts back in.
+If the boss opts the Coordinator out
+(``inactivity_followup_opted_out``), this routine skips it until they
+opt back in.
 
 This routine deliberately does **not** delete or deprovision anything.
 Contact lifecycle and cost are governed exclusively by the billing
-suspension routine (``assistant_contact_suspension``), which releases
-contacts only when an account genuinely can't pay for them. Inactivity
-is purely a re-engagement signal.
+suspension routine (``assistant_contact_suspension``).
 
 Scheduling:
     GitHub Actions: ``.github/workflows/inactivity-followup.yml``
@@ -33,8 +30,7 @@ Scheduling:
         and staging) with ``Authorization: Bearer <ORCHESTRA_ADMIN_KEY>``.
     Cron: ``15 1,13 * * *``  (01:15 and 13:15 UTC — twice daily,
         staggered 15 min after the billing suspension routine at
-        01:00 UTC). The schedule activates automatically once the
-        workflow lands on the default branch.
+        01:00 UTC).
 """
 
 from __future__ import annotations
@@ -49,7 +45,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.models.orchestra_models import Assistant
+from orchestra.db.models.orchestra_models import User
 from orchestra.settings import settings
 from orchestra.web.lifetime import get_engine
 
@@ -67,6 +63,7 @@ class FollowupResult:
 
     agent_id: int
     dispatched: bool = False
+    skipped: bool = False
     error: Optional[str] = None
 
 
@@ -77,49 +74,49 @@ class InactivityFollowupResult:
     followup_candidates_found: int = 0
     followups_dispatched: int = 0
     followups_failed: int = 0
+    followups_skipped: int = 0
     followup_results: List[FollowupResult] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# Adapter dispatch
+# Bookkeeping (short-lived session — never held across awaits)
 # ---------------------------------------------------------------------------
 
 
-async def _dispatch_inactivity_followup_event(agent_id: int) -> None:
-    """Signal the Coordinator brain that this Coordinator should follow up.
+def _stamp_followup_sent(
+    agent_id: int,
+    when: _dt.datetime,
+    *,
+    bind=None,
+) -> None:
+    """Commit ``last_followup_sent_at`` in an isolated transaction.
 
-    POSTs to the communication-adapter webhook
-    ``/assistant/inactivity-followup``, which decides whether to wake a
-    cold pod via ``dispatch_unity_start_intent`` or publish a system
-    event directly to a hot pod's Pub/Sub topic. The brain then composes
-    and sends the re-engagement message through its own comms primitives.
-
-    Raises on a non-2xx response so the caller records the failure and
-    leaves the Coordinator eligible for retry on the next run. No-ops
-    with a warning log when the adapters URL or admin key are not
-    configured (typical in local dev).
+    Uses ``bind`` when provided (the request session's engine) so tests
+    and prod share the same database; never reuses the long-lived
+    request session across awaits.
     """
-    from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _adapters_url
-    from orchestra.web.api.utils.http_client import get_async_client
 
-    adapters_url = _adapters_url()
-    if not adapters_url or not ADMIN_KEY:
-        logger.warning(
-            "Inactivity follow-up dispatch skipped for assistant %d: "
-            "adapters URL or admin key not configured.",
-            agent_id,
-        )
-        return
-
-    url = adapters_url.rstrip("/") + "/assistant/inactivity-followup"
-    client = get_async_client()
-    response = await client.post(
-        url,
-        json={"assistant_id": str(agent_id)},
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        timeout=30,
+    SessionLocal = sessionmaker(
+        bind=bind if bind is not None else get_engine(),
+        expire_on_commit=False,
     )
-    response.raise_for_status()
+    with SessionLocal() as session:
+        AssistantDAO(session).mark_followup_sent(agent_id, when)
+        session.commit()
+
+
+def _owner_email_and_name(
+    session: Session,
+    user_id: str | None,
+) -> tuple[Optional[str], Optional[str]]:
+    if not user_id:
+        return None, None
+    user = session.get(User, user_id)
+    if user is None:
+        return None, None
+    email = (user.email or "").strip() or None
+    first_name = (user.name or "").strip() or None
+    return email, first_name
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +127,11 @@ async def _dispatch_inactivity_followup_event(agent_id: int) -> None:
 async def run_inactivity_followup(
     session: Session | None = None,
 ) -> InactivityFollowupResult:
-    """Send re-engagement follow-ups to users who've gone quiet.
+    """Send re-engagement follow-up emails to users who've gone quiet.
 
-    :param session: Optional SQLAlchemy session. If ``None``, a fresh
-        session is created.
+    :param session: Optional SQLAlchemy session used only to *find*
+        candidates. Stamps use a separate short-lived session so awaits
+        never hold an open transaction.
     :return: Aggregate metrics for the invocation.
     """
     if session is not None:
@@ -151,29 +149,36 @@ async def _run_in_session(session: Session) -> InactivityFollowupResult:
 
     followup_cutoff = now - _dt.timedelta(days=settings.inactivity_followup_days)
     batch_size = settings.inactivity_followup_batch_size
-    jitter_seconds = max(0, settings.inactivity_followup_jitter_seconds)
+    # Tiny delay only — email sends are fast; large jitter previously
+    # held DB sessions open for hours and poisoned mark_followup_sent.
+    jitter_seconds = min(2, max(0, settings.inactivity_followup_jitter_seconds))
 
     try:
         candidates = dao.find_followup_candidates(
             followup_cutoff=followup_cutoff,
             limit=batch_size,
         )
-        result.followup_candidates_found = len(candidates)
+        # Detach identity fields we need after the find query so we do
+        # not keep the request transaction busy across email awaits.
+        candidate_snapshots = [(int(c.agent_id), c.user_id) for c in candidates]
+        result.followup_candidates_found = len(candidate_snapshots)
+        session.commit()
 
-        for coordinator in candidates:
+        for agent_id, user_id in candidate_snapshots:
             followup_result = await _dispatch_followup_for_coordinator(
-                dao=dao,
-                coordinator=coordinator,
+                session=session,
+                agent_id=agent_id,
+                user_id=user_id,
                 now=now,
                 jitter_seconds=jitter_seconds,
             )
             result.followup_results.append(followup_result)
             if followup_result.dispatched:
                 result.followups_dispatched += 1
+            elif followup_result.skipped:
+                result.followups_skipped += 1
             else:
                 result.followups_failed += 1
-
-        session.commit()
     except Exception:
         session.rollback()
         logger.exception("Inactivity follow-up routine failed – rolled back.")
@@ -181,38 +186,63 @@ async def _run_in_session(session: Session) -> InactivityFollowupResult:
 
     logger.info(
         "Inactivity follow-up routine complete: %d candidates "
-        "(%d dispatched, %d failed).",
+        "(%d dispatched, %d skipped, %d failed).",
         result.followup_candidates_found,
         result.followups_dispatched,
+        result.followups_skipped,
         result.followups_failed,
     )
     return result
 
 
 async def _dispatch_followup_for_coordinator(
-    dao: AssistantDAO,
-    coordinator: Assistant,
+    *,
+    session: Session,
+    agent_id: int,
+    user_id: str | None,
     now: _dt.datetime,
     jitter_seconds: int,
 ) -> FollowupResult:
-    """Wake one Coordinator to compose a follow-up; record the dispatch.
+    """Email one owner a soft check-in; stamp only after a successful send.
 
-    ``last_followup_sent_at`` is stamped only on a successful dispatch so
-    a failed dispatch remains eligible for retry on the next run. The
-    actual message is composed and sent by the Coordinator's brain.
+    Owners without an email are skipped without stamping so a later
+    email add can re-arm. Send failures leave the Coordinator eligible
+    for retry on the next run.
     """
-    result = FollowupResult(agent_id=int(coordinator.agent_id))
+    from orchestra.routines.inactivity_notifications import (
+        send_coordinator_inactivity_followup_email,
+    )
+
+    result = FollowupResult(agent_id=agent_id)
     try:
+        recipient_email, owner_first_name = _owner_email_and_name(session, user_id)
+        if not recipient_email:
+            logger.info(
+                "Skipping inactivity follow-up for coordinator %d: "
+                "owner has no email.",
+                agent_id,
+            )
+            result.skipped = True
+            result.error = "no_owner_email"
+            return result
+
         if jitter_seconds > 0:
             await asyncio.sleep(random.uniform(0, jitter_seconds))
 
-        await _dispatch_inactivity_followup_event(int(coordinator.agent_id))
-        dao.mark_followup_sent(int(coordinator.agent_id), now)
+        sent = await send_coordinator_inactivity_followup_email(
+            recipient_email=recipient_email,
+            owner_first_name=owner_first_name,
+        )
+        if not sent:
+            result.error = "send_failed"
+            return result
+
+        _stamp_followup_sent(agent_id, now, bind=session.get_bind())
         result.dispatched = True
     except Exception as exc:
         logger.exception(
             "Failed to dispatch inactivity follow-up for coordinator %d",
-            coordinator.agent_id,
+            agent_id,
         )
         result.error = str(exc)
     return result
