@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -32,6 +33,7 @@ from orchestra.db.dao.ms_teams_bot_dao import (
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import MsTeamsBotInstall
 from orchestra.services.ms_teams_bot_dispatcher import resolve_inbound
+from orchestra.settings import settings
 
 admin_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -100,6 +102,15 @@ class InstallResponse(BaseModel):
             "Handshake nonce for a pending install. Only populated when "
             "``include_nonce=true`` is passed; never returned by list "
             "endpoints."
+        ),
+    )
+    connect_url: Optional[str] = Field(
+        None,
+        description=(
+            "One-click Console URL that claims this pending install for the "
+            "signed-in owner (carries ``bind_nonce`` as ``ms_teams_bind``). "
+            "Populated alongside ``bind_nonce`` so the bot can DM the "
+            "installer a single link instead of a code to copy."
         ),
     )
 
@@ -213,12 +224,23 @@ class ConversationRouteResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _build_connect_url(nonce: str) -> str:
+    """One-click Console link that binds this install to the signed-in owner.
+
+    Console's ``/assistants`` page consumes ``ms_teams_bind`` and calls the
+    bind handshake, so the installer never copies a code by hand.
+    """
+    base = (settings.console_url or "https://console.unify.ai/").rstrip("/")
+    return f"{base}/assistants?ms_teams_bind={quote(nonce)}"
+
+
 def _install_to_response(
     install: MsTeamsBotInstall,
     *,
     include_nonce: bool = False,
 ) -> InstallResponse:
     pending = install.organization_id is None and install.user_id is None
+    nonce = install.bind_nonce if include_nonce else None
     return InstallResponse(
         id=install.id,
         organization_id=install.organization_id,
@@ -231,7 +253,8 @@ def _install_to_response(
         scopes=install.scopes,
         pending=pending,
         revoked=install.revoked_at is not None,
-        bind_nonce=install.bind_nonce if include_nonce else None,
+        bind_nonce=nonce,
+        connect_url=_build_connect_url(nonce) if nonce else None,
     )
 
 
