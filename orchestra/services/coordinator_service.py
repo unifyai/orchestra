@@ -14,6 +14,7 @@ from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.ms_teams_bot_dao import MsTeamsBotDAO
@@ -31,6 +32,7 @@ from orchestra.db.models.coordinator_voice import (
 )
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantUserDesktop,
     Context,
     LogEvent,
     LogEventContext,
@@ -1812,6 +1814,8 @@ ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
 ONBOARDING_STEP_CREATE_SCHEDULED_TASK = "create-scheduled-task"
 ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK = "create-triggerable-task"
+ONBOARDING_STEP_YOUR_COMPUTER_LINK = "your-computer-link"
+ONBOARDING_STEP_YOUR_COMPUTER_FILESYS = "your-computer-filesys"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
 DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_EMAIL_REPLY,
@@ -1832,6 +1836,8 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_APPS,
     ONBOARDING_STEP_CREATE_SCHEDULED_TASK,
     ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK,
+    ONBOARDING_STEP_YOUR_COMPUTER_LINK,
+    ONBOARDING_STEP_YOUR_COMPUTER_FILESYS,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
     *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
@@ -1949,6 +1955,8 @@ class _OnboardingProbeScope:
         self._secrets: dict[str, str] | None = None
         self._task_rows: list[LogEvent] | None = None
         self._integration_connections: list[Any] | None = None
+        self._boss_desktop_link: AssistantUserDesktop | None = None
+        self._boss_desktop_link_loaded = False
         self._trigger_outbound_at: dict[str, datetime | None] = {}
 
     @property
@@ -1992,6 +2000,28 @@ class _OnboardingProbeScope:
                 self.session,
             ).list_connections(owner)
         return self._integration_connections
+
+    @property
+    def boss_desktop_link(self) -> "AssistantUserDesktop | None":
+        """The boss's own desktop link to this Coordinator, if any.
+
+        Scoped to ``(assistant_id=coordinator.agent_id,
+        owner_user_id=coordinator.user_id)`` so another user's link on a
+        shared assistant never ticks the boss's Their Computer checklist.
+        One query serves both the link and filesys probes.
+        """
+        if not self._boss_desktop_link_loaded:
+            user_id = self.coordinator.user_id
+            if not user_id:
+                self._boss_desktop_link = None
+            else:
+                result = DesktopDAO(self.session).get_link_for_user(
+                    self.coordinator.agent_id,
+                    user_id,
+                )
+                self._boss_desktop_link = result[0] if result is not None else None
+            self._boss_desktop_link_loaded = True
+        return self._boss_desktop_link
 
     def trigger_outbound_created_at(
         self,
@@ -2222,6 +2252,25 @@ def _has_slack_install(
     return install is not None
 
 
+def _has_linked_desktop(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """Their Computer link row: boss linked their machine to the Coordinator."""
+    return scope.boss_desktop_link is not None
+
+
+def _has_desktop_filesys(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """Their Computer filesys row: boss's link has filesystem sync enabled."""
+    link = scope.boss_desktop_link
+    return bool(link is not None and link.filesys_sync)
+
+
 def _has_ms_teams_bot_install(
     scope: "_OnboardingProbeScope",
     *,
@@ -2445,6 +2494,8 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_APPS: _has_connected_integration,
         ONBOARDING_STEP_CREATE_SCHEDULED_TASK: _has_scheduled_task,
         ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK: _has_triggerable_task,
+        ONBOARDING_STEP_YOUR_COMPUTER_LINK: _has_linked_desktop,
+        ONBOARDING_STEP_YOUR_COMPUTER_FILESYS: _has_desktop_filesys,
     }
     completed: list[str] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:
