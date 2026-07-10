@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -1063,3 +1063,52 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
     assert (
         dbsession.query(LogEvent).filter(LogEvent.project_id == project.id).count() == 0
     )
+
+
+@pytest.mark.anyio
+async def test_cleanup_after_assistant_delete_runs_single_pass() -> None:
+    """Post-delete BackgroundTask must drain the queue once, not poll for minutes."""
+    from orchestra.web.api.assistant import views as assistant_views
+
+    session = MagicMock()
+    session_factory = MagicMock(return_value=session)
+    summary = {
+        "processed": 2,
+        "completed": 1,
+        "retried": 1,
+        "failed": 0,
+        "errors": [],
+    }
+
+    with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+        return_value=summary,
+    ) as process:
+        await assistant_views._cleanup_after_assistant_delete(
+            session_factory,
+            [10, 11],
+            42,
+        )
+
+    process.assert_awaited_once_with(session, task_ids=[10, 11])
+    session.close.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_cleanup_after_assistant_delete_skips_empty_task_ids() -> None:
+    from orchestra.web.api.assistant import views as assistant_views
+
+    session_factory = MagicMock()
+    with patch(
+        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+        new_callable=AsyncMock,
+    ) as process:
+        await assistant_views._cleanup_after_assistant_delete(
+            session_factory,
+            [],
+            42,
+        )
+
+    process.assert_not_called()
+    session_factory.assert_not_called()

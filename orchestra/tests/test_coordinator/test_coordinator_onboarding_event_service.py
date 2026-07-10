@@ -203,8 +203,8 @@ async def test_async_notify_for_assistant_returns_false_when_no_coordinator() ->
     post.assert_not_called()
 
 
-def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
-    """Sync wrapper must spawn a thread instead of blocking on httpx."""
+def test_sync_notify_posts_inline_when_in_onboarding() -> None:
+    """Sync wrapper must POST during the request (no detached daemon thread)."""
     coordinator = _fake_coordinator()
     with (
         patch.object(svc, "get_coordinator_state", return_value=ACTIVE_STATE),
@@ -221,6 +221,54 @@ def test_sync_notify_kicks_a_daemon_thread_when_in_onboarding() -> None:
     payload = fire.call_args.args[0]
     assert payload["event_type"] == svc.COORDINATOR_ONBOARDING_EVENT_TYPE
     assert payload["extra_event_fields"]["subtype"] == svc.SUBTYPE_INTEGRATION_CONNECTED
+
+
+def test_fire_and_forget_onboarding_event_posts_inline_with_short_timeout() -> None:
+    """In-request httpx POST; no Thread.start under CPU throttling."""
+    payload = {
+        "assistant_id": 1,
+        "extra_event_fields": {"subtype": svc.SUBTYPE_INTEGRATION_CONNECTED},
+    }
+    mock_response = MagicMock()
+    mock_client = MagicMock()
+    mock_client.post.return_value = mock_response
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch.object(svc, "ADMIN_KEY", "test-key"),
+        patch.object(svc, "_adapters_url", return_value="https://adapters.test"),
+        patch.object(svc.httpx, "Client", return_value=mock_client) as client_cls,
+        patch("threading.Thread") as thread_cls,
+    ):
+        svc._fire_and_forget_onboarding_event(payload)
+
+    thread_cls.assert_not_called()
+    client_cls.assert_called_once_with(timeout=3.0)
+    mock_client.post.assert_called_once_with(
+        "https://adapters.test/unity/system-event",
+        headers={
+            "Authorization": "Bearer test-key",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+    mock_response.raise_for_status.assert_called_once()
+
+
+def test_fire_and_forget_onboarding_event_swallows_http_errors() -> None:
+    """Adapters outages must not propagate to the sync caller."""
+    with (
+        patch.object(svc, "ADMIN_KEY", "test-key"),
+        patch.object(svc, "_adapters_url", return_value="https://adapters.test"),
+        patch.object(svc.httpx, "Client", side_effect=RuntimeError("adapters down")),
+    ):
+        svc._fire_and_forget_onboarding_event(
+            {
+                "assistant_id": 1,
+                "extra_event_fields": {"subtype": svc.SUBTYPE_INTEGRATION_CONNECTED},
+            },
+        )
 
 
 @pytest.mark.parametrize(

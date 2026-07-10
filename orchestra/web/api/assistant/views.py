@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import io
 import logging
@@ -56,7 +55,6 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_TEAM,
     TEAM_STATUS_ACTIVE,
     Assistant,
-    AssistantCleanupTask,
     AssistantConsoleConfig,
     ContactMembership,
     Context,
@@ -230,9 +228,6 @@ from orchestra.web.api.utils.assistant_infra import (
     wake_up_coordinator_best_effort,
 )
 from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
-
-ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS = 180.0
-ASSISTANT_DELETE_CLEANUP_POLL_SECONDS = 5.0
 
 
 class ResolvedContactIds(NamedTuple):
@@ -4325,68 +4320,43 @@ async def _cleanup_after_assistant_delete(
     cleanup_task_ids: list[int],
     assistant_id: int,
 ) -> None:
-    """Re-drive durable cleanup tasks after the delete response is sent.
+    """Run one immediate post-delete cleanup pass in the background.
 
     Runs as a FastAPI BackgroundTask so the user gets an immediate response.
-    Assistant-scoped GCS cleanup now happens inside ``process_assistant_cleanup_tasks``
-    once runtime teardown is complete, so this background task only re-drives
-    the durable queue toward completion.
+    A single best-effort drain of the durable cleanup queue; unfinished work
+    remains for the scheduled cleanup worker (GHA ``cleanup-assistant-runtime``).
+    Holding the request concurrency slot for a multi-minute poll loop is unsafe
+    under Cloud Run CPU throttling and wastes capacity after the client already
+    received 200.
     """
-    if cleanup_task_ids:
-        deadline = time.monotonic() + ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS
-        while True:
-            bg_session = session_factory()
-            try:
-                result = await process_assistant_cleanup_tasks(
-                    bg_session,
-                    task_ids=cleanup_task_ids,
-                )
-                tasks = (
-                    bg_session.query(AssistantCleanupTask)
-                    .filter(AssistantCleanupTask.id.in_(cleanup_task_ids))
-                    .all()
-                )
-                task_states = [
-                    {
-                        "id": task.id,
-                        "status": task.status,
-                        "attempt_count": task.attempt_count,
-                        "last_error": task.last_error,
-                        "next_retry_at": (
-                            task.next_retry_at.isoformat()
-                            if task.next_retry_at is not None
-                            else None
-                        ),
-                    }
-                    for task in tasks
-                ]
-                logging.info(
-                    "Assistant %s cleanup loop result=%s task_states=%s",
-                    assistant_id,
-                    result,
-                    task_states,
-                )
-                if tasks and all(
-                    task.status in {"completed", "failed"} for task in tasks
-                ):
-                    break
-                if time.monotonic() >= deadline:
-                    logging.warning(
-                        "Assistant %s cleanup loop timed out after %.0fs",
-                        assistant_id,
-                        ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS,
-                    )
-                    break
-            except Exception as exc:
-                logging.error(
-                    "Background runtime cleanup failed for assistant %s: %s",
-                    assistant_id,
-                    exc,
-                )
-                break
-            finally:
-                bg_session.close()
-            await asyncio.sleep(ASSISTANT_DELETE_CLEANUP_POLL_SECONDS)
+    if not cleanup_task_ids:
+        return
+
+    bg_session = session_factory()
+    try:
+        result = await process_assistant_cleanup_tasks(
+            bg_session,
+            task_ids=cleanup_task_ids,
+        )
+        logging.info(
+            "Assistant %s cleanup pass result=%s",
+            assistant_id,
+            result,
+        )
+        if result.get("errors"):
+            logging.error(
+                "Runtime cleanup task issues for deleted assistant %s: %s",
+                assistant_id,
+                result["errors"],
+            )
+    except Exception as exc:
+        logging.error(
+            "Background runtime cleanup failed for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+    finally:
+        bg_session.close()
 
 
 @router.delete(

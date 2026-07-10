@@ -97,14 +97,6 @@ def mock_assistant_infra_calls(request):
             "orchestra.web.api.assistant.views.settings",
         ) as mock_settings,
         patch(
-            "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
-            0.0,
-        ),
-        patch(
-            "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
-            0.0,
-        ),
-        patch(
             "orchestra.web.api.assistant.views.create_bucket_service",
         ) as mock_bucket_cls,
         patch(

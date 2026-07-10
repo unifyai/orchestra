@@ -1,7 +1,6 @@
 """Coordinator provisioning and lifecycle helpers."""
 
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
@@ -3064,12 +3063,12 @@ def _fire_and_forget_onboarding_event(
 ) -> None:
     """Best-effort sync POST used by non-async trigger sites.
 
-    Spawns a daemon thread that fires the HTTP request and walks
-    away. We deliberately don't ``join`` — narration is decorative,
-    not load-bearing, and blocking the caller (e.g. ``create_logs``)
-    on a remote service round-trip would be a regression. Exceptions
-    are caught + logged on the worker thread so a transient adapters
-    outage never reaches the user.
+    Runs the HTTP call inline with a short timeout so it completes during
+    the caller's request (e.g. ``create_logs`` on FastAPI's threadpool).
+    Under Cloud Run CPU throttling, a detached daemon thread would be
+    starved after the response; keeping the POST in-request avoids that.
+    Exceptions are caught + logged so a transient adapters outage never
+    reaches the user. Narration remains decorative, not load-bearing.
     """
     url = f"{_adapters_url()}/unity/system-event"
     headers = {
@@ -3077,21 +3076,18 @@ def _fire_and_forget_onboarding_event(
         "Content-Type": "application/json",
     }
 
-    def _worker() -> None:
-        try:
-            with httpx.Client(timeout=20.0) as client:
-                response = client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-        except Exception as exc:
-            logger.warning(
-                "Coordinator onboarding event POST failed (subtype=%s, "
-                "assistant_id=%s): %s",
-                payload.get("extra_event_fields", {}).get("subtype"),
-                payload.get("assistant_id"),
-                exc,
-            )
-
-    threading.Thread(target=_worker, daemon=True).start()
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            response = client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+    except Exception as exc:
+        logger.warning(
+            "Coordinator onboarding event POST failed (subtype=%s, "
+            "assistant_id=%s): %s",
+            payload.get("extra_event_fields", {}).get("subtype"),
+            payload.get("assistant_id"),
+            exc,
+        )
 
 
 async def notify_coordinator_onboarding_event(
@@ -3159,11 +3155,11 @@ def notify_coordinator_onboarding_event_safe_sync(
 ) -> bool:
     """Sync wrapper around :func:`notify_coordinator_onboarding_event`.
 
-    Same gating semantics, but the actual HTTP POST runs on a daemon
-    thread so the caller (a sync view like ``create_logs`` dispatched
-    by FastAPI's threadpool) never blocks on a network round-trip.
-    Returns ``True`` when the thread was kicked off, ``False`` when
-    the gate suppressed the emission.
+    Same gating semantics, but the HTTP POST runs inline with a short
+    timeout so the caller (a sync view like ``create_logs``) completes
+    the side effect during the request. Returns ``True`` when the POST
+    was attempted (including when adapters failed), ``False`` when the
+    gate suppressed the emission.
     """
     if subtype not in COORDINATOR_ONBOARDING_SUBTYPES:
         logger.warning("Ignoring unknown coordinator onboarding subtype: %s", subtype)
