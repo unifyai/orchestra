@@ -33,11 +33,12 @@ jobs:
         candidates=$(echo "$body" | jq -r '.followup_candidates_found // 0')
         dispatched=$(echo "$body" | jq -r '.followups_dispatched // 0')
         failed=$(echo "$body" | jq -r '.followups_failed // 0')
+        skipped=$(echo "$body" | jq -r '.followups_skipped // 0')
 
-        echo "::notice::Found $candidates inactive user(s): $dispatched follow-up(s) dispatched, $failed failed"
+        echo "::notice::Found $candidates inactive user(s): $dispatched emailed, $skipped skipped, $failed failed"
 
         if [ "$failed" -gt 0 ]; then
-          echo "::warning::$failed follow-up dispatch(es) failed; they remain eligible for retry on the next run"
+          echo "::warning::$failed follow-up send(s) failed; they remain eligible for retry on the next run"
         fi
 
   inactivity_followup_staging:
@@ -65,9 +66,10 @@ jobs:
         candidates=$(echo "$body" | jq -r '.followup_candidates_found // 0')
         dispatched=$(echo "$body" | jq -r '.followups_dispatched // 0')
         failed=$(echo "$body" | jq -r '.followups_failed // 0')
+        skipped=$(echo "$body" | jq -r '.followups_skipped // 0')
 
-        echo "::notice::Found $candidates inactive user(s): $dispatched follow-up(s) dispatched, $failed failed"
+        echo "::notice::Found $candidates inactive user(s): $dispatched emailed, $skipped skipped, $failed failed"
 
         if [ "$failed" -gt 0 ]; then
-          echo "::warning::$failed follow-up dispatch(es) failed in staging; they remain eligible for retry on the next run"
+          echo "::warning::$failed follow-up send(s) failed in staging; they remain eligible for retry on the next run"
         fi

@@ -14,6 +14,7 @@ from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.ms_teams_bot_dao import MsTeamsBotDAO
@@ -31,6 +32,7 @@ from orchestra.db.models.coordinator_voice import (
 )
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantUserDesktop,
     Context,
     LogEvent,
     LogEventContext,
@@ -1489,20 +1491,55 @@ def set_coordinator_state(
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
     )
-    if (
-        skip_onboarding_phase is not None
-        and skip_onboarding_phase not in next_skipped_phase_ids
-    ):
-        next_skipped_phase_ids = [
-            phase
-            for phase in SKIPPABLE_ONBOARDING_PHASES
-            if phase == skip_onboarding_phase or phase in next_skipped_phase_ids
+    if skip_onboarding_phase is not None:
+        if skip_onboarding_phase not in next_skipped_phase_ids:
+            next_skipped_phase_ids = [
+                phase
+                for phase in SKIPPABLE_ONBOARDING_PHASES
+                if phase == skip_onboarding_phase or phase in next_skipped_phase_ids
+            ]
+        # Phase skip is leaf skip for every skippable step in the section —
+        # same downward COMPLETED-cascade as skip_onboarding_step — so the
+        # checklist markers, progress, and dependency satisfaction all see
+        # the rows as skipped rather than merely dimmed.
+        phase_step_ids = {
+            step.id
+            for step in onboarding_graph.ONBOARDING_GRAPH
+            if step.phase == skip_onboarding_phase and step.can_skip
+        }
+        skipped_step_set = set(next_skipped_step_ids)
+        for step_id in phase_step_ids:
+            skipped_step_set.add(step_id)
+            skipped_step_set.update(
+                onboarding_graph.completion_blocked_descendants(step_id),
+            )
+        next_skipped_step_ids = [
+            step_id
+            for step_id in SKIPPABLE_ONBOARDING_STEPS
+            if step_id in skipped_step_set
         ]
+        for step_id in skipped_step_set:
+            dispatched_at.pop(step_id, None)
     if unskip_onboarding_phase is not None:
         next_skipped_phase_ids = [
             phase
             for phase in next_skipped_phase_ids
             if phase != unskip_onboarding_phase
+        ]
+        phase_step_ids = {
+            step.id
+            for step in onboarding_graph.ONBOARDING_GRAPH
+            if step.phase == unskip_onboarding_phase
+        }
+        unskipped_step_set = set(phase_step_ids)
+        for step_id in phase_step_ids:
+            unskipped_step_set.update(
+                onboarding_graph.completion_blocked_descendants(step_id),
+            )
+        next_skipped_step_ids = [
+            step_id
+            for step_id in next_skipped_step_ids
+            if step_id not in unskipped_step_set
         ]
     if (
         next_step is not None
@@ -1679,6 +1716,11 @@ SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 # live desktop demo (no chips). Twin marks the step done explicitly after the
 # chat attachment via ``set_onboarding_task_state``.
 SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
+# Fired when the user clicks the Their Computer beat row: it starts the
+# filesystem fetch-and-return demo over the linked desktop (no chips, no ring).
+# Twin marks the step done explicitly after the chat attachment via
+# ``set_onboarding_task_state``.
+SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED = "your_computer_beat_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1722,6 +1764,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
         SUBTYPE_LEARNING_BEAT_REQUESTED,
         SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
+        SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
@@ -1771,6 +1814,8 @@ ONBOARDING_STEP_WORKSPACE = "workspace"
 ONBOARDING_STEP_APPS = "apps"
 ONBOARDING_STEP_CREATE_SCHEDULED_TASK = "create-scheduled-task"
 ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK = "create-triggerable-task"
+ONBOARDING_STEP_YOUR_COMPUTER_LINK = "your-computer-link"
+ONBOARDING_STEP_YOUR_COMPUTER_FILESYS = "your-computer-filesys"
 ONBOARDING_STEP_HIRE_SPECIALIST = "hire-specialist"
 DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_EMAIL_REPLY,
@@ -1791,14 +1836,30 @@ DERIVABLE_ONBOARDING_STEPS = (
     ONBOARDING_STEP_APPS,
     ONBOARDING_STEP_CREATE_SCHEDULED_TASK,
     ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK,
+    ONBOARDING_STEP_YOUR_COMPUTER_LINK,
+    ONBOARDING_STEP_YOUR_COMPUTER_FILESYS,
 )
 SKIPPABLE_ONBOARDING_STEPS = (
     *(step.id for step in onboarding_graph.ONBOARDING_GRAPH if step.can_skip),
     ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 SKIPPABLE_ONBOARDING_STEP_SET = frozenset(SKIPPABLE_ONBOARDING_STEPS)
+# Phase-level skip is reserved for optional capability areas the user may
+# not have (workspace OAuth, app integrations, computer-use opt-in). Always-
+# doable phases (Tasks, Learning, …) and Communication (skipped per channel
+# via step cascade) are intentionally excluded.
 SKIPPABLE_ONBOARDING_PHASES = (
-    *(phase.label for phase in onboarding_graph.ONBOARDING_PHASES),
+    onboarding_graph.PHASE_WORKSPACE,
+    onboarding_graph.PHASE_INTEGRATIONS,
+    onboarding_graph.PHASE_MY_COMPUTER,
+    onboarding_graph.PHASE_YOUR_COMPUTER,
+)
+# Canonical step order for normalizing any persisted step-id list (skipped,
+# manually completed, …). Broader than SKIPPABLE_ONBOARDING_STEPS so
+# non-skippable beats still round-trip correctly.
+_ONBOARDING_STEP_ID_ORDER = (
+    *(step.id for step in onboarding_graph.ONBOARDING_GRAPH),
+    ONBOARDING_STEP_HIRE_SPECIALIST,
 )
 
 COORDINATOR_EVENTS_MANAGER_METHOD_CONTEXT = "Events/ManagerMethod"
@@ -1810,7 +1871,7 @@ def normalize_onboarding_step_ids(value: Any) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     seen = {str(item) for item in value if isinstance(item, str)}
-    return [step_id for step_id in SKIPPABLE_ONBOARDING_STEPS if step_id in seen]
+    return [step_id for step_id in _ONBOARDING_STEP_ID_ORDER if step_id in seen]
 
 
 def normalize_onboarding_phase_ids(value: Any) -> list[str]:
@@ -1894,6 +1955,8 @@ class _OnboardingProbeScope:
         self._secrets: dict[str, str] | None = None
         self._task_rows: list[LogEvent] | None = None
         self._integration_connections: list[Any] | None = None
+        self._boss_desktop_link: AssistantUserDesktop | None = None
+        self._boss_desktop_link_loaded = False
         self._trigger_outbound_at: dict[str, datetime | None] = {}
 
     @property
@@ -1937,6 +2000,28 @@ class _OnboardingProbeScope:
                 self.session,
             ).list_connections(owner)
         return self._integration_connections
+
+    @property
+    def boss_desktop_link(self) -> "AssistantUserDesktop | None":
+        """The boss's own desktop link to this Coordinator, if any.
+
+        Scoped to ``(assistant_id=coordinator.agent_id,
+        owner_user_id=coordinator.user_id)`` so another user's link on a
+        shared assistant never ticks the boss's Their Computer checklist.
+        One query serves both the link and filesys probes.
+        """
+        if not self._boss_desktop_link_loaded:
+            user_id = self.coordinator.user_id
+            if not user_id:
+                self._boss_desktop_link = None
+            else:
+                result = DesktopDAO(self.session).get_link_for_user(
+                    self.coordinator.agent_id,
+                    user_id,
+                )
+                self._boss_desktop_link = result[0] if result is not None else None
+            self._boss_desktop_link_loaded = True
+        return self._boss_desktop_link
 
     def trigger_outbound_created_at(
         self,
@@ -2167,6 +2252,25 @@ def _has_slack_install(
     return install is not None
 
 
+def _has_linked_desktop(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """Their Computer link row: boss linked their machine to the Coordinator."""
+    return scope.boss_desktop_link is not None
+
+
+def _has_desktop_filesys(
+    scope: "_OnboardingProbeScope",
+    *,
+    reset_after: datetime | None = None,
+) -> bool:
+    """Their Computer filesys row: boss's link has filesystem sync enabled."""
+    link = scope.boss_desktop_link
+    return bool(link is not None and link.filesys_sync)
+
+
 def _has_ms_teams_bot_install(
     scope: "_OnboardingProbeScope",
     *,
@@ -2390,6 +2494,8 @@ def derive_onboarding_progress(
         ONBOARDING_STEP_APPS: _has_connected_integration,
         ONBOARDING_STEP_CREATE_SCHEDULED_TASK: _has_scheduled_task,
         ONBOARDING_STEP_CREATE_TRIGGERABLE_TASK: _has_triggerable_task,
+        ONBOARDING_STEP_YOUR_COMPUTER_LINK: _has_linked_desktop,
+        ONBOARDING_STEP_YOUR_COMPUTER_FILESYS: _has_desktop_filesys,
     }
     completed: list[str] = []
     for step in onboarding_graph.ONBOARDING_GRAPH:

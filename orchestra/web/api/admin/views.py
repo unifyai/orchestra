@@ -767,10 +767,9 @@ async def trigger_inactivity_followup(
     Finds users who have not interacted with any of their assistants
     (the Coordinator included) for ``inactivity_followup_days`` and whose
     personal Coordinator has not already followed up since their last
-    activity (and has not opted out), then wakes each user's Coordinator
-    via the communication adapter so the **brain composes and sends** a
-    personalised re-engagement message, recording ``last_followup_sent_at``
-    on the Coordinator after a successful dispatch.
+    activity (and has not opted out), then emails each owner a soft
+    check-in from the shared Coordinator mailbox (``twin@``), recording
+    ``last_followup_sent_at`` on the Coordinator after a successful send.
 
     This routine never deletes or deprovisions assistants — contact
     lifecycle/cost is governed solely by the billing suspension routine.
@@ -790,6 +789,7 @@ async def trigger_inactivity_followup(
             "followup_candidates_found": result.followup_candidates_found,
             "followups_dispatched": result.followups_dispatched,
             "followups_failed": result.followups_failed,
+            "followups_skipped": result.followups_skipped,
         }
 
     except Exception as e:

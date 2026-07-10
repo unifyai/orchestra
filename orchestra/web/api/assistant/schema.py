@@ -797,9 +797,10 @@ class CoordinatorStateUpdate(BaseModel):
     onboarding so a future re-entry doesn't carry stale step state).
     ``skip_onboarding_step`` records an intentional user skip separately from
     real completion; ``unskip_onboarding_step`` returns that step to the
-    active checklist. ``skip_onboarding_phase`` records a section-level defer
-    without expanding it into per-step skips; ``unskip_onboarding_phase``
-    resumes that section while preserving any per-step skips inside it.
+    active checklist. ``skip_onboarding_phase`` records a section-level skip
+    and expands it into per-step skips for every skippable leaf in that
+    phase (with the same downward cascade as ``skip_onboarding_step``);
+    ``unskip_onboarding_phase`` clears the phase flag and those leaf skips.
     ``onboarding_step_completion`` records a Coordinator slow-brain manual
     complete/uncomplete for steps outside auto-triggered Communication rows.
 

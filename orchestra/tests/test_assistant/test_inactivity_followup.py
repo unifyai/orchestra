@@ -1,10 +1,9 @@
-"""Tests for the per-user inactivity follow-up routine + Coordinator welcome.
+"""Tests for the per-user inactivity follow-up routine + Coordinator emails.
 
-The follow-up is *brain-composed*: orchestra only finds quiet users and
-wakes their personal Coordinator via the communication adapter; the
-Coordinator's brain composes and sends the actual re-engagement message.
-These tests therefore assert on the adapter *dispatch*, not on email
-bodies.
+The follow-up is Orchestra-templated: quiet users' personal Coordinators
+are selected, then a soft check-in is emailed from the shared twin@
+mailbox. These tests assert on the email send helper and
+``last_followup_sent_at`` bookkeeping — not on GKE / adapter wakes.
 
 Covers:
     1. AssistantDAO helpers
@@ -15,14 +14,14 @@ Covers:
           logic, opt-out / demo / local exclusion, coordinator scoping
     2. inactivity follow-up routine
         - no-op when no candidates
-        - dispatches to the adapter + stamps last_followup_sent_at
-        - fails cleanly (no stamp) when the dispatch raises
+        - sends templated email + stamps last_followup_sent_at
+        - fails cleanly (no stamp) when the send returns False / raises
         - skips opted-out coordinators
         - never deletes or deprovisions anything
     3. Admin endpoints
         - touch-activity, opt-out-followups, opt-in-followups (200 + 404)
         - inactivity-followup trigger endpoint returns followup metrics
-    4. Welcome email template + send helper
+    4. Welcome + follow-up email templates + send helpers
 """
 
 from __future__ import annotations
@@ -42,9 +41,10 @@ from orchestra.routines.inactivity_followup import (
     run_inactivity_followup,
 )
 
-# Patch target for the adapter dispatch the routine performs per Coordinator.
-_DISPATCH_TARGET = (
-    "orchestra.routines.inactivity_followup._dispatch_inactivity_followup_event"
+# Patch target for the templated email send the routine performs per owner.
+_SEND_TARGET = (
+    "orchestra.routines.inactivity_notifications."
+    "send_coordinator_inactivity_followup_email"
 )
 
 
@@ -135,10 +135,10 @@ def zero_jitter():
 
 
 @pytest.fixture
-def mock_dispatch():
-    """Replace the adapter dispatch with an AsyncMock (succeeds by default)."""
-    with patch(_DISPATCH_TARGET, new_callable=AsyncMock) as mock:
-        mock.return_value = None
+def mock_send():
+    """Replace the templated email send with an AsyncMock (succeeds by default)."""
+    with patch(_SEND_TARGET, new_callable=AsyncMock) as mock:
+        mock.return_value = True
         yield mock
 
 
@@ -447,21 +447,26 @@ class TestDAOFindFollowupCandidates:
 
 
 # ===========================================================================
-# 2. Routine (brain-composed: dispatch to adapter, no email here)
+# 2. Routine (templated email from twin@, no adapter wake)
 # ===========================================================================
 
 
 class TestInactivityFollowupRoutine:
     @pytest.mark.anyio
-    async def test_noop_when_no_candidates(self, dbsession: Session, mock_dispatch):
+    async def test_noop_when_no_candidates(self, dbsession: Session, mock_send):
         result = await run_inactivity_followup(session=dbsession)
         assert isinstance(result, InactivityFollowupResult)
         assert result.followup_candidates_found == 0
-        mock_dispatch.assert_not_called()
+        mock_send.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_dispatches_and_stamps(self, dbsession: Session, mock_dispatch):
-        user = _make_user(dbsession, "rte_u1", email="owner@test.com")
+    async def test_sends_and_stamps(self, dbsession: Session, mock_send):
+        user = _make_user(
+            dbsession,
+            "rte_u1",
+            email="owner@test.com",
+            first_name="Olivia",
+        )
         coord = _make_coordinator(
             dbsession,
             user.id,
@@ -472,12 +477,16 @@ class TestInactivityFollowupRoutine:
 
         assert result.followups_dispatched == 1
         assert result.followups_failed == 0
-        mock_dispatch.assert_awaited_once_with(coord.agent_id)
+        assert result.followups_skipped == 0
+        mock_send.assert_awaited_once()
+        kwargs = mock_send.await_args.kwargs
+        assert kwargs["recipient_email"] == "owner@test.com"
+        assert kwargs["owner_first_name"] == "Olivia"
         dbsession.refresh(coord)
         assert coord.last_followup_sent_at is not None
 
     @pytest.mark.anyio
-    async def test_dispatch_raising_does_not_stamp(self, dbsession: Session):
+    async def test_send_false_does_not_stamp(self, dbsession: Session):
         user = _make_user(dbsession, "rte_u4", email="owner@test.com")
         coord = _make_coordinator(
             dbsession,
@@ -485,8 +494,8 @@ class TestInactivityFollowupRoutine:
             last_correspondence_at=_cutoff(8),
         )
 
-        with patch(_DISPATCH_TARGET, new_callable=AsyncMock) as mock:
-            mock.side_effect = RuntimeError("adapter unreachable")
+        with patch(_SEND_TARGET, new_callable=AsyncMock) as mock:
+            mock.return_value = False
             result = await run_inactivity_followup(session=dbsession)
 
         assert result.followups_dispatched == 0
@@ -495,7 +504,25 @@ class TestInactivityFollowupRoutine:
         assert coord.last_followup_sent_at is None
 
     @pytest.mark.anyio
-    async def test_skips_opted_out_coordinator(self, dbsession: Session, mock_dispatch):
+    async def test_send_raising_does_not_stamp(self, dbsession: Session):
+        user = _make_user(dbsession, "rte_raise", email="owner@test.com")
+        coord = _make_coordinator(
+            dbsession,
+            user.id,
+            last_correspondence_at=_cutoff(8),
+        )
+
+        with patch(_SEND_TARGET, new_callable=AsyncMock) as mock:
+            mock.side_effect = RuntimeError("gmail unreachable")
+            result = await run_inactivity_followup(session=dbsession)
+
+        assert result.followups_dispatched == 0
+        assert result.followups_failed == 1
+        dbsession.refresh(coord)
+        assert coord.last_followup_sent_at is None
+
+    @pytest.mark.anyio
+    async def test_skips_opted_out_coordinator(self, dbsession: Session, mock_send):
         user = _make_user(dbsession, "rte_optout", email="owner@test.com")
         _make_coordinator(
             dbsession,
@@ -507,13 +534,13 @@ class TestInactivityFollowupRoutine:
         result = await run_inactivity_followup(session=dbsession)
 
         assert result.followup_candidates_found == 0
-        mock_dispatch.assert_not_called()
+        mock_send.assert_not_called()
 
     @pytest.mark.anyio
     async def test_routine_never_deletes_assistants(
         self,
         dbsession: Session,
-        mock_dispatch,
+        mock_send,
     ):
         """The follow-up routine must not hard-delete or deprovision anyone."""
         user = _make_user(dbsession, "rte_u5", email="owner@test.com")
@@ -628,7 +655,7 @@ class TestAdminInactivityEndpoints:
         self,
         client: AsyncClient,
         dbsession: Session,
-        mock_dispatch,
+        mock_send,
     ):
         from orchestra.tests.utils import ADMIN_HEADERS
 
@@ -646,10 +673,11 @@ class TestAdminInactivityEndpoints:
         assert "followup_candidates_found" in body
         assert "followups_dispatched" in body
         assert "followups_failed" in body
+        assert "followups_skipped" in body
 
 
 # ===========================================================================
-# 4. Welcome email template + send helper
+# 4. Welcome + follow-up email templates + send helpers
 # ===========================================================================
 
 
@@ -677,6 +705,36 @@ class TestEmailTemplates:
         body = build_coordinator_welcome_email(owner_first_name=None)
         normalized = re.sub(r"\s+", " ", body.lower())
         assert "hi," in normalized
+
+    def test_followup_email_is_soft_check_in(self):
+        from orchestra.routines.inactivity_notifications import (
+            FOLLOWUP_SUBJECT,
+            build_coordinator_inactivity_followup_email,
+        )
+
+        body = build_coordinator_inactivity_followup_email(owner_first_name="Olivia")
+        normalized = re.sub(r"\s+", " ", body.lower())
+
+        assert FOLLOWUP_SUBJECT == "All good?"
+        assert "haven't heard from you in a while" in normalized
+        assert "all good on your end" in normalized
+        assert "anything i can help with" in normalized
+        assert "just reply to this email" in normalized
+        assert "helloooo olivia," in normalized
+        assert "friendly neighbourhood t-w1n" in normalized
+        assert "https://console.unify.ai/" not in body
+        assert "automated message" not in normalized
+        for banned in ("delet", "suspend", "billing", "terminat", "account will"):
+            assert banned not in normalized
+
+    def test_followup_email_handles_missing_first_name(self):
+        from orchestra.routines.inactivity_notifications import (
+            build_coordinator_inactivity_followup_email,
+        )
+
+        body = build_coordinator_inactivity_followup_email(owner_first_name=None)
+        normalized = re.sub(r"\s+", " ", body.lower())
+        assert "helloooo," in normalized
 
 
 class TestWelcomeSendHelper:
@@ -711,6 +769,47 @@ class TestWelcomeSendHelper:
             new_callable=AsyncMock,
         ) as mock:
             sent = await notif.send_coordinator_welcome_email(
+                recipient_email=None,
+                owner_first_name="Olivia",
+            )
+
+        assert sent is False
+        mock.assert_not_called()
+
+
+class TestFollowupSendHelper:
+    @pytest.mark.anyio
+    async def test_send_followup_routes_through_coordinator_mailbox(self):
+        from orchestra.routines import inactivity_notifications as notif
+
+        with patch.object(
+            notif,
+            "send_coordinator_emails",
+            new_callable=AsyncMock,
+        ) as mock:
+            mock.return_value = True
+            sent = await notif.send_coordinator_inactivity_followup_email(
+                recipient_email="owner@test.com",
+                owner_first_name="Olivia",
+            )
+
+        assert sent is True
+        mock.assert_awaited_once()
+        recipients, subject, body = mock.await_args.args
+        assert recipients == ["owner@test.com"]
+        assert subject == notif.FOLLOWUP_SUBJECT
+        assert "haven't heard from you" in body.lower()
+
+    @pytest.mark.anyio
+    async def test_send_followup_noops_without_recipient(self):
+        from orchestra.routines import inactivity_notifications as notif
+
+        with patch.object(
+            notif,
+            "send_coordinator_emails",
+            new_callable=AsyncMock,
+        ) as mock:
+            sent = await notif.send_coordinator_inactivity_followup_email(
                 recipient_email=None,
                 owner_first_name="Olivia",
             )

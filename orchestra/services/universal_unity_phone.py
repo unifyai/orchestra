@@ -70,6 +70,33 @@ def is_universal_unity_phone_number(number: str | None) -> bool:
     return normalized in set(get_universal_unity_phone_numbers().values())
 
 
+def is_shared_platform_phone_number(
+    session: Session | None,
+    number: str | None,
+) -> bool:
+    """True when *number* is a shared universal Coordinator pool number.
+
+    Such a number is shared by every Coordinator assistant at once (they all
+    resolve to the same platform Twilio number), so it must never be released
+    as part of a single assistant's teardown — releasing it tears the number
+    down for every Coordinator. Covers both the currently-configured universal
+    numbers and any (e.g. rotated-out) number still registered in the shared
+    phone pool. A missing ``session`` still catches configured numbers.
+    """
+    if not number:
+        return False
+    if is_universal_unity_phone_number(number):
+        return True
+    if session is None:
+        return False
+    from orchestra.db.dao.shared_pool_dao import SharedPoolDAO
+
+    return (
+        SharedPoolDAO(session, platform="phone").get_pool_number_by_value(number)
+        is not None
+    )
+
+
 def infer_phone_country(number: str | None) -> str | None:
     if not number:
         return None

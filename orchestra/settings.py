@@ -496,27 +496,25 @@ class Settings(BaseSettings):
 
     # Re-engagement follow-up routine.
     # inactivity_followup_days: days a user can go without interacting
-    #   with ANY of their assistants (incl. the Coordinator) before their
-    #   personal Coordinator is woken to send a re-engagement follow-up.
+    #   with ANY of their assistants (incl. the Coordinator) before
+    #   Orchestra emails a soft check-in from the shared twin@ mailbox.
     #   Measured per-user from the most recent correspondence across all
     #   their assistants (or from signup for users who never engaged).
-    #   Orchestra only decides who/when; the Coordinator's brain composes
-    #   and sends the actual re-engagement message.
     # inactivity_followup_batch_size: upper bound on users processed per
-    #   routine invocation — caps blast radius and keeps the daily Cloud
-    #   Scheduler run bounded.
+    #   routine invocation — caps blast radius and keeps the daily run
+    #   bounded.
     # inactivity_followup_jitter_seconds: per-user random delay
-    #   (0..jitter) applied when dispatching follow-ups so a daily run
-    #   does not wake hundreds of Coordinators in the same second.
+    #   (0..jitter, capped at 2s in the routine) so a batch does not
+    #   hammer the Gmail API in the same instant.
     #
-    # Note: this routine no longer deletes or deprovisions inactive
+    # Note: this routine never deletes or deprovisions inactive
     # assistants — contact lifecycle/cost is governed solely by the
     # billing suspension routine (assistant_contact_suspension). The
     # follow-up is purely a gentle re-engagement prompt, and users who
     # explicitly opt out (``inactivity_followup_opted_out``) are skipped.
     inactivity_followup_days: int = 7
     inactivity_followup_batch_size: int = 200
-    inactivity_followup_jitter_seconds: int = 600
+    inactivity_followup_jitter_seconds: int = 2
 
     @property
     def db_url(self) -> URL:
