@@ -12,13 +12,15 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
 )
+from orchestra.services.task_trigger_service import TaskTriggerTarget
 from orchestra.tests.utils import HEADERS
+from orchestra.web.api.tasks import views as task_views
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_task_trigger_dispatch():
     with patch(
-        "orchestra.web.api.tasks.views._dispatch_task_trigger_to_adapters",
+        "orchestra.web.api.tasks.views._dispatch_task_trigger",
         new_callable=AsyncMock,
     ) as mock_dispatch:
         yield mock_dispatch
@@ -62,6 +64,7 @@ def _seed_task(
     status_value: str = "scheduled",
     name: str = "Review report",
     legacy_context_owner: bool = False,
+    offline: bool = False,
 ) -> LogEvent:
     project = (
         dbsession.query(Project)
@@ -95,6 +98,7 @@ def _seed_task(
             "status": status_value,
             "name": name,
             "description": "Review the weekly report.",
+            "offline": offline,
         },
     )
     dbsession.add(log)
@@ -113,6 +117,24 @@ def _seed_task(
 
 def _auth_user_id() -> str:
     return str(os.getenv("AUTH_ACCOUNT_USER_ID"))
+
+
+def _make_target(**overrides) -> TaskTriggerTarget:
+    base = dict(
+        assistant_id=42,
+        task_id=17,
+        source_task_log_id=9001,
+        destination=None,
+        task_name="Review report",
+        task_description="Review the weekly report.",
+        status="scheduled",
+        instance_id=0,
+        is_local=False,
+        offline=False,
+        activation_revision=None,
+    )
+    base.update(overrides)
+    return TaskTriggerTarget(**base)
 
 
 @pytest.mark.anyio
@@ -137,14 +159,13 @@ async def test_trigger_task_dispatches_to_adapters(
         "assistant_id": assistant_id,
         "status": "accepted",
     }
-    mock_task_trigger_dispatch.assert_awaited_once_with(
-        assistant_id=assistant_id,
-        task_id=17,
-        source_task_log_id=task_row.id,
-        task_label="Review report",
-        task_summary="Review the weekly report.",
-        is_local=False,
-    )
+    mock_task_trigger_dispatch.assert_awaited_once()
+    target = mock_task_trigger_dispatch.await_args.args[0]
+    assert target.assistant_id == assistant_id
+    assert target.task_id == 17
+    assert target.source_task_log_id == task_row.id
+    assert target.task_name == "Review report"
+    assert target.offline is False
 
 
 @pytest.mark.anyio
@@ -174,8 +195,7 @@ async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metad
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     mock_task_trigger_dispatch.assert_awaited_once()
     assert (
-        mock_task_trigger_dispatch.await_args.kwargs["source_task_log_id"]
-        == task_row.id
+        mock_task_trigger_dispatch.await_args.args[0].source_task_log_id == task_row.id
     )
 
 
@@ -210,3 +230,96 @@ async def test_trigger_task_rejects_ambiguous_task_id(
     response = await client.post("/v0/tasks/31/trigger", headers=HEADERS)
 
     assert response.status_code == status.HTTP_409_CONFLICT
+
+
+@pytest.mark.anyio
+async def test_dispatch_hosted_offline_posts_comms_explicit(monkeypatch):
+    target = _make_target(offline=True, activation_revision="rev-abc")
+    posted = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = "ok"
+
+    class _FakeClient:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            posted["url"] = url
+            posted["headers"] = headers
+            posted["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr(task_views, "COMMS_URL", "https://comms.test")
+    monkeypatch.setattr(task_views, "ADMIN_KEY", "admin-key")
+    monkeypatch.setattr(task_views, "get_async_client", lambda: _FakeClient())
+
+    with patch.object(
+        task_views,
+        "_emit_task_trigger_system_event",
+        new_callable=AsyncMock,
+    ) as emit_event:
+        request_id = await task_views._dispatch_task_trigger(target)
+
+    assert request_id
+    emit_event.assert_not_awaited()
+    assert posted["url"] == (
+        "https://comms.test/infra/task-activation/offline-dispatch"
+    )
+    assert posted["json"]["source_type"] == "explicit"
+    assert posted["json"]["execution_mode"] == "offline"
+    assert posted["json"]["activation_revision"] == "rev-abc"
+    assert posted["json"]["source_ref"] == request_id
+    assert posted["headers"]["Authorization"] == "Bearer admin-key"
+
+
+@pytest.mark.anyio
+async def test_dispatch_hosted_live_emits_system_event_only():
+    target = _make_target(offline=False)
+
+    with (
+        patch.object(
+            task_views,
+            "_dispatch_offline_task_to_comms",
+            new_callable=AsyncMock,
+        ) as offline_dispatch,
+        patch.object(
+            task_views,
+            "_emit_task_trigger_system_event",
+            new_callable=AsyncMock,
+        ) as emit_event,
+    ):
+        await task_views._dispatch_task_trigger(target)
+
+    offline_dispatch.assert_not_awaited()
+    emit_event.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_dispatch_local_offline_emits_system_event():
+    target = _make_target(offline=True, is_local=True, activation_revision="rev-local")
+
+    with (
+        patch.object(
+            task_views,
+            "_dispatch_offline_task_to_comms",
+            new_callable=AsyncMock,
+        ) as offline_dispatch,
+        patch.object(
+            task_views,
+            "_emit_task_trigger_system_event",
+            new_callable=AsyncMock,
+        ) as emit_event,
+    ):
+        await task_views._dispatch_task_trigger(target)
+
+    offline_dispatch.assert_not_awaited()
+    emit_event.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_dispatch_hosted_offline_without_revision_raises():
+    target = _make_target(offline=True, activation_revision=None)
+
+    with pytest.raises(Exception) as exc_info:
+        await task_views._dispatch_task_trigger(target)
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT

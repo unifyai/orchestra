@@ -17,6 +17,8 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     TASKS_CONTEXT_NAME,
+    _coerce_bool,
+    get_task_activation,
     is_task_surface_context_name,
 )
 
@@ -39,6 +41,8 @@ class TaskTriggerTarget:
     status: str
     instance_id: int
     is_local: bool
+    offline: bool = False
+    activation_revision: str | None = None
 
 
 class AmbiguousTaskTriggerTargetError(ValueError):
@@ -78,16 +82,29 @@ def resolve_task_trigger_target(
             continue
         if int(assistant.agent_id) != resolved_assistant_id:
             continue
+        destination = _destination_from_context_name(context_name)
+        offline = _coerce_bool(data.get("offline"))
+        activation_revision = None
+        if offline:
+            activation_revision = _activation_revision_for_task(
+                session=session,
+                project_id=project.id,
+                assistant_id=resolved_assistant_id,
+                task_id=task_id,
+                destination=destination,
+            )
         target = TaskTriggerTarget(
             assistant_id=resolved_assistant_id,
             task_id=task_id,
             source_task_log_id=int(row.id),
-            destination=_destination_from_context_name(context_name),
+            destination=destination,
             task_name=str(data.get("name") or f"task {task_id}"),
             task_description=str(data.get("description") or ""),
             status=str(data.get("status") or ""),
             instance_id=_coerce_int(data.get("instance_id")) or 0,
             is_local=bool(assistant.is_local),
+            offline=offline,
+            activation_revision=activation_revision,
         )
         targets_by_assistant.setdefault(resolved_assistant_id, []).append(target)
 
@@ -98,6 +115,31 @@ def resolve_task_trigger_target(
             f"Task id {task_id} is visible on multiple assistants.",
         )
     return _select_current_target(next(iter(targets_by_assistant.values())))
+
+
+def _activation_revision_for_task(
+    *,
+    session: Session,
+    project_id: int,
+    assistant_id: int,
+    task_id: int,
+    destination: str | None,
+) -> str | None:
+    """Return the current activation revision for one offline task, if present."""
+
+    activation = get_task_activation(
+        session,
+        project_id,
+        assistant_id=str(assistant_id),
+        task_id=task_id,
+        destination=destination,
+    )
+    if activation is None or not isinstance(activation.data, dict):
+        return None
+    revision = activation.data.get("activation_revision")
+    if revision in (None, ""):
+        return None
+    return str(revision)
 
 
 def _task_project_for_owner(
