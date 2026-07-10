@@ -1489,20 +1489,55 @@ def set_coordinator_state(
     next_skipped_phase_ids = normalize_onboarding_phase_ids(
         (previous or {}).get("skipped_phase_ids"),
     )
-    if (
-        skip_onboarding_phase is not None
-        and skip_onboarding_phase not in next_skipped_phase_ids
-    ):
-        next_skipped_phase_ids = [
-            phase
-            for phase in SKIPPABLE_ONBOARDING_PHASES
-            if phase == skip_onboarding_phase or phase in next_skipped_phase_ids
+    if skip_onboarding_phase is not None:
+        if skip_onboarding_phase not in next_skipped_phase_ids:
+            next_skipped_phase_ids = [
+                phase
+                for phase in SKIPPABLE_ONBOARDING_PHASES
+                if phase == skip_onboarding_phase or phase in next_skipped_phase_ids
+            ]
+        # Phase skip is leaf skip for every skippable step in the section —
+        # same downward COMPLETED-cascade as skip_onboarding_step — so the
+        # checklist markers, progress, and dependency satisfaction all see
+        # the rows as skipped rather than merely dimmed.
+        phase_step_ids = {
+            step.id
+            for step in onboarding_graph.ONBOARDING_GRAPH
+            if step.phase == skip_onboarding_phase and step.can_skip
+        }
+        skipped_step_set = set(next_skipped_step_ids)
+        for step_id in phase_step_ids:
+            skipped_step_set.add(step_id)
+            skipped_step_set.update(
+                onboarding_graph.completion_blocked_descendants(step_id),
+            )
+        next_skipped_step_ids = [
+            step_id
+            for step_id in SKIPPABLE_ONBOARDING_STEPS
+            if step_id in skipped_step_set
         ]
+        for step_id in skipped_step_set:
+            dispatched_at.pop(step_id, None)
     if unskip_onboarding_phase is not None:
         next_skipped_phase_ids = [
             phase
             for phase in next_skipped_phase_ids
             if phase != unskip_onboarding_phase
+        ]
+        phase_step_ids = {
+            step.id
+            for step in onboarding_graph.ONBOARDING_GRAPH
+            if step.phase == unskip_onboarding_phase
+        }
+        unskipped_step_set = set(phase_step_ids)
+        for step_id in phase_step_ids:
+            unskipped_step_set.update(
+                onboarding_graph.completion_blocked_descendants(step_id),
+            )
+        next_skipped_step_ids = [
+            step_id
+            for step_id in next_skipped_step_ids
+            if step_id not in unskipped_step_set
         ]
     if (
         next_step is not None
