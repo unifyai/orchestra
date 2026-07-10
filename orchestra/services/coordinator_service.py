@@ -1714,6 +1714,11 @@ SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 # live desktop demo (no chips). Twin marks the step done explicitly after the
 # chat attachment via ``set_onboarding_task_state``.
 SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
+# Fired when the user clicks the Their Computer beat row: it starts the
+# filesystem fetch-and-return demo over the linked desktop (no chips, no ring).
+# Twin marks the step done explicitly after the chat attachment via
+# ``set_onboarding_task_state``.
+SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED = "your_computer_beat_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1757,6 +1762,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
         SUBTYPE_LEARNING_BEAT_REQUESTED,
         SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
+        SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )
