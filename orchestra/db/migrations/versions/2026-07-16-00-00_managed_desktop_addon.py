@@ -132,19 +132,6 @@ def upgrade() -> None:
         ),
     )
 
-    bind.execute(
-        text(
-            """
-            UPDATE assistants
-            SET
-                managed_desktop_status = 'active',
-                managed_desktop_enabled_at = NOW()
-            WHERE desktop_mode IN ('ubuntu', 'windows')
-              AND managed_desktop_status IS NULL
-            """,
-        ),
-    )
-
     # Restore the migrator session default for any later revisions in the same run.
     bind.execute(text("SET lock_timeout = '5min'"))
 
