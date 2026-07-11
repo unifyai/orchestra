@@ -5,6 +5,7 @@ import pytest
 
 from orchestra.db.models.orchestra_models import AssistantCleanupTask
 from orchestra.services.assistant_cleanup_service import (
+    STALE_PROCESSING_AFTER,
     AssistantCleanupSpec,
     CleanupSource,
     ContactCleanupSpec,
@@ -409,6 +410,177 @@ async def test_process_assistant_cleanup_tasks_without_task_ids_respects_retry_b
     assert refreshed.status == "pending"
     mock_teardown.assert_not_called()
     mock_deprovision.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_process_assistant_cleanup_tasks_skips_fresh_processing(dbsession):
+    task = AssistantCleanupTask(
+        assistant_id=45,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={"contacts": []},
+        status="processing",
+        processing_started_at=datetime.now(timezone.utc),
+    )
+    dbsession.add(task)
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision:
+        result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task.id])
+
+    dbsession.expire_all()
+    refreshed = dbsession.get(AssistantCleanupTask, task.id)
+    assert result["processed"] == 0
+    assert refreshed is not None
+    assert refreshed.status == "processing"
+    mock_teardown.assert_not_called()
+    mock_deprovision.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_process_assistant_cleanup_tasks_reclaims_stale_processing(dbsession):
+    task = AssistantCleanupTask(
+        assistant_id=46,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={"contacts": []},
+        status="processing",
+        processing_started_at=datetime.now(timezone.utc)
+        - STALE_PROCESSING_AFTER
+        - timedelta(minutes=1),
+    )
+    dbsession.add(task)
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision:
+        mock_teardown.return_value = {
+            "success": True,
+            "assistant_id": "46",
+            "steps": {},
+            "errors": [],
+        }
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+        result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task.id])
+
+    dbsession.expire_all()
+    refreshed = dbsession.get(AssistantCleanupTask, task.id)
+    assert result["processed"] == 1
+    assert result["completed"] == 1
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+
+
+@pytest.mark.anyio
+async def test_process_assistant_cleanup_tasks_commits_claim_before_teardown(
+    dbsession,
+):
+    task = AssistantCleanupTask(
+        assistant_id=47,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={"contacts": []},
+        status="pending",
+    )
+    dbsession.add(task)
+    dbsession.commit()
+    task_id = task.id
+
+    async def _assert_claimed_then_succeed(assistant_id, desktop_mode=None):
+        claimed = dbsession.get(AssistantCleanupTask, task_id)
+        assert claimed is not None
+        assert claimed.status == "processing"
+        assert claimed.processing_started_at is not None
+        return {
+            "success": True,
+            "assistant_id": str(assistant_id),
+            "steps": {},
+            "errors": [],
+        }
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+        side_effect=_assert_claimed_then_succeed,
+    ), patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision:
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+        result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task_id])
+
+    assert result["completed"] == 1
+
+
+@pytest.mark.anyio
+async def test_process_assistant_cleanup_tasks_filters_by_assistant_id(dbsession):
+    keep = AssistantCleanupTask(
+        assistant_id=48,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={"contacts": []},
+        status="pending",
+    )
+    skip = AssistantCleanupTask(
+        assistant_id=49,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={"contacts": []},
+        status="pending",
+    )
+    dbsession.add_all([keep, skip])
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision:
+        mock_teardown.return_value = {
+            "success": True,
+            "assistant_id": "48",
+            "steps": {},
+            "errors": [],
+        }
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+        result = await process_assistant_cleanup_tasks(
+            dbsession,
+            assistant_id=48,
+        )
+
+    dbsession.expire_all()
+    assert result["processed"] == 1
+    assert result["completed"] == 1
+    assert dbsession.get(AssistantCleanupTask, keep.id).status == "completed"
+    assert dbsession.get(AssistantCleanupTask, skip.id).status == "pending"
 
 
 @pytest.mark.anyio
