@@ -1533,9 +1533,12 @@ class VoiceRead(VoiceCreate):
 class DefaultModelOptionRead(BaseModel):
     """One selectable per-assistant default LLM option."""
 
-    model: str = Field(
-        ...,
-        description="unillm 'model@provider' endpoint.",
+    model: Optional[str] = Field(
+        None,
+        description=(
+            "unillm 'model@provider' endpoint. Null means the system default "
+            "(leave the assistant unset so the runtime applies its own defaults)."
+        ),
         example="gpt-5.6-sol@openai",
     )
     reasoning_effort: Optional[str] = Field(

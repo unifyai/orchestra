@@ -23,13 +23,14 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 PLATFORM_DEFAULT_MODEL = "minimax-v3@minimax"
+PLATFORM_DEFAULT_DISPLAY_NAME = "MiniMax-M3"
 
 _AA_MODELS_BASE_URL = "https://artificialanalysis.ai/models"
 
 
 @dataclass(frozen=True)
 class DefaultModelOption:
-    model: str
+    model: Optional[str]
     reasoning_effort: Optional[str]
     label: str
     approx_credits_per_task: int
@@ -41,10 +42,20 @@ def _aa_url(slug: str) -> str:
 
 
 DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
+    # model=None means "leave unset" — the runtime applies its own defaults
+    # (UNIFY_MODEL / SLOW_BRAIN_MODEL, etc.). Distinct from pinning the same
+    # endpoint that currently backs that default.
+    DefaultModelOption(
+        model=None,
+        reasoning_effort=None,
+        label=f"System Default (currently {PLATFORM_DEFAULT_DISPLAY_NAME})",
+        approx_credits_per_task=40,
+        artificial_analysis_url=_aa_url("minimax-m3"),
+    ),
     DefaultModelOption(
         model=PLATFORM_DEFAULT_MODEL,
         reasoning_effort=None,
-        label="MiniMax-M3 (platform default)",
+        label=PLATFORM_DEFAULT_DISPLAY_NAME,
         approx_credits_per_task=40,
         artificial_analysis_url=_aa_url("minimax-m3"),
     ),
@@ -202,7 +213,9 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
 )
 
 _VALID_PAIRS = {
-    (option.model, option.reasoning_effort) for option in DEFAULT_MODEL_OPTIONS
+    (option.model, option.reasoning_effort)
+    for option in DEFAULT_MODEL_OPTIONS
+    if option.model is not None
 }
 
 

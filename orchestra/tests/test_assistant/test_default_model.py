@@ -42,9 +42,14 @@ async def test_list_default_model_options(client: AsyncClient):
     assert resp.status_code == 200
     options = resp.json()["info"]
     assert len(options) == len(DEFAULT_MODEL_OPTIONS)
-    assert options[0]["model"] == PLATFORM_DEFAULT_MODEL
+    assert options[0]["model"] is None
     assert options[0]["reasoning_effort"] is None
+    assert "System Default" in options[0]["label"]
+    assert options[1]["model"] == PLATFORM_DEFAULT_MODEL
+    assert options[1]["label"] == "MiniMax-M3"
     pairs = {(o["model"], o["reasoning_effort"]) for o in options}
+    assert (None, None) in pairs
+    assert (PLATFORM_DEFAULT_MODEL, None) in pairs
     assert ("gpt-5.6-sol@openai", "high") in pairs
     assert ("gpt-5.6-terra@openai", "medium") in pairs
     assert ("gpt-5.6-luna@openai", "low") in pairs
@@ -62,11 +67,13 @@ async def test_list_default_model_options(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_default_model_options_costs_rank_sensibly(client: AsyncClient):
-    """Within a model, higher effort costs more; the default is the cheapest."""
+    """Within a concrete model, higher effort costs more; system default is cheapest."""
     resp = await client.get("/v0/assistant/default-model-options", headers=HEADERS)
     options = resp.json()["info"]
     by_model: dict = {}
     for o in options:
+        if o["model"] is None:
+            continue
         by_model.setdefault(o["model"], []).append(o["approx_credits_per_task"])
     for model, costs in by_model.items():
         assert costs == sorted(costs), model
