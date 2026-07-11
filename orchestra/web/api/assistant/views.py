@@ -143,7 +143,7 @@ from orchestra.services.universal_unity_discord import (
     notify_comms_discord_sync,
 )
 from orchestra.settings import settings
-from orchestra.web.api.assistant.default_models import DEFAULT_MODEL_OPTIONS
+from orchestra.web.api.assistant.default_models import list_model_options
 from orchestra.web.api.assistant.schema import (
     AdminUpdateAssistant,
     AdminUpdateAssistantResponse,
@@ -275,6 +275,8 @@ RUNTIME_FACING_ASSISTANT_UPDATE_FIELDS = frozenset(
         "voice_provider",
         "default_model",
         "default_reasoning_effort",
+        "slow_brain_model",
+        "slow_brain_reasoning_effort",
     },
 )
 
@@ -819,6 +821,8 @@ def _build_assistant_read(
         voice_provider=a.voice_provider,
         default_model=a.default_model,
         default_reasoning_effort=a.default_reasoning_effort,
+        slow_brain_model=a.slow_brain_model,
+        slow_brain_reasoning_effort=a.slow_brain_reasoning_effort,
         timezone=a.timezone,
         demo_id=a.demo_id,
         is_local=a.is_local,
@@ -1196,6 +1200,8 @@ async def create_assistant(
             voice_provider=assistant_in.voice_provider,
             default_model=assistant_in.default_model,
             default_reasoning_effort=assistant_in.default_reasoning_effort,
+            slow_brain_model=assistant_in.slow_brain_model,
+            slow_brain_reasoning_effort=assistant_in.slow_brain_reasoning_effort,
             timezone=assistant_in.timezone,
             organization_id=organization_id,
             owner_team_id=assistant_in.owner_team_id,
@@ -5605,12 +5611,23 @@ async def clone_voice(
     summary="List default model options",
     description=(
         "Returns the curated catalog of multimodal LLM options that can be "
-        "set as an assistant's default model."
+        "set as an assistant's default (actor) or slow-brain model. Pass "
+        "usage=slow_brain to label the system-default row for the platform "
+        "slow-brain default."
     ),
     tags=["Assistant Management"],
 )
-def list_default_model_options() -> InfoResponse[List[DefaultModelOptionRead]]:
-    """List the selectable per-assistant default LLM options."""
+def list_default_model_options(
+    usage: Literal["actor", "slow_brain"] = Query(
+        "actor",
+        description=(
+            "Which runtime role the catalog is for. Affects only the "
+            "system-default option's label and per-message credit display; "
+            "the selectable model pairs are identical."
+        ),
+    ),
+) -> InfoResponse[List[DefaultModelOptionRead]]:
+    """List the selectable per-assistant LLM options."""
     return InfoResponse(
         info=[
             DefaultModelOptionRead(
@@ -5618,9 +5635,10 @@ def list_default_model_options() -> InfoResponse[List[DefaultModelOptionRead]]:
                 reasoning_effort=option.reasoning_effort,
                 label=option.label,
                 approx_credits_per_task=option.approx_credits_per_task,
+                approx_credits_per_message=option.approx_credits_per_message,
                 artificial_analysis_url=option.artificial_analysis_url,
             )
-            for option in DEFAULT_MODEL_OPTIONS
+            for option in list_model_options(usage)
         ],
     )
 
@@ -8635,6 +8653,8 @@ async def create_demo_assistant(
             voice_provider=source_assistant.voice_provider,
             default_model=source_assistant.default_model,
             default_reasoning_effort=source_assistant.default_reasoning_effort,
+            slow_brain_model=source_assistant.slow_brain_model,
+            slow_brain_reasoning_effort=source_assistant.slow_brain_reasoning_effort,
             # Demo-specific settings
             timezone="UTC",  # Default timezone for demos
             monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),

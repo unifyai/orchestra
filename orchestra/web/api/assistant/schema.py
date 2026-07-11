@@ -12,7 +12,10 @@ from pydantic import (
 )
 from pydantic.generics import GenericModel
 
-from orchestra.web.api.assistant.default_models import is_valid_default_model
+from orchestra.web.api.assistant.default_models import (
+    is_valid_default_model,
+    is_valid_slow_brain_model,
+)
 from orchestra.web.api.utils.safe_text import (
     MAX_LABEL_LENGTH,
     OptionalSafeLabel,
@@ -174,6 +177,24 @@ class AssistantCreate(BaseModel):
         ),
         example="high",
     )
+    slow_brain_model: Optional[str] = Field(
+        None,
+        description=(
+            "ConversationManager slow-brain LLM as a unillm "
+            "'model@provider' endpoint. Must be a catalog option "
+            "(see GET /assistant/default-model-options?usage=slow_brain). "
+            "NULL means the platform slow-brain default applies."
+        ),
+        example="gpt-5.6-terra@openai",
+    )
+    slow_brain_reasoning_effort: Optional[str] = Field(
+        None,
+        description=(
+            "Reasoning-effort level paired with 'slow_brain_model'. Must "
+            "match the selected catalog option."
+        ),
+        example="high",
+    )
     create_infra: Optional[bool] = Field(
         True,
         description="Whether to create the infrastructure for the assistant (pubsub, VM, etc.)",
@@ -267,6 +288,23 @@ class AssistantCreate(BaseModel):
                     f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
                     "is not a valid default model option. See "
                     "GET /assistant/default-model-options.",
+                )
+            if (
+                self.slow_brain_reasoning_effort is not None
+                and self.slow_brain_model is None
+            ):
+                raise ValueError(
+                    "'slow_brain_reasoning_effort' requires 'slow_brain_model'.",
+                )
+            if self.slow_brain_model is not None and not is_valid_slow_brain_model(
+                self.slow_brain_model,
+                self.slow_brain_reasoning_effort,
+            ):
+                raise ValueError(
+                    f"({self.slow_brain_model!r}, "
+                    f"{self.slow_brain_reasoning_effort!r}) "
+                    "is not a valid slow-brain model option. See "
+                    "GET /assistant/default-model-options?usage=slow_brain.",
                 )
         return self
 
@@ -1300,6 +1338,24 @@ class AssistantUpdate(BaseModel):
         ),
         example="high",
     )
+    slow_brain_model: Optional[str] = Field(
+        None,
+        description=(
+            "ConversationManager slow-brain LLM as a unillm "
+            "'model@provider' endpoint. Must be a catalog option "
+            "(see GET /assistant/default-model-options?usage=slow_brain). "
+            "Send null to reset to the platform slow-brain default."
+        ),
+        example="gpt-5.6-terra@openai",
+    )
+    slow_brain_reasoning_effort: Optional[str] = Field(
+        None,
+        description=(
+            "Reasoning-effort level paired with 'slow_brain_model'. Must "
+            "match the selected catalog option."
+        ),
+        example="high",
+    )
     timezone: Optional[str] = Field(
         None,
         description="Timezone of the assistant in IANA format",
@@ -1395,6 +1451,40 @@ class AssistantUpdate(BaseModel):
                 f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
                 "is not a valid default model option. See "
                 "GET /assistant/default-model-options.",
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def check_slow_brain_model_fields_on_update(cls, self):
+        """Validate slow-brain model fields for PATCH operations."""
+        provided = self.__pydantic_fields_set__
+
+        has_model = "slow_brain_model" in provided
+        has_effort = "slow_brain_reasoning_effort" in provided
+
+        if not any([has_model, has_effort]):
+            return self
+
+        if has_model and self.slow_brain_model is None:
+            self.slow_brain_reasoning_effort = None
+            return self
+
+        if not has_model:
+            raise ValueError(
+                "'slow_brain_reasoning_effort' cannot be updated without "
+                "'slow_brain_model'.",
+            )
+
+        if not is_valid_slow_brain_model(
+            self.slow_brain_model,
+            self.slow_brain_reasoning_effort,
+        ):
+            raise ValueError(
+                f"({self.slow_brain_model!r}, "
+                f"{self.slow_brain_reasoning_effort!r}) "
+                "is not a valid slow-brain model option. See "
+                "GET /assistant/default-model-options?usage=slow_brain.",
             )
 
         return self
@@ -1561,6 +1651,16 @@ class DefaultModelOptionRead(BaseModel):
             "costs at this option, in customer-facing credits. Display-only."
         ),
         example=475,
+    )
+    approx_credits_per_message: int = Field(
+        ...,
+        description=(
+            "Order-of-magnitude estimate of what one typical ConversationManager "
+            "slow-brain message costs at this option, in customer-facing "
+            "credits. Derived from raw token rates for a controlled turn "
+            "budget. Display-only."
+        ),
+        example=25,
     )
     artificial_analysis_url: str = Field(
         ...,

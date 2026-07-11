@@ -1,31 +1,54 @@
-"""Curated catalog of per-assistant default LLM options.
+"""Curated catalog of per-assistant LLM options (actor default + slow brain).
 
 Each option pairs a unillm ``model@provider`` endpoint with a reasoning-effort
 level. Only multimodal models (native image input) are eligible, because the
-assistant runtime routes screenshots and other image content through its
-default model's call sites.
+assistant runtime routes screenshots and other image content through these
+call sites.
 
 An option with ``reasoning_effort=None`` leaves the runtime's per-call-site
-effort levels untouched; a concrete effort overrides them wherever the default
-model is used.
+effort levels untouched; a concrete effort overrides them wherever that model
+is used.
 
-``approx_credits_per_task`` is a display-only, order-of-magnitude estimate of
-what one typical assistant task costs at that option, in customer-facing
-credits (1 USD of billed provider cost = 400 credits, billed at a 1.2x margin
-on provider rates). The high-effort figures are anchored to Artificial
-Analysis's "Cost per Intelligence Index Task" measurements (heavyweight
-agentic benchmark tasks at max/xhigh effort); medium and low efforts are
-scaled to roughly 70% and 50% of the high anchor. Real tasks vary by an order
-of magnitude either way — treat these as relative price signals, not quotes.
+Credit estimates (display-only; 1 USD billed provider cost = 400 credits, at a
+1.2x margin on provider rates):
+
+- ``approx_credits_per_task`` — order-of-magnitude cost of one typical
+  CodeActActor / tool-loop task. High-effort figures are anchored to Artificial
+  Analysis's "Cost per Intelligence Index Task"; medium/low scale to ~70%/50%
+  of the high anchor. Real tasks vary widely.
+- ``approx_credits_per_message`` — cost of one typical ConversationManager
+  slow-brain turn, derived from raw token rates for a controlled budget of
+  ~12k input tokens plus effort-scaled output (low ~400 / medium ~800 /
+  high ~1500 / unset ~600). Slow-brain turns are far more constrained than
+  open-ended actor tasks, so token math is a better signal than AA task
+  anchors here.
 """
 
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Literal, Optional, Tuple
 
 PLATFORM_DEFAULT_MODEL = "minimax-v3@minimax"
 PLATFORM_DEFAULT_DISPLAY_NAME = "MiniMax-M3"
 
+# Matches Unify's UNITY_CONVERSATION_SLOW_BRAIN_* defaults.
+PLATFORM_SLOW_BRAIN_MODEL = "gpt-5.6-terra@openai"
+PLATFORM_SLOW_BRAIN_DISPLAY_NAME = "GPT-5.6 Terra"
+PLATFORM_SLOW_BRAIN_REASONING_EFFORT = "high"
+
 _AA_MODELS_BASE_URL = "https://artificialanalysis.ai/models"
+
+# Typical slow-brain conversational turn token budget.
+_MSG_INPUT_TOKENS = 12_000
+_MSG_OUTPUT_BY_EFFORT = {
+    None: 600,
+    "low": 400,
+    "medium": 800,
+    "high": 1_500,
+}
+_MARGIN = 1.2
+_CREDITS_PER_USD = 400
 
 
 @dataclass(frozen=True)
@@ -34,6 +57,7 @@ class DefaultModelOption:
     reasoning_effort: Optional[str]
     label: str
     approx_credits_per_task: int
+    approx_credits_per_message: int
     artificial_analysis_url: str
 
 
@@ -41,174 +65,259 @@ def _aa_url(slug: str) -> str:
     return f"{_AA_MODELS_BASE_URL}/{slug}"
 
 
+def _msg_credits(
+    input_usd_per_m: float,
+    output_usd_per_m: float,
+    effort: Optional[str],
+) -> int:
+    """Credits for one typical slow-brain message at the given token rates."""
+
+    out_tokens = _MSG_OUTPUT_BY_EFFORT[effort]
+    usd = (
+        input_usd_per_m * _MSG_INPUT_TOKENS + output_usd_per_m * out_tokens
+    ) / 1_000_000
+    return max(1, round(usd * _MARGIN * _CREDITS_PER_USD))
+
+
+def _opt(
+    *,
+    model: Optional[str],
+    reasoning_effort: Optional[str],
+    label: str,
+    approx_credits_per_task: int,
+    input_usd_per_m: float,
+    output_usd_per_m: float,
+    aa_slug: str,
+) -> DefaultModelOption:
+    return DefaultModelOption(
+        model=model,
+        reasoning_effort=reasoning_effort,
+        label=label,
+        approx_credits_per_task=approx_credits_per_task,
+        approx_credits_per_message=_msg_credits(
+            input_usd_per_m,
+            output_usd_per_m,
+            reasoning_effort,
+        ),
+        artificial_analysis_url=_aa_url(aa_slug),
+    )
+
+
 DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
     # model=None means "leave unset" — the runtime applies its own defaults
-    # (UNIFY_MODEL / SLOW_BRAIN_MODEL, etc.). Distinct from pinning the same
-    # endpoint that currently backs that default.
-    DefaultModelOption(
+    # (UNIFY_MODEL for actor / SLOW_BRAIN_MODEL for slow brain). Distinct from
+    # pinning the same endpoint that currently backs that default.
+    _opt(
         model=None,
         reasoning_effort=None,
         label=f"System Default (currently {PLATFORM_DEFAULT_DISPLAY_NAME})",
         approx_credits_per_task=40,
-        artificial_analysis_url=_aa_url("minimax-m3"),
+        input_usd_per_m=0.30,
+        output_usd_per_m=1.20,
+        aa_slug="minimax-m3",
     ),
-    DefaultModelOption(
+    _opt(
         model=PLATFORM_DEFAULT_MODEL,
         reasoning_effort=None,
         label=PLATFORM_DEFAULT_DISPLAY_NAME,
         approx_credits_per_task=40,
-        artificial_analysis_url=_aa_url("minimax-m3"),
+        input_usd_per_m=0.30,
+        output_usd_per_m=1.20,
+        aa_slug="minimax-m3",
     ),
-    DefaultModelOption(
+    _opt(
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="low",
         label="Gemini 3.1 Pro (low thinking)",
         approx_credits_per_task=100,
-        artificial_analysis_url=_aa_url("gemini-3-1-pro-preview"),
+        input_usd_per_m=1.25,
+        output_usd_per_m=10.0,
+        aa_slug="gemini-3-1-pro-preview",
     ),
-    DefaultModelOption(
+    _opt(
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="medium",
         label="Gemini 3.1 Pro (medium thinking)",
         approx_credits_per_task=140,
-        artificial_analysis_url=_aa_url("gemini-3-1-pro-preview"),
+        input_usd_per_m=1.25,
+        output_usd_per_m=10.0,
+        aa_slug="gemini-3-1-pro-preview",
     ),
-    DefaultModelOption(
+    _opt(
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="high",
         label="Gemini 3.1 Pro (high thinking)",
         approx_credits_per_task=200,
-        artificial_analysis_url=_aa_url("gemini-3-1-pro-preview"),
+        input_usd_per_m=1.25,
+        output_usd_per_m=10.0,
+        aa_slug="gemini-3-1-pro-preview",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-luna@openai",
         reasoning_effort="low",
         label="GPT-5.6 Luna (low thinking)",
         approx_credits_per_task=50,
-        artificial_analysis_url=_aa_url("gpt-5-6-luna"),
+        input_usd_per_m=1.0,
+        output_usd_per_m=6.0,
+        aa_slug="gpt-5-6-luna",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-luna@openai",
         reasoning_effort="medium",
         label="GPT-5.6 Luna (medium thinking)",
         approx_credits_per_task=70,
-        artificial_analysis_url=_aa_url("gpt-5-6-luna"),
+        input_usd_per_m=1.0,
+        output_usd_per_m=6.0,
+        aa_slug="gpt-5-6-luna",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-luna@openai",
         reasoning_effort="high",
         label="GPT-5.6 Luna (high thinking)",
         approx_credits_per_task=95,
-        artificial_analysis_url=_aa_url("gpt-5-6-luna"),
+        input_usd_per_m=1.0,
+        output_usd_per_m=6.0,
+        aa_slug="gpt-5-6-luna",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-terra@openai",
         reasoning_effort="low",
         label="GPT-5.6 Terra (low thinking)",
         approx_credits_per_task=120,
-        artificial_analysis_url=_aa_url("gpt-5-6-terra"),
+        input_usd_per_m=2.50,
+        output_usd_per_m=15.0,
+        aa_slug="gpt-5-6-terra",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-terra@openai",
         reasoning_effort="medium",
         label="GPT-5.6 Terra (medium thinking)",
         approx_credits_per_task=170,
-        artificial_analysis_url=_aa_url("gpt-5-6-terra"),
+        input_usd_per_m=2.50,
+        output_usd_per_m=15.0,
+        aa_slug="gpt-5-6-terra",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-terra@openai",
         reasoning_effort="high",
         label="GPT-5.6 Terra (high thinking)",
         approx_credits_per_task=240,
-        artificial_analysis_url=_aa_url("gpt-5-6-terra"),
+        input_usd_per_m=2.50,
+        output_usd_per_m=15.0,
+        aa_slug="gpt-5-6-terra",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-sol@openai",
         reasoning_effort="low",
         label="GPT-5.6 Sol (low thinking)",
         approx_credits_per_task=240,
-        artificial_analysis_url=_aa_url("gpt-5-6-sol"),
+        input_usd_per_m=5.0,
+        output_usd_per_m=30.0,
+        aa_slug="gpt-5-6-sol",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-sol@openai",
         reasoning_effort="medium",
         label="GPT-5.6 Sol (medium thinking)",
         approx_credits_per_task=330,
-        artificial_analysis_url=_aa_url("gpt-5-6-sol"),
+        input_usd_per_m=5.0,
+        output_usd_per_m=30.0,
+        aa_slug="gpt-5-6-sol",
     ),
-    DefaultModelOption(
+    _opt(
         model="gpt-5.6-sol@openai",
         reasoning_effort="high",
         label="GPT-5.6 Sol (high thinking)",
         approx_credits_per_task=475,
-        artificial_analysis_url=_aa_url("gpt-5-6-sol"),
+        input_usd_per_m=5.0,
+        output_usd_per_m=30.0,
+        aa_slug="gpt-5-6-sol",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-4.8-opus@anthropic",
         reasoning_effort="low",
         label="Claude Opus 4.8 (low thinking)",
         approx_credits_per_task=430,
-        artificial_analysis_url=_aa_url("claude-opus-4-8"),
+        input_usd_per_m=5.0,
+        output_usd_per_m=25.0,
+        aa_slug="claude-opus-4-8",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-4.8-opus@anthropic",
         reasoning_effort="medium",
         label="Claude Opus 4.8 (medium thinking)",
         approx_credits_per_task=600,
-        artificial_analysis_url=_aa_url("claude-opus-4-8"),
+        input_usd_per_m=5.0,
+        output_usd_per_m=25.0,
+        aa_slug="claude-opus-4-8",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-4.8-opus@anthropic",
         reasoning_effort="high",
         label="Claude Opus 4.8 (high thinking)",
         approx_credits_per_task=850,
-        artificial_analysis_url=_aa_url("claude-opus-4-8"),
+        input_usd_per_m=5.0,
+        output_usd_per_m=25.0,
+        aa_slug="claude-opus-4-8",
     ),
     # Sonnet 5 has cheaper token rates than Opus 4.8 ($3/$15 vs $5/$25) but a
     # HIGHER per-task cost: it runs ~3x the agent loops and its tokenizer
     # inflates counts ~30%, so Artificial Analysis measures $2.29/task vs
-    # Opus 4.8's $1.78. The estimates deliberately reflect per-task reality.
-    DefaultModelOption(
+    # Opus 4.8's $1.78. The task estimates deliberately reflect per-task reality;
+    # message estimates stay on raw token rates.
+    _opt(
         model="claude-sonnet-5@anthropic",
         reasoning_effort="low",
         label="Claude Sonnet 5 (low thinking)",
         approx_credits_per_task=550,
-        artificial_analysis_url=_aa_url("claude-sonnet-5"),
+        input_usd_per_m=3.0,
+        output_usd_per_m=15.0,
+        aa_slug="claude-sonnet-5",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-sonnet-5@anthropic",
         reasoning_effort="medium",
         label="Claude Sonnet 5 (medium thinking)",
         approx_credits_per_task=770,
-        artificial_analysis_url=_aa_url("claude-sonnet-5"),
+        input_usd_per_m=3.0,
+        output_usd_per_m=15.0,
+        aa_slug="claude-sonnet-5",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-sonnet-5@anthropic",
         reasoning_effort="high",
         label="Claude Sonnet 5 (high thinking)",
         approx_credits_per_task=1100,
-        artificial_analysis_url=_aa_url("claude-sonnet-5"),
+        input_usd_per_m=3.0,
+        output_usd_per_m=15.0,
+        aa_slug="claude-sonnet-5",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-fable-5@anthropic",
         reasoning_effort="low",
         label="Claude Fable 5 (low thinking)",
         approx_credits_per_task=780,
-        artificial_analysis_url=_aa_url("claude-fable-5"),
+        input_usd_per_m=10.0,
+        output_usd_per_m=50.0,
+        aa_slug="claude-fable-5",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-fable-5@anthropic",
         reasoning_effort="medium",
         label="Claude Fable 5 (medium thinking)",
         approx_credits_per_task=1100,
-        artificial_analysis_url=_aa_url("claude-fable-5"),
+        input_usd_per_m=10.0,
+        output_usd_per_m=50.0,
+        aa_slug="claude-fable-5",
     ),
-    DefaultModelOption(
+    _opt(
         model="claude-fable-5@anthropic",
         reasoning_effort="high",
         label="Claude Fable 5 (high thinking)",
         approx_credits_per_task=1550,
-        artificial_analysis_url=_aa_url("claude-fable-5"),
+        input_usd_per_m=10.0,
+        output_usd_per_m=50.0,
+        aa_slug="claude-fable-5",
     ),
 )
 
@@ -218,6 +327,20 @@ _VALID_PAIRS = {
     if option.model is not None
 }
 
+# Terra high — used for the slow-brain system-default credit display.
+_SLOW_BRAIN_SYSTEM_DEFAULT_CREDITS = next(
+    option.approx_credits_per_message
+    for option in DEFAULT_MODEL_OPTIONS
+    if option.model == PLATFORM_SLOW_BRAIN_MODEL
+    and option.reasoning_effort == PLATFORM_SLOW_BRAIN_REASONING_EFFORT
+)
+_SLOW_BRAIN_SYSTEM_DEFAULT_URL = next(
+    option.artificial_analysis_url
+    for option in DEFAULT_MODEL_OPTIONS
+    if option.model == PLATFORM_SLOW_BRAIN_MODEL
+    and option.reasoning_effort == PLATFORM_SLOW_BRAIN_REASONING_EFFORT
+)
+
 
 def is_valid_default_model(
     model: str,
@@ -226,3 +349,25 @@ def is_valid_default_model(
     """Return whether (model, reasoning_effort) is a catalog option."""
 
     return (model, reasoning_effort) in _VALID_PAIRS
+
+
+# Alias: slow brain uses the same curated pairs as the actor default.
+is_valid_slow_brain_model = is_valid_default_model
+
+
+def list_model_options(
+    usage: Literal["actor", "slow_brain"] = "actor",
+) -> Tuple[DefaultModelOption, ...]:
+    """Return catalog options, with the system-default row labeled for ``usage``."""
+
+    if usage == "actor":
+        return DEFAULT_MODEL_OPTIONS
+
+    system_default = replace(
+        DEFAULT_MODEL_OPTIONS[0],
+        label=f"System Default (currently {PLATFORM_SLOW_BRAIN_DISPLAY_NAME})",
+        approx_credits_per_task=DEFAULT_MODEL_OPTIONS[0].approx_credits_per_task,
+        approx_credits_per_message=_SLOW_BRAIN_SYSTEM_DEFAULT_CREDITS,
+        artificial_analysis_url=_SLOW_BRAIN_SYSTEM_DEFAULT_URL,
+    )
+    return (system_default, *DEFAULT_MODEL_OPTIONS[1:])
