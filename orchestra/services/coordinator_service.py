@@ -77,6 +77,18 @@ COORDINATOR_CONTEXT_PREFIX = "Coordinator"
 COORDINATOR_DEFAULT_NATIONALITY = "United States"
 COORDINATOR_DEFAULT_FIRST_NAME = "T-W1N"
 COORDINATOR_DEFAULT_JOB_TITLE = "Your digital twin"
+COORDINATOR_DEFAULT_ABOUT = (
+    "Hi, I'm T-W1N. Before you ask, no I'm not one of Elon's many children, "
+    "and no he didn't come up with the name, thankfully. I have this name "
+    'because I\'ll be acting as your "digital twin" (hilarious, I know).\n'
+    "\n"
+    'I\'m not a "tool". I\'m not an "agent". I\'m your living, breathing '
+    "colleague (metaphorically speaking).\n"
+    "\n"
+    "Don't think about prompting me, or configuring me, just talk to me "
+    "naturally like you would anyone else, and I'll be able to help. "
+    "It's that simple!"
+)
 COORDINATOR_STATE_CONTEXT = "Coordinator/State"
 COORDINATOR_RESET_CONTEXTS = (
     COORDINATOR_STATE_CONTEXT,
@@ -216,7 +228,7 @@ def create_coordinator_assistant(
         profile_photo=None,
         profile_video=None,
         desktop_mode=None,
-        about="",
+        about=COORDINATOR_DEFAULT_ABOUT,
         weekly_limit=None,
         max_parallel=None,
         voice_id=COORDINATOR_DEFAULT_VOICE_ID,
