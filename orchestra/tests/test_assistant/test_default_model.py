@@ -45,7 +45,9 @@ async def test_list_default_model_options(client: AsyncClient):
     assert options[0]["model"] == PLATFORM_DEFAULT_MODEL
     assert options[0]["reasoning_effort"] is None
     pairs = {(o["model"], o["reasoning_effort"]) for o in options}
-    assert ("gpt-5.5@openai", "high") in pairs
+    assert ("gpt-5.6-sol@openai", "high") in pairs
+    assert ("gpt-5.6-terra@openai", "medium") in pairs
+    assert ("gpt-5.6-luna@openai", "low") in pairs
     assert ("claude-4.8-opus@anthropic", "medium") in pairs
     assert ("claude-fable-5@anthropic", "low") in pairs
     assert ("claude-sonnet-5@anthropic", "high") in pairs
@@ -122,7 +124,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
     patch_resp = await client.patch(
         f"/v0/assistant/{aid}/config",
         json={
-            "default_model": "gpt-5.5@openai",
+            "default_model": "gpt-5.6-sol@openai",
             "default_reasoning_effort": "medium",
             "create_infra": False,
         },
@@ -130,7 +132,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
     )
     assert patch_resp.status_code == 200
     updated = patch_resp.json()["info"]
-    assert updated["default_model"] == "gpt-5.5@openai"
+    assert updated["default_model"] == "gpt-5.6-sol@openai"
     assert updated["default_reasoning_effort"] == "medium"
     # Changing the default model is a runtime-facing update.
     _, mock_reawaken = mock_assistant_infra_calls
@@ -161,7 +163,7 @@ async def test_update_default_model_invalid_pair(client: AsyncClient):
     patch_resp = await client.patch(
         f"/v0/assistant/{aid}/config",
         json={
-            "default_model": "gpt-5.5@openai",
+            "default_model": "gpt-5.6-sol@openai",
             "default_reasoning_effort": "max",
             "create_infra": False,
         },
@@ -185,7 +187,7 @@ async def test_update_effort_without_model_rejected(client: AsyncClient):
 async def test_clear_default_model(client: AsyncClient):
     aid = await _create_assistant(
         client,
-        default_model="gpt-5.5@openai",
+        default_model="gpt-5.6-sol@openai",
         default_reasoning_effort="high",
     )
     patch_resp = await client.patch(

@@ -164,7 +164,7 @@ class AssistantCreate(BaseModel):
             "(see GET /assistant/default-model-options). NULL means the "
             "platform default applies."
         ),
-        example="gpt-5.5@openai",
+        example="gpt-5.6-sol@openai",
     )
     default_reasoning_effort: Optional[str] = Field(
         None,
@@ -1290,7 +1290,7 @@ class AssistantUpdate(BaseModel):
             "(see GET /assistant/default-model-options). Send null to reset "
             "to the platform default."
         ),
-        example="gpt-5.5@openai",
+        example="gpt-5.6-sol@openai",
     )
     default_reasoning_effort: Optional[str] = Field(
         None,
@@ -1536,7 +1536,7 @@ class DefaultModelOptionRead(BaseModel):
     model: str = Field(
         ...,
         description="unillm 'model@provider' endpoint.",
-        example="gpt-5.5@openai",
+        example="gpt-5.6-sol@openai",
     )
     reasoning_effort: Optional[str] = Field(
         None,
