@@ -1521,6 +1521,99 @@ def test_task_outbound_operation_create_or_adopt_reports_adoption_after_upsert_r
     assert created is False
 
 
+def test_get_task_activation_is_read_only(monkeypatch):
+    """Activation lookup must not create contexts or upsert field types."""
+
+    fake_session = SimpleNamespace()
+    ensure_calls: list[dict] = []
+    migrate_calls: list[dict] = []
+    activation_row = SimpleNamespace(
+        id=11,
+        data={"activation_key": "42:7", "activation_revision": "rev-1"},
+    )
+
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "resolve_tasks_context_name",
+        lambda **kwargs: TASKS_CONTEXT,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "ensure_task_machine_contexts",
+        lambda **kwargs: ensure_calls.append(kwargs)
+        or SimpleNamespace(
+            activations_context_id=99,
+        ),
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_migrate_legacy_machine_row_if_present",
+        lambda **kwargs: migrate_calls.append(kwargs) or None,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "lookup_task_machine_activation_context_id",
+        lambda **kwargs: 55,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_get_machine_row_by_unique_field",
+        lambda **kwargs: activation_row,
+    )
+
+    activation = task_machine_state_service.get_task_activation(
+        session=fake_session,
+        project_id=1,
+        assistant_id="42",
+        task_id=7,
+    )
+
+    assert activation is activation_row
+    assert ensure_calls == []
+    assert migrate_calls == []
+
+
+def test_get_task_activation_returns_none_without_creating_contexts(monkeypatch):
+    """Missing activation contexts should yield None without schema writes."""
+
+    fake_session = SimpleNamespace()
+    ensure_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "resolve_tasks_context_name",
+        lambda **kwargs: TASKS_CONTEXT,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "ensure_task_machine_contexts",
+        lambda **kwargs: ensure_calls.append(kwargs)
+        or SimpleNamespace(
+            activations_context_id=99,
+        ),
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "lookup_task_machine_activation_context_id",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_get_context_id",
+        lambda **kwargs: None,
+    )
+
+    activation = task_machine_state_service.get_task_activation(
+        session=fake_session,
+        project_id=1,
+        assistant_id="42",
+        task_id=7,
+    )
+
+    assert activation is None
+    assert ensure_calls == []
+
+
 @pytest.mark.anyio
 async def test_task_outbound_operation_update_mutates_existing_row(
     client: AsyncClient,

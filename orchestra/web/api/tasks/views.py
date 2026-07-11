@@ -234,6 +234,12 @@ async def trigger_task(
             detail="Task not found.",
         )
 
+    # Release any resolve-time DB locks before outbound HTTP. Offline dispatch
+    # re-enters Orchestra via /admin/task-activation/current; holding this
+    # request transaction open across that round-trip causes field_type lock
+    # timeouts under concurrent ensure/upsert paths.
+    session.commit()
+
     await _dispatch_task_trigger(target)
     return InfoResponse(
         info=TaskTriggerStatus(

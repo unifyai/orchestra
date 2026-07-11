@@ -380,3 +380,48 @@ async def test_dispatch_hosted_offline_without_revision_raises():
         await task_views._dispatch_task_trigger(target)
 
     assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+
+
+@pytest.mark.anyio
+async def test_trigger_commits_session_before_dispatch(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+):
+    """Outbound dispatch must not run while the resolve transaction is open."""
+
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=51,
+    )
+    order: list[str] = []
+    original_commit = dbsession.commit
+
+    def _tracking_commit(*args, **kwargs):
+        order.append("commit")
+        return original_commit(*args, **kwargs)
+
+    async def _tracking_dispatch(target):
+        order.append("dispatch")
+        assert target.task_id == 51
+
+    dbsession.commit = _tracking_commit  # type: ignore[method-assign]
+    try:
+        with patch(
+            "orchestra.web.api.tasks.views._dispatch_task_trigger",
+            new=_tracking_dispatch,
+        ):
+            response = await client.post(
+                "/v0/tasks/51/trigger",
+                headers=HEADERS,
+                json={"assistant_id": assistant_id},
+            )
+    finally:
+        dbsession.commit = original_commit  # type: ignore[method-assign]
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    assert "commit" in order
+    assert "dispatch" in order
+    assert order.index("commit") < order.index("dispatch")
