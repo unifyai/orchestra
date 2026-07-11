@@ -35,6 +35,7 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.services import coordinator_service as svc
 from orchestra.services.coordinator_service import (
+    COORDINATOR_DEFAULT_ABOUT,
     COORDINATOR_DEFAULT_FIRST_NAME,
     COORDINATOR_DEFAULT_JOB_TITLE,
 )
@@ -371,7 +372,7 @@ def _assert_coordinator_provisioned(
     assert coordinator.user_id == owner_user_id
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    assert coordinator.about == ""
+    assert coordinator.about == COORDINATOR_DEFAULT_ABOUT
     assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
     assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
     only_org_coordinator = dbsession.scalar(
@@ -1865,7 +1866,7 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     assert coordinator is not None
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    assert coordinator.about == ""
+    assert coordinator.about == COORDINATOR_DEFAULT_ABOUT
     assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
     assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
     coordinator.nationality = None
@@ -1881,7 +1882,7 @@ async def test_personal_opt_in_repairs_defaults_and_generic_surfaces_reject_flag
     dbsession.refresh(coordinator)
     assert coordinator.nationality == EXPECTED_COORDINATOR_DEFAULT_NATIONALITY
     assert coordinator.desktop_mode == EXPECTED_COORDINATOR_DEFAULT_DESKTOP_MODE
-    assert coordinator.about == ""
+    assert coordinator.about == COORDINATOR_DEFAULT_ABOUT
     assert coordinator.first_name == COORDINATOR_DEFAULT_FIRST_NAME
     assert coordinator.job_title == COORDINATOR_DEFAULT_JOB_TITLE
 

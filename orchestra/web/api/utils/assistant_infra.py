@@ -796,15 +796,17 @@ async def delete_assistant_disk(assistant_id: str):
 async def delete_assistant_pool_archive(
     assistant_id: str,
 ):
-    """Delete an assistant's GCS workspace archive (permanent unhire cleanup).
+    """Delete an assistant's GCS archives (permanent unhire cleanup).
 
     Pool VMs persist ``/Unity/Local`` to
-    ``gs://bucket/{assistant_id}.tar.gz`` between
-    sessions so a fresh PD can be rehydrated on the next assignment.
-    On permanent delete this archive is orphan state and must be
-    removed in the same teardown flow as the per-assistant PD; otherwise
-    the archive bucket accumulates state for assistants that no longer
-    exist.
+    ``gs://{archive-bucket}/{assistant_id}.tar.gz`` and browser/GUI session
+    state to the companion
+    ``gs://{archive-bucket}/{assistant_id}-desktop-profile.tar.gz`` between
+    sessions so a fresh PD / cold home can be rehydrated on the next
+    assignment. On permanent delete both blobs are orphan state and must
+    be removed in the same teardown flow as the per-assistant PD;
+    otherwise the archive bucket accumulates state for assistants that
+    no longer exist.
     """
     return await _request_cleanup_step(
         name="delete_assistant_pool_archive",

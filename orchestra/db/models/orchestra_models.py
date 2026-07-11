@@ -2081,6 +2081,10 @@ class Assistant(Base):
     # endpoint plus a reasoning-effort level. NULL = platform default.
     default_model = Column(String, nullable=True)
     default_reasoning_effort = Column(String, nullable=True)
+    # ConversationManager slow-brain LLM. NULL = platform slow-brain default
+    # (SLOW_BRAIN_MODEL), independent of default_model / UNIFY_MODEL.
+    slow_brain_model = Column(String, nullable=True)
+    slow_brain_reasoning_effort = Column(String, nullable=True)
     is_local = Column(Boolean, nullable=False, default=False, server_default="false")
     is_coordinator = Column(
         Boolean,
