@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from orchestra.tests.utils import HEADERS
 from orchestra.web.api.assistant.default_models import (
     DEFAULT_MODEL_OPTIONS,
+    PLATFORM_DEFAULT_DISPLAY_NAME,
     PLATFORM_DEFAULT_MODEL,
     PLATFORM_SLOW_BRAIN_DISPLAY_NAME,
 )
@@ -46,12 +47,18 @@ async def test_list_default_model_options(client: AsyncClient):
     assert options[0]["model"] is None
     assert options[0]["reasoning_effort"] is None
     assert "System Default" in options[0]["label"]
-    assert "MiniMax" in options[0]["label"]
-    assert options[1]["model"] == PLATFORM_DEFAULT_MODEL
+    assert PLATFORM_DEFAULT_DISPLAY_NAME in options[0]["label"]
+    assert options[0]["approx_credits_per_task"] == next(
+        o.approx_credits_per_task
+        for o in DEFAULT_MODEL_OPTIONS
+        if o.model == PLATFORM_DEFAULT_MODEL and o.reasoning_effort == "high"
+    )
+    assert options[1]["model"] == "minimax-v3@minimax"
     assert options[1]["label"] == "MiniMax-M3"
     pairs = {(o["model"], o["reasoning_effort"]) for o in options}
     assert (None, None) in pairs
-    assert (PLATFORM_DEFAULT_MODEL, None) in pairs
+    assert ("minimax-v3@minimax", None) in pairs
+    assert (PLATFORM_DEFAULT_MODEL, "high") in pairs
     assert ("gpt-5.6-sol@openai", "high") in pairs
     assert ("gpt-5.6-terra@openai", "medium") in pairs
     assert ("gpt-5.6-luna@openai", "low") in pairs
@@ -93,7 +100,7 @@ async def test_list_slow_brain_model_options(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_default_model_options_costs_rank_sensibly(client: AsyncClient):
-    """Within a concrete model, higher effort costs more; system default is cheapest."""
+    """Within a concrete model, higher effort costs more."""
     resp = await client.get("/v0/assistant/default-model-options", headers=HEADERS)
     options = resp.json()["info"]
     by_model: dict = {}
@@ -103,8 +110,11 @@ async def test_default_model_options_costs_rank_sensibly(client: AsyncClient):
         by_model.setdefault(o["model"], []).append(o["approx_credits_per_task"])
     for model, costs in by_model.items():
         assert costs == sorted(costs), model
-    assert options[0]["approx_credits_per_task"] == min(
-        o["approx_credits_per_task"] for o in options
+    # System default mirrors the platform Sol-high task estimate.
+    assert options[0]["approx_credits_per_task"] == next(
+        o["approx_credits_per_task"]
+        for o in options
+        if o["model"] == PLATFORM_DEFAULT_MODEL and o["reasoning_effort"] == "high"
     )
 
 
@@ -225,7 +235,7 @@ async def test_update_default_model_minimax_without_effort(client: AsyncClient):
     patch_resp = await client.patch(
         f"/v0/assistant/{aid}/config",
         json={
-            "default_model": PLATFORM_DEFAULT_MODEL,
+            "default_model": "minimax-v3@minimax",
             "default_reasoning_effort": None,
             "create_infra": False,
         },
@@ -233,7 +243,7 @@ async def test_update_default_model_minimax_without_effort(client: AsyncClient):
     )
     assert patch_resp.status_code == 200
     updated = patch_resp.json()["info"]
-    assert updated["default_model"] == PLATFORM_DEFAULT_MODEL
+    assert updated["default_model"] == "minimax-v3@minimax"
     assert updated["default_reasoning_effort"] is None
 
 

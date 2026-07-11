@@ -29,8 +29,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal, Optional, Tuple
 
-PLATFORM_DEFAULT_MODEL = "minimax-v3@minimax"
-PLATFORM_DEFAULT_DISPLAY_NAME = "MiniMax-M3"
+PLATFORM_DEFAULT_MODEL = "gpt-5.6-sol@openai"
+PLATFORM_DEFAULT_REASONING_EFFORT = "high"
+PLATFORM_DEFAULT_DISPLAY_NAME = "GPT-5.6 Sol"
 
 # Matches Unify's UNITY_CONVERSATION_SLOW_BRAIN_* defaults.
 PLATFORM_SLOW_BRAIN_MODEL = "gpt-5.6-terra@openai"
@@ -111,15 +112,16 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model=None,
         reasoning_effort=None,
         label=f"System Default (currently {PLATFORM_DEFAULT_DISPLAY_NAME})",
-        approx_credits_per_task=40,
-        input_usd_per_m=0.30,
-        output_usd_per_m=1.20,
-        aa_slug="minimax-m3",
+        # Display credits match the platform default (GPT-5.6 Sol high).
+        approx_credits_per_task=475,
+        input_usd_per_m=5.0,
+        output_usd_per_m=30.0,
+        aa_slug="gpt-5-6-sol",
     ),
     _opt(
-        model=PLATFORM_DEFAULT_MODEL,
+        model="minimax-v3@minimax",
         reasoning_effort=None,
-        label=PLATFORM_DEFAULT_DISPLAY_NAME,
+        label="MiniMax-M3",
         approx_credits_per_task=40,
         input_usd_per_m=0.30,
         output_usd_per_m=1.20,
@@ -319,6 +321,22 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         output_usd_per_m=50.0,
         aa_slug="claude-fable-5",
     ),
+)
+
+_PLATFORM_DEFAULT_OPTION = next(
+    option
+    for option in DEFAULT_MODEL_OPTIONS
+    if option.model == PLATFORM_DEFAULT_MODEL
+    and option.reasoning_effort == PLATFORM_DEFAULT_REASONING_EFFORT
+)
+DEFAULT_MODEL_OPTIONS = (
+    replace(
+        DEFAULT_MODEL_OPTIONS[0],
+        approx_credits_per_task=_PLATFORM_DEFAULT_OPTION.approx_credits_per_task,
+        approx_credits_per_message=_PLATFORM_DEFAULT_OPTION.approx_credits_per_message,
+        artificial_analysis_url=_PLATFORM_DEFAULT_OPTION.artificial_analysis_url,
+    ),
+    *DEFAULT_MODEL_OPTIONS[1:],
 )
 
 _VALID_PAIRS = {
