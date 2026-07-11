@@ -111,7 +111,7 @@ def _seed_task(
             owner_key=f"a{assistant_id}",
         ),
     )
-    dbsession.flush()
+    dbsession.commit()
     return log
 
 
@@ -385,12 +385,13 @@ async def test_dispatch_hosted_offline_without_revision_raises():
 
 
 @pytest.mark.anyio
-async def test_trigger_commits_session_before_dispatch(
+async def test_trigger_closes_session_before_dispatch(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
+    fastapi_app,
 ):
-    """Outbound dispatch must not run while the resolve transaction is open."""
+    """Resolve must commit and close its DB session before outbound dispatch."""
 
     _seed_task(
         dbsession,
@@ -399,17 +400,31 @@ async def test_trigger_commits_session_before_dispatch(
         task_id=51,
     )
     order: list[str] = []
-    original_commit = dbsession.commit
+    real_factory = fastapi_app.state.db_session_factory
 
-    def _tracking_commit(*args, **kwargs):
-        order.append("commit")
-        return original_commit(*args, **kwargs)
+    def _tracking_factory(*args, **kwargs):
+        session = real_factory(*args, **kwargs)
+        original_commit = session.commit
+        original_close = session.close
+
+        def _commit(*cargs, **ckwargs):
+            order.append("commit")
+            return original_commit(*cargs, **ckwargs)
+
+        def _close(*cargs, **ckwargs):
+            order.append("close")
+            return original_close(*cargs, **ckwargs)
+
+        session.commit = _commit  # type: ignore[method-assign]
+        session.close = _close  # type: ignore[method-assign]
+        return session
 
     async def _tracking_dispatch(target):
         order.append("dispatch")
         assert target.task_id == 51
+        assert "close" in order
 
-    dbsession.commit = _tracking_commit  # type: ignore[method-assign]
+    fastapi_app.state.db_session_factory = _tracking_factory
     try:
         with patch(
             "orchestra.web.api.tasks.views._dispatch_task_trigger",
@@ -421,9 +436,7 @@ async def test_trigger_commits_session_before_dispatch(
                 json={"assistant_id": assistant_id},
             )
     finally:
-        dbsession.commit = original_commit  # type: ignore[method-assign]
+        fastapi_app.state.db_session_factory = real_factory
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
-    assert "commit" in order
-    assert "dispatch" in order
-    assert order.index("commit") < order.index("dispatch")
+    assert order.index("commit") < order.index("close") < order.index("dispatch")

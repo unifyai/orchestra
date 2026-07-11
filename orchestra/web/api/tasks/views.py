@@ -2,12 +2,11 @@ import logging
 import os
 import uuid
 
-from fastapi import Depends, HTTPException, Path, status
+from fastapi import HTTPException, Path, status
 from fastapi.routing import APIRouter
-from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import transient_request_db_session
 from orchestra.services.task_trigger_service import (
     TaskTriggerTarget,
     resolve_task_trigger_target,
@@ -221,26 +220,24 @@ async def trigger_task(
         description="The logical task id to trigger.",
         example=123,
     ),
-    session: Session = Depends(get_db_session),
 ) -> InfoResponse[TaskTriggerStatus]:
-    target = resolve_task_trigger_target(
-        session,
-        user_id=request.state.user_id,
-        organization_id=getattr(request.state, "organization_id", None),
-        task_id=task_id,
-        assistant_id=body.assistant_id,
-    )
-    if target is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found.",
+    # Resolve under a short-lived session that is committed and closed before
+    # outbound HTTP. Offline dispatch can re-enter Orchestra; holding the
+    # request-scoped Depends session across that round-trip previously caused
+    # field_type lock timeouts.
+    with transient_request_db_session(request) as session:
+        target = resolve_task_trigger_target(
+            session,
+            user_id=request.state.user_id,
+            organization_id=getattr(request.state, "organization_id", None),
+            task_id=task_id,
+            assistant_id=body.assistant_id,
         )
-
-    # Release any resolve-time DB locks before outbound HTTP. Offline dispatch
-    # re-enters Orchestra via /admin/task-activation/current; holding this
-    # request transaction open across that round-trip causes field_type lock
-    # timeouts under concurrent ensure/upsert paths.
-    session.commit()
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found.",
+            )
 
     await _dispatch_task_trigger(target)
     return InfoResponse(
