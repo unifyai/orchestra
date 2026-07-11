@@ -43,6 +43,7 @@ class TaskTriggerTarget:
     is_local: bool
     offline: bool = False
     activation_revision: str | None = None
+    entrypoint: int | None = None
 
 
 def resolve_task_trigger_target(
@@ -85,14 +86,18 @@ def resolve_task_trigger_target(
         destination = _destination_from_context_name(context_name)
         offline = _coerce_bool(data.get("offline"))
         activation_revision = None
+        entrypoint = None
         if offline:
-            activation_revision = _activation_revision_for_task(
+            activation_snapshot = _offline_activation_for_task(
                 session=session,
                 project_id=project.id,
                 assistant_id=resolved_assistant_id,
                 task_id=task_id,
                 destination=destination,
             )
+            if activation_snapshot is not None:
+                activation_revision = activation_snapshot.revision
+                entrypoint = activation_snapshot.entrypoint
         targets.append(
             TaskTriggerTarget(
                 assistant_id=resolved_assistant_id,
@@ -106,6 +111,7 @@ def resolve_task_trigger_target(
                 is_local=bool(assistant.is_local),
                 offline=offline,
                 activation_revision=activation_revision,
+                entrypoint=entrypoint,
             ),
         )
 
@@ -114,15 +120,21 @@ def resolve_task_trigger_target(
     return _select_current_target(targets)
 
 
-def _activation_revision_for_task(
+@dataclass(frozen=True)
+class _OfflineActivationSnapshot:
+    revision: str
+    entrypoint: int | None
+
+
+def _offline_activation_for_task(
     *,
     session: Session,
     project_id: int,
     assistant_id: int,
     task_id: int,
     destination: str | None,
-) -> str | None:
-    """Return the current activation revision for one offline task, if present."""
+) -> _OfflineActivationSnapshot | None:
+    """Return revision + entrypoint for one offline task activation, if present."""
 
     activation = get_task_activation(
         session,
@@ -136,7 +148,10 @@ def _activation_revision_for_task(
     revision = activation.data.get("activation_revision")
     if revision in (None, ""):
         return None
-    return str(revision)
+    return _OfflineActivationSnapshot(
+        revision=str(revision),
+        entrypoint=_coerce_int(activation.data.get("entrypoint")),
+    )
 
 
 def _task_project_for_owner(

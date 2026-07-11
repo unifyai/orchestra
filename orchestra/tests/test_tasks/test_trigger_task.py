@@ -132,6 +132,7 @@ def _make_target(**overrides) -> TaskTriggerTarget:
         is_local=False,
         offline=False,
         activation_revision=None,
+        entrypoint=None,
     )
     base.update(overrides)
     return TaskTriggerTarget(**base)
@@ -291,7 +292,7 @@ async def test_trigger_task_returns_404_for_wrong_assistant_id(
 
 @pytest.mark.anyio
 async def test_dispatch_hosted_offline_posts_comms_explicit(monkeypatch):
-    target = _make_target(offline=True, activation_revision="rev-abc")
+    target = _make_target(offline=True, activation_revision="rev-abc", entrypoint=27)
     posted = {}
 
     class _FakeResponse:
@@ -324,6 +325,7 @@ async def test_dispatch_hosted_offline_posts_comms_explicit(monkeypatch):
     assert posted["json"]["source_type"] == "explicit"
     assert posted["json"]["execution_mode"] == "offline"
     assert posted["json"]["activation_revision"] == "rev-abc"
+    assert posted["json"]["entrypoint"] == 27
     assert posted["json"]["source_ref"] == request_id
     assert posted["headers"]["Authorization"] == "Bearer admin-key"
 

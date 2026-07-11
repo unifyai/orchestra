@@ -94,6 +94,8 @@ async def _dispatch_offline_task_to_comms(
     }
     if target.destination:
         payload["destination"] = target.destination
+    if target.entrypoint is not None:
+        payload["entrypoint"] = target.entrypoint
     client = get_async_client()
     response = await client.post(
         f"{comms_url}/infra/task-activation/offline-dispatch",
