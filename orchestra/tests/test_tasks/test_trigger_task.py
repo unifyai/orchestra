@@ -151,7 +151,11 @@ async def test_trigger_task_dispatches_to_adapters(
         task_id=17,
     )
 
-    response = await client.post("/v0/tasks/17/trigger", headers=HEADERS)
+    response = await client.post(
+        "/v0/tasks/17/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     assert response.json()["info"] == {
@@ -169,8 +173,22 @@ async def test_trigger_task_dispatches_to_adapters(
 
 
 @pytest.mark.anyio
-async def test_trigger_task_returns_404_when_task_missing(client: AsyncClient):
-    response = await client.post("/v0/tasks/999999/trigger", headers=HEADERS)
+async def test_trigger_task_requires_assistant_id_body(client: AsyncClient):
+    response = await client.post("/v0/tasks/17/trigger", headers=HEADERS)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_trigger_task_returns_404_when_task_missing(
+    client: AsyncClient,
+    assistant_id: int,
+):
+    response = await client.post(
+        "/v0/tasks/999999/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -190,7 +208,11 @@ async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metad
         legacy_context_owner=True,
     )
 
-    response = await client.post("/v0/tasks/19/trigger", headers=HEADERS)
+    response = await client.post(
+        "/v0/tasks/19/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     mock_task_trigger_dispatch.assert_awaited_once()
@@ -200,10 +222,11 @@ async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metad
 
 
 @pytest.mark.anyio
-async def test_trigger_task_rejects_ambiguous_task_id(
+async def test_trigger_task_selects_requested_assistant_when_task_id_shared(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
 ):
     second_response = await client.post(
         "/v0/assistant",
@@ -212,7 +235,7 @@ async def test_trigger_task_rejects_ambiguous_task_id(
     )
     assert second_response.status_code == status.HTTP_200_OK, second_response.json()
     second_assistant_id = int(second_response.json()["info"]["agent_id"])
-    _seed_task(
+    first_row = _seed_task(
         dbsession,
         assistant_id=assistant_id,
         user_id=_auth_user_id(),
@@ -227,9 +250,43 @@ async def test_trigger_task_rejects_ambiguous_task_id(
         name="Second task",
     )
 
-    response = await client.post("/v0/tasks/31/trigger", headers=HEADERS)
+    response = await client.post(
+        "/v0/tasks/31/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
 
-    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    assert response.json()["info"]["assistant_id"] == assistant_id
+    mock_task_trigger_dispatch.assert_awaited_once()
+    target = mock_task_trigger_dispatch.await_args.args[0]
+    assert target.assistant_id == assistant_id
+    assert target.source_task_log_id == first_row.id
+    assert target.task_name == "First task"
+
+
+@pytest.mark.anyio
+async def test_trigger_task_returns_404_for_wrong_assistant_id(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=41,
+    )
+
+    response = await client.post(
+        "/v0/tasks/41/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id + 99999},
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    mock_task_trigger_dispatch.assert_not_awaited()
 
 
 @pytest.mark.anyio

@@ -19,12 +19,11 @@ TODO
 ## Public Assistant Task Trigger
 
 `POST /v0/tasks/{task_id}/trigger` starts an existing assistant task by logical
-`task_id` using the caller's API-key scope. The request has no body; the path
-parameter is the only caller-supplied argument. Orchestra resolves the unique
-accessible assistant/task pair, wakes Unity through the adapters
-`unity_system_event` channel, and returns `202 Accepted` while execution
-continues asynchronously in the assistant runtime. If the API key can see the
-same `task_id` on more than one assistant, the endpoint returns `409 Conflict`.
+`task_id` for a specific assistant. The JSON body must include `assistant_id`.
+Orchestra resolves that assistant/task pair under the caller's API-key scope,
+dispatches (offline via Communication, otherwise via the adapters
+`unity_system_event` channel), and returns `202 Accepted` while execution
+continues asynchronously. Missing or inaccessible pairs return `404`.
 
 ## Async vs Sync Route Handlers
 

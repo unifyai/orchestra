@@ -9,12 +9,11 @@ from starlette.requests import Request
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.services.task_trigger_service import (
-    AmbiguousTaskTriggerTargetError,
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
 from orchestra.web.api.assistant.schema import InfoResponse
-from orchestra.web.api.tasks.schema import TaskTriggerStatus
+from orchestra.web.api.tasks.schema import TaskTriggerRequest, TaskTriggerStatus
 from orchestra.web.api.utils.http_client import get_async_client
 
 logger = logging.getLogger(__name__)
@@ -205,13 +204,16 @@ async def _dispatch_task_trigger_to_adapters(
     tags=["Tasks"],
     summary="Trigger an assistant task",
     description=(
-        "Trigger a task by logical task id. The task starts asynchronously in "
-        "the assistant runtime when the id resolves to exactly one accessible task. "
-        "Offline tasks are dispatched headlessly via Communication."
+        "Trigger a task by logical task id for a specific assistant. The request "
+        "body must include assistant_id. The task starts asynchronously in the "
+        "assistant runtime when that assistant/task pair is accessible under the "
+        "caller's API-key scope. Offline tasks are dispatched headlessly via "
+        "Communication."
     ),
 )
 async def trigger_task(
     request: Request,
+    body: TaskTriggerRequest,
     task_id: int = Path(
         ...,
         description="The logical task id to trigger.",
@@ -219,18 +221,13 @@ async def trigger_task(
     ),
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[TaskTriggerStatus]:
-    try:
-        target = resolve_task_trigger_target(
-            session,
-            user_id=request.state.user_id,
-            organization_id=getattr(request.state, "organization_id", None),
-            task_id=task_id,
-        )
-    except AmbiguousTaskTriggerTargetError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+    target = resolve_task_trigger_target(
+        session,
+        user_id=request.state.user_id,
+        organization_id=getattr(request.state, "organization_id", None),
+        task_id=task_id,
+        assistant_id=body.assistant_id,
+    )
     if target is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
