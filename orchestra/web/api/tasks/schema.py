@@ -1,6 +1,13 @@
 from pydantic import BaseModel, Field
 
 
+class TaskTriggerRequest(BaseModel):
+    assistant_id: int = Field(
+        description="The assistant that owns the task to trigger.",
+        examples=[1406],
+    )
+
+
 class TaskTriggerStatus(BaseModel):
     task_id: int = Field(description="The logical task id requested by the caller.")
     assistant_id: int = Field(description="The assistant that owns the triggered task.")

@@ -2,19 +2,17 @@ import logging
 import os
 import uuid
 
-from fastapi import Depends, HTTPException, Path, status
+from fastapi import HTTPException, Path, status
 from fastapi.routing import APIRouter
-from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import transient_request_db_session
 from orchestra.services.task_trigger_service import (
-    AmbiguousTaskTriggerTargetError,
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
 from orchestra.web.api.assistant.schema import InfoResponse
-from orchestra.web.api.tasks.schema import TaskTriggerStatus
+from orchestra.web.api.tasks.schema import TaskTriggerRequest, TaskTriggerStatus
 from orchestra.web.api.utils.http_client import get_async_client
 
 logger = logging.getLogger(__name__)
@@ -95,6 +93,8 @@ async def _dispatch_offline_task_to_comms(
     }
     if target.destination:
         payload["destination"] = target.destination
+    if target.entrypoint is not None:
+        payload["entrypoint"] = target.entrypoint
     client = get_async_client()
     response = await client.post(
         f"{comms_url}/infra/task-activation/offline-dispatch",
@@ -205,37 +205,39 @@ async def _dispatch_task_trigger_to_adapters(
     tags=["Tasks"],
     summary="Trigger an assistant task",
     description=(
-        "Trigger a task by logical task id. The task starts asynchronously in "
-        "the assistant runtime when the id resolves to exactly one accessible task. "
-        "Offline tasks are dispatched headlessly via Communication."
+        "Trigger a task by logical task id for a specific assistant. The request "
+        "body must include assistant_id. The task starts asynchronously in the "
+        "assistant runtime when that assistant/task pair is accessible under the "
+        "caller's API-key scope. Offline tasks are dispatched headlessly via "
+        "Communication."
     ),
 )
 async def trigger_task(
     request: Request,
+    body: TaskTriggerRequest,
     task_id: int = Path(
         ...,
         description="The logical task id to trigger.",
         example=123,
     ),
-    session: Session = Depends(get_db_session),
 ) -> InfoResponse[TaskTriggerStatus]:
-    try:
+    # Resolve under a short-lived session that is committed and closed before
+    # outbound HTTP. Offline dispatch can re-enter Orchestra; holding the
+    # request-scoped Depends session across that round-trip previously caused
+    # field_type lock timeouts.
+    with transient_request_db_session(request) as session:
         target = resolve_task_trigger_target(
             session,
             user_id=request.state.user_id,
             organization_id=getattr(request.state, "organization_id", None),
             task_id=task_id,
+            assistant_id=body.assistant_id,
         )
-    except AmbiguousTaskTriggerTargetError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-    if target is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found.",
-        )
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found.",
+            )
 
     await _dispatch_task_trigger(target)
     return InfoResponse(

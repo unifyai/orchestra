@@ -43,10 +43,7 @@ class TaskTriggerTarget:
     is_local: bool
     offline: bool = False
     activation_revision: str | None = None
-
-
-class AmbiguousTaskTriggerTargetError(ValueError):
-    """Raised when a task id maps to multiple assistants in the caller scope."""
+    entrypoint: int | None = None
 
 
 def resolve_task_trigger_target(
@@ -55,8 +52,9 @@ def resolve_task_trigger_target(
     user_id: str,
     organization_id: int | None,
     task_id: int,
+    assistant_id: int,
 ) -> TaskTriggerTarget | None:
-    """Return the unique accessible task target for a public task trigger."""
+    """Return the accessible task target for one assistant + logical task id."""
 
     project = _task_project_for_owner(
         session=session,
@@ -66,12 +64,13 @@ def resolve_task_trigger_target(
     if project is None:
         return None
 
+    requested_assistant_id = int(assistant_id)
     rows = _task_rows_for_id(
         session=session,
         project_id=project.id,
         task_id=task_id,
     )
-    targets_by_assistant: dict[int, list[TaskTriggerTarget]] = {}
+    targets: list[TaskTriggerTarget] = []
     for row, context_name, assistant in rows:
         data = row.data if isinstance(row.data, dict) else {}
         resolved_assistant_id = _resolve_assistant_id(
@@ -82,50 +81,60 @@ def resolve_task_trigger_target(
             continue
         if int(assistant.agent_id) != resolved_assistant_id:
             continue
+        if resolved_assistant_id != requested_assistant_id:
+            continue
         destination = _destination_from_context_name(context_name)
         offline = _coerce_bool(data.get("offline"))
         activation_revision = None
+        entrypoint = None
         if offline:
-            activation_revision = _activation_revision_for_task(
+            activation_snapshot = _offline_activation_for_task(
                 session=session,
                 project_id=project.id,
                 assistant_id=resolved_assistant_id,
                 task_id=task_id,
                 destination=destination,
             )
-        target = TaskTriggerTarget(
-            assistant_id=resolved_assistant_id,
-            task_id=task_id,
-            source_task_log_id=int(row.id),
-            destination=destination,
-            task_name=str(data.get("name") or f"task {task_id}"),
-            task_description=str(data.get("description") or ""),
-            status=str(data.get("status") or ""),
-            instance_id=_coerce_int(data.get("instance_id")) or 0,
-            is_local=bool(assistant.is_local),
-            offline=offline,
-            activation_revision=activation_revision,
+            if activation_snapshot is not None:
+                activation_revision = activation_snapshot.revision
+                entrypoint = activation_snapshot.entrypoint
+        targets.append(
+            TaskTriggerTarget(
+                assistant_id=resolved_assistant_id,
+                task_id=task_id,
+                source_task_log_id=int(row.id),
+                destination=destination,
+                task_name=str(data.get("name") or f"task {task_id}"),
+                task_description=str(data.get("description") or ""),
+                status=str(data.get("status") or ""),
+                instance_id=_coerce_int(data.get("instance_id")) or 0,
+                is_local=bool(assistant.is_local),
+                offline=offline,
+                activation_revision=activation_revision,
+                entrypoint=entrypoint,
+            ),
         )
-        targets_by_assistant.setdefault(resolved_assistant_id, []).append(target)
 
-    if not targets_by_assistant:
+    if not targets:
         return None
-    if len(targets_by_assistant) > 1:
-        raise AmbiguousTaskTriggerTargetError(
-            f"Task id {task_id} is visible on multiple assistants.",
-        )
-    return _select_current_target(next(iter(targets_by_assistant.values())))
+    return _select_current_target(targets)
 
 
-def _activation_revision_for_task(
+@dataclass(frozen=True)
+class _OfflineActivationSnapshot:
+    revision: str
+    entrypoint: int | None
+
+
+def _offline_activation_for_task(
     *,
     session: Session,
     project_id: int,
     assistant_id: int,
     task_id: int,
     destination: str | None,
-) -> str | None:
-    """Return the current activation revision for one offline task, if present."""
+) -> _OfflineActivationSnapshot | None:
+    """Return revision + entrypoint for one offline task activation, if present."""
 
     activation = get_task_activation(
         session,
@@ -139,7 +148,10 @@ def _activation_revision_for_task(
     revision = activation.data.get("activation_revision")
     if revision in (None, ""):
         return None
-    return str(revision)
+    return _OfflineActivationSnapshot(
+        revision=str(revision),
+        entrypoint=_coerce_int(activation.data.get("entrypoint")),
+    )
 
 
 def _task_project_for_owner(

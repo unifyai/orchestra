@@ -1014,6 +1014,22 @@ def sync_task_activations_for_task_ids(
     return {"upserted": upserted, "deleted": deleted}
 
 
+def lookup_task_machine_activation_context_id(
+    session: Session,
+    project_id: int,
+    *,
+    tasks_context_name: str,
+) -> int | None:
+    """Return the activations context id when it already exists (read-only)."""
+
+    context_names = _resolve_task_machine_context_names(tasks_context_name)
+    return _get_context_id(
+        session=session,
+        project_id=project_id,
+        name=context_names.activations_context_name,
+    )
+
+
 def get_task_activation(
     session: Session,
     project_id: int,
@@ -1022,36 +1038,49 @@ def get_task_activation(
     task_id: int,
     destination: str | None = None,
 ) -> LogEvent | None:
-    """Return the current activation row for one assistant/task pair, if present."""
+    """Return the current activation row for one assistant/task pair, if present.
+
+    Lookup is read-only: it never creates machine contexts or upserts field
+    types. Schema materialization belongs on write/projection paths via
+    ``ensure_task_machine_contexts``.
+    """
 
     tasks_context_name = resolve_tasks_context_name(
         session=session,
         project_id=project_id,
         assistant_id=assistant_id,
     )
-    context_ids = ensure_task_machine_contexts(
-        session=session,
-        project_id=project_id,
-        tasks_context_name=tasks_context_name,
-    )
     activation_key = _build_activation_key(
         assistant_id=assistant_id,
         task_id=task_id,
         destination=destination,
     )
-    activation = _get_machine_row_by_unique_field(
-        session=session,
-        context_id=context_ids.activations_context_id,
-        unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-        unique_field_value=activation_key,
-    )
-    if activation is not None:
-        return activation
-    return _migrate_legacy_machine_row_if_present(
+    activations_context_id = lookup_task_machine_activation_context_id(
         session=session,
         project_id=project_id,
-        legacy_context_name=TASK_ACTIVATIONS_CONTEXT_NAME,
-        nested_context_id=context_ids.activations_context_id,
+        tasks_context_name=tasks_context_name,
+    )
+    if activations_context_id is not None:
+        activation = _get_machine_row_by_unique_field(
+            session=session,
+            context_id=activations_context_id,
+            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
+            unique_field_value=activation_key,
+        )
+        if activation is not None:
+            return activation
+
+    # Read-only legacy fallback — do not migrate on lookup.
+    legacy_context_id = _get_context_id(
+        session=session,
+        project_id=project_id,
+        name=TASK_ACTIVATIONS_CONTEXT_NAME,
+    )
+    if legacy_context_id is None:
+        return None
+    return _get_machine_row_by_unique_field(
+        session=session,
+        context_id=legacy_context_id,
         unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
         unique_field_value=activation_key,
     )

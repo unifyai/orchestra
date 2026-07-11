@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from typing import Any, Dict, Generator
 
 from opentelemetry import trace
@@ -357,6 +358,29 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
     except Exception as e:
         session.rollback()
         raise e
+    finally:
+        session.close()
+
+
+@contextmanager
+def transient_request_db_session(request: Request) -> Generator[Session, None, None]:
+    """Open a DB session that is committed and closed before the caller continues.
+
+    Use this instead of ``Depends(get_db_session)`` when the handler must await
+    outbound HTTP (or any work that can re-enter Orchestra) after resolve/mutate
+    work. Request-scoped ``get_db_session`` keeps the connection checked out
+    until the response is fully produced.
+    """
+
+    SessionLocal = request.app.state.db_session_factory
+    session: Session = SessionLocal()
+    session.info["request_state"] = request.state
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 
