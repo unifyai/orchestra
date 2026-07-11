@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
@@ -31,7 +31,9 @@ DEFAULT_CLEANUP_TASK_BATCH_SIZE = 25
 MAX_CLEANUP_TASK_BATCH_SIZE = 200
 MAX_CLEANUP_ATTEMPTS = 5
 BASE_RETRY_DELAY_MINUTES = 5
-RETRYABLE_CLEANUP_TASK_STATUSES = ("pending", "processing")
+# Fresh in-flight rows stay "processing" and are not re-selected. Only reclaim
+# after this age so a crashed worker cannot wedge the queue forever.
+STALE_PROCESSING_AFTER = timedelta(minutes=30)
 
 ASSISTANTS_PROJECT_NAME = "Assistants"
 
@@ -410,36 +412,99 @@ def _next_retry_at(attempt_count: int) -> datetime:
     return datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
 
 
+def _claimable_cleanup_task_filter(
+    now: datetime,
+    *,
+    honor_retry_at: bool,
+):
+    """Rows a worker may claim: pending (optionally due) or stale processing."""
+    pending = AssistantCleanupTask.status == "pending"
+    if honor_retry_at:
+        pending = and_(
+            pending,
+            or_(
+                AssistantCleanupTask.next_retry_at.is_(None),
+                AssistantCleanupTask.next_retry_at <= now,
+            ),
+        )
+    stale_cutoff = now - STALE_PROCESSING_AFTER
+    stale_processing = and_(
+        AssistantCleanupTask.status == "processing",
+        or_(
+            AssistantCleanupTask.processing_started_at.is_(None),
+            AssistantCleanupTask.processing_started_at <= stale_cutoff,
+        ),
+    )
+    return or_(pending, stale_processing)
+
+
+def _claim_assistant_cleanup_tasks(
+    session: Session,
+    *,
+    now: datetime,
+    task_ids: list[int] | None,
+    assistant_id: int | None,
+    limit: int,
+) -> list[AssistantCleanupTask]:
+    """Atomically claim a batch of cleanup tasks and commit before long work.
+
+    Uses ``FOR UPDATE SKIP LOCKED`` so concurrent workers (DELETE background
+    task, admin redrive, cron) never block each other on the same row. The
+    claim is committed immediately so the row lock is not held across runtime
+    teardown HTTP calls (Cloud SQL ``lock_timeout`` is 10s).
+    """
+    query = session.query(AssistantCleanupTask).filter(
+        _claimable_cleanup_task_filter(
+            now,
+            honor_retry_at=task_ids is None,
+        ),
+    )
+    if task_ids is not None:
+        query = query.filter(AssistantCleanupTask.id.in_(task_ids))
+    if assistant_id is not None:
+        query = query.filter(AssistantCleanupTask.assistant_id == assistant_id)
+
+    tasks = (
+        query.order_by(AssistantCleanupTask.created_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+    if not tasks:
+        return []
+
+    claimed_at = datetime.now(timezone.utc)
+    for task in tasks:
+        task.status = "processing"
+        task.processing_started_at = claimed_at
+    session.commit()
+    return tasks
+
+
 async def process_assistant_cleanup_tasks(
     session: Session,
     *,
     task_ids: list[int] | None = None,
+    assistant_id: int | None = None,
     limit: int = DEFAULT_CLEANUP_TASK_BATCH_SIZE,
 ) -> dict:
     """Process queued cleanup tasks and persist retry/completion state.
 
     A task is only marked complete after runtime teardown, contact cleanup, and
     assistant-scoped GCS deletion have all succeeded.
+
+    Concurrent callers claim disjoint rows (``SKIP LOCKED``) and release the
+    claim transaction before teardown, so overlapping redrives return cleanly
+    instead of hitting Postgres ``lock_timeout``.
     """
     now = datetime.now(timezone.utc)
-    if task_ids:
-        # Explicit task processing is used by the in-request/background cleanup
-        # loop and must keep re-driving the same tasks even if a prior attempt
-        # scheduled a later retry. The cron path below still honors next_retry_at.
-        query = session.query(AssistantCleanupTask).filter(
-            AssistantCleanupTask.status.in_(RETRYABLE_CLEANUP_TASK_STATUSES),
-            AssistantCleanupTask.id.in_(task_ids),
-        )
-    else:
-        query = session.query(AssistantCleanupTask).filter(
-            AssistantCleanupTask.status.in_(RETRYABLE_CLEANUP_TASK_STATUSES),
-            or_(
-                AssistantCleanupTask.next_retry_at.is_(None),
-                AssistantCleanupTask.next_retry_at <= now,
-            ),
-        )
-
-    tasks = query.order_by(AssistantCleanupTask.created_at.asc()).limit(limit).all()
+    tasks = _claim_assistant_cleanup_tasks(
+        session,
+        now=now,
+        task_ids=task_ids,
+        assistant_id=assistant_id,
+        limit=limit,
+    )
     summary = {
         "processed": 0,
         "completed": 0,
@@ -449,9 +514,6 @@ async def process_assistant_cleanup_tasks(
     }
 
     for task in tasks:
-        task.status = "processing"
-        task.processing_started_at = datetime.now(timezone.utc)
-
         spec = AssistantCleanupSpec.from_task(task)
         try:
             runtime_result = await teardown_assistant_runtime(
@@ -519,6 +581,6 @@ async def process_assistant_cleanup_tasks(
             summary["errors"].append(str(exc))
 
         summary["processed"] += 1
+        session.commit()
 
-    session.commit()
     return summary

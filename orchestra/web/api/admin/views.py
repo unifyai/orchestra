@@ -1398,11 +1398,19 @@ async def admin_process_assistant_cleanup_tasks(
         ge=1,
         le=MAX_CLEANUP_TASK_BATCH_SIZE,
     ),
+    assistant_id: int | None = Query(
+        None,
+        description="When set, only claim cleanup tasks for this assistant.",
+    ),
     session: Session = Depends(get_db_session),
 ) -> dict:
     """Drain the assistant cleanup retry queue for a bounded batch of tasks."""
     try:
-        result = await process_assistant_cleanup_tasks(session, limit=limit)
+        result = await process_assistant_cleanup_tasks(
+            session,
+            limit=limit,
+            assistant_id=assistant_id,
+        )
         return {
             **result,
             "timestamp": datetime.now(timezone.utc).isoformat(),
