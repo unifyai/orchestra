@@ -57,7 +57,7 @@ class SpendingLimitNotificationService:
         self.org_dao = OrganizationDAO(session)
         self.org_member_dao = OrganizationMemberDAO(session)
 
-    def process_limit_reached(
+    async def process_limit_reached(
         self,
         limit_type: str,
         entity_id: str,
@@ -74,7 +74,7 @@ class SpendingLimitNotificationService:
         This method:
         1. Checks deduplication
         2. Gets recipients
-        3. Sends emails (fire-and-forget)
+        3. Sends emails (awaited so they complete during the request)
         4. Records the notification
 
         Args:
@@ -113,8 +113,10 @@ class SpendingLimitNotificationService:
         if not recipients:
             return NotificationResult(notified=False, reason="no_recipients")
 
-        # Send emails (fire-and-forget)
+        # Await sends during the request so CPU throttling cannot drop them
+        # after the response (create_task would outlive the request).
         notified_user_ids = []
+        send_coros = []
         for recipient in recipients:
             subject, body = self._build_email(
                 entity_type=limit_type,
@@ -124,7 +126,7 @@ class SpendingLimitNotificationService:
                 is_org_admin=recipient.is_org_admin,
             )
             # Send from noreply@unify.ai (an alias), but impersonate hello@unify.ai (the real user)
-            asyncio.create_task(
+            send_coros.append(
                 send_email_async(
                     recipient.email,
                     subject,
@@ -134,6 +136,8 @@ class SpendingLimitNotificationService:
                 ),
             )
             notified_user_ids.append(recipient.user_id)
+
+        await asyncio.gather(*send_coros)
 
         # Record the notification for deduplication
         self.notification_dao.record_notification(

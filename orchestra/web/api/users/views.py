@@ -2714,7 +2714,7 @@ async def spending_limit_reached(
 
     notification_service = SpendingLimitNotificationService(session)
 
-    result = notification_service.process_limit_reached(
+    result = await notification_service.process_limit_reached(
         limit_type=body.limit_type,
         entity_id=body.entity_id,
         limit_value=body.limit_value,

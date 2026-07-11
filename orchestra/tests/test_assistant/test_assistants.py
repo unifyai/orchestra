@@ -47,13 +47,7 @@ def mock_assistant_infra_calls(request):
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
         new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_WAIT_SECONDS",
-        0.0,
-    ), patch(
-        "orchestra.web.api.assistant.views.ASSISTANT_DELETE_CLEANUP_POLL_SECONDS",
-        0.0,
-    ):
+    ) as mock_reawaken:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})

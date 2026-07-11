@@ -32,13 +32,16 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+    ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         yield mock_wake_up, mock_reawaken
@@ -1207,3 +1210,55 @@ async def test_cleanup_endpoint_with_no_old_notifications(
     cleanup_data = cleanup_response.json()
     assert "deleted_count" in cleanup_data
     assert cleanup_data["months_retained"] == 12
+
+
+@pytest.mark.anyio
+async def test_process_limit_reached_awaits_email_sends_not_create_task() -> None:
+    """Spending-limit emails must complete during the request under CPU throttling."""
+    from orchestra.services.spending_limit_notification_service import (
+        NotificationRecipient,
+        SpendingLimitNotificationService,
+    )
+
+    session = MagicMock()
+    service = SpendingLimitNotificationService(session)
+    service.notification_dao.should_notify = MagicMock(return_value=True)
+    service.notification_dao.record_notification = MagicMock()
+    service._get_recipients = MagicMock(
+        return_value=(
+            [
+                NotificationRecipient(user_id="u1", email="a@example.com"),
+                NotificationRecipient(
+                    user_id="u2",
+                    email="b@example.com",
+                    is_org_admin=True,
+                ),
+            ],
+            "Acme",
+        ),
+    )
+
+    with (
+        patch(
+            "orchestra.services.spending_limit_notification_service.send_email_async",
+            new_callable=AsyncMock,
+        ) as mock_send,
+        patch(
+            "orchestra.services.spending_limit_notification_service.asyncio.create_task",
+        ) as mock_create_task,
+    ):
+        mock_send.return_value = True
+        result = await service.process_limit_reached(
+            limit_type="organization",
+            entity_id="1",
+            limit_value=100.0,
+            current_spend=100.0,
+            month="2026-07",
+            entity_name="Acme",
+        )
+
+    mock_create_task.assert_not_called()
+    assert mock_send.await_count == 2
+    assert result.notified is True
+    assert result.recipient_count == 2
+    service.notification_dao.record_notification.assert_called_once()
