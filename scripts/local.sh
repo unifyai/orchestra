@@ -605,20 +605,25 @@ start_db_container() {
 
   log_info "Waiting for PostgreSQL to be ready..."
 
+  # pg_isready can succeed before initdb finishes creating POSTGRES_DB=orchestra
+  # (especially on a cold image pull). Keep waiting for the database itself; only
+  # hard-fail once the wait budget is exhausted (or for already-running containers
+  # above via ensure_orchestra_database_present).
   local max_attempts=30
   local attempt=0
   while (( attempt < max_attempts )); do
-    if docker exec "$ORCHESTRA_DB_CONTAINER" pg_isready -U orchestra &>/dev/null; then
-      if ensure_orchestra_database_present; then
-        log_success "PostgreSQL is ready"
-        return 0
-      fi
-      return 1
+    if docker exec "$ORCHESTRA_DB_CONTAINER" pg_isready -U orchestra &>/dev/null \
+      && db_container_has_orchestra_database "$ORCHESTRA_DB_CONTAINER"; then
+      log_success "PostgreSQL is ready"
+      return 0
     fi
     sleep 1
     ((attempt++)) || true
   done
 
+  if docker exec "$ORCHESTRA_DB_CONTAINER" pg_isready -U orchestra &>/dev/null; then
+    ensure_orchestra_database_present || return 1
+  fi
   log_error "PostgreSQL failed to start within 30 seconds"
   return 1
 }
