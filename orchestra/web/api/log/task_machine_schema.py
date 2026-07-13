@@ -67,7 +67,7 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
         description="Owning Unity/Tasks row for the activation instance.",
     )
     source_type: str = Field(
-        description="Why the run exists: scheduled, triggered, etc.",
+    description="Why the run exists: scheduled, triggered, explicit, provider_event, etc.",
     )
     execution_mode: Literal["live", "offline"] = Field(
         description="Which execution lane owns the run.",

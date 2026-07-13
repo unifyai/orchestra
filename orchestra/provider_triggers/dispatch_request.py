@@ -5,12 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProviderEventDispatchRequest(BaseModel):
     """Internal dispatch authorization passed to Communication or Unity."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["1"] = "1"
     operation_id: str
     run_id: int
     run_key: str
