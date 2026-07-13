@@ -51,6 +51,11 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
 )
+from orchestra.services.task_log_seam import (
+    maybe_apply_provider_event_log_updates,
+    maybe_create_provider_event_task_logs,
+    maybe_delete_provider_event_task_logs,
+)
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     get_task_ids_for_log_ids,
@@ -424,6 +429,16 @@ def create_logs(
 
     # Load the Context object once
     context_obj = session.get(Context, context_id)
+
+    create_seam_response = maybe_create_provider_event_task_logs(
+        session,
+        project_id=project_id,
+        project_name=project.name,
+        context_name=getattr(context_obj, "name", None),
+        entries=request.entries,
+    )
+    if create_seam_response is not None:
+        return create_seam_response
 
     try:
         # Call the internal implementation with validated project and context
@@ -2159,6 +2174,18 @@ def _update_logs(
                 log_event_ids=ids_to_update,
             )
 
+    seam_response = maybe_apply_provider_event_log_updates(
+        session,
+        project_id=project_id,
+        project_name=project_name,
+        context_name=getattr(ctx_obj_cache, "name", None),
+        log_ids=ids_to_update,
+        entries=body.entries,
+        overwrite=body.overwrite,
+    )
+    if seam_response is not None:
+        return seam_response
+
     # Fetch field types once
     try:
         field_types = field_type_dao.get_field_types(
@@ -3336,6 +3363,16 @@ def delete_logs(
             detail=f"Context '{context_name}' not found for project '{body.project_name}'.",
         )
     context_id = context[0][0].id
+
+    delete_seam_response = maybe_delete_provider_event_task_logs(
+        session,
+        project_id=project_id,
+        project_name=body.project_name,
+        context_name=context_name or None,
+        ids_and_fields=body.ids_and_fields,
+    )
+    if delete_seam_response is not None:
+        return delete_seam_response
 
     # Preprocess ids_and_fields to handle dict-based selectors
     processed_ids_and_fields = []
