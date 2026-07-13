@@ -941,6 +941,7 @@ def _connection_to_response(
         backend_id=conn.backend_id,
         provider_app_id=conn.provider_app_id,
         provider_connection_id=conn.provider_connection_id,
+        provider_user_id=conn.provider_user_id,
         status=conn.status,
         external_account_label=conn.external_account_label,
         granted_scopes=conn.granted_scopes_json or [],
@@ -1686,10 +1687,13 @@ def complete_connection(
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
-    updates = {
-        "provider_connection_id": provider_connection_id
+    resolved_provider_connection_id = (
+        provider_connection_id
         or conn.provider_connection_id
-        or f"local_{uuid.uuid4().hex}",
+        or f"local_{uuid.uuid4().hex}"
+    )
+    updates = {
+        "provider_connection_id": resolved_provider_connection_id,
         "granted_scopes_json": granted_scopes or conn.granted_scopes_json or [],
         "status": status,
         "reconnect_reason": (
@@ -1702,6 +1706,26 @@ def complete_connection(
         updates["external_account_label"] = _normalize_account_label(
             external_account_label,
         )
+    if status == "connected" and not resolved_provider_connection_id.startswith(
+        "local_",
+    ):
+        # Persist the entity id the provider bound this account to at link
+        # time: execution must present that exact id, and the connection's
+        # owner scope can legitimately diverge from it later (ownership
+        # transfers, mirrored environments).
+        try:
+            adapter = get_provider_adapter(conn.backend_id)
+            provider_user_id = adapter.connected_account_user_id(
+                resolved_provider_connection_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to resolve provider entity id for connection %s",
+                conn.connection_id,
+            )
+            provider_user_id = None
+        if provider_user_id:
+            updates["provider_user_id"] = provider_user_id
     dao.update_connection_fields(conn, **updates)
     session.commit()
     response = _connection_to_response(conn)
@@ -2581,7 +2605,13 @@ def run_tool(
                 backend_config=(backend.config_json if backend else {}),
                 backend_status=backend.status if backend else "enabled",
             )
-            provider_user_id = _owner_external_user_id(
+            # The entity id recorded at link time is authoritative: providers
+            # (Composio) reject executions whose user_id differs from the one
+            # the account was created under, and the connection's owner scope
+            # can diverge from it after ownership transfers or mirroring.
+            provider_user_id = (
+                conn.provider_user_id if conn else None
+            ) or _owner_external_user_id(
                 owner,
                 conn.connection_id if conn else None,
             )

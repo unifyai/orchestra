@@ -2,17 +2,37 @@ import logging
 import os
 import uuid
 
-from fastapi import HTTPException, Path, status
+from fastapi import Depends, Header, HTTPException, Path, Response, status
 from fastapi.routing import APIRouter
 from starlette.requests import Request
 
-from orchestra.db.dependencies import transient_request_db_session
+from orchestra.db.dependencies import get_db_session, transient_request_db_session
+from orchestra.provider_triggers.task_trigger import parse_task_trigger
+from orchestra.services.task_mutation_contract import (
+    TaskRevisionConflict,
+    format_task_etag,
+    parse_if_match,
+)
+from orchestra.services.task_mutation_service import TaskMutationService
 from orchestra.services.task_trigger_service import (
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
 from orchestra.web.api.assistant.schema import InfoResponse
-from orchestra.web.api.tasks.schema import TaskTriggerRequest, TaskTriggerStatus
+from orchestra.web.api.tasks.schema import (
+    RetryTriggerResponse,
+    TaskRevisionConflictResponse,
+    TaskTriggerRequest,
+    TaskTriggerStatus,
+    TriggerCatalogEvent,
+    TriggerCatalogResponse,
+    TriggerHealthResponse,
+    TypedTaskCreateRequest,
+    TypedTaskListResponse,
+    TypedTaskPatchRequest,
+    TypedTaskResponse,
+)
+from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 from orchestra.web.api.utils.http_client import get_async_client
 
 logger = logging.getLogger(__name__)
@@ -95,6 +115,8 @@ async def _dispatch_offline_task_to_comms(
         payload["destination"] = target.destination
     if target.entrypoint is not None:
         payload["entrypoint"] = target.entrypoint
+    if target.max_runtime_seconds is not None:
+        payload["max_runtime_seconds"] = target.max_runtime_seconds
     client = get_async_client()
     response = await client.post(
         f"{comms_url}/infra/task-activation/offline-dispatch",
@@ -196,6 +218,445 @@ async def _dispatch_task_trigger_to_adapters(
         source_ref=request_id,
     )
     return request_id
+
+
+def _typed_task_response(
+    *,
+    assistant_id: int,
+    log_event_id: int,
+    task_id: int,
+    task_revision: int,
+    data: dict,
+) -> TypedTaskResponse:
+    trigger = data.get("trigger")
+    parsed_trigger = None
+    if trigger is not None:
+        try:
+            parsed_trigger = parse_task_trigger(trigger)
+        except (TypeError, ValueError):
+            parsed_trigger = trigger
+    return TypedTaskResponse(
+        log_event_id=log_event_id,
+        task_id=task_id,
+        task_revision=task_revision,
+        assistant_id=assistant_id,
+        name=data.get("name"),
+        description=data.get("description"),
+        status=data.get("status"),
+        enabled=data.get("enabled"),
+        offline=data.get("offline"),
+        trigger=parsed_trigger,
+        schedule=data.get("schedule"),
+        priority=data.get("priority"),
+        entrypoint=data.get("entrypoint"),
+        provider_event_binding_id=data.get("provider_event_binding_id"),
+        raw=data,
+    )
+
+
+def _attach_task_etag(response: Response, task_revision: int) -> None:
+    response.headers["ETag"] = format_task_etag(task_revision)
+
+
+def _require_if_match(if_match: str | None) -> int:
+    try:
+        return parse_if_match(if_match)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="If-Match header with task_revision is required.",
+        ) from exc
+
+
+def _conflict_response(exc: TaskRevisionConflict) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=TaskRevisionConflictResponse(
+            task_revision=exc.latest_revision,
+        ).model_dump(),
+    )
+
+
+@router.get(
+    "/assistants/{assistant_id}/tasks",
+    response_model=InfoResponse[TypedTaskListResponse],
+    tags=["Tasks"],
+    summary="List assistant tasks",
+)
+def list_assistant_tasks(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    session=Depends(get_db_session),
+) -> InfoResponse[TypedTaskListResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=False)
+    service = TaskMutationService(session)
+    rows = service.list_tasks(assistant=assistant)
+    return InfoResponse(
+        info=TypedTaskListResponse(
+            tasks=[
+                _typed_task_response(
+                    assistant_id=assistant_id,
+                    log_event_id=row.log_event_id,
+                    task_id=row.task_id,
+                    task_revision=row.task_revision,
+                    data=row.data,
+                )
+                for row in rows
+            ],
+        ),
+    )
+
+
+@router.post(
+    "/assistants/{assistant_id}/tasks",
+    status_code=status.HTTP_201_CREATED,
+    response_model=InfoResponse[TypedTaskResponse],
+    tags=["Tasks"],
+    summary="Create an assistant task",
+)
+def create_assistant_task(
+    request: Request,
+    body: TypedTaskCreateRequest,
+    response: Response,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    session=Depends(get_db_session),
+) -> InfoResponse[TypedTaskResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    entries = body.model_dump(exclude_none=True)
+    if body.trigger is not None:
+        entries["trigger"] = (
+            body.trigger.model_dump()
+            if hasattr(body.trigger, "model_dump")
+            else body.trigger
+        )
+    if body.status is None:
+        entries["status"] = "triggerable" if entries.get("trigger") else "scheduled"
+    service = TaskMutationService(session)
+    try:
+        result = service.create_task(assistant=assistant, entries=entries)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    session.commit()
+    _attach_task_etag(response, result.task_revision)
+    return InfoResponse(
+        info=_typed_task_response(
+            assistant_id=assistant_id,
+            log_event_id=result.log_event_id,
+            task_id=result.task_id,
+            task_revision=result.task_revision,
+            data=result.data,
+        ),
+    )
+
+
+@router.get(
+    "/assistants/{assistant_id}/tasks/{task_id}",
+    response_model=InfoResponse[TypedTaskResponse],
+    tags=["Tasks"],
+    summary="Read one assistant task",
+)
+def get_assistant_task(
+    request: Request,
+    response: Response,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    session=Depends(get_db_session),
+) -> InfoResponse[TypedTaskResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=False)
+    service = TaskMutationService(session)
+    row = service.get_task(assistant=assistant, task_id=task_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    _attach_task_etag(response, row.task_revision)
+    return InfoResponse(
+        info=_typed_task_response(
+            assistant_id=assistant_id,
+            log_event_id=row.log_event_id,
+            task_id=row.task_id,
+            task_revision=row.task_revision,
+            data=row.data,
+        ),
+    )
+
+
+@router.patch(
+    "/assistants/{assistant_id}/tasks/{task_id}",
+    response_model=InfoResponse[TypedTaskResponse],
+    tags=["Tasks"],
+    summary="Update one assistant task",
+)
+def patch_assistant_task(
+    request: Request,
+    body: TypedTaskPatchRequest,
+    response: Response,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    session=Depends(get_db_session),
+) -> InfoResponse[TypedTaskResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    expected_revision = _require_if_match(if_match)
+    updates = body.model_dump(exclude_none=True)
+    if body.trigger is not None:
+        updates["trigger"] = (
+            body.trigger.model_dump()
+            if hasattr(body.trigger, "model_dump")
+            else body.trigger
+        )
+    service = TaskMutationService(session)
+    try:
+        result = service.mutate_authored_task(
+            assistant=assistant,
+            task_id=task_id,
+            expected_task_revision=expected_revision,
+            updates=updates,
+        )
+    except TaskRevisionConflict as exc:
+        raise _conflict_response(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    session.commit()
+    _attach_task_etag(response, result.task_revision)
+    return InfoResponse(
+        info=_typed_task_response(
+            assistant_id=assistant_id,
+            log_event_id=result.log_event_id,
+            task_id=result.task_id,
+            task_revision=result.task_revision,
+            data=result.data,
+        ),
+    )
+
+
+@router.delete(
+    "/assistants/{assistant_id}/tasks/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Tasks"],
+    summary="Delete one assistant task",
+)
+def delete_assistant_task(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    session=Depends(get_db_session),
+) -> Response:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    expected_revision = _require_if_match(if_match)
+    service = TaskMutationService(session)
+    try:
+        service.delete_task(
+            assistant=assistant,
+            task_id=task_id,
+            expected_task_revision=expected_revision,
+        )
+    except TaskRevisionConflict as exc:
+        raise _conflict_response(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/assistants/{assistant_id}/tasks/{task_id}/pause",
+    response_model=InfoResponse[TypedTaskResponse],
+    tags=["Tasks"],
+    summary="Pause provider-event automation",
+)
+def pause_assistant_task_trigger(
+    request: Request,
+    response: Response,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    session=Depends(get_db_session),
+) -> InfoResponse[TypedTaskResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    expected_revision = _require_if_match(if_match)
+    service = TaskMutationService(session)
+    try:
+        result = service.pause_provider_trigger(
+            assistant=assistant,
+            task_id=task_id,
+            expected_task_revision=expected_revision,
+        )
+    except TaskRevisionConflict as exc:
+        raise _conflict_response(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    session.commit()
+    _attach_task_etag(response, result.task_revision)
+    return InfoResponse(
+        info=_typed_task_response(
+            assistant_id=assistant_id,
+            log_event_id=result.log_event_id,
+            task_id=result.task_id,
+            task_revision=result.task_revision,
+            data=result.data,
+        ),
+    )
+
+
+@router.post(
+    "/assistants/{assistant_id}/tasks/{task_id}/resume",
+    response_model=InfoResponse[TypedTaskResponse],
+    tags=["Tasks"],
+    summary="Resume provider-event automation",
+)
+def resume_assistant_task_trigger(
+    request: Request,
+    response: Response,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    session=Depends(get_db_session),
+) -> InfoResponse[TypedTaskResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    expected_revision = _require_if_match(if_match)
+    service = TaskMutationService(session)
+    try:
+        result = service.resume_provider_trigger(
+            assistant=assistant,
+            task_id=task_id,
+            expected_task_revision=expected_revision,
+        )
+    except TaskRevisionConflict as exc:
+        raise _conflict_response(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    session.commit()
+    _attach_task_etag(response, result.task_revision)
+    return InfoResponse(
+        info=_typed_task_response(
+            assistant_id=assistant_id,
+            log_event_id=result.log_event_id,
+            task_id=result.task_id,
+            task_revision=result.task_revision,
+            data=result.data,
+        ),
+    )
+
+
+@router.post(
+    "/assistants/{assistant_id}/tasks/{task_id}/retry-trigger",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=InfoResponse[RetryTriggerResponse],
+    tags=["Tasks"],
+    summary="Request immediate trigger reconciliation",
+)
+def retry_assistant_task_trigger(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    session=Depends(get_db_session),
+) -> InfoResponse[RetryTriggerResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=True)
+    service = TaskMutationService(session)
+    row = service.get_task(assistant=assistant, task_id=task_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    return InfoResponse(info=RetryTriggerResponse(task_id=task_id))
+
+
+@router.get(
+    "/assistants/{assistant_id}/tasks/{task_id}/trigger-health",
+    response_model=InfoResponse[TriggerHealthResponse],
+    tags=["Tasks"],
+    summary="Read composed provider-trigger health",
+)
+def get_assistant_task_trigger_health(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    session=Depends(get_db_session),
+) -> InfoResponse[TriggerHealthResponse]:
+    assistant = require_owned_assistant(request, assistant_id, session, write=False)
+    service = TaskMutationService(session)
+    row = service.get_task(assistant=assistant, task_id=task_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    trigger = parse_task_trigger(row.data.get("trigger"))
+    authored_state = (
+        trigger.state
+        if trigger is not None and trigger.kind == "provider_event"
+        else None
+    )
+    return InfoResponse(
+        info=TriggerHealthResponse(
+            task_id=task_id,
+            task_revision=row.task_revision,
+            authored_trigger_state=authored_state,
+            task_enabled=bool(row.data.get("enabled", True)),
+            runtime_health="absent",
+            remediation=None,
+        ),
+    )
+
+
+@router.get(
+    "/task-trigger-catalog",
+    response_model=InfoResponse[TriggerCatalogResponse],
+    tags=["Tasks"],
+    summary="List supported provider-event trigger catalog entries",
+)
+def get_task_trigger_catalog() -> InfoResponse[TriggerCatalogResponse]:
+    # TODO: replace this static skeleton with a live Composio/Pipedream-backed
+    # trigger registry once the curated provider catalog adapter lands.
+    return InfoResponse(
+        info=TriggerCatalogResponse(
+            events=[
+                TriggerCatalogEvent(
+                    event_slug="github.issue_created",
+                    canonical_app_slug="github",
+                    schema_version="1",
+                    filters=[
+                        {
+                            "field": "repository",
+                            "operator": "is",
+                        },
+                        {
+                            "field": "author",
+                            "operator": "is",
+                        },
+                        {
+                            "field": "labels",
+                            "operator": "contains",
+                        },
+                        {
+                            "field": "title",
+                            "operator": "contains",
+                        },
+                    ],
+                    backends=["composio", "pipedream"],
+                ),
+            ],
+        ),
+    )
 
 
 @router.post(

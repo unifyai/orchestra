@@ -206,6 +206,18 @@ class BaseIntegrationProviderAdapter(ABC):
     ) -> ProviderExecutionResult:
         """Check whether the provider connection is usable."""
 
+    def connected_account_user_id(
+        self,
+        provider_connection_id: str,
+    ) -> str | None:
+        """Return the entity id the provider bound this connected account to.
+
+        Backends that scope execution by a link-time entity id (Composio)
+        override this so the id can be persisted on the connection row.
+        """
+
+        return None
+
     def stage_file(
         self,
         *,

@@ -77,6 +77,8 @@ cover/
 *.txt
 *.json
 !.cursor/worktrees.json
+!orchestra/tests/fixtures/provider_trigger_contract/*.json
+!orchestra/tests/fixtures/task_trigger_contract/*.json
 *.csv
 # Django stuff:
 *.log
@@ -129,6 +131,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.provider-probes
 .venv
 env/
 venv/

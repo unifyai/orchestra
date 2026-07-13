@@ -4013,12 +4013,17 @@ class MsTeamsBotInstall(Base):
 
     Uniqueness mirrors ``SlackInstall``:
 
-    * ``ux_ms_teams_bot_install_org_tenant`` — one row per
-      ``(organization_id, tenant_id)`` (org installs).
-    * ``ux_ms_teams_bot_install_user_tenant`` — one row per
-      ``(user_id, tenant_id)`` (personal installs).
+    * ``ux_ms_teams_bot_install_org_tenant`` — one *active* (non-revoked)
+      row per ``(organization_id, tenant_id)`` (org installs).
+    * ``ux_ms_teams_bot_install_user_tenant`` — one *active* (non-revoked)
+      row per ``(user_id, tenant_id)`` (personal installs).
     * ``ux_ms_teams_bot_install_active_tenant`` — at most one *active*
       (non-revoked) row per ``tenant_id``.
+
+    The owner-tenant indexes are scoped to ``revoked_at IS NULL`` so a
+    revoked install (kept for audit) never blocks a fresh re-install/bind
+    for the same owner and tenant — reconnecting after a disconnect is a
+    clean insert, not a unique-constraint collision.
     """
 
     __tablename__ = "ms_teams_bot_installs"
@@ -4062,14 +4067,16 @@ class MsTeamsBotInstall(Base):
             "organization_id",
             "tenant_id",
             unique=True,
-            postgresql_where=text("organization_id IS NOT NULL"),
+            postgresql_where=text(
+                "organization_id IS NOT NULL AND revoked_at IS NULL",
+            ),
         ),
         Index(
             "ux_ms_teams_bot_install_user_tenant",
             "user_id",
             "tenant_id",
             unique=True,
-            postgresql_where=text("user_id IS NOT NULL"),
+            postgresql_where=text("user_id IS NOT NULL AND revoked_at IS NULL"),
         ),
         Index(
             "ux_ms_teams_bot_install_active_tenant",

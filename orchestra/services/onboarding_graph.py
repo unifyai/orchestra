@@ -190,6 +190,26 @@ WORKSPACE_FRAMING = (
     "marks the step done, and moves on rather than inventing content."
 )
 
+WORKSPACE_CALL_FRAMING = (
+    "The user wants to speak with T-W1N live in a video call on their connected "
+    "workspace's own platform — Google Meet for a Google workspace, Microsoft "
+    "Teams for a Microsoft one. T-W1N never creates the meeting: the user hosts "
+    "it and pastes the link, because only the human account can open a meeting on "
+    "their tenant. So T-W1N asks the user to start a Meet/Teams meeting and paste "
+    "the link (the Console click already opens the right 'new meeting' page for "
+    "them), and if no link has arrived yet it waits for one rather than guessing. "
+    "Once a link is in hand, T-W1N joins it — a meet.google.com link with the "
+    "Google Meet join tool, a teams.microsoft.com link with the Teams join tool — "
+    "with a short, warm spoken opener, has a brief live back-and-forth to prove "
+    "two-way audio works, and then wraps up. Joining and speaking is the demo "
+    "task; the checklist does NOT auto-detect it, so it is not finished until "
+    "T-W1N has actually joined and spoken, after which T-W1N marks the step done "
+    "explicitly. Respect the one-voice-session-at-a-time guard: if T-W1N is "
+    "already in a call it finishes or leaves that first. If the user declines to "
+    "share a link or can't host, T-W1N says so plainly and does not mark the step "
+    "done."
+)
+
 INTEGRATIONS_FRAMING = (
     "In the Integrations phase T-W1N proves connected apps are more than a "
     "gallery: first the user connects at least one non-workspace app, then "
@@ -357,62 +377,151 @@ MY_COMPUTER_FRAMING = (
     "Rule 1 — Off-call click: in the same turn, send ONE short ack (tutorial intro: "
     "this step shows I have a real computer of my own; you'll watch me use it live) "
     "and call start_unify_meet immediately. Do not warm or wait on a separate "
-    "desktop-prep tool — ring now. Opener = tutorial-esque intro spoken naturally "
-    "(what they'll watch, questions welcome anytime); briefing = the full demo "
-    "script below. Unanswered ring: ONE chat line inviting a ring-back; do not "
+    "desktop-prep tool — ring now. User-facing opener = that short tutorial intro "
+    "spoken naturally (what they'll watch, questions welcome anytime). Actor "
+    "briefing = the Fixed substeps script below (pass those execute_code bodies "
+    "verbatim). Unanswered ring: ONE chat line inviting a ring-back; do not "
     "re-ring. "
     "Rule 2 — On-call click: start the demo immediately and tell them to click "
     "Show assistant screen so they watch live. "
     "Rule 3 — Narrated persist-act demo: launch act(persist=True) during the ring "
-    "(the actor's setup pass overlaps the user answering). Drive it substep by "
-    "substep: send one substep, and when the act responds, narrate ONE short line on "
+    "(the actor's setup pass overlaps the user answering). Drive five fixed "
+    "substeps one at a time: send one substep's execute_code body verbatim as "
+    "the interjection, and when the act responds, narrate ONE short line on "
     "voice via guide_voice_agent and interject the next substep. Never batch the "
-    "whole demo into one act request. Do NOT start with a desktop-health / orienting "
-    "screenshot substep — go straight into the visible work. "
-    "Actor execution style (instruct the actor in every substep): prefer "
-    "`await primitives.computer.desktop.act(..., verify=False)` (or the matching "
-    "web-session `act(..., verify=False)`) for GUI work so each action stays fast; "
-    "use low-level primitives like `.click(x, y)`, `.type_text(...)`, "
-    "`.press_key(...)` only as fallbacks when high-level act fails or is clearly "
-    "the wrong tool. Before every major visual action (opening the browser, "
-    "navigating, Save Image As, closing the browser, opening Thunar, opening "
-    "Ristretto, sending the attachment), call the top-level "
-    "`send_notification(message=...)` tool first so the user hears a coherent "
-    "narration of what is about to happen, then perform the action "
-    "(via `execute_function` / `execute_code`). Do not rely on sandbox-only "
-    "`notify(...)` unless the whole beat already runs inside one `execute_code` "
-    "block. "
-    "Fixed substeps: (1) open a visible browser and navigate to NASA's Astronomy "
-    "Picture of the Day; (2) save today's image with the browser GUI only — "
-    "right-click the main image → Save Image As… → confirm Save in the dialog "
-    "(keep the default filename; leave it in the dialog's default folder, normally "
-    "/Unity/Downloads — do not create a subfolder). Never urllib, curl, wget, "
-    "Python HTTP download, or any other headless/programmatic save; (3) close the "
-    "browser window, open Thunar (the GUI file manager) from the dock, and navigate "
-    "to the folder used in the Save dialog (default /Unity/Downloads) so the saved "
-    "file is visibly listed — never a terminal, never shell commands like xdg-open; "
-    "(4) in Thunar, right-click the saved image → Open With → Ristretto (the image "
-    "viewer) so the user sees the picture open on the desktop; (5) the actor sends "
-    "the attachment itself: instruct it to run execute_code with "
-    "await primitives.comms.send_unify_message(content=<one short caption>, "
-    "attachment_filepath=<the exact saved path from the Save dialog>), then respond "
-    "confirming delivery and the exact path it sent. If a substep is dragging "
-    "(~2 minutes), simplify it or move on honestly — never grind silently. If the "
-    "user asks for something else mid-call, honor it as long as it keeps the same "
-    "shape (real site → GUI Save Image As → Thunar reveal → Ristretto open → "
-    "deliver). "
-    "Rule 4 — Tutorial voice throughout: plain language, no tool names; explain "
+    "whole demo into one act request. Do NOT start with a desktop-health / "
+    "orienting screenshot substep — go straight into the visible work. No "
+    "rename/move. "
+    "Hybrid execution style: every GUI interjection is the exact execute_code "
+    "body from that Fixed substep — the CM copies it as-is; the actor does not "
+    "rewrite, discover, or invent. Because verify=False is one-shot, each "
+    "desktop.act is already split at every UI-state boundary (never pack "
+    "right-click → menu pick → dialog confirm into one call). After EVERY "
+    "desktop.act, the body MUST call "
+    "display(await primitives.computer.desktop.get_screenshot()) so the actor "
+    "sees the real desktop/browser state. If the screenshot shows the expected "
+    "UI did not land, retry that SAME act (same instruction string) up to 2 "
+    "more times and screenshot again — do not invent a different approach, "
+    "alternate URL, Downloads path, or low-level click loop. Only after the "
+    "screenshot confirms the substep goal may the actor report success and "
+    "await the next interjection. Forbidden inside a GUI substep: tool/"
+    "function search, reading /app/unify source, query_llm screenshot "
+    "archaeology, multi-micro execute_code click/type loops, multi-step "
+    "recovery inventing new tools, and soft 'prefer act / fall back to "
+    "low-level' exploration. If the same act still fails after those retries, "
+    "report failure honestly with what the last screenshot showed — do not "
+    "invent a workaround. Delivery substep (5): copy-paste that execute_code "
+    "body after substituting the real synced path from Save / Thunar / "
+    "Ristretto. Forbidden: grepping source, hand-rolling multipart uploads, "
+    "inventing alternate upload APIs. If the exact call fails, report the error "
+    "and stop. "
+    "Narration: before each Fixed substep (not before every granular act), call "
+    "the top-level `send_notification(message=...)` tool so the user hears what "
+    "is about to happen, then interject that substep's execute_code body. Do "
+    "not rely on sandbox-only `notify(...)` unless the whole beat already runs "
+    "inside one `execute_code` block. "
+    "Fixed substeps — CM passes each execute_code body verbatim to the actor "
+    "(substitute only the real filename/path once known from Save / Thunar): "
+    "(1) Open browser → NASA APOD: "
+    "await primitives.computer.desktop.act('Open the web browser from the dock', "
+    "verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('This is XFCE desktop Chromium, not "
+    "Magnitude web mode — do NOT use browser:nav (it drives the wrong browser). "
+    "Click the address bar, type https://apod.nasa.gov/apod/astropix.html with "
+    "keyboard type/enter (or equivalent mouse + keyboard primitives), and wait "
+    "until the APOD page is visibly loaded', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "If the screenshot is still a New Tab / blank page, retry that SAME navigate "
+    "act up to 2 more times (screenshot after each; still no browser:nav). Only "
+    "then report that APOD is visible. "
+    "(2) Save Image As (GUI only, default filename) into /Unity/Local/Outputs — "
+    "the synced outbound staging folder (NOT a Downloads-only happy path). "
+    "Keep the default filename; no rename; no subfolder. Never urllib, curl, "
+    "wget, Python HTTP download, or any other headless/programmatic save: "
+    "await primitives.computer.desktop.act('Right-click the main APOD image on "
+    "the page', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('Click Save Image As… in the context "
+    "menu that just opened', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "After that screenshot, branch on what is visible: "
+    "(2a) Prefer path — Save dialog is open: "
+    "await primitives.computer.desktop.act('In the Save dialog now open, navigate "
+    "to the /Unity/Local/Outputs directory via the location sidebar or "
+    "breadcrumb — do not type Outputs into the Name/filename field', "
+    "verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('In the Save dialog, keep the default "
+    "filename and click Save', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "then report the exact saved path under /Unity/Local/Outputs. "
+    "(2b) Flake path — Save dialog did NOT open (known XFCE/Chromium flake): "
+    "do NOT invent alternate tools. Instead check the Chromium toolbar download "
+    "icon in the screenshot — if it is blue / highlighted and shows a completed "
+    "recent download, Chromium auto-saved the image to /Unity/Local/Downloads "
+    "(under the synced Local tree). Treat that as save success, find the newest "
+    "image there, and report the exact path under /Unity/Local/Downloads — then "
+    "proceed with later substeps using that path. "
+    "If neither Save dialog nor a blue completed-download icon is visible, "
+    "retry the Save Image As act up to 2 more times (screenshot after each); "
+    "if still neither, report failure honestly. "
+    "(3) Close browser → Thunar reveal at the folder where the image was saved "
+    "(/Unity/Local/Outputs from 2a, or /Unity/Local/Downloads from 2b). Never a "
+    "terminal, never shell xdg-open: "
+    "await primitives.computer.desktop.act('Close the browser window', "
+    "verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('Open Thunar from the dock', "
+    "verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('In Thunar, navigate to the saved "
+    "image folder (/Unity/Local/Outputs or /Unity/Local/Downloads) so the "
+    "saved image is visibly listed', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "then report when the file is visibly listed. "
+    "(4) Open the saved image in Ristretto (image viewer) from Thunar: "
+    "await primitives.computer.desktop.act('In Thunar, right-click the saved "
+    "image file', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('Click Open With in the context menu "
+    "that just opened', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "await primitives.computer.desktop.act('Click Ristretto Image Viewer in the "
+    "Open With submenu', verify=False); "
+    "display(await primitives.computer.desktop.get_screenshot()); "
+    "then report when Ristretto visibly displays the image. "
+    "(5) Deliver attachment — substitute <exact-synced-path> with the path from "
+    "substep 2/3 (under /Unity/Local/Outputs from 2a, or /Unity/Local/Downloads "
+    "from the blue-download flake path 2b): "
+    "await primitives.comms.send_unify_message(content=\"Here is today's NASA "
+    'Astronomy Picture of the Day from my computer.", '
+    "attachment_filepath='<exact-synced-path>'); "
+    "print('delivered', '<exact-synced-path>'); "
+    "then report path + delivery confirmation. "
+    "If a substep is dragging (~2 minutes), move on honestly with the same shape "
+    "(fewer flourishes, same tools and paths) — never grind silently and never "
+    "switch to desktop-only /Unity/Downloads delivery, programmatic download, "
+    "or alternate upload APIs (the blue-download flake that lands under "
+    "/Unity/Local/Downloads is allowed). If "
+    "the user asks for something else mid-call, honor it as long as it keeps "
+    "the same shape (real site → GUI Save Image As into a Local synced folder → "
+    "Thunar reveal → Ristretto open → deliver). "
+    "Rule 4 — Tutorial voice to the user: plain language, no tool names; explain "
     "what they're seeing as it happens; invite questions mid-demo and answer them "
-    "(the persist act pauses naturally between substeps). "
-    "Rule 5 — Explicit completion: the demo is not finished until the actor's "
-    "response confirms the attachment was delivered. Marking the step done, stopping "
-    "act, and that delivery confirmation are three separate moments — never batch "
-    "them into one turn. The CM never sends the attachment itself. If the actor "
-    "reports the send failed, that is Rule-7 territory: say so, retry or offer "
-    "later, do not mark done. The checklist does not auto-detect anything. "
-    "Rule 6 — Contextual wrap-up: after marking done, give a one-line recap of what "
-    "they watched (real computer, Save Image As, Thunar, Ristretto, delivered to "
-    "chat), name "
+    "(the persist act pauses naturally between substeps). Actor interjections "
+    "MUST keep the exact tool/API names and execute_code bodies from Fixed "
+    "substeps — Rule 4 does not apply to actor text. "
+    "Rule 5 — Explicit completion: call "
+    "set_onboarding_task_state('my-computer-demo', True) only after the actor "
+    "confirms delivery. Delivery confirmation, the completion call, and stopping "
+    "act are three separate turns — never batch them. The CM never sends the "
+    "attachment itself. If the actor reports the send failed, that is Rule-7 "
+    "territory: say so, retry or offer later, do not mark done. The checklist "
+    "does not auto-detect anything. "
+    "Rule 6 — Contextual wrap-up: after marking done (its own turn) and after "
+    "stopping act (its own turn), give a one-line recap of what they watched "
+    "(real computer, Save Image As, Thunar, Ristretto, delivered to chat), name "
     "the next onboarding step from the live progress block, and offer both paths — "
     "continue on this call or 'I'll message you the next step' — then respect their "
     "choice (gated hang-up if they're done). "
@@ -835,9 +944,9 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     """Event fired when the user clicks the My Computer beat row.
 
     The click starts the call-anchored live desktop demo — persist-act substeps
-    on the managed VM (GUI Save Image As, Thunar reveal, Ristretto open, chat
-    attachment) — scripted by ``MY_COMPUTER_FRAMING``. There is no freeform mode
-    and there are no chips.
+    on the managed VM (GUI Save Image As into synced workspace, Thunar reveal,
+    Ristretto open, exact execute_code attachment) — scripted by
+    ``MY_COMPUTER_FRAMING``. There is no freeform mode and there are no chips.
     """
     interaction = {
         "type": "my_computer_beat",
@@ -851,22 +960,35 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "Off-call: short ack + start_unify_meet in the same turn — ring "
             "immediately. Launch act(persist=True) during the ring. On-call: start "
             "the persist-act demo immediately and tell them to click Show assistant "
-            "screen. Drive five substeps one at a time — act "
-            "response → one guide_voice_agent line → interject next substep: browser "
-            "to NASA APOD; GUI Save Image As… into the dialog default folder "
-            "(normally /Unity/Downloads; keep default filename; no programmatic "
-            "download); close browser, open Thunar, navigate to that folder; "
-            "right-click → Open With → Ristretto; actor sends send_unify_message "
-            "attachment via execute_code and confirms delivery plus the exact path. "
-            "No orienting desktop screenshot. Prefer act(..., verify=False); "
-            "low-level click/type only as fallback; send_notification(...) before "
-            "each major visual action. Never a terminal or shell xdg-open. After "
-            "the actor confirms delivery, mark the step done in its own turn, then "
-            "stop act, then wrap up from the live progress block (recap, name next "
-            "step, continue on call or message). Unanswered ring: one ring-back "
-            "invite; do not re-ring. On failure: say so, do not mark done. This is "
-            "a poll, not a request to repeat work already done: if the demo is "
-            "already finished, treat this as confirmation and do NOT redo it. "
+            "screen. Drive five fixed substeps one at a time — act response → one "
+            "guide_voice_agent line → interject the next Fixed-substep execute_code "
+            "body verbatim: (1) browser to NASA APOD via granular "
+            "desktop.act(..., verify=False) with "
+            "display(await primitives.computer.desktop.get_screenshot()) after "
+            "each act — navigate act must forbid browser:nav and use "
+            "click/type/enter on XFCE Chromium (retry same act if still New "
+            "Tab); (2) GUI Save "
+            "Image As… into /Unity/Local/Outputs (synced staging; navigate via "
+            "sidebar/breadcrumb, never type Outputs into the Name field; if the "
+            "Save dialog does not open, accept a blue Chromium download icon as "
+            "success — file auto-lands in /Unity/Local/Downloads; prefer Save "
+            "dialog into Outputs when it does open; split right-click / menu / "
+            "navigate-or-confirm / Save; screenshot after each); (3) close "
+            "browser, open Thunar, reveal the saved folder; (4) Thunar "
+            "right-click → Open With → Ristretto; (5) exact send_unify_message "
+            "execute_code with that Local path (Outputs or Local/Downloads), "
+            "then confirm delivery plus the exact path. No orienting "
+            "screenshot, no rename/move flourish, no desktop-only "
+            "/Unity/Downloads attachment path, no tool/source search or "
+            "low-level click fallbacks. send_notification(...) once per Fixed "
+            "substep before interjecting its execute_code body. Never a "
+            "terminal or shell xdg-open. After the actor confirms delivery, "
+            "mark the step done in its own turn, then stop act, then wrap up "
+            "from the live progress block (recap, name next step, continue on "
+            "call or message). Unanswered ring: one ring-back invite; do not "
+            "re-ring. On failure: say so, do not mark done. This is a poll, "
+            "not a request to repeat work already done: if the demo is already "
+            "finished, treat this as confirmation and do NOT redo it. "
             f"Full contract: {MY_COMPUTER_FRAMING}"
         ),
         subtype="my_computer_beat_requested",
@@ -876,6 +998,52 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
             "phase": PHASE_MY_COMPUTER,
             "phase_id": "my-computer",
             "phase_framing": MY_COMPUTER_FRAMING,
+            "interaction": interaction,
+        },
+    )
+
+
+def _workspace_call_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
+    """Event fired when the user clicks the workspace video-call beat row.
+
+    The click asks T-W1N to join a live Google Meet / Microsoft Teams call the
+    user hosts. The provider is auto-detected upstream (Console opens the right
+    'new meeting' page), and T-W1N picks the join tool from the pasted link's
+    host, so the event itself stays provider-agnostic — scripted by
+    ``WORKSPACE_CALL_FRAMING``. There is no meeting creation, no freeform mode,
+    and there are no chips.
+    """
+    interaction = {
+        "type": "workspace_call_beat",
+        "trigger_step_id": step_id,
+        "instructions": WORKSPACE_CALL_FRAMING,
+    }
+    return OnboardingEventSpec(
+        event_type="coordinator_onboarding_event",
+        message=(
+            f"The user just clicked '{title}' — they want to talk to me live in a "
+            "Google Meet or Microsoft Teams call. I do NOT create the meeting: I "
+            "ask them to start the meeting and paste the link (the Console click "
+            "already opened the right 'new meeting' page for them), and I wait for "
+            "the link rather than guessing one. When the link arrives I join it — "
+            "a meet.google.com link with join_google_meet, a teams.microsoft.com "
+            "link with join_teams_meet — passing a short, warm spoken opener, then "
+            "have a brief live exchange to prove two-way audio. Respect the "
+            "one-voice-session-at-a-time guard. This is a poll, not a request to "
+            "repeat work already done: if I have already joined and spoken, treat "
+            "this as confirmation and do NOT rejoin. After I have actually joined "
+            "and spoken, mark the step done in its own turn with "
+            "set_onboarding_task_state; on failure or if they decline, say so and "
+            "do not mark it done. "
+            f"Full contract: {WORKSPACE_CALL_FRAMING}"
+        ),
+        subtype="workspace_call_beat_requested",
+        details={
+            "trigger_step_id": step_id,
+            "framing": WORKSPACE_CALL_FRAMING,
+            "phase": PHASE_WORKSPACE,
+            "phase_id": "workspace",
+            "phase_framing": WORKSPACE_FRAMING,
             "interaction": interaction,
         },
     )
@@ -1355,6 +1523,30 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         requires_feature="calendar",
     ),
     OnboardingStep(
+        id="workspace-call",
+        title="Speak to T-W1N in a video call",
+        phase=PHASE_WORKSPACE,
+        kind="trigger",
+        depends_on={"workspace": COMPLETED},
+        can_skip=True,
+        derivable=False,
+        paired_reply=None,
+        nudge_chat=(
+            "Once their workspace is connected, invite them to click the 'Speak "
+            "to T-W1N in a video call' row in the Onboarding checklist; it opens "
+            "a new Google Meet or Microsoft Teams meeting for them to host. They "
+            "paste me the link, I join the call and we talk live."
+        ),
+        nudge_voice=(
+            "clicking the 'Speak to T-W1N in a video call' row in the Onboarding "
+            "checklist"
+        ),
+        event=_workspace_call_beat_event(
+            "workspace-call",
+            "Speak to T-W1N in a video call",
+        ),
+    ),
+    OnboardingStep(
         id="apps",
         title="Connect T-W1N with your apps",
         phase=PHASE_INTEGRATIONS,
@@ -1623,6 +1815,7 @@ MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
     "learn-from-correction",
     "my-computer-demo",
     "your-computer-demo",
+    "workspace-call",
 )
 
 # Steps whose completion comes ONLY from durable domain state and never from a
@@ -1914,9 +2107,14 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
     ),
     "my-computer-demo": StepPresentation(
         "T-W1N drives its own computer live on a call — it saves a file from the "
-        "web with Save Image As, shows it in Thunar, opens it in Ristretto, and "
-        "sends it to you here.",
+        "web with Save Image As into its synced Outputs folder, shows it in "
+        "Thunar, opens it in Ristretto, and sends it to you here.",
         "~3 min",
+    ),
+    "workspace-call": StepPresentation(
+        "Host a quick video call and T-W1N joins to talk with you live — you "
+        "start the meeting, paste T-W1N the link, and it hops on to chat.",
+        "~2 min",
     ),
 }
 
@@ -2138,11 +2336,20 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "my-computer-demo": (
         "Clicking the 'Watch me work on my computer' row starts the live desktop "
         "demo on a call — T-W1N opens its browser on the managed VM, saves today's "
-        "NASA Astronomy Picture of the Day via Save Image As, shows the file in "
-        "Thunar under /Unity/Downloads, opens it in Ristretto, and sends it as a "
-        "chat attachment; off-call the click is a call invitation instead. When "
-        "the attachment is delivered, I mark the step done explicitly — nothing "
-        "auto-completes."
+        "NASA Astronomy Picture of the Day via Save Image As into "
+        "/Unity/Local/Outputs, shows the file in Thunar, opens it in Ristretto, "
+        "and sends it as a chat attachment; off-call the click is a call "
+        "invitation instead. When the attachment is delivered, I mark the step "
+        "done explicitly — nothing auto-completes."
+    ),
+    "workspace-call": (
+        "Clicking the 'Speak to T-W1N in a video call' row opens a new Google "
+        "Meet or Microsoft Teams meeting page (whichever matches their connected "
+        "workspace) for the user to host. I don't create the meeting myself — I "
+        "ask them to start it and paste me the link, then I join that link and "
+        "we talk live to prove two-way audio, and I mark the step done once I've "
+        "actually joined and spoken. Nothing auto-completes; if they can't host "
+        "or decline, I say so and leave it pending."
     ),
 }
 
@@ -2165,6 +2372,17 @@ PROVIDER_PRESENTATION_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "microsoft": (
             "T-W1N scans your OneDrive and SharePoint files and sends back a "
             "short summary, with an optional tidy-up suggestion if it looks messy."
+        ),
+    },
+    "workspace-call": {
+        "google": (
+            "Host a quick Google Meet and T-W1N joins to talk with you live — "
+            "you start the meeting, paste T-W1N the link, and it hops on to chat."
+        ),
+        "microsoft": (
+            "Host a quick Microsoft Teams meeting and T-W1N joins to talk with "
+            "you live — you start the meeting, paste T-W1N the link, and it hops "
+            "on to chat."
         ),
     },
 }

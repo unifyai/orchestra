@@ -1,0 +1,19 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 42,
+    "title": "Provider trigger fixture",
+    "labels": [
+      {
+        "name": "bug"
+      }
+    ],
+    "user": {
+      "login": "octocat"
+    }
+  },
+  "repository": {
+    "full_name": "octocat/Hello-World"
+  },
+  "trace_id": "pd_trace_provider_trigger_example"
+}
