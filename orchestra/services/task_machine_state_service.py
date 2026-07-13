@@ -565,6 +565,14 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Offline function_id when execution_mode=offline.",
     },
+    "max_runtime_seconds": {
+        "field_type": "int",
+        "mutable": True,
+        "description": (
+            "Optional per-task execution bound mirrored from the source task "
+            "row; null means the run is unbounded."
+        ),
+    },
     "repeat": {
         "field_type": "list",
         "mutable": True,
@@ -1583,6 +1591,7 @@ def _project_activation_payload(
         "interrupt": bool(trigger.get("interrupt", False)),
         "trigger_recurring": bool(trigger.get("recurring", False)),
         "entrypoint": entrypoint,
+        "max_runtime_seconds": _coerce_int(row.data.get("max_runtime_seconds")),
         "repeat": _coerce_optional_list(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
             row.updated_at or row.created_at,

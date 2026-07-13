@@ -44,6 +44,7 @@ class TaskTriggerTarget:
     offline: bool = False
     activation_revision: str | None = None
     entrypoint: int | None = None
+    max_runtime_seconds: int | None = None
 
 
 def resolve_task_trigger_target(
@@ -87,6 +88,7 @@ def resolve_task_trigger_target(
         offline = _coerce_bool(data.get("offline"))
         activation_revision = None
         entrypoint = None
+        max_runtime_seconds = None
         if offline:
             activation_snapshot = _offline_activation_for_task(
                 session=session,
@@ -98,6 +100,7 @@ def resolve_task_trigger_target(
             if activation_snapshot is not None:
                 activation_revision = activation_snapshot.revision
                 entrypoint = activation_snapshot.entrypoint
+                max_runtime_seconds = activation_snapshot.max_runtime_seconds
         targets.append(
             TaskTriggerTarget(
                 assistant_id=resolved_assistant_id,
@@ -112,6 +115,7 @@ def resolve_task_trigger_target(
                 offline=offline,
                 activation_revision=activation_revision,
                 entrypoint=entrypoint,
+                max_runtime_seconds=max_runtime_seconds,
             ),
         )
 
@@ -124,6 +128,7 @@ def resolve_task_trigger_target(
 class _OfflineActivationSnapshot:
     revision: str
     entrypoint: int | None
+    max_runtime_seconds: int | None
 
 
 def _offline_activation_for_task(
@@ -151,6 +156,9 @@ def _offline_activation_for_task(
     return _OfflineActivationSnapshot(
         revision=str(revision),
         entrypoint=_coerce_int(activation.data.get("entrypoint")),
+        max_runtime_seconds=_coerce_int(
+            activation.data.get("max_runtime_seconds"),
+        ),
     )
 
 
