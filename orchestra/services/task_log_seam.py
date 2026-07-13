@@ -94,10 +94,23 @@ def maybe_apply_provider_event_log_updates(
         return None
 
     if len(log_ids) != 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Provider-event task updates must target exactly one log id.",
+        # Multi-row task updates are legitimate for plain task rows (the
+        # runtime batches shared-field writes across a task's instance
+        # rows). Only provider-event rows are restricted to the typed API.
+        rows = (
+            session.query(LogEvent)
+            .filter(
+                LogEvent.project_id == project_id,
+                LogEvent.id.in_([int(i) for i in log_ids]),
+            )
+            .all()
         )
+        if any(is_provider_event_task_row(dict(row.data or {})) for row in rows):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provider-event task updates must target exactly one log id.",
+            )
+        return None
 
     log_id = int(log_ids[0])
     payload = entries if isinstance(entries, dict) else entries[0]
