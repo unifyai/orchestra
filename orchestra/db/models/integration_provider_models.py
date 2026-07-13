@@ -162,6 +162,11 @@ class IntegrationConnection(Base):
     backend_id = Column(String, nullable=False, index=True)
     provider_app_id = Column(String, nullable=False)
     provider_connection_id = Column(String, nullable=True, index=True)
+    # Entity id the provider bound the connected account to at link time.
+    # Providers (Composio) require this exact id on every execution, so it is
+    # persisted here rather than re-derived from the caller's owner scope,
+    # which can legitimately diverge (ownership transfers, mirrored rows).
+    provider_user_id = Column(String, nullable=True)
     status = Column(String, nullable=False, server_default="pending", index=True)
     external_account_label = Column(String, nullable=True)
     granted_scopes_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_ARRAY)

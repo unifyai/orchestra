@@ -961,6 +961,39 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             },
         )
 
+    def connected_account_user_id(
+        self,
+        provider_connection_id: str,
+    ) -> str | None:
+        """Return the Composio entity id the connected account was linked under.
+
+        Composio rejects executions whose ``user_id`` differs from the entity
+        the account was created for, so the authoritative value comes from the
+        provider rather than from whoever currently owns the connection row.
+        """
+
+        if not provider_connection_id or not self.api_key:
+            return None
+
+        import requests
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/connected_accounts/{provider_connection_id}",
+                headers=self._api_key_headers(),
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception:
+            logger.exception(
+                "Failed to resolve Composio entity id for connected account %s",
+                provider_connection_id,
+            )
+            return None
+        user_id = data.get("user_id") or data.get("userId")
+        return str(user_id) if user_id else None
+
 
 def _items_from_response(
     data: dict[str, Any],

@@ -224,6 +224,7 @@ class IntegrationConnectionResponse(BaseModel):
     backend_id: str
     provider_app_id: str
     provider_connection_id: Optional[str] = None
+    provider_user_id: Optional[str] = None
     status: ConnectionStatus
     external_account_label: Optional[str] = None
     granted_scopes: list[str] = Field(default_factory=list)
