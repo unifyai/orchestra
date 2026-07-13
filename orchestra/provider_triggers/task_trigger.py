@@ -53,7 +53,9 @@ TaskTrigger = Annotated[
 ]
 
 
-def parse_task_trigger(value: Any) -> CommunicationTrigger | ProviderEventTrigger | None:
+def parse_task_trigger(
+    value: Any,
+) -> CommunicationTrigger | ProviderEventTrigger | None:
     """Parse one authored trigger payload into the discriminated union."""
 
     if value is None:
