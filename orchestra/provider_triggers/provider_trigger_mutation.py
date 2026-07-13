@@ -190,6 +190,38 @@ def promote_active_generation(session: Session, *, binding_id: str) -> MutationR
     )
 
 
+def sync_fence_after_task_row_mutation(
+    session: Session,
+    *,
+    binding_id: str,
+    task_revision: int,
+    desired_state: str,
+    open_acceptance: bool,
+    bump_acceptance_epoch: bool,
+) -> MutationResult:
+    """Mirror one authored task-row revision onto the derived binding fence."""
+
+    ensure_binding_fence_schema(session)
+    fence = session.execute(
+        select(ProviderTriggerBindingFence)
+        .where(ProviderTriggerBindingFence.binding_id == binding_id)
+        .with_for_update(),
+    ).scalar_one()
+    fence.task_revision = task_revision
+    fence.desired_state = desired_state
+    fence.acceptance_open = open_acceptance
+    if bump_acceptance_epoch:
+        fence.acceptance_epoch += 1
+    session.flush()
+    return MutationResult(
+        binding_id=fence.binding_id,
+        task_revision=fence.task_revision,
+        acceptance_epoch=fence.acceptance_epoch,
+        desired_state=fence.desired_state,
+        acceptance_open=fence.acceptance_open,
+    )
+
+
 def attempt_event_acceptance(
     session: Session,
     *,
