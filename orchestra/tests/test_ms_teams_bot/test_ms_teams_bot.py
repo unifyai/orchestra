@@ -266,6 +266,77 @@ class TestInstallDAO:
         assert second.id == first.id
         assert second.revoked_at is None
 
+    def test_bind_succeeds_despite_revoked_owner_leftover_user(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A revoked personal install must not block re-binding the same
+        ``(user, tenant)``.
+
+        The Teams Store path re-installs via ``ensure_pending_install`` (which
+        skips revoked rows and so mints a *fresh* pending row) followed by
+        ``bind_install``. Setting the owner on that fresh row used to collide
+        with the revoked leftover under a ``user_id``-only unique index; the
+        index is now scoped to active rows, so the bind is a clean insert.
+        """
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "revbind")
+        first = _make_install(dbsession, user=user, tenant_id="tenant-revbind")
+        dao.revoke_install(first.id)
+
+        pending = dao.ensure_pending_install(
+            tenant_id="tenant-revbind",
+            bot_app_id="app-guid-001",
+        )
+        assert pending.id != first.id
+
+        bound = dao.bind_install(pending.id, user_id=user.id)
+        assert bound.id == pending.id
+        assert bound.user_id == user.id
+        assert bound.revoked_at is None
+        # The revoked leftover is retained (audit) beside the new active row.
+        assert first.revoked_at is not None
+
+    def test_bind_succeeds_despite_revoked_owner_leftover_org(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Org analogue of the personal revoked-leftover rebind."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "revbindorg")
+        org = _make_org(dbsession, user, "revbindorg")
+        first = _make_install(
+            dbsession,
+            organization=org,
+            tenant_id="tenant-revbindorg",
+        )
+        dao.revoke_install(first.id)
+
+        pending = dao.ensure_pending_install(
+            tenant_id="tenant-revbindorg",
+            bot_app_id="app-guid-001",
+        )
+        assert pending.id != first.id
+
+        bound = dao.bind_install(pending.id, organization_id=org.id)
+        assert bound.id == pending.id
+        assert bound.organization_id == org.id
+        assert bound.revoked_at is None
+        assert first.revoked_at is not None
+
+    def test_two_active_installs_same_user_tenant_rejected(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Scoping the owner-tenant index to active rows must not weaken the
+        guarantee that one ``(user, tenant)`` holds at most one *active*
+        install."""
+        user = _make_user(dbsession, "dupuser")
+        _make_install(dbsession, user=user, tenant_id="tenant-dupuser")
+        with pytest.raises(IntegrityError):
+            _make_install(dbsession, user=user, tenant_id="tenant-dupuser")
+        dbsession.rollback()
+
     def test_get_install_by_tenant_ignores_revoked(
         self,
         dbsession: Session,
