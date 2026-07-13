@@ -129,6 +129,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.provider-probes
 .venv
 env/
 venv/
