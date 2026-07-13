@@ -22,7 +22,7 @@ def _load_fixture(name: str) -> dict:
 
 def test_parse_task_trigger_coerces_legacy_medium_only_row() -> None:
     trigger = parse_task_trigger(
-        _load_fixture("task_trigger.communication.legacy.json")
+        _load_fixture("task_trigger.communication.legacy.json"),
     )
     assert isinstance(trigger, CommunicationTrigger)
     assert trigger.kind == "communication"
