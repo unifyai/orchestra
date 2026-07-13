@@ -1,0 +1,27 @@
+{
+  "id": "evt_provider_trigger_example",
+  "type": "composio.trigger.message",
+  "metadata": {
+    "trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+    "trigger_id": "ti_provider_trigger_example",
+    "connected_account_id": "ca_provider_trigger_example",
+    "user_id": "assistant:provider-trigger-probe"
+  },
+  "data": {
+    "action": "opened",
+    "issue_number": 42,
+    "title": "Provider trigger fixture",
+    "repository": {
+      "full_name": "octocat/Hello-World"
+    },
+    "user": {
+      "login": "octocat"
+    },
+    "labels": [
+      {
+        "name": "bug"
+      }
+    ]
+  },
+  "timestamp": "2026-01-15T10:30:00Z"
+}
