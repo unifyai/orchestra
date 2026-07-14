@@ -148,7 +148,7 @@ class OrganizationMemberDAO:
             role_id, created_at)
           - role_name (from Role)
           - User profile fields: name, last_name, email, image, bio,
-            timezone, phone_number
+            job_title, timezone, phone_number, whatsapp_number
 
         :param organization_id: Organization ID.
         :return: List of member detail dicts.
@@ -166,6 +166,7 @@ class OrganizationMemberDAO:
                 User.email.label("user_email"),
                 User.image.label("user_image"),
                 User.bio.label("user_bio"),
+                User.job_title.label("user_job_title"),
                 User.timezone.label("user_timezone"),
                 User.phone_number.label("user_phone_number"),
                 User.whatsapp_number.label("user_whatsapp_number"),
@@ -199,6 +200,7 @@ class OrganizationMemberDAO:
                     "email": row.user_email,
                     "image": row.user_image,
                     "bio": row.user_bio,
+                    "job_title": row.user_job_title,
                     "timezone": row.user_timezone,
                     "phone_number": row.user_phone_number,
                     "whatsapp_number": row.user_whatsapp_number,
@@ -231,6 +233,7 @@ class OrganizationMemberDAO:
                 User.email.label("user_email"),
                 User.image.label("user_image"),
                 User.bio.label("user_bio"),
+                User.job_title.label("user_job_title"),
                 User.timezone.label("user_timezone"),
                 User.phone_number.label("user_phone_number"),
                 User.whatsapp_number.label("user_whatsapp_number"),
@@ -264,6 +267,7 @@ class OrganizationMemberDAO:
             "email": row.user_email,
             "image": row.user_image,
             "bio": row.user_bio,
+            "job_title": row.user_job_title,
             "timezone": row.user_timezone,
             "phone_number": row.user_phone_number,
             "whatsapp_number": row.user_whatsapp_number,

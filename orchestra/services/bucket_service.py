@@ -477,6 +477,30 @@ class BucketService:
         blob.upload_from_string(file_content, content_type=content_type)
         return f"gs://{self.account_photo_bucket_name}/{object_path}"
 
+    def upload_team_photo_file(
+        self,
+        file_content: bytes,
+        org_id: int,
+        team_id: int,
+        content_type: str = "image/jpeg",
+    ) -> str:
+        """
+        Upload a team's profile photo to the account photo bucket.
+
+        Stored under ``organization/{org_id}/team/{team_id}/{filename}``.
+        """
+        extension = (
+            content_type.split("/")[-1]
+            if content_type and "/" in content_type
+            else "jpg"
+        )
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"organization/{org_id}/team/{team_id}/{file_name}.{extension}"
+
+        blob = self.account_photo_bucket.blob(object_path)
+        blob.upload_from_string(file_content, content_type=content_type)
+        return f"gs://{self.account_photo_bucket_name}/{object_path}"
+
     # -----------------------------------------------------------------
     #                   Temporary file operations
     # -----------------------------------------------------------------

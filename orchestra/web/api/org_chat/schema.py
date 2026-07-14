@@ -14,6 +14,11 @@ class RosterHuman(BaseModel):
     email: Optional[str] = None
     image: Optional[str] = None
     role_name: Optional[str] = None
+    bio: Optional[str] = None
+    job_title: Optional[str] = None
+    phone_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    timezone: Optional[str] = None
     online: bool = False
     last_seen_at: Optional[datetime] = None
 
@@ -28,6 +33,7 @@ class RosterTeam(BaseModel):
     created_at: Optional[datetime] = None
     member_user_ids: List[str] = Field(default_factory=list)
     assistant_member_ids: List[int] = Field(default_factory=list)
+    image: Optional[str] = None
 
 
 class OrgRosterResponse(BaseModel):

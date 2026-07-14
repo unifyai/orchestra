@@ -1613,6 +1613,7 @@ class Team(Base):
         default=False,
         server_default="false",
     )
+    image = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     assistant_memberships = relationship(
