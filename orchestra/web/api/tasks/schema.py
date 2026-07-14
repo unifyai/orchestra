@@ -76,6 +76,13 @@ class TriggerHealthResponse(BaseModel):
         "needs_attention",
         "removing",
     ] = "absent"
+    desired_activation_revision: str | None = None
+    observed_activation_revision: str | None = None
+    acceptance_epoch: int | None = None
+    local_acceptance_open: bool = False
+    active_generation_id: str | None = None
+    coverage_started_at: str | None = None
+    coverage_ended_at: str | None = None
     remediation: str | None = None
 
 
