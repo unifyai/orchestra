@@ -757,6 +757,61 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Owning runtime job name for offline or live execution when known.",
     },
+    "provider_event_binding_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Stable binding identifier for a provider-event run.",
+    },
+    "provider_event_receipt_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Durable receipt identifier accepted for this provider-event run.",
+    },
+    "provider_event_backend_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Trigger backend that delivered the accepted provider event.",
+    },
+    "provider_event_app_slug": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Canonical app slug for the accepted provider event.",
+    },
+    "provider_event_slug": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Canonical event slug for the accepted provider event.",
+    },
+    "provider_event_schema_version": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Registry schema version used when the event was accepted.",
+    },
+    "provider_event_acceptance_epoch": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Acceptance epoch captured when the provider event was accepted.",
+    },
+    "provider_event_received_at": {
+        "field_type": "datetime",
+        "mutable": True,
+        "description": "When Orchestra durably accepted the provider event.",
+    },
+    "provider_event_occurred_at": {
+        "field_type": "datetime",
+        "mutable": True,
+        "description": "Provider-reported event occurrence time when available.",
+    },
+    "provider_event_matched_filters": {
+        "field_type": "list",
+        "mutable": True,
+        "description": "Filter snapshot that matched when the provider event was accepted.",
+    },
+    "provider_event_identity_hmac": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Per-binding HMAC digest of the retry-stable provider event identity.",
+    },
 }
 
 
