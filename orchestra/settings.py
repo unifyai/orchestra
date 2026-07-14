@@ -380,6 +380,12 @@ class Settings(BaseSettings):
     provider_trigger_health_failure_threshold: int = int(
         os.environ.get("PROVIDER_TRIGGER_HEALTH_FAILURE_THRESHOLD", "3"),
     )
+    provider_trigger_ingress_max_body_bytes: int = int(
+        os.environ.get("PROVIDER_TRIGGER_INGRESS_MAX_BODY_BYTES", str(1_048_576)),
+    )
+    provider_trigger_ingress_rate_limit_per_minute: int = int(
+        os.environ.get("PROVIDER_TRIGGER_INGRESS_RATE_LIMIT_PER_MINUTE", "120"),
+    )
 
     @property
     def provider_trigger_callback_base_url(self) -> str | None:
