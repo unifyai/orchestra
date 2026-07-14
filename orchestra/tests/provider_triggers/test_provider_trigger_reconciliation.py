@@ -417,6 +417,8 @@ def test_run_worker_cycle_upserts_heartbeat_metadata(
 
     assert totals_first["bindings_claimed"] == 0
     assert totals_second["bindings_claimed"] == 0
+    assert "dispatches_claimed" in totals_second
+    assert "dispatch_backlog_oldest_age_seconds" in totals_second
     assert heartbeat.lease_owner == "test-owner"
     assert heartbeat.metadata_json == totals_second
     assert heartbeat.last_reconcile_at is not None
