@@ -50,6 +50,7 @@ from orchestra.web.api.table_view.views import admin_router as table_view_admin_
 from orchestra.web.api.table_view.views import router as table_view_router
 from orchestra.web.api.tasks import router as tasks_router
 from orchestra.web.api.utils.assistant_infra import fetch_comms_features
+from orchestra.web.api.webhooks import provider_triggers as provider_trigger_webhooks
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 from orchestra.web.api.whatsapp import admin_router as whatsapp_admin_router
 from orchestra.web.api.whatsapp import router as whatsapp_router
@@ -368,6 +369,7 @@ api_router.include_router(
 # NO AUTH
 
 api_router.include_router(stripe_webhooks.router)
+api_router.include_router(provider_trigger_webhooks.router)
 # White-label OAuth redirect proxy (provider browsers hit this with no auth).
 api_router.include_router(integrations.public_router)
 
