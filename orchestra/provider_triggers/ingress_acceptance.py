@@ -45,6 +45,9 @@ from orchestra.provider_triggers.trigger_adapter_registry import (
     get_trigger_provider_adapter,
 )
 from orchestra.services.provider_event_blob_service import ProviderEventBlobService
+from orchestra.services.provider_event_context_service import (
+    ProviderEventContextService,
+)
 from orchestra.services.task_machine_state_service import create_task_run_if_absent
 from orchestra.settings import settings
 
@@ -490,6 +493,13 @@ def _accept_matched_delivery(
         run_id=run_id,
         run_key=run_key,
         audience=audience,
+    )
+    ProviderEventContextService(session).stamp_expiry_on_acceptance(
+        receipt=receipt,
+        run_key=run_key,
+        project_id=locked_binding.project_id,
+        assistant_id=locked_binding.assistant_id,
+        source_task_log_id=locked_binding.source_task_log_id,
     )
     logger.info(
         {
