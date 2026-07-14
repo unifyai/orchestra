@@ -322,6 +322,42 @@ class Settings(BaseSettings):
     mfa_kms_keyring: str = os.environ.get("MFA_KMS_KEYRING", "mfa")
     mfa_kms_key: str = os.environ.get("MFA_KMS_KEY", "mfa-secrets")
 
+    trigger_event_wrapping_master_key: Optional[str] = os.environ.get(
+        "TRIGGER_EVENT_WRAPPING_MASTER_KEY",
+    )
+    trigger_event_kms_keyring: str = os.environ.get(
+        "TRIGGER_EVENT_KMS_KEYRING",
+        "provider-triggers",
+    )
+    trigger_event_kms_key: str = os.environ.get(
+        "TRIGGER_EVENT_KMS_KEY",
+        "event-blob-keys",
+    )
+    trigger_event_private_root: str = os.environ.get(
+        "TRIGGER_EVENT_PRIVATE_ROOT",
+        os.path.expanduser("~/.unity/provider-event-blobs"),
+    )
+    trigger_event_private_bucket: str = os.environ.get(
+        "TRIGGER_EVENT_PRIVATE_BUCKET",
+        "provider-event-blobs",
+    )
+    trigger_event_orphan_safety_seconds: int = int(
+        os.environ.get("TRIGGER_EVENT_ORPHAN_SAFETY_SECONDS", "3600"),
+    )
+    trigger_event_deletion_batch_size: int = int(
+        os.environ.get("TRIGGER_EVENT_DELETION_BATCH_SIZE", "25"),
+    )
+
+    @property
+    def provider_event_storage_configured(self) -> bool:
+        """Return True when private provider-event storage prerequisites are set."""
+
+        from orchestra.provider_triggers.private_event_storage import (
+            provider_event_storage_configured,
+        )
+
+        return provider_event_storage_configured()
+
     # Stripe configuration
     stripe_secret_key: Optional[str] = os.environ.get("STRIPE_SECRET_KEY")
     stripe_webhook_secret: Optional[str] = os.environ.get("STRIPE_WEBHOOK_SECRET")
