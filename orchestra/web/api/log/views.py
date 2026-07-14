@@ -2544,7 +2544,11 @@ def _update_logs(
                             exclude_ids=exclude_ids,
                         )
                         if duplicate:
-                            unique_dao.remove_constraints_for_logs(exclude_ids)
+                            unique_dao.remove_constraints_for_logs(
+                                exclude_ids,
+                                context_id=ctx_id,
+                                project_id=project_id,
+                            )
                             raise HTTPException(
                                 status_code=400,
                                 detail=(
@@ -2564,7 +2568,11 @@ def _update_logs(
                     if duplicate:
                         _, field_name, _ = duplicate
                         # Clean up any constraints that were inserted
-                        unique_dao.remove_constraints_for_logs(exclude_ids)
+                        unique_dao.remove_constraints_for_logs(
+                            exclude_ids,
+                            context_id=ctx_id,
+                            project_id=project_id,
+                        )
                         raise HTTPException(
                             status_code=400,
                             detail=f"Duplicate entry for unique field '{field_name}'.",
@@ -2805,16 +2813,25 @@ def _delete_logs(
                     # No specific fields - delete all derived fields for this log
                     ids_and_fields[log_id] = derived_field_keys
 
-    # Get all log_event_ids in this context for validation
-    context_log_ids = [
-        row[0]
-        for row in session.query(LogEventContext.log_event_id)
-        .filter(
-            LogEventContext.project_id == project_id,
-            LogEventContext.context_id == context_id,
-        )
-        .all()
-    ]
+    # Full-context id lists are only needed for context-wide (log_id is None)
+    # operations. Targeted id-list deletes must not load every membership row
+    # from large contexts (e.g. GTM Prospects at 10^5+).
+    context_log_ids: Optional[List[int]] = None
+
+    def get_context_log_ids() -> List[int]:
+        nonlocal context_log_ids
+        if context_log_ids is None:
+            context_log_ids = [
+                row[0]
+                for row in session.query(LogEventContext.log_event_id)
+                .filter(
+                    LogEventContext.project_id == project_id,
+                    LogEventContext.context_id == context_id,
+                )
+                .all()
+            ]
+        return context_log_ids
+
     pre_sync_task_ids: Set[int] = set()
     if body.project_name == TASK_MACHINE_PROJECT_NAME and is_task_surface_context_name(
         context_name,
@@ -2822,7 +2839,7 @@ def _delete_logs(
         candidate_task_log_ids: Set[int] = set()
         for log_id, fields in ids_and_fields.items():
             if log_id is None:
-                candidate_task_log_ids.update(context_log_ids)
+                candidate_task_log_ids.update(get_context_log_ids())
             else:
                 candidate_task_log_ids.add(log_id)
         pre_sync_task_ids = get_task_ids_for_log_ids(
@@ -2851,7 +2868,8 @@ def _delete_logs(
         deleted_fields.update(fields)
 
         # Collect for media deletion
-        all_log_event_ids_for_media.extend(context_log_ids)
+        context_wide_ids = get_context_log_ids()
+        all_log_event_ids_for_media.extend(context_wide_ids)
         all_field_names_for_media.extend(fields)
 
         # Apply FK CASCADE and SET NULL actions before deletion
@@ -2859,7 +2877,7 @@ def _delete_logs(
         logs_data = (
             session.query(LogEvent.data)
             .filter(
-                LogEvent.id.in_(context_log_ids),
+                LogEvent.id.in_(context_wide_ids),
                 project_scope(LogEvent, project_id),
             )
             .all()
@@ -2881,7 +2899,7 @@ def _delete_logs(
 
         # Delete GCS files BEFORE any DB operations
         log_dao._bulk_delete_gcs_media(
-            log_event_ids=context_log_ids,
+            log_event_ids=context_wide_ids,
             project_id=project_id,
             field_names=fields,
         )
@@ -2893,7 +2911,7 @@ def _delete_logs(
             session.query(LogEvent)
             .filter(
                 LogEvent.project_id == project_id,
-                LogEvent.id.in_(context_log_ids),
+                LogEvent.id.in_(context_wide_ids),
             )
             .update(
                 {LogEvent.data: LogEvent.data.op("-")(fields_array)},
@@ -2967,25 +2985,28 @@ def _delete_logs(
         )
 
         # Partition logs: those still referenced by another context vs those to
-        # delete entirely.
-        logs_in_other_contexts = []
-        logs_to_delete = []
-
-        for log_id in entire_log_deletions:
-            other_contexts = (
-                session.query(LogEventContext.context_id)
-                .filter(
-                    LogEventContext.project_id == project_id,
-                    LogEventContext.log_event_id == log_id,
-                    LogEventContext.context_id != context_id,
-                )
-                .all()
+        # delete entirely. One bulk query (same pattern as Group 3) — never N+1.
+        logs_with_other_contexts = set(
+            row[0]
+            for row in session.query(LogEventContext.log_event_id)
+            .filter(
+                LogEventContext.project_id == project_id,
+                LogEventContext.log_event_id.in_(entire_log_deletions),
+                LogEventContext.context_id != context_id,
             )
-
-            if other_contexts:
-                logs_in_other_contexts.append(log_id)
-            else:
-                logs_to_delete.append(log_id)
+            .distinct()
+            .all()
+        )
+        logs_in_other_contexts = [
+            log_id
+            for log_id in entire_log_deletions
+            if log_id in logs_with_other_contexts
+        ]
+        logs_to_delete = [
+            log_id
+            for log_id in entire_log_deletions
+            if log_id not in logs_with_other_contexts
+        ]
 
         # Remove logs from current context
         if logs_in_other_contexts:
@@ -3054,8 +3075,20 @@ def _delete_logs(
             # log_unique_constraint no longer cascades with log_event (FK dropped
             # for partitioning); clear its rows so deleting+recreating a unique
             # machine row (e.g. activation reprojection) does not hit a stale
-            # uniqueness conflict.
-            UniqueConstraintDAO(session).remove_constraints_for_logs(logs_to_delete)
+            # uniqueness conflict. Scope by context/project to avoid lock fights
+            # on the global log_event_id index under concurrent creates.
+            UniqueConstraintDAO(session).remove_constraints_for_logs(
+                logs_to_delete,
+                context_id=context_id,
+                project_id=project_id,
+            )
+
+            # Association FK was also dropped; remove memberships before the
+            # hard log_event delete so we do not leave orphaned associations.
+            session.query(LogEventContext).filter(
+                LogEventContext.project_id == project_id,
+                LogEventContext.log_event_id.in_(logs_to_delete),
+            ).delete(synchronize_session=False)
 
             deleted_count = (
                 session.query(LogEvent)
@@ -3254,7 +3287,14 @@ def _delete_logs(
                 # dropped for partitioning); clear its rows explicitly.
                 UniqueConstraintDAO(session).remove_constraints_for_logs(
                     logs_to_delete,
+                    context_id=context_id,
+                    project_id=project_id,
                 )
+
+                session.query(LogEventContext).filter(
+                    LogEventContext.project_id == project_id,
+                    LogEventContext.log_event_id.in_(logs_to_delete),
+                ).delete(synchronize_session=False)
 
                 deleted_count = (
                     session.query(LogEvent)

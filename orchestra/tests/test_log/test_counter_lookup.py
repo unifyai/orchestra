@@ -183,6 +183,7 @@ def test_context_counter_conflict_retry_advances_past_stale_value(
     dbsession.add(
         LogUniqueConstraint(
             context_id=context.id,
+            project_id=project.id,
             field_name=COMPOSITE_KEY_FIELD,
             value_hash=UniqueConstraintDAO.hash_composite(
                 {"row_id": 1},

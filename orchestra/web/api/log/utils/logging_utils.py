@@ -2115,7 +2115,11 @@ def _create_logs_internal(
                         exclude_ids=new_log_ids,
                     )
                     if duplicate:
-                        unique_dao.remove_constraints_for_logs(new_log_ids)
+                        unique_dao.remove_constraints_for_logs(
+                            new_log_ids,
+                            context_id=context_id,
+                            project_id=project_id,
+                        )
                         for log_event_id in new_log_ids:
                             try:
                                 log_event_dao.delete(log_event_id)
@@ -2142,7 +2146,11 @@ def _create_logs_internal(
                     dup_log_id, field_name, _ = duplicate
 
                     # Clean up: remove constraints for all new logs
-                    unique_dao.remove_constraints_for_logs(new_log_ids)
+                    unique_dao.remove_constraints_for_logs(
+                        new_log_ids,
+                        context_id=context_id,
+                        project_id=project_id,
+                    )
 
                     # Delete all the log events we just created
                     for log_event_id in new_log_ids:

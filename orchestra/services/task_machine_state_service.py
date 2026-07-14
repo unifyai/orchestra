@@ -2371,6 +2371,7 @@ def _upsert_machine_row(
         pg_insert(LogUniqueConstraint)
         .values(
             context_id=context_id,
+            project_id=project_id,
             field_name=unique_field_name,
             value_hash=UniqueConstraintDAO.hash_value(unique_field_value),
             log_event_id=log_event.id,
@@ -2431,6 +2432,8 @@ def _delete_machine_row_by_unique_field(
     session.execute(
         delete(LogUniqueConstraint).where(
             LogUniqueConstraint.log_event_id == existing.id,
+            LogUniqueConstraint.context_id == context_id,
+            LogUniqueConstraint.project_id == project_id,
         ),
     )
     session.execute(

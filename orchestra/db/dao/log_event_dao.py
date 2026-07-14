@@ -986,6 +986,7 @@ class LogEventDAO:
                     context_id=context_id,
                     log_entries=log_entries,
                     key_columns=list(unique_key_columns),
+                    project_id=project_id,
                 )
 
                 if not duplicate:
@@ -2120,11 +2121,16 @@ class LogEventDAO:
 
             # The log_unique_constraint -> log_event FK was removed for
             # partitioning, so its rows are no longer cascade-deleted; remove
-            # them explicitly to avoid orphaned uniqueness rows. (Not partitioned
-            # by project_id, so it is deleted by log_event_id alone.)
-            self.session.query(LogUniqueConstraint).filter(
+            # them explicitly to avoid orphaned uniqueness rows. Prefer
+            # project_id scope when known so the delete hits the project index.
+            luc_query = self.session.query(LogUniqueConstraint).filter(
                 LogUniqueConstraint.log_event_id.in_(ids),
-            ).delete(synchronize_session=False)
+            )
+            if project_ids:
+                luc_query = luc_query.filter(
+                    LogUniqueConstraint.project_id.in_(project_ids),
+                )
+            luc_query.delete(synchronize_session=False)
 
             # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)
             le_query = self.session.query(LogEvent).filter(

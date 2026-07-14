@@ -102,8 +102,11 @@ def delete_orphaned_log_events(
     # cascade-deleted with their log events; remove them explicitly to avoid
     # orphaned uniqueness rows that would block future re-inserts.
     session.execute(
-        text("DELETE FROM log_unique_constraint WHERE log_event_id = ANY(:ids)"),
-        {"ids": orphaned_ids},
+        text(
+            "DELETE FROM log_unique_constraint "
+            "WHERE log_event_id = ANY(:ids) AND project_id = :project_id",
+        ),
+        {"ids": orphaned_ids, "project_id": project_id},
     )
 
     session.execute(
@@ -3404,9 +3407,10 @@ class ContextDAO:
                         self.session.execute(
                             text(
                                 "DELETE FROM log_unique_constraint "
-                                "WHERE log_event_id = ANY(:ids)",
+                                "WHERE log_event_id = ANY(:ids) "
+                                "AND project_id = :project_id",
                             ),
-                            {"ids": orphaned_ids},
+                            {"ids": orphaned_ids, "project_id": project_id},
                         )
 
                         # Batched orphan log deletion with SKIP LOCKED.
@@ -4591,6 +4595,12 @@ class ContextDAO:
         """
         old_ids = list(id_map.keys())
         total = 0
+        target_project_id = self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :cid"),
+            {"cid": target_context_id},
+        ).scalar()
+        if target_project_id is None:
+            raise ValueError(f"Unknown target_context_id={target_context_id}")
 
         for offset in range(0, len(old_ids), batch_size):
             batch_old = old_ids[offset : offset + batch_size]
@@ -4609,6 +4619,7 @@ class ContextDAO:
             values = [
                 {
                     "context_id": target_context_id,
+                    "project_id": int(target_project_id),
                     "field_name": r.field_name,
                     "value_hash": r.value_hash,
                     "log_event_id": id_map[r.log_event_id],
