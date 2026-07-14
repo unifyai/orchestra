@@ -7,6 +7,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Audience an assistant runtime must present when calling back into Orchestra to
+# fetch a provider-event's decrypted context. It scopes the ownership-checked
+# read path and is distinct from the dispatch-envelope ``audience`` above, which
+# names the short-lived credential rail for delivering the dispatch itself.
+EVENT_CONTEXT_AUDIENCE = "orchestra:event-context"
+
 
 class ProviderEventDispatchRequest(BaseModel):
     """Internal dispatch authorization passed to Communication or Unity."""

@@ -1,4 +1,9 @@
-"""Live provider catalog and signing probes for GitHub issue-created triggers."""
+"""Live provider catalog and signing probes for GitHub issue-created triggers.
+
+# TODO: Relocate — keep committed fixtures under tests/fixtures/task_trigger_contract/
+and redacted probe evidence; do not call this module from runtime ingress or
+reconciliation once the curated registry owns the supported mappings.
+"""
 
 from __future__ import annotations
 

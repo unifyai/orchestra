@@ -362,12 +362,13 @@ jobs:
         if-no-files-found: ignore
         retention-days: 90
 
-  # Single, stable required status check for the Staging->Main ruleset.
+  # Single, stable required status check for staging->main releases.
   # The matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),
-  # which a fixed required-context named "pytest" can never match -- so this
-  # gate republishes one "pytest" check that is green iff every shard passed
-  # (aggregate `needs.pytest.result`), or was skipped on a non-test run. This
-  # keeps the required check meaningful and robust to changing the shard count.
+  # which branch protection cannot target by name -- so this job republishes one
+  # "pytest" check that is green iff every shard passed (aggregate
+  # `needs.pytest.result`), or was skipped on a non-test run. The Staging->Main
+  # ruleset and main branch protection both require this context with strict
+  # (latest-commit) semantics; see scripts/ensure_staging_to_main_gates.sh.
   pytest-required:
     name: pytest
     needs: [should-run-tests, pytest]

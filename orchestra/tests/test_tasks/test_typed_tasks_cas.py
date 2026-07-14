@@ -12,10 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Context, LogEvent, Project
-from orchestra.provider_triggers.provider_trigger_mutation import (
-    ProviderTriggerBindingFence,
-    ensure_binding_fence_schema,
-)
+from orchestra.db.models.provider_trigger_models import EventTriggerBinding
 from orchestra.tests.test_tasks.test_trigger_task import _auth_user_id
 from orchestra.tests.utils import HEADERS
 
@@ -106,17 +103,16 @@ async def test_patch_with_stale_if_match_returns_task_revision_conflict(
 
 
 @pytest.mark.anyio
-async def test_pause_increments_revision_and_advances_fence_epoch(
+async def test_pause_increments_revision_and_advances_binding_epoch(
     client: AsyncClient,
     assistant_id: int,
     dbsession: Session,
 ) -> None:
     created = await _create_provider_event_task(client, assistant_id=assistant_id)
-    ensure_binding_fence_schema(dbsession)
     binding_id = created["provider_event_binding_id"]
     before = dbsession.execute(
-        select(ProviderTriggerBindingFence).where(
-            ProviderTriggerBindingFence.binding_id == binding_id,
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
         ),
     ).scalar_one()
     before_epoch = before.acceptance_epoch
@@ -130,12 +126,13 @@ async def test_pause_increments_revision_and_advances_fence_epoch(
     assert paused.json()["info"]["trigger"]["state"] == "paused"
 
     after = dbsession.execute(
-        select(ProviderTriggerBindingFence).where(
-            ProviderTriggerBindingFence.binding_id == binding_id,
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
         ),
     ).scalar_one()
     assert after.task_revision == 2
     assert after.acceptance_epoch == before_epoch + 1
+    assert after.local_acceptance_open is False
 
 
 from orchestra.services.task_mutation_contract import format_task_etag

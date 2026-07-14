@@ -333,7 +333,6 @@ CREATE TABLE public.assistants (
     monthly_spending_cap numeric,
     user_desktop_filesys_sync boolean DEFAULT false NOT NULL,
     monthly_spending_cap_set_at timestamp with time zone,
-    demo_id integer,
     user_desktop_id integer,
     is_local boolean DEFAULT false NOT NULL,
     desktop_filesync_sshkey character varying,
@@ -734,40 +733,6 @@ CREATE SEQUENCE public.decommissioned_routes_id_seq
 --
 
 ALTER SEQUENCE public.decommissioned_routes_id_seq OWNED BY public.decommissioned_routes.id;
-
---
--- Name: demo_assistant_meta; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.demo_assistant_meta (
-    id integer NOT NULL,
-    source_assistant_id integer NOT NULL,
-    demoer_user_id character varying NOT NULL,
-    label character varying NOT NULL,
-    created_at timestamp without time zone DEFAULT now() NOT NULL,
-    prospect_first_name character varying,
-    prospect_surname character varying,
-    prospect_email character varying,
-    prospect_phone character varying
-);
-
---
--- Name: demo_assistant_meta_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.demo_assistant_meta_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
---
--- Name: demo_assistant_meta_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.demo_assistant_meta_id_seq OWNED BY public.demo_assistant_meta.id;
 
 --
 -- Name: editor_tile; Type: TABLE; Schema: public; Owner: -
@@ -1934,12 +1899,6 @@ ALTER TABLE ONLY public.credit_transaction ALTER COLUMN id SET DEFAULT nextval('
 ALTER TABLE ONLY public.decommissioned_routes ALTER COLUMN id SET DEFAULT nextval('public.decommissioned_routes_id_seq'::regclass);
 
 --
--- Name: demo_assistant_meta id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.demo_assistant_meta ALTER COLUMN id SET DEFAULT nextval('public.demo_assistant_meta_id_seq'::regclass);
-
---
 -- Name: email_account id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2263,13 +2222,6 @@ ALTER TABLE ONLY public.dashboard_token
 
 ALTER TABLE ONLY public.decommissioned_routes
     ADD CONSTRAINT decommissioned_routes_pkey PRIMARY KEY (id);
-
---
--- Name: demo_assistant_meta demo_assistant_meta_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.demo_assistant_meta
-    ADD CONSTRAINT demo_assistant_meta_pkey PRIMARY KEY (id);
 
 --
 -- Name: editor_tile editor_tile_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -2706,12 +2658,6 @@ ALTER TABLE ONLY public.shared_platform_routes
     ADD CONSTRAINT whatsapp_routes_pkey PRIMARY KEY (id);
 
 --
--- Name: idx_assistants_demo_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_assistants_demo_id ON public.assistants USING btree (demo_id);
-
---
 -- Name: idx_dashboard_token_project_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2722,12 +2668,6 @@ CREATE INDEX idx_dashboard_token_project_id ON public.dashboard_token USING btre
 --
 
 CREATE INDEX idx_dashboard_token_user_id ON public.dashboard_token USING btree (user_id);
-
---
--- Name: idx_demo_meta_demoer; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_demo_meta_demoer ON public.demo_assistant_meta USING btree (demoer_user_id);
 
 --
 -- Name: idx_plot_organization_id; Type: INDEX; Schema: public; Owner: -
@@ -3625,13 +3565,6 @@ ALTER TABLE ONLY public.favorite_project
     ADD CONSTRAINT favorite_project_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 --
--- Name: assistants fk_assistants_demo_meta; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.assistants
-    ADD CONSTRAINT fk_assistants_demo_meta FOREIGN KEY (demo_id) REFERENCES public.demo_assistant_meta(id) ON DELETE SET NULL;
-
---
 -- Name: assistants fk_assistants_voices; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3665,20 +3598,6 @@ ALTER TABLE ONLY public.contact_memberships
 
 ALTER TABLE ONLY public.credit_transaction
     ADD CONSTRAINT fk_credit_txn_plan_assignment FOREIGN KEY (plan_assignment_id) REFERENCES public.billing_plan_assignment(id) ON DELETE SET NULL;
-
---
--- Name: demo_assistant_meta fk_demo_meta_demoer; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.demo_assistant_meta
-    ADD CONSTRAINT fk_demo_meta_demoer FOREIGN KEY (demoer_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-
---
--- Name: demo_assistant_meta fk_demo_meta_source_assistant; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.demo_assistant_meta
-    ADD CONSTRAINT fk_demo_meta_source_assistant FOREIGN KEY (source_assistant_id) REFERENCES public.assistants(agent_id) ON DELETE SET NULL;
 
 --
 -- Name: organization fk_organization_billing_account_id; Type: FK CONSTRAINT; Schema: public; Owner: -

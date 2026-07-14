@@ -1,0 +1,37 @@
+"""Registry for inbound trigger-provider adapters."""
+
+from __future__ import annotations
+
+import os
+from typing import Type
+
+from orchestra.provider_triggers.composio_trigger_adapter import ComposioTriggerAdapter
+from orchestra.provider_triggers.trigger_adapter import TriggerProviderAdapter
+from orchestra.provider_triggers.trigger_registry import COMPOSIO_BACKEND_ID
+
+TRIGGER_PROVIDER_ADAPTERS: dict[str, Type[TriggerProviderAdapter]] = {
+    # TODO: Register Pipedream (and any other inbound backends) here once their
+    # TriggerProviderAdapter implementation exists. Catalog backends track this
+    # map so unmapped backends are not advertised as provisionable.
+    COMPOSIO_BACKEND_ID: ComposioTriggerAdapter,
+}
+
+
+def get_trigger_provider_adapter(
+    backend_id: str,
+    *,
+    timeout_seconds: int = 30,
+) -> TriggerProviderAdapter:
+    """Return the inbound trigger adapter for one backend id.
+
+    Only curated backends with a concrete adapter implementation are returned.
+    """
+
+    adapter_cls = TRIGGER_PROVIDER_ADAPTERS.get(backend_id)
+    if adapter_cls is ComposioTriggerAdapter:
+        if not os.getenv("COMPOSIO_API_KEY"):
+            # Construction still succeeds so pure verify/normalize paths can run
+            # in tests; live provision/delete raise when the key is required.
+            pass
+        return ComposioTriggerAdapter(timeout_seconds=timeout_seconds)
+    raise LookupError(f"No trigger provider adapter registered for {backend_id!r}")

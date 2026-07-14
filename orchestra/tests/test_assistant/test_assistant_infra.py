@@ -109,10 +109,7 @@ def mock_all_infra(dbsession):
                     "orchestra.web.api.assistant.views.get_db_session",
                     side_effect=_mock_get_db_session_generator(dbsession),
                 ):
-                    with patch(
-                        "orchestra.web.api.assistant.views.asyncio.sleep",
-                        new_callable=AsyncMock,
-                    ), patch("orchestra.web.api.assistant.views.time.sleep"):
+                    with patch("orchestra.web.api.assistant.views.time.sleep"):
                         patches["release_pool_vm"] = release_pool_vm_mock
                         patches["assign_whatsapp_pool_number"] = wa_pool_mock
                         patches["register_whatsapp_sender"] = wa_register_mock

@@ -58,11 +58,9 @@ from orchestra.db.models.orchestra_models import (
     AssistantConsoleConfig,
     ContactMembership,
     Context,
-    DemoAssistantMeta,
     LogEvent,
     LogEventContext,
     Organization,
-    OrganizationMember,
     Project,
     Team,
     TeamAssistantMembership,
@@ -185,8 +183,6 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorTranscriptSeedResponse,
     CoordinatorWakeupResponse,
     DefaultModelOptionRead,
-    DemoAssistantCreate,
-    DemoAssistantMetaRead,
     GrantedFeaturesResponse,
     InfoResponse,
     ManagedDesktopEnable,
@@ -258,7 +254,6 @@ def _open_request_session(request: Request) -> Session:
 
 router = APIRouter()
 admin_router = APIRouter()
-demo_router = APIRouter()
 
 _prediction_owners: dict[str, str] = {}
 
@@ -824,7 +819,6 @@ def _build_assistant_read(
         slow_brain_model=a.slow_brain_model,
         slow_brain_reasoning_effort=a.slow_brain_reasoning_effort,
         timezone=a.timezone,
-        demo_id=a.demo_id,
         is_local=a.is_local,
         is_coordinator=a.is_coordinator,
         monthly_spending_cap=(
@@ -2100,14 +2094,6 @@ def list_assistants(
         False,
         description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
     ),
-    demo: bool = Query(
-        False,
-        description="If True, include demo assistants in results.",
-    ),
-    demo_only: bool = Query(
-        False,
-        description="If True, only return demo assistants.",
-    ),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List assistants based on API key context.
@@ -2146,8 +2132,6 @@ def list_assistants(
                 phone=phone,
                 email=email,
                 agent_id=agent_id,
-                include_demo=demo,
-                demo_only=demo_only,
             )
         else:
             # Personal context OR org context with list_all_org=False
@@ -2157,8 +2141,6 @@ def list_assistants(
                 phone=phone,
                 email=email,
                 agent_id=agent_id,
-                include_demo=demo,
-                demo_only=demo_only,
             )
         voice_dao = VoiceDAO(session)
 
@@ -4476,17 +4458,6 @@ async def delete_assistant(
                 source_flow=CleanupSource.ASSISTANT_DELETE,
             )
         ]
-
-        if assistant.demo_id:
-            demo_meta = (
-                session.query(DemoAssistantMeta)
-                .filter(
-                    DemoAssistantMeta.id == assistant.demo_id,
-                )
-                .first()
-            )
-            if demo_meta:
-                session.delete(demo_meta)
 
         dao.delete_assistant(
             user_id=request.state.user_id,
@@ -7577,15 +7548,30 @@ def _raise_if_ambiguous_universal_admin_contact_lookup(
         )
 
 
+# Broad fleet listing without an explicit page size used to hydrate every
+# assistant in one request (minutes under load). Cap the default page and
+# skip expensive hydration unless the caller opts in via from_fields / a
+# narrow filter (agent_id or contact identity).
+_ADMIN_LIST_DEFAULT_LIMIT = 100
+
+
 def _admin_list_uses_slim_hydration(
     *,
     requested_fields: Optional[set[str]],
     has_contact_filter: bool,
+    is_narrow_lookup: bool,
 ) -> bool:
-    """Skip expensive per-assistant hydration unless a full fleet read was requested."""
+    """Skip expensive per-assistant hydration unless a full narrow read was requested.
+
+    Narrow lookups (``agent_id`` or contact filter) keep full hydration when
+    ``from_fields`` is omitted so single-assistant admin reads stay complete.
+    Broad fleet lists always slim unless the caller names the fields they need.
+    """
     if has_contact_filter:
         return True
     if requested_fields is not None:
+        return True
+    if not is_narrow_lookup:
         return True
     return False
 
@@ -7593,8 +7579,10 @@ def _admin_list_uses_slim_hydration(
 @admin_router.get(
     "/assistant",
     summary="Admin: list all assistants",
-    description="Retrieve every assistant in the system, optionally filtered by phone or email. "
-    "Use 'fields' parameter for selective field retrieval to improve performance.",
+    description="List assistants with optional filtering. Broad fleet lists default to "
+    "a page size of 100 and slim hydration; pass limit/offset and from_fields to page "
+    "or opt into expensive fields. Narrow lookups (agent_id / contact filter) keep "
+    "full hydration when from_fields is omitted.",
     tags=["Assistants", "Admin"],
 )
 def admin_list_all_assistants(
@@ -7640,7 +7628,9 @@ def admin_list_all_assistants(
         ge=1,
         le=1000,
         description="Maximum number of assistants to return (pagination over a stable "
-        "agent_id ordering). Combine with 'offset' to page through results.",
+        "agent_id ordering). Combine with 'offset' to page through results. Broad "
+        f"fleet lists default to {_ADMIN_LIST_DEFAULT_LIMIT} when omitted; narrow "
+        "lookups (agent_id / contact filter) stay uncapped.",
     ),
     offset: int = Query(
         0,
@@ -7650,19 +7640,21 @@ def admin_list_all_assistants(
     from_fields: Optional[str] = Query(
         None,
         description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
-        "If omitted, returns full AssistantRead objects. Using this parameter skips "
-        "expensive lookups (api_key, user info) when those fields aren't requested.",
+        "On broad fleet lists, omitting this skips expensive lookups (api_key, teams, "
+        "contact identity roots, secrets). Narrow lookups (agent_id / contact filter) "
+        "still return full AssistantRead objects when from_fields is omitted.",
         example="email,agent_id,first_name",
     ),
     session: Session = Depends(get_db_session),
 ):
     """
-    List all assistants in the system with optional filtering and field selection.
+    List assistants with optional filtering and field selection.
 
-    When 'from_fields' is specified, returns only the requested fields, skipping expensive
-    database lookups for unrequested fields like api_key and user details.
-
-    When 'from_fields' is omitted, returns full AssistantRead objects.
+    Broad fleet lists (no agent_id / contact filter) default to a page size of
+    100 and slim hydration so callers cannot accidentally hydrate the whole
+    fleet in one request. Pass ``limit`` + ``offset`` to page, and ``from_fields``
+    to opt into specific expensive fields. Narrow lookups keep full hydration
+    when ``from_fields`` is omitted.
     """
     # Normalize filter parameters to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
@@ -7715,6 +7707,9 @@ def admin_list_all_assistants(
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=assistant_whatsapp_number,
     )
+    is_narrow_lookup = agent_id is not None or has_contact_filter
+    if not is_narrow_lookup and limit is None:
+        limit = _ADMIN_LIST_DEFAULT_LIMIT
     _raise_if_ambiguous_universal_admin_contact_lookup(
         agent_id=agent_id,
         phone=phone,
@@ -7724,7 +7719,10 @@ def admin_list_all_assistants(
     use_slim_hydration = _admin_list_uses_slim_hydration(
         requested_fields=requested_fields,
         has_contact_filter=has_contact_filter,
+        is_narrow_lookup=is_narrow_lookup,
     )
+    # Full default hydrate only for narrow lookups without from_fields.
+    load_expensive_defaults = requested_fields is None and not use_slim_hydration
 
     try:
         assistants = assistant_dao.list_all_assistants(
@@ -7753,34 +7751,43 @@ def admin_list_all_assistants(
         # Perform expensive lookups only if needed
         api_keys = (
             [get_api_key_for_assistant(a) for a in assistants]
-            if (requested_fields is None or "api_key" in requested_fields)
+            if (
+                load_expensive_defaults
+                or (requested_fields is not None and "api_key" in requested_fields)
+            )
             else None
         )
         users = (
             [user_dao.get_by_id(a.user_id)[0] for a in assistants]
             if (
-                requested_fields is None
-                or bool(
-                    requested_fields
-                    & {
-                        "user_email",
-                        "user_first_name",
-                        "user_last_name",
-                        "user_image",
-                        "user_whatsapp_number",
-                    },
+                load_expensive_defaults
+                or (
+                    requested_fields is not None
+                    and bool(
+                        requested_fields
+                        & {
+                            "user_email",
+                            "user_first_name",
+                            "user_last_name",
+                            "user_image",
+                            "user_whatsapp_number",
+                        },
+                    )
                 )
             )
             else None
         )
 
-        skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+        skip_teams = (
+            requested_fields is not None and "team_ids" not in requested_fields
+        ) or (requested_fields is None and use_slim_hydration)
         skip_team_summaries = (
             requested_fields is not None and "team_summaries" not in requested_fields
         ) or use_slim_hydration
-        skip_contact_ids = requested_fields is not None and not (
-            {"self_contact_id", "boss_contact_id"} & requested_fields
-        )
+        skip_contact_ids = (
+            requested_fields is not None
+            and not ({"self_contact_id", "boss_contact_id"} & requested_fields)
+        ) or (requested_fields is None and use_slim_hydration)
         skip_contact_identity_roots = use_slim_hydration and (
             requested_fields is None or "contact_identity_roots" not in requested_fields
         )
@@ -7813,7 +7820,7 @@ def admin_list_all_assistants(
 
         skip_secrets = (
             requested_fields is not None and "secrets" not in requested_fields
-        )
+        ) or (requested_fields is None and use_slim_hydration)
         secrets_by_assistant: dict[int, dict[str, str]] = {}
         if not skip_secrets:
             agent_ids = [a.agent_id for a in assistants]
@@ -8545,321 +8552,6 @@ async def set_assistant_spending_limit(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-# ============================================================================
-# Demo Assistant Endpoints
-# ============================================================================
-
-
-@demo_router.post(
-    "/assistant",
-    response_model=InfoResponse[AssistantRead],
-    status_code=status.HTTP_200_OK,
-    summary="Create a demo assistant",
-    description="Create a demo assistant by cloning from a source assistant. Only available to Unify organization members.",
-    tags=["Demo Assistants"],
-    include_in_schema=False,  # Hidden from public API docs
-)
-async def create_demo_assistant(
-    request: Request,
-    demo_create: DemoAssistantCreate,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[AssistantRead]:
-    """
-    Create a demo assistant for product demonstrations.
-
-    This endpoint is only available to members of the Unify organization.
-    It clones configuration from a source assistant and provisions phone
-    infrastructure for demo calls.
-    """
-    user_id = request.state.user_id
-
-    # Validate user is in Unify organization
-    unify_org_name = settings.orchestra_organization_name
-
-    # Get the Unify organization
-    org_query = (
-        session.query(Organization)
-        .filter(
-            Organization.name == unify_org_name,
-        )
-        .first()
-    )
-
-    if not org_query:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Demo assistant creation requires Unify organization membership.",
-        )
-
-    # Check if user is a member of the Unify organization
-    member = (
-        session.query(OrganizationMember)
-        .filter(
-            OrganizationMember.user_id == user_id,
-            OrganizationMember.organization_id == org_query.id,
-        )
-        .first()
-    )
-
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must be a member of the Unify organization to create demo assistants.",
-        )
-
-    # Get the source assistant
-    assistant_dao = AssistantDAO(session)
-    source_assistant = assistant_dao.get_assistant_by_agent_id(
-        agent_id=demo_create.source_assistant_id,
-    )
-
-    if not source_assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source assistant {demo_create.source_assistant_id} not found or you don't have access to it.",
-        )
-
-    try:
-        # Create the demo metadata (including optional prospect details)
-        demo_meta = DemoAssistantMeta(
-            source_assistant_id=source_assistant.agent_id,
-            demoer_user_id=user_id,
-            label=demo_create.label,
-            # Optional prospect details for pre-populating boss contact
-            prospect_first_name=demo_create.prospect_first_name,
-            prospect_surname=demo_create.prospect_surname,
-            prospect_email=demo_create.prospect_email,
-            prospect_phone=demo_create.prospect_phone,
-        )
-        session.add(demo_meta)
-        session.flush()  # Get the demo_meta.id
-
-        # Create the demo assistant, cloning config from source
-        demo_assistant = Assistant(
-            user_id=user_id,
-            organization_id=None,  # Personal assistant for the demoer
-            first_name=demo_create.first_name,
-            surname=demo_create.surname,
-            # Clone from source
-            age=source_assistant.age,
-            nationality=source_assistant.nationality,
-            job_title=source_assistant.job_title,
-            about=source_assistant.about,
-            profile_photo=source_assistant.profile_photo,
-            profile_video=source_assistant.profile_video,
-            voice_id=source_assistant.voice_id,
-            voice_provider=source_assistant.voice_provider,
-            default_model=source_assistant.default_model,
-            default_reasoning_effort=source_assistant.default_reasoning_effort,
-            slow_brain_model=source_assistant.slow_brain_model,
-            slow_brain_reasoning_effort=source_assistant.slow_brain_reasoning_effort,
-            # Demo-specific settings
-            timezone="UTC",  # Default timezone for demos
-            monthly_spending_cap=Decimal(str(demo_create.monthly_spending_cap)),
-            # Link to demo metadata
-            demo_id=demo_meta.id,
-        )
-        session.add(demo_assistant)
-        session.flush()  # Get the agent_id
-
-        # Provision phone infrastructure
-        # Use provided phone_country, fallback to source assistant's country, then default to US
-        phone_country = demo_create.phone_country or "US"
-        demo_phone_number = None
-        try:
-            phone_response = await create_phone_number(
-                phone_country=phone_country,
-            )
-            if "detail" in phone_response:
-                raise Exception(f"Phone creation failed: {phone_response['detail']}")
-            demo_phone_number = phone_response.get("phoneNumber")
-        except Exception as e:
-            logging.error(f"Failed to provision phone for demo assistant: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to provision phone number: {str(e)}",
-            )
-
-        # Create pubsub topic
-        try:
-            await create_pubsub_topic(
-                str(demo_assistant.agent_id),
-            )
-        except Exception as e:
-            logging.warning(f"Failed to create pubsub topic for demo assistant: {e}")
-
-        # Create AssistantContact rows for demo assistant
-        contact_dao = AssistantContactDAO(session)
-        if demo_phone_number:
-            contact_dao.upsert_assistant_contact(
-                assistant_id=demo_assistant.agent_id,
-                contact_type="phone",
-                contact_value=demo_phone_number,
-                provider="twilio",
-                country_code=phone_country,
-            )
-            # Store demoer phone on user profile if not already set
-            if demo_create.demoer_phone:
-                demo_user = session.get(User, user_id)
-                if demo_user and not demo_user.phone_number:
-                    demo_user.phone_number = demo_create.demoer_phone
-
-        # Commit the transaction BEFORE waking up the assistant
-        # This ensures the assistant is visible to Adapters when it queries Orchestra
-        session.commit()
-
-        # Wake up the assistant with demo mode
-        # This must happen AFTER commit so Adapters can find the assistant in the database
-        try:
-            await wake_up_assistant(
-                str(demo_assistant.agent_id),
-            )
-        except Exception as e:
-            logging.warning(f"Failed to wake up demo assistant: {e}")
-
-        return InfoResponse(
-            info=_build_assistant_read(demo_assistant, session),
-        )
-
-    except IntegrityError as e:
-        session.rollback()
-        logging.error(f"Database integrity error creating demo assistant: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to create demo assistant due to a constraint violation.",
-        )
-    except HTTPException:
-        session.rollback()
-        raise
-    except Exception as e:
-        session.rollback()
-        logging.error(f"Unexpected error creating demo assistant: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create demo assistant: {str(e)}",
-        )
-
-
-@demo_router.get(
-    "/assistant/{demo_id}/meta",
-    response_model=InfoResponse[DemoAssistantMetaRead],
-    status_code=status.HTTP_200_OK,
-    summary="Get demo assistant metadata",
-    description="Get metadata for a demo assistant.",
-    tags=["Demo Assistants"],
-    include_in_schema=False,  # Hidden from public API docs
-)
-async def get_demo_assistant_meta(
-    request: Request,
-    demo_id: int,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[DemoAssistantMetaRead]:
-    """
-    Get metadata for a demo assistant.
-
-    The caller must own an assistant with this demo_id.
-    """
-    user_id = request.state.user_id
-
-    # Verify the user owns an assistant with this demo_id
-    assistant = (
-        session.query(Assistant)
-        .filter(
-            Assistant.demo_id == demo_id,
-            Assistant.user_id == user_id,
-        )
-        .first()
-    )
-
-    if not assistant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Demo assistant not found or you don't have access to it.",
-        )
-
-    # Get the demo metadata
-    demo_meta = (
-        session.query(DemoAssistantMeta)
-        .filter(
-            DemoAssistantMeta.id == demo_id,
-        )
-        .first()
-    )
-
-    if not demo_meta:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Demo metadata not found.",
-        )
-
-    return InfoResponse(
-        info=DemoAssistantMetaRead(
-            id=demo_meta.id,
-            source_assistant_id=demo_meta.source_assistant_id,
-            demoer_user_id=demo_meta.demoer_user_id,
-            label=demo_meta.label,
-            created_at=demo_meta.created_at,
-            prospect_first_name=demo_meta.prospect_first_name,
-            prospect_surname=demo_meta.prospect_surname,
-            prospect_email=demo_meta.prospect_email,
-            prospect_phone=demo_meta.prospect_phone,
-        ),
-    )
-
-
-@demo_router.get(
-    "/assistant/meta/list",
-    response_model=InfoResponse[List[DemoAssistantMetaRead]],
-    status_code=status.HTTP_200_OK,
-    summary="List all demo assistant metadata for current user",
-    description="List all demo assistant metadata for the authenticated user.",
-    tags=["Demo Assistants"],
-    include_in_schema=False,  # Hidden from public API docs
-)
-async def list_demo_assistant_meta(
-    request: Request,
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[List[DemoAssistantMetaRead]]:
-    """
-    List all demo assistant metadata for the authenticated user.
-
-    Returns metadata for all demo assistants owned by the current user,
-    including labels and prospect details for UI display.
-    """
-    user_id = request.state.user_id
-
-    # Get all demo meta entries for assistants owned by this user
-    demo_metas = (
-        session.query(DemoAssistantMeta)
-        .join(
-            Assistant,
-            Assistant.demo_id == DemoAssistantMeta.id,
-        )
-        .filter(
-            Assistant.user_id == user_id,
-        )
-        .order_by(DemoAssistantMeta.created_at.desc())
-        .all()
-    )
-
-    return InfoResponse(
-        info=[
-            DemoAssistantMetaRead(
-                id=meta.id,
-                source_assistant_id=meta.source_assistant_id,
-                demoer_user_id=meta.demoer_user_id,
-                label=meta.label,
-                created_at=meta.created_at,
-                prospect_first_name=meta.prospect_first_name,
-                prospect_surname=meta.prospect_surname,
-                prospect_email=meta.prospect_email,
-                prospect_phone=meta.prospect_phone,
-            )
-            for meta in demo_metas
-        ],
-    )
 
 
 # ---------------------------------------------------------------------------

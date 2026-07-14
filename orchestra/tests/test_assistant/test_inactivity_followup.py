@@ -11,7 +11,7 @@ Covers:
         - mark_followup_sent
         - set_inactivity_followup_opt_out
         - find_followup_candidates per-user activity aggregation, re-arm
-          logic, opt-out / demo / local exclusion, coordinator scoping
+          logic, opt-out / local exclusion, coordinator scoping
     2. inactivity follow-up routine
         - no-op when no candidates
         - sends templated email + stamps last_followup_sent_at
@@ -35,7 +35,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.models.orchestra_models import Assistant, DemoAssistantMeta, User
+from orchestra.db.models.orchestra_models import Assistant, User
 from orchestra.routines.inactivity_followup import (
     InactivityFollowupResult,
     run_inactivity_followup,
@@ -80,7 +80,6 @@ def _make_assistant(
     inactivity_followup_opted_out: bool = False,
     is_coordinator: bool = False,
     organization_id: int | None = None,
-    demo_id: int | None = None,
     is_local: bool = False,
 ) -> Assistant:
     a = Assistant(
@@ -91,7 +90,6 @@ def _make_assistant(
         inactivity_followup_opted_out=inactivity_followup_opted_out,
         is_coordinator=is_coordinator,
         organization_id=organization_id,
-        demo_id=demo_id,
         is_local=is_local,
     )
     dbsession.add(a)
@@ -107,7 +105,6 @@ def _make_coordinator(
     last_followup_sent_at: datetime | None = None,
     inactivity_followup_opted_out: bool = False,
     is_local: bool = False,
-    demo_id: int | None = None,
 ) -> Assistant:
     return _make_assistant(
         dbsession,
@@ -119,7 +116,6 @@ def _make_coordinator(
         is_coordinator=True,
         organization_id=None,
         is_local=is_local,
-        demo_id=demo_id,
     )
 
 
@@ -392,31 +388,6 @@ class TestDAOFindFollowupCandidates:
         candidates = dao.find_followup_candidates(followup_cutoff=_cutoff(7))
         assert specialist.agent_id not in {c.agent_id for c in candidates}
         assert all(c.is_coordinator for c in candidates)
-
-    def test_excludes_demos_by_default(self, dbsession: Session):
-        user = _make_user(dbsession, "fup_u11")
-        demo_meta = DemoAssistantMeta(
-            source_assistant_id=None,
-            demoer_user_id=user.id,
-            label="demo",
-        )
-        dbsession.add(demo_meta)
-        dbsession.flush()
-        demo_coord = _make_coordinator(
-            dbsession,
-            user.id,
-            last_correspondence_at=_cutoff(8),
-            demo_id=demo_meta.id,
-        )
-
-        dao = AssistantDAO(dbsession)
-        without_demo = dao.find_followup_candidates(followup_cutoff=_cutoff(7))
-        with_demo = dao.find_followup_candidates(
-            followup_cutoff=_cutoff(7),
-            include_demo=True,
-        )
-        assert demo_coord.agent_id not in {c.agent_id for c in without_demo}
-        assert demo_coord.agent_id in {c.agent_id for c in with_demo}
 
     def test_excludes_is_local_by_default(self, dbsession: Session):
         user = _make_user(dbsession, "fup_u12")

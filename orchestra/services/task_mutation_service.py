@@ -13,6 +13,7 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.db.log_queries import log_event_context_join, owner_scope_clause
 from orchestra.db.models.orchestra_models import (
     Assistant,
@@ -21,10 +22,6 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
 )
 from orchestra.db.scope import single_owner_key_for_context
-from orchestra.provider_triggers.provider_trigger_mutation import (
-    initialize_binding,
-    sync_fence_after_task_row_mutation,
-)
 from orchestra.provider_triggers.task_trigger import (
     ProviderEventTrigger,
     parse_task_trigger,
@@ -32,6 +29,7 @@ from orchestra.provider_triggers.task_trigger import (
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     _build_assistant_tasks_context_name,
+    _coerce_bool,
     _coerce_int,
     _replace_log_payload,
     sync_task_activations_for_task_ids,
@@ -82,6 +80,7 @@ class TaskMutationService:
         )
         self._field_type_dao = FieldTypeDAO(session)
         self._log_event_dao = LogEventDAO(session, self._context_dao)
+        self._provider_trigger_dao = ProviderTriggerDAO(session)
 
     def list_tasks(
         self,
@@ -123,6 +122,29 @@ class TaskMutationService:
             task_id=task_id,
         )
 
+    def get_binding_for_task(
+        self,
+        *,
+        assistant: Assistant,
+        task_id: int,
+        for_update: bool = False,
+    ):
+        """Return the durable binding for one provider-event task, if present."""
+
+        project_id, context_id, _ = self._resolve_task_scope(assistant)
+        row = self._get_latest_task_row(
+            project_id=project_id,
+            context_id=context_id,
+            task_id=task_id,
+        )
+        if row is None:
+            return None
+        return self._provider_trigger_dao.get_binding_for_task(
+            project_id=project_id,
+            source_task_log_id=row.log_event_id,
+            for_update=for_update,
+        )
+
     def create_task(
         self,
         *,
@@ -146,22 +168,10 @@ class TaskMutationService:
         payload.setdefault("instance_id", 0)
 
         trigger = parse_task_trigger(payload.get("trigger"))
+        binding_id: str | None = None
         if trigger is not None and trigger.kind == "provider_event":
             binding_id = f"binding-{uuid.uuid4().hex[:12]}"
             payload[TaskRowKey.provider_event_binding_id.value] = binding_id
-            initialize_binding(
-                self.session,
-                binding_id=binding_id,
-                desired_state=trigger.state,
-            )
-            sync_fence_after_task_row_mutation(
-                self.session,
-                binding_id=binding_id,
-                task_revision=1,
-                desired_state=trigger.state,
-                open_acceptance=trigger.state == "enabled",
-                bump_acceptance_epoch=False,
-            )
 
         request = CreateLogConfig(
             project_name=TASK_MACHINE_PROJECT_NAME,
@@ -194,6 +204,23 @@ class TaskMutationService:
         )
         data = dict(created.data or {})
         task_id = int(data["task_id"])
+
+        if binding_id is not None and isinstance(trigger, ProviderEventTrigger):
+            execution_mode = "offline" if _coerce_bool(data.get("offline")) else "live"
+            self._provider_trigger_dao.create_binding(
+                binding_id=binding_id,
+                project_id=project_id,
+                tasks_context_id=context_id,
+                source_task_log_id=log_event_id,
+                task_id=task_id,
+                assistant_id=int(assistant.agent_id),
+                task_revision=1,
+                trigger=trigger,
+                execution_mode=execution_mode,
+                entrypoint=_coerce_int(data.get("entrypoint")),
+                task_enabled=_coerce_bool(data.get("enabled", True)),
+            )
+
         self._project_task_activation(
             project_id=project_id,
             tasks_context_name=tasks_context_name,
@@ -222,10 +249,27 @@ class TaskMutationService:
             project_id=project_id,
             context_id=context_id,
             task_id=task_id,
-            for_update=True,
         )
         if row is None:
             raise ValueError(f"Task {task_id} not found.")
+
+        binding = None
+        if is_provider_event_task_row(row.data):
+            binding = self._provider_trigger_dao.get_binding_for_task(
+                project_id=project_id,
+                source_task_log_id=row.log_event_id,
+                for_update=True,
+            )
+
+        locked_row = self._get_latest_task_row(
+            project_id=project_id,
+            context_id=context_id,
+            task_id=task_id,
+            for_update=True,
+        )
+        if locked_row is None:
+            raise ValueError(f"Task {task_id} not found.")
+        row = locked_row
 
         if row.task_revision != expected_task_revision:
             raise TaskRevisionConflict(latest_revision=row.task_revision)
@@ -252,10 +296,13 @@ class TaskMutationService:
         self.session.flush()
 
         if is_provider_event_task_row(merged):
-            self._sync_provider_event_fence(
+            self._sync_provider_event_binding(
+                project_id=project_id,
                 data=merged,
+                source_task_log_id=row.log_event_id,
                 task_revision=int(merged[TaskRowKey.task_revision.value]),
                 bump_acceptance_epoch=bump_acceptance_epoch,
+                binding=binding,
             )
 
         self._project_task_activation(
@@ -318,6 +365,23 @@ class TaskMutationService:
             bump_acceptance_epoch=True,
         )
 
+    def retry_provider_trigger(
+        self,
+        *,
+        assistant: Assistant,
+        task_id: int,
+    ) -> None:
+        """Request immediate reconciliation for one provider-event binding."""
+
+        binding = self.get_binding_for_task(
+            assistant=assistant,
+            task_id=task_id,
+            for_update=True,
+        )
+        if binding is None:
+            raise ValueError(f"Task {task_id} has no provider-event binding.")
+        self._provider_trigger_dao.request_reconcile(binding=binding)
+
     def delete_task(
         self,
         *,
@@ -328,6 +392,23 @@ class TaskMutationService:
         """Delete the current authored row under a revision CAS."""
 
         project_id, context_id, tasks_context_name = self._resolve_task_scope(assistant)
+        row_preview = self._get_latest_task_row(
+            project_id=project_id,
+            context_id=context_id,
+            task_id=task_id,
+        )
+        if row_preview is None:
+            raise ValueError(f"Task {task_id} not found.")
+
+        if is_provider_event_task_row(row_preview.data):
+            binding = self._provider_trigger_dao.get_binding_for_task(
+                project_id=project_id,
+                source_task_log_id=row_preview.log_event_id,
+                for_update=True,
+            )
+            if binding is not None:
+                self._provider_trigger_dao.tombstone_binding(binding=binding)
+
         row = self._get_latest_task_row(
             project_id=project_id,
             context_id=context_id,
@@ -481,12 +562,15 @@ class TaskMutationService:
         )
         return log_event
 
-    def _sync_provider_event_fence(
+    def _sync_provider_event_binding(
         self,
         *,
+        project_id: int,
         data: dict[str, Any],
+        source_task_log_id: int,
         task_revision: int,
         bump_acceptance_epoch: bool,
+        binding=None,
     ) -> None:
         binding_id = data.get(TaskRowKey.provider_event_binding_id.value)
         if not binding_id:
@@ -494,14 +578,23 @@ class TaskMutationService:
         trigger = parse_task_trigger(data.get("trigger"))
         if not isinstance(trigger, ProviderEventTrigger):
             return
-        sync_fence_after_task_row_mutation(
-            self.session,
-            binding_id=str(binding_id),
+        if binding is None:
+            binding = self._provider_trigger_dao.get_binding_for_task(
+                project_id=project_id,
+                source_task_log_id=source_task_log_id,
+                for_update=True,
+            )
+        if binding is None:
+            return
+        execution_mode = "offline" if _coerce_bool(data.get("offline")) else "live"
+        self._provider_trigger_dao.sync_desired_state(
+            binding=binding,
             task_revision=task_revision,
-            desired_state=trigger.state,
-            open_acceptance=trigger.state == "enabled"
-            and bool(data.get("enabled", True)),
+            trigger=trigger,
+            execution_mode=execution_mode,
+            entrypoint=_coerce_int(data.get("entrypoint")),
             bump_acceptance_epoch=bump_acceptance_epoch,
+            task_enabled=_coerce_bool(data.get("enabled", True)),
         )
 
     def _project_task_activation(

@@ -18,6 +18,7 @@ from orchestra.services.task_trigger_service import (
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
+from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.tasks.schema import (
     RetryTriggerResponse,
@@ -577,6 +578,13 @@ def retry_assistant_task_trigger(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Task not found.",
         )
+    try:
+        service.retry_provider_trigger(assistant=assistant, task_id=task_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
     return InfoResponse(info=RetryTriggerResponse(task_id=task_id))
 
 
@@ -606,14 +614,55 @@ def get_assistant_task_trigger_health(
         if trigger is not None and trigger.kind == "provider_event"
         else None
     )
+    binding = service.get_binding_for_task(assistant=assistant, task_id=task_id)
+    remediation = None
+    runtime_health: str = "absent"
+    desired_activation_revision = None
+    observed_activation_revision = None
+    acceptance_epoch = None
+    local_acceptance_open = False
+    active_generation_id = None
+    coverage_started_at = None
+    coverage_ended_at = None
+    if binding is not None:
+        runtime_health = binding.runtime_health
+        desired_activation_revision = binding.desired_activation_revision
+        observed_activation_revision = binding.observed_activation_revision
+        acceptance_epoch = binding.acceptance_epoch
+        local_acceptance_open = binding.local_acceptance_open
+        active_generation_id = binding.active_generation_id
+        if binding.coverage_started_at is not None:
+            coverage_started_at = binding.coverage_started_at.isoformat()
+        if binding.coverage_ended_at is not None:
+            coverage_ended_at = binding.coverage_ended_at.isoformat()
+        if runtime_health == "needs_attention":
+            remediation = "Review the provider connection and trigger configuration."
+        elif runtime_health == "provisioning":
+            remediation = "Trigger provisioning is in progress."
+    event_storage_configured = settings.provider_event_storage_configured
+    if (
+        binding is not None
+        and not event_storage_configured
+        and runtime_health not in {"absent", "removing"}
+    ):
+        runtime_health = "needs_attention"
+        remediation = "Provider-event storage is not configured for this deployment."
     return InfoResponse(
         info=TriggerHealthResponse(
             task_id=task_id,
             task_revision=row.task_revision,
             authored_trigger_state=authored_state,
             task_enabled=bool(row.data.get("enabled", True)),
-            runtime_health="absent",
-            remediation=None,
+            runtime_health=runtime_health,  # type: ignore[arg-type]
+            desired_activation_revision=desired_activation_revision,
+            observed_activation_revision=observed_activation_revision,
+            acceptance_epoch=acceptance_epoch,
+            local_acceptance_open=local_acceptance_open,
+            active_generation_id=active_generation_id,
+            coverage_started_at=coverage_started_at,
+            coverage_ended_at=coverage_ended_at,
+            remediation=remediation,
+            event_storage_configured=event_storage_configured,
         ),
     )
 
@@ -625,35 +674,15 @@ def get_assistant_task_trigger_health(
     summary="List supported provider-event trigger catalog entries",
 )
 def get_task_trigger_catalog() -> InfoResponse[TriggerCatalogResponse]:
-    # TODO: replace this static skeleton with a live Composio/Pipedream-backed
-    # trigger registry once the curated provider catalog adapter lands.
+    from orchestra.provider_triggers.trigger_registry import (
+        list_trigger_catalog_payloads,
+    )
+
     return InfoResponse(
         info=TriggerCatalogResponse(
             events=[
-                TriggerCatalogEvent(
-                    event_slug="github.issue_created",
-                    canonical_app_slug="github",
-                    schema_version="1",
-                    filters=[
-                        {
-                            "field": "repository",
-                            "operator": "is",
-                        },
-                        {
-                            "field": "author",
-                            "operator": "is",
-                        },
-                        {
-                            "field": "labels",
-                            "operator": "contains",
-                        },
-                        {
-                            "field": "title",
-                            "operator": "contains",
-                        },
-                    ],
-                    backends=["composio", "pipedream"],
-                ),
+                TriggerCatalogEvent.model_validate(payload)
+                for payload in list_trigger_catalog_payloads()
             ],
         ),
     )

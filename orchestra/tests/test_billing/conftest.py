@@ -158,9 +158,7 @@ def put_on_tier(
     subscription_id: str,
 ) -> None:
     """Place an account on a seeded subscription tier with a fake Stripe sub."""
-    from orchestra.db.dao.billing_plan_assignment_dao import (
-        BillingPlanAssignmentDAO,
-    )
+    from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDAO
 
     BillingPlanAssignmentDAO(session).set_plan(
         billing_account_id=ba.id,
@@ -281,7 +279,6 @@ def make_assistant(
     first_name: str = "Test",
     surname: str = "Bot",
     organization_id: int | None = None,
-    demo_id: int | None = None,
     *,
     is_coordinator: bool = False,
 ) -> Assistant:
@@ -291,7 +288,6 @@ def make_assistant(
         first_name=first_name,
         surname=surname,
         organization_id=organization_id,
-        demo_id=demo_id,
         is_coordinator=is_coordinator,
     )
     dbsession.add(a)

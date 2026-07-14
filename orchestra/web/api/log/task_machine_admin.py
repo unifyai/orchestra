@@ -9,6 +9,7 @@ from orchestra.services.task_machine_state_service import (
     create_task_run_if_absent,
     get_latest_task_run_for_task,
     get_task_activation,
+    get_task_run,
     resolve_tasks_context_name,
     sync_task_activations_for_task_ids,
     update_task_outbound_operation,
@@ -24,6 +25,8 @@ from orchestra.web.api.log.task_machine_schema import (
     TaskOutboundOperationMutationResponse,
     TaskOutboundOperationUpdateRequest,
     TaskRunCreateOrAdoptRequest,
+    TaskRunGetRequest,
+    TaskRunGetResponse,
     TaskRunLatestRequest,
     TaskRunLatestResponse,
     TaskRunMutationResponse,
@@ -255,6 +258,24 @@ def get_latest_task_run_core(session, request: TaskRunLatestRequest) -> dict:
     return {"run": dict(run.data or {}) if run is not None else None}
 
 
+def get_task_run_core(session, request: TaskRunGetRequest) -> dict:
+    """Return one task run row by run_key without creating or adopting."""
+
+    project = _get_internal_project_or_404(
+        session,
+        project_name=request.project_name,
+        assistant_id=request.assistant_id,
+    )
+    run = get_task_run(
+        session=session,
+        project_id=project.id,
+        run_key=request.run_key,
+        assistant_id=request.assistant_id,
+        source_task_log_id=request.source_task_log_id,
+    )
+    return {"run": dict(run.data or {}) if run is not None else None}
+
+
 def create_or_adopt_task_outbound_operation_core(
     session,
     request: TaskOutboundOperationCreateOrAdoptRequest,
@@ -344,6 +365,20 @@ def get_latest_task_run(
     """Return the most recently updated task run for one assistant/task pair."""
 
     return get_latest_task_run_core(session, request)
+
+
+@router.post(
+    "/task-run/get",
+    response_model=TaskRunGetResponse,
+)
+def get_task_run_by_key(
+    request: TaskRunGetRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Return one task run row by run_key without creating or adopting."""
+
+    return get_task_run_core(session, request)
 
 
 @router.post(

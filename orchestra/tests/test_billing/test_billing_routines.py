@@ -4,7 +4,7 @@ Tests for billing routines (scheduled / admin-triggered jobs).
 Covers:
 1. Assistant contact levy (resource_levy routine):
    - Billing contacts for personal users and organizations
-   - Skipping demo, BYOD, deleted, and already-billed contacts
+   - Skipping BYOD, deleted, and already-billed contacts
    - Mixed contact types (phone, email, whatsapp)
    - Cost fallback when country_code is not in AssistantContactCost table
    - Multiple billing accounts in a single run
@@ -37,7 +37,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     AssistantContactCost,
-    DemoAssistantMeta,
     Organization,
     Recharge,
     RechargeStatus,
@@ -294,39 +293,6 @@ class TestLevyCoreLogic:
 
         dbsession.refresh(ba)
         assert ba.credits == Decimal("100") - expected
-
-    def test_skips_demo_assistant_contacts(self, dbsession: Session):
-        """Contacts on demo assistants are not billed."""
-        ba = make_billing_account(dbsession, credits=100)
-        user = make_user(dbsession, "lev_u4", ba)
-
-        demo_meta = DemoAssistantMeta(
-            demoer_user_id=user.id,
-            label="test-demo",
-        )
-        dbsession.add(demo_meta)
-        dbsession.flush()
-
-        asst = make_assistant(
-            dbsession,
-            user.id,
-            first_name="LevDemo",
-            demo_id=demo_meta.id,
-        )
-        make_contact(
-            dbsession,
-            asst.agent_id,
-            contact_type="phone",
-            contact_value="+15551200020",
-        )
-        dbsession.flush()
-
-        result = levy_provisioned_resources(2026, 3, session=dbsession)
-
-        # No contacts should be billed for this demo assistant's BA
-        for ar in result.account_results:
-            if ar.billing_account_id == ba.id:
-                pytest.fail("Demo assistant contacts should not be billed")
 
     def test_skips_byod_contacts(self, dbsession: Session):
         """User-provisioned (BYOD) contacts are not billed."""

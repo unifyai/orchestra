@@ -1,0 +1,97 @@
+"""Canonical provider-event activation revision hashing."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any, Mapping
+
+from orchestra.provider_triggers.task_trigger import (
+    ProviderEventTrigger,
+    parse_task_trigger,
+)
+
+
+def normalize_provider_event_filters(
+    filters: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Return a deterministic filter list for hashing and persistence."""
+
+    if not filters:
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in filters:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "field": str(item.get("field", "")),
+                "operator": str(item.get("operator", "")),
+                "value": item.get("value"),
+            },
+        )
+    return sorted(
+        normalized,
+        key=lambda row: (
+            row["field"],
+            row["operator"],
+            json.dumps(row["value"], sort_keys=True),
+        ),
+    )
+
+
+def provider_event_activation_revision_payload(
+    *,
+    trigger: ProviderEventTrigger | Mapping[str, Any],
+    binding_id: str,
+    execution_mode: str,
+    entrypoint: int | None,
+    provider_account_subject_hmac: str | None = None,
+) -> dict[str, Any]:
+    """Build the config-only payload hashed into provider activation revisions."""
+
+    if isinstance(trigger, ProviderEventTrigger):
+        trigger_payload = trigger
+    else:
+        parsed = parse_task_trigger(trigger)
+        if not isinstance(parsed, ProviderEventTrigger):
+            raise TypeError("provider_event trigger required")
+        trigger_payload = parsed
+
+    payload: dict[str, Any] = {
+        "binding_id": binding_id,
+        "connection_id": trigger_payload.connection_id,
+        "backend_id": trigger_payload.backend_id,
+        "canonical_app_slug": trigger_payload.canonical_app_slug,
+        "event_slug": trigger_payload.event_slug,
+        "schema_version": trigger_payload.schema_version,
+        "filters": normalize_provider_event_filters(
+            [item.model_dump() for item in trigger_payload.filters],
+        ),
+        "execution_mode": execution_mode,
+        "entrypoint": entrypoint,
+    }
+    if provider_account_subject_hmac:
+        payload["provider_account_subject_hmac"] = provider_account_subject_hmac
+    return payload
+
+
+def compute_provider_event_activation_revision(
+    *,
+    trigger: ProviderEventTrigger | Mapping[str, Any],
+    binding_id: str,
+    execution_mode: str,
+    entrypoint: int | None,
+    provider_account_subject_hmac: str | None = None,
+) -> str:
+    """Return the SHA-256 digest for one provider-event activation revision."""
+
+    payload = provider_event_activation_revision_payload(
+        trigger=trigger,
+        binding_id=binding_id,
+        execution_mode=execution_mode,
+        entrypoint=entrypoint,
+        provider_account_subject_hmac=provider_account_subject_hmac,
+    )
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

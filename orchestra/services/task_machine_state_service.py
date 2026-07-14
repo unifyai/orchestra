@@ -38,6 +38,11 @@ from orchestra.db.models.orchestra_models import (
     TeamAssistantMembership,
 )
 from orchestra.db.scope import single_owner_key_for_context
+from orchestra.provider_triggers.activation_revision import (
+    compute_provider_event_activation_revision,
+    normalize_provider_event_filters,
+)
+from orchestra.provider_triggers.task_trigger import parse_task_trigger
 from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
@@ -508,7 +513,7 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "activation_kind": {
         "field_type": "str",
         "mutable": True,
-        "description": "How the task wakes: scheduled or triggered.",
+        "description": "How the task wakes: scheduled, triggered, or provider_event.",
     },
     "execution_mode": {
         "field_type": "str",
@@ -592,6 +597,51 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "field_type": "datetime",
         "mutable": True,
         "description": "When Orchestra last projected this activation row.",
+    },
+    "provider_event_binding_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Stable binding identifier for provider-event activations.",
+    },
+    "acceptance_epoch": {
+        "field_type": "int",
+        "mutable": True,
+        "description": "Lifecycle fence for provider-event acceptance ordering.",
+    },
+    "connection_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Pinned integration connection for provider-event matching.",
+    },
+    "backend_id": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Provider backend for provider-event triggers.",
+    },
+    "canonical_app_slug": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Canonical app slug for provider-event triggers.",
+    },
+    "event_slug": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Canonical event slug for provider-event triggers.",
+    },
+    "schema_version": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Registry schema version for provider-event triggers.",
+    },
+    "provider_event_filters": {
+        "field_type": "list",
+        "mutable": True,
+        "description": "Normalized AND filters for provider-event matching.",
+    },
+    "provider_account_subject_hmac": {
+        "field_type": "str",
+        "mutable": True,
+        "description": "Pinned provider account subject digest when known.",
     },
 }
 
@@ -1258,6 +1308,35 @@ def get_task_run(
     )
 
 
+def get_task_run_by_run_id(
+    session: Session,
+    project_id: int,
+    *,
+    run_id: int,
+) -> LogEvent | None:
+    """Return one task run row by its stable ``run_id`` (the run's log_event id).
+
+    Runs live under an assistant-scoped ``.../Tasks/Runs`` context and their
+    ``run_id`` equals the backing ``LogEvent.id``. Callers pass the run id
+    received out-of-band (for example on a provider-event dispatch) and get the
+    row back only when it is genuinely a task-run row in the given project.
+    """
+
+    return (
+        session.query(LogEvent)
+        .join(LogEventContext, log_event_context_join())
+        .join(Context, Context.id == LogEventContext.context_id)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
+            Context.project_id == project_id,
+            LogEvent.id == run_id,
+            Context.name.like(f"%{TASK_RUNS_CONTEXT_NAME}"),
+        )
+        .first()
+    )
+
+
 def get_latest_task_run_for_task(
     session: Session,
     project_id: int,
@@ -1525,8 +1604,20 @@ def _build_activation_payload(
             destination=destination,
         )
 
+    provider_candidates = [
+        row for row in ordered_rows if _is_provider_event_activation_candidate(row.data)
+    ]
+    if provider_candidates:
+        return _project_provider_event_activation_payload(
+            row=provider_candidates[0],
+            tasks_context_name=tasks_context_name,
+            destination=destination,
+        )
+
     trigger_candidates = [
-        row for row in ordered_rows if _is_trigger_activation_candidate(row.data)
+        row
+        for row in ordered_rows
+        if _is_communication_trigger_activation_candidate(row.data)
     ]
     if trigger_candidates:
         return _project_activation_payload(
@@ -1598,6 +1689,81 @@ def _project_activation_payload(
         ),
     }
     payload["activation_revision"] = _stable_hash(payload)
+    payload["last_materialized_at"] = _coerce_datetime_string(
+        datetime.now(timezone.utc),
+    )
+    return payload
+
+
+def _project_provider_event_activation_payload(
+    row: _TaskRow,
+    *,
+    tasks_context_name: str,
+    destination: str | None,
+) -> dict[str, Any]:
+    """Flatten one provider-event task row into an activation payload."""
+
+    task_id = _coerce_int(row.data.get("task_id"))
+    if task_id is None:
+        raise ValueError("Activations require task rows with an integer task_id.")
+
+    trigger = parse_task_trigger(row.data.get("trigger"))
+    if trigger is None or trigger.kind != "provider_event":
+        raise ValueError("Provider-event activations require a provider_event trigger.")
+
+    binding_id = _coerce_optional_str(
+        row.data.get("provider_event_binding_id"),
+    )
+    if not binding_id:
+        raise ValueError(
+            "Provider-event activations require provider_event_binding_id.",
+        )
+
+    assistant_id = _resolve_assistant_id(
+        task_row=row,
+        tasks_context_name=tasks_context_name,
+    )
+    execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
+    entrypoint = _coerce_int(row.data.get("entrypoint"))
+    normalized_filters = normalize_provider_event_filters(
+        [item.model_dump() for item in trigger.filters],
+    )
+    activation_revision = compute_provider_event_activation_revision(
+        trigger=trigger,
+        binding_id=binding_id,
+        execution_mode=execution_mode,
+        entrypoint=entrypoint,
+    )
+    payload = {
+        "assistant_id": assistant_id,
+        "destination": destination,
+        "activation_key": _build_activation_key(
+            assistant_id=assistant_id,
+            task_id=task_id,
+            destination=destination,
+        ),
+        "task_id": task_id,
+        "source_task_log_id": row.log_event_id,
+        "instance_id": _coerce_int(row.data.get("instance_id")),
+        "activation_kind": "provider_event",
+        "execution_mode": execution_mode,
+        "status": row.data.get("status"),
+        "task_name": _coerce_optional_str(row.data.get("name")),
+        "task_description": _coerce_optional_str(row.data.get("description")),
+        "entrypoint": entrypoint,
+        "repeat": _coerce_optional_list(row.data.get("repeat")),
+        "source_task_updated_at": _coerce_datetime_string(
+            row.updated_at or row.created_at,
+        ),
+        "provider_event_binding_id": binding_id,
+        "connection_id": trigger.connection_id,
+        "backend_id": trigger.backend_id,
+        "canonical_app_slug": trigger.canonical_app_slug,
+        "event_slug": trigger.event_slug,
+        "schema_version": trigger.schema_version,
+        "provider_event_filters": normalized_filters,
+        "activation_revision": activation_revision,
+    }
     payload["last_materialized_at"] = _coerce_datetime_string(
         datetime.now(timezone.utc),
     )
@@ -1827,19 +1993,48 @@ def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
     return status in _SCHEDULED_ACTIVATION_STATUSES
 
 
-def _is_trigger_activation_candidate(data: Mapping[str, Any]) -> bool:
-    """Return True when a task row is the current armed trigger activation."""
+def _is_provider_event_activation_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row arms a provider-event activation."""
 
     if not _is_task_enabled(data):
         return False
     schedule = data.get("schedule")
-    trigger = data.get("trigger")
     if schedule not in (None, {}):
         return False
-    if not isinstance(trigger, dict):
+    trigger = parse_task_trigger(data.get("trigger"))
+    if trigger is None or trigger.kind != "provider_event":
+        return False
+    if trigger.state != "enabled":
         return False
     status = _coerce_optional_str(data.get("status"))
     return status == _TRIGGERABLE_STATUS
+
+
+def _is_communication_trigger_activation_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row arms a communication trigger activation."""
+
+    if not _is_task_enabled(data):
+        return False
+    schedule = data.get("schedule")
+    if schedule not in (None, {}):
+        return False
+    trigger = parse_task_trigger(data.get("trigger"))
+    if trigger is None:
+        return False
+    if trigger.kind == "provider_event":
+        return False
+    status = _coerce_optional_str(data.get("status"))
+    return status == _TRIGGERABLE_STATUS
+
+
+def _is_trigger_activation_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row is the current armed trigger activation."""
+
+    return _is_communication_trigger_activation_candidate(
+        data,
+    ) or _is_provider_event_activation_candidate(
+        data,
+    )
 
 
 def _load_task_rows(

@@ -69,7 +69,6 @@ def _fetch_billable_desktops(
         .filter(
             Assistant.desktop_mode.in_(tuple(MANAGED_DESKTOP_MODES)),
             Assistant.managed_desktop_status.in_(["active", "grace_period"]),
-            Assistant.demo_id.is_(None),
             (
                 Assistant.managed_desktop_last_billed_month.is_(None)
                 | (Assistant.managed_desktop_last_billed_month != billing_month)
