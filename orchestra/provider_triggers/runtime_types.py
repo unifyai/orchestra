@@ -82,6 +82,17 @@ class ReceiptProcessingState(StrEnum):
     failed = "failed"
 
 
+class ReceiptClassificationReason(StrEnum):
+    """Stable classification for one durable provider-event receipt."""
+
+    matched = "matched"
+    unmatched = "unmatched"
+    inactive = "inactive"
+    stale = "stale"
+    unauthorized = "unauthorized"
+    unsupported = "unsupported"
+
+
 class DispatchProcessingState(StrEnum):
     """Processing state for one provider-event dispatch operation."""
 
