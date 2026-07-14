@@ -352,6 +352,7 @@ class ProviderTriggerDAO:
         classification_reason: str = "matched",
         stable_envelope_json: dict[str, Any] | None = None,
         curated_projection_json: dict[str, Any] | None = None,
+        event_context_expires_at: datetime | None = None,
     ) -> ProviderEventReceipt:
         """Insert or adopt one receipt under the binding identity constraint."""
 
@@ -376,6 +377,7 @@ class ProviderTriggerDAO:
             classification_reason=classification_reason,
             stable_envelope_json=stable_envelope_json,
             curated_projection_json=curated_projection_json,
+            event_context_expires_at=event_context_expires_at,
         )
         self.session.add(receipt)
         self.session.flush()
@@ -841,34 +843,38 @@ class ProviderTriggerDAO:
         self,
         *,
         receipt: ProviderEventReceipt,
+        reason: str | None = None,
     ) -> tuple[ProviderEventReceipt, ProviderEventBlob | None]:
-        """Mark one receipt's event context unavailable."""
+        """Mark one receipt's event context unavailable and clear readable fields."""
 
-        if not receipt.event_context_ref:
+        if not receipt.event_context_ref and not receipt.stable_envelope_json:
+            if reason and not receipt.event_context_unavailable_reason:
+                receipt.event_context_unavailable_reason = reason
+                self.session.flush()
             return receipt, None
 
-        blob = self.session.execute(
-            select(ProviderEventBlob).where(
-                ProviderEventBlob.blob_id == receipt.event_context_ref,
-            ),
-        ).scalar_one_or_none()
-        if blob is None:
-            receipt.event_context_ref = None
-            receipt.event_context_integrity_hash = None
-            receipt.event_context_size_bytes = None
-            receipt.event_context_content_type = None
-            receipt.event_context_key_version = None
-            self.session.flush()
-            return receipt, None
+        blob = None
+        if receipt.event_context_ref:
+            blob = self.session.execute(
+                select(ProviderEventBlob).where(
+                    ProviderEventBlob.blob_id == receipt.event_context_ref,
+                ),
+            ).scalar_one_or_none()
 
         now = datetime.now(timezone.utc)
-        blob.commit_state = BlobCommitState.unavailable.value
-        blob.unavailable_at = now
+        if blob is not None:
+            blob.commit_state = BlobCommitState.unavailable.value
+            blob.unavailable_at = now
+
         receipt.event_context_ref = None
         receipt.event_context_integrity_hash = None
         receipt.event_context_size_bytes = None
         receipt.event_context_content_type = None
         receipt.event_context_key_version = None
+        receipt.stable_envelope_json = None
+        receipt.curated_projection_json = None
+        if reason:
+            receipt.event_context_unavailable_reason = reason
         self.session.flush()
         return receipt, blob
 
