@@ -121,7 +121,11 @@ def provider_account_subject_hmac(subject: str, *, pepper: str | bytes) -> str:
 def github_resource_from_filters(
     filters: Sequence[Mapping[str, Any]] | None,
 ) -> str | None:
-    """Derive the owner/name resource from authored repository filters."""
+    """Derive the owner/name resource from authored repository filters.
+
+    TODO: Replace with registry/adapter resource resolution so reconciliation
+    does not hardcode GitHub repository extraction outside the adapter.
+    """
 
     if not filters:
         return None

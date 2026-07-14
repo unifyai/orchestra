@@ -78,7 +78,11 @@ def initialize_binding(
     binding_id: str | None = None,
     desired_state: str = "enabled",
 ) -> MutationResult:
-    """Create a new derived binding for contract-gate and concurrency tests."""
+    """Create a synthetic binding for lifecycle and concurrency tests.
+
+    TODO: Remove once typed task mutations and ingress acceptance provide the
+    same coverage without synthetic project/task identifiers.
+    """
 
     resolved_binding_id = binding_id or f"binding-{uuid.uuid4().hex[:12]}"
     scope_token = abs(hash(resolved_binding_id)) % (2**30)
@@ -220,7 +224,11 @@ def attempt_event_acceptance(
     acceptance_epoch: int,
     provider_event_identity_hmac: str = "identity-test",
 ) -> AcceptanceResult:
-    """Try to accept one provider event under the shared binding lock."""
+    """Try to accept one provider event under the shared binding lock.
+
+    TODO: Remove once signed ingress performs real acceptance with payload
+    retention, run creation, and dispatch operation creation.
+    """
 
     from sqlalchemy import select
 

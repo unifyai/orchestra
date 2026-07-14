@@ -332,7 +332,11 @@ class ProviderTriggerDAO:
         run_key: str | None = None,
         audience: str = "unity",
     ) -> ProviderEventDispatch:
-        """Insert or adopt one dispatch operation for a receipt."""
+        """Insert or adopt one dispatch operation for a receipt.
+
+        TODO: Require the real run_id and run_key from ingress acceptance;
+        remove synthetic defaults once the acceptance transaction creates runs.
+        """
 
         existing = self.session.execute(
             select(ProviderEventDispatch).where(

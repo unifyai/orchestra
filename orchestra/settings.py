@@ -383,7 +383,11 @@ class Settings(BaseSettings):
 
     @property
     def provider_trigger_callback_base_url(self) -> str | None:
-        """Return the public HTTPS callback base for provider trigger ingress."""
+        """Return the public HTTPS callback base for provider trigger ingress.
+
+        TODO: Require an explicit externally reachable callback base instead of
+        falling back to ORCHESTRA_PUBLIC_URL before activating subscriptions.
+        """
 
         configured = (self.orchestra_trigger_callback_base_url or "").strip()
         if configured:

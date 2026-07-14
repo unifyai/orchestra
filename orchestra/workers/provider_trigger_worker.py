@@ -34,7 +34,11 @@ def run_worker_cycle(
     *,
     lease_owner: str | None = None,
 ) -> dict[str, int]:
-    """Run one reconcile, generation, and health cycle."""
+    """Run one reconcile, generation, and health cycle.
+
+    TODO: Add dispatch claim/send/reclaim so persisted provider_event_dispatches
+    are delivered to Communication or Unity and downstream adoption converges.
+    """
 
     resolved_owner = lease_owner or f"trigger-worker-{uuid.uuid4().hex[:8]}"
     totals = {
