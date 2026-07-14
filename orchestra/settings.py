@@ -386,6 +386,24 @@ class Settings(BaseSettings):
     provider_trigger_ingress_rate_limit_per_minute: int = int(
         os.environ.get("PROVIDER_TRIGGER_INGRESS_RATE_LIMIT_PER_MINUTE", "120"),
     )
+    provider_trigger_dispatch_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_BATCH_SIZE", "25"),
+    )
+    provider_trigger_dispatch_status_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_STATUS_BATCH_SIZE", "50"),
+    )
+    provider_trigger_dispatch_lease_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_LEASE_SECONDS", "300"),
+    )
+    provider_trigger_dispatch_max_attempts: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_MAX_ATTEMPTS", "8"),
+    )
+    provider_trigger_dispatch_http_timeout_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_HTTP_TIMEOUT_SECONDS", "30"),
+    )
+    provider_trigger_dispatch_poll_interval_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_POLL_INTERVAL_SECONDS", "10"),
+    )
 
     @property
     def provider_trigger_callback_base_url(self) -> str | None:

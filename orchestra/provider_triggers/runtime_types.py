@@ -105,6 +105,28 @@ class DispatchProcessingState(StrEnum):
     failed = "failed"
 
 
+class DispatchErrorCode(StrEnum):
+    """Stable internal error codes for provider-event dispatch delivery."""
+
+    dispatch_rail_unconfigured = "dispatch_rail_unconfigured"
+    dispatch_request_expired = "dispatch_request_expired"
+    dispatch_validation_failed = "dispatch_validation_failed"
+    dispatch_inbox_mismatch = "dispatch_inbox_mismatch"
+    dispatch_transport_failed = "dispatch_transport_failed"
+    dispatch_downstream_rejected = "dispatch_downstream_rejected"
+    dispatch_run_terminal_failed = "dispatch_run_terminal_failed"
+    dispatch_max_attempts_exceeded = "dispatch_max_attempts_exceeded"
+
+
+class DownstreamAdoptionStatus(StrEnum):
+    """Public downstream adoption vocabulary mirrored on dispatch rows."""
+
+    adopted = "adopted"
+    started = "started"
+    terminal = "terminal"
+    published = "published"
+
+
 class BlobCommitState(StrEnum):
     """Commit lifecycle for one private provider-event blob."""
 
