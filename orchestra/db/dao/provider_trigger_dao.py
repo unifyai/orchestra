@@ -238,6 +238,45 @@ class ProviderTriggerDAO:
         self.session.flush()
         return generation
 
+    def get_generation(
+        self,
+        *,
+        generation_id: str,
+        for_update: bool = False,
+    ) -> EventTriggerSubscriptionGeneration | None:
+        """Return one subscription generation by id."""
+
+        query = select(EventTriggerSubscriptionGeneration).where(
+            EventTriggerSubscriptionGeneration.generation_id == generation_id,
+        )
+        if for_update:
+            query = query.with_for_update()
+        return self.session.execute(query).scalar_one_or_none()
+
+    def get_generation_by_ingress_key(
+        self,
+        *,
+        backend_id: str,
+        ingress_key: str,
+    ) -> tuple[EventTriggerSubscriptionGeneration, EventTriggerBinding] | None:
+        """Resolve one generation and its binding from the public ingress key."""
+
+        row = self.session.execute(
+            select(EventTriggerSubscriptionGeneration, EventTriggerBinding)
+            .join(
+                EventTriggerBinding,
+                EventTriggerBinding.binding_id
+                == EventTriggerSubscriptionGeneration.binding_id,
+            )
+            .where(
+                EventTriggerSubscriptionGeneration.ingress_key == ingress_key,
+                EventTriggerBinding.backend_id == backend_id,
+            ),
+        ).one_or_none()
+        if row is None:
+            return None
+        return row[0], row[1]
+
     def promote_generation(
         self,
         *,
@@ -282,6 +321,22 @@ class ProviderTriggerDAO:
         self.session.flush()
         return binding
 
+    def get_receipt_by_identity(
+        self,
+        *,
+        binding_id: str,
+        provider_event_identity_hmac: str,
+    ) -> ProviderEventReceipt | None:
+        """Return the durable receipt for one binding/event identity when present."""
+
+        return self.session.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.binding_id == binding_id,
+                ProviderEventReceipt.provider_event_identity_hmac
+                == provider_event_identity_hmac,
+            ),
+        ).scalar_one_or_none()
+
     def adopt_receipt(
         self,
         *,
@@ -290,17 +345,18 @@ class ProviderTriggerDAO:
         provider_event_identity_hmac: str,
         receipt_id: str | None = None,
         acceptance_authorization_json: dict[str, Any] | None = None,
+        processing_state: str = ReceiptProcessingState.accepted.value,
+        classification_reason: str = "matched",
+        stable_envelope_json: dict[str, Any] | None = None,
+        curated_projection_json: dict[str, Any] | None = None,
     ) -> ProviderEventReceipt:
         """Insert or adopt one receipt under the binding identity constraint."""
 
         resolved_receipt_id = receipt_id or f"receipt-{uuid.uuid4().hex[:12]}"
-        existing = self.session.execute(
-            select(ProviderEventReceipt).where(
-                ProviderEventReceipt.binding_id == binding.binding_id,
-                ProviderEventReceipt.provider_event_identity_hmac
-                == provider_event_identity_hmac,
-            ),
-        ).scalar_one_or_none()
+        existing = self.get_receipt_by_identity(
+            binding_id=binding.binding_id,
+            provider_event_identity_hmac=provider_event_identity_hmac,
+        )
         if existing is not None:
             return existing
 
@@ -312,14 +368,17 @@ class ProviderTriggerDAO:
             accepted_activation_revision=generation.desired_activation_revision,
             acceptance_epoch=generation.acceptance_epoch,
             schema_version=binding.schema_version,
-            processing_state=ReceiptProcessingState.accepted.value,
+            processing_state=processing_state,
             acceptance_authorization_json=acceptance_authorization_json or {},
-            classification_reason="matched",
+            classification_reason=classification_reason,
+            stable_envelope_json=stable_envelope_json,
+            curated_projection_json=curated_projection_json,
         )
         self.session.add(receipt)
         self.session.flush()
-        binding.last_accepted_event_at = datetime.now(timezone.utc)
-        self.session.flush()
+        if processing_state != ReceiptProcessingState.ignored.value:
+            binding.last_accepted_event_at = datetime.now(timezone.utc)
+            self.session.flush()
         return receipt
 
     def adopt_dispatch(
@@ -327,16 +386,17 @@ class ProviderTriggerDAO:
         *,
         receipt: ProviderEventReceipt,
         binding: EventTriggerBinding,
+        run_id: int,
+        run_key: str,
+        audience: str,
         operation_id: str | None = None,
-        run_id: int | None = None,
-        run_key: str | None = None,
-        audience: str = "unity",
     ) -> ProviderEventDispatch:
-        """Insert or adopt one dispatch operation for a receipt.
+        """Insert or adopt one dispatch operation for a receipt."""
 
-        TODO: Require the real run_id and run_key from ingress acceptance;
-        remove synthetic defaults once the acceptance transaction creates runs.
-        """
+        if run_id is None or not run_key:
+            raise ValueError("dispatch_requires_run_identity")
+        if not audience:
+            raise ValueError("dispatch_requires_audience")
 
         existing = self.session.execute(
             select(ProviderEventDispatch).where(
@@ -347,16 +407,14 @@ class ProviderTriggerDAO:
             return existing
 
         resolved_operation_id = operation_id or f"op-{uuid.uuid4().hex[:12]}"
-        resolved_run_id = run_id if run_id is not None else 0
-        resolved_run_key = run_key or f"run-{resolved_operation_id}"
         dispatch = ProviderEventDispatch(
             operation_id=resolved_operation_id,
             receipt_id=receipt.receipt_id,
             binding_id=binding.binding_id,
             assistant_id=binding.assistant_id,
             task_id=binding.task_id,
-            run_id=resolved_run_id,
-            run_key=resolved_run_key,
+            run_id=run_id,
+            run_key=run_key,
             dispatch_mode=binding.execution_mode,
             accepted_activation_revision=receipt.accepted_activation_revision,
             event_context_ref=receipt.event_context_ref,
