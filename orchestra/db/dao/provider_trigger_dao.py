@@ -30,6 +30,7 @@ from orchestra.provider_triggers.runtime_types import (
     BlobCommitState,
     BlobDeletionState,
     DesiredTriggerState,
+    DispatchErrorCode,
     DispatchProcessingState,
     GenerationLifecycle,
     GenerationOperationState,
@@ -40,6 +41,8 @@ from orchestra.provider_triggers.trigger_registry import curated_provider_event_
 from orchestra.settings import settings
 
 STALE_RECONCILE_PROCESSING = timedelta(minutes=5)
+BASE_DISPATCH_RETRY_DELAY_MINUTES = 5
+MAX_DISPATCH_RETRY_DELAY_MINUTES = 60
 
 
 class ProviderTriggerDAO:
@@ -429,6 +432,353 @@ class ProviderTriggerDAO:
         receipt.run_id = dispatch.run_id
         receipt.dispatch_mode = dispatch.dispatch_mode
         receipt.processing_state = ReceiptProcessingState.dispatch_pending.value
+        self.session.flush()
+        return dispatch
+
+    def get_dispatch_by_operation_id(
+        self,
+        *,
+        operation_id: str,
+        for_update: bool = False,
+    ) -> ProviderEventDispatch | None:
+        """Return one dispatch operation by its immutable operation id."""
+
+        query = select(ProviderEventDispatch).where(
+            ProviderEventDispatch.operation_id == operation_id,
+        )
+        if for_update:
+            query = query.with_for_update()
+        return self.session.execute(query).scalar_one_or_none()
+
+    def get_receipt_by_id(
+        self,
+        *,
+        receipt_id: str,
+    ) -> ProviderEventReceipt | None:
+        """Return one durable receipt by receipt id."""
+
+        return self.session.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.receipt_id == receipt_id,
+            ),
+        ).scalar_one_or_none()
+
+    def _claimable_dispatch_filter(self, now: datetime):
+        """Dispatches due for delivery with an available or expired lease."""
+
+        state_due = ProviderEventDispatch.processing_state.in_(
+            [
+                DispatchProcessingState.pending.value,
+                DispatchProcessingState.retryable.value,
+                DispatchProcessingState.claimed.value,
+            ],
+        )
+        retry_due = or_(
+            ProviderEventDispatch.next_retry_at.is_(None),
+            ProviderEventDispatch.next_retry_at <= now,
+        )
+        lease_available = or_(
+            ProviderEventDispatch.lease_expires_at.is_(None),
+            ProviderEventDispatch.lease_expires_at <= now,
+        )
+        return and_(state_due, retry_due, lease_available)
+
+    def claim_dispatches_for_delivery(
+        self,
+        *,
+        lease_owner: str,
+        limit: int,
+        lease_ttl: timedelta,
+    ) -> list[ProviderEventDispatch]:
+        """Claim a batch of dispatch operations for outbound delivery."""
+
+        now = datetime.now(timezone.utc)
+        claimable = (
+            select(ProviderEventDispatch)
+            .where(self._claimable_dispatch_filter(now))
+            .order_by(ProviderEventDispatch.next_retry_at.asc().nullsfirst())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        dispatches = list(self.session.execute(claimable).scalars())
+        lease_expires_at = now + lease_ttl
+        for dispatch in dispatches:
+            dispatch.processing_state = DispatchProcessingState.claimed.value
+            dispatch.lease_owner = lease_owner
+            dispatch.lease_expires_at = lease_expires_at
+            dispatch.attempt_count += 1
+        if dispatches:
+            self.session.flush()
+        return dispatches
+
+    def _convergeable_dispatch_filter(self, now: datetime):
+        """Dispatches due for downstream status convergence polling."""
+
+        state_due = ProviderEventDispatch.processing_state.in_(
+            [
+                DispatchProcessingState.delivered.value,
+                DispatchProcessingState.started.value,
+            ],
+        )
+        retry_due = or_(
+            ProviderEventDispatch.next_retry_at.is_(None),
+            ProviderEventDispatch.next_retry_at <= now,
+        )
+        return and_(state_due, retry_due)
+
+    def list_dispatches_for_status_convergence(
+        self,
+        *,
+        limit: int,
+    ) -> list[ProviderEventDispatch]:
+        """Return dispatches due for downstream status convergence."""
+
+        now = datetime.now(timezone.utc)
+        rows = self.session.execute(
+            select(ProviderEventDispatch)
+            .where(self._convergeable_dispatch_filter(now))
+            .order_by(ProviderEventDispatch.next_retry_at.asc().nullsfirst())
+            .limit(limit),
+        ).scalars()
+        return list(rows)
+
+    def list_dispatch_backlog(
+        self,
+        *,
+        limit: int,
+    ) -> list[ProviderEventDispatch]:
+        """Return the oldest non-terminal dispatch operations."""
+
+        terminal_states = {
+            DispatchProcessingState.succeeded.value,
+            DispatchProcessingState.failed.value,
+        }
+        rows = self.session.execute(
+            select(ProviderEventDispatch)
+            .where(
+                ProviderEventDispatch.processing_state.notin_(terminal_states),
+            )
+            .order_by(ProviderEventDispatch.created_at.asc())
+            .limit(limit),
+        ).scalars()
+        return list(rows)
+
+    def release_dispatch_lease(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+    ) -> None:
+        """Clear the delivery lease on one dispatch operation."""
+
+        dispatch.lease_owner = None
+        dispatch.lease_expires_at = None
+        self.session.flush()
+
+    def _dispatch_retry_at(self, attempt_count: int) -> datetime:
+        delay_minutes = min(
+            BASE_DISPATCH_RETRY_DELAY_MINUTES * (2 ** max(0, attempt_count - 1)),
+            MAX_DISPATCH_RETRY_DELAY_MINUTES,
+        )
+        return datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+
+    def _sync_receipt_processing_state(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        receipt_state: str,
+    ) -> None:
+        receipt = self.get_receipt_by_id(receipt_id=dispatch.receipt_id)
+        if receipt is None:
+            return
+        receipt.processing_state = receipt_state
+        now = datetime.now(timezone.utc)
+        receipt.last_attempt_at = now
+        if receipt.first_attempt_at is None:
+            receipt.first_attempt_at = now
+        self.session.flush()
+
+    def record_downstream_adoption(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+    ) -> ProviderEventDispatch:
+        """Persist the latest downstream adoption observation."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.downstream_adoption_status = adoption_status
+        dispatch.downstream_adoption_ref = adoption_ref
+        dispatch.downstream_status_at = now
+        self.session.flush()
+        return dispatch
+
+    def mark_dispatch_delivered(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+        poll_after_seconds: int | None = None,
+    ) -> ProviderEventDispatch:
+        """Record successful handoff to the execution rail."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.delivered.value
+        dispatch.delivered_at = now
+        dispatch.terminal_error_code = None
+        poll_seconds = poll_after_seconds or (
+            settings.provider_trigger_dispatch_poll_interval_seconds
+        )
+        dispatch.next_retry_at = now + timedelta(seconds=poll_seconds)
+        self.record_downstream_adoption(
+            dispatch=dispatch,
+            adoption_status=adoption_status,
+            adoption_ref=adoption_ref,
+        )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.dispatched.value,
+        )
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_started(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+        poll_after_seconds: int | None = None,
+    ) -> ProviderEventDispatch:
+        """Record that downstream execution has started."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.started.value
+        if dispatch.started_at is None:
+            dispatch.started_at = now
+        dispatch.terminal_error_code = None
+        poll_seconds = poll_after_seconds or (
+            settings.provider_trigger_dispatch_poll_interval_seconds
+        )
+        dispatch.next_retry_at = now + timedelta(seconds=poll_seconds)
+        self.record_downstream_adoption(
+            dispatch=dispatch,
+            adoption_status=adoption_status,
+            adoption_ref=adoption_ref,
+        )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.started.value,
+        )
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_succeeded(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+    ) -> ProviderEventDispatch:
+        """Record terminal success for one dispatch operation."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.succeeded.value
+        dispatch.terminal_at = now
+        dispatch.next_retry_at = None
+        self.record_downstream_adoption(
+            dispatch=dispatch,
+            adoption_status=adoption_status,
+            adoption_ref=adoption_ref,
+        )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.succeeded.value,
+        )
+        receipt = self.get_receipt_by_id(receipt_id=dispatch.receipt_id)
+        if receipt is not None:
+            receipt.terminal_at = now
+            receipt.terminal_reason = adoption_status
+            self.session.flush()
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_failed(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        error_code: str,
+        adoption_status: str | None = None,
+        adoption_ref: str | None = None,
+    ) -> ProviderEventDispatch:
+        """Record terminal failure for one dispatch operation."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.failed.value
+        dispatch.terminal_error_code = error_code
+        dispatch.terminal_at = now
+        dispatch.next_retry_at = None
+        if adoption_status is not None:
+            self.record_downstream_adoption(
+                dispatch=dispatch,
+                adoption_status=adoption_status,
+                adoption_ref=adoption_ref,
+            )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.failed.value,
+        )
+        receipt = self.get_receipt_by_id(receipt_id=dispatch.receipt_id)
+        if receipt is not None:
+            receipt.terminal_at = now
+            receipt.terminal_reason = error_code
+            self.session.flush()
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_retryable(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        error_code: str,
+    ) -> ProviderEventDispatch:
+        """Schedule a retryable dispatch delivery failure."""
+
+        dispatch.processing_state = DispatchProcessingState.retryable.value
+        dispatch.terminal_error_code = error_code
+        if dispatch.attempt_count >= settings.provider_trigger_dispatch_max_attempts:
+            return self.mark_dispatch_failed(
+                dispatch=dispatch,
+                error_code=DispatchErrorCode.dispatch_max_attempts_exceeded.value,
+            )
+        dispatch.next_retry_at = self._dispatch_retry_at(dispatch.attempt_count)
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.retryable.value,
+        )
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def requeue_dispatch_for_repair(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+    ) -> ProviderEventDispatch:
+        """Requeue one non-terminal dispatch operation for worker delivery."""
+
+        if dispatch.processing_state in {
+            DispatchProcessingState.succeeded.value,
+            DispatchProcessingState.failed.value,
+            DispatchProcessingState.delivered.value,
+            DispatchProcessingState.started.value,
+        }:
+            raise ValueError("dispatch_not_repairable")
+        dispatch.processing_state = DispatchProcessingState.pending.value
+        dispatch.next_retry_at = datetime.now(timezone.utc)
+        dispatch.lease_owner = None
+        dispatch.lease_expires_at = None
+        dispatch.terminal_error_code = None
         self.session.flush()
         return dispatch
 
