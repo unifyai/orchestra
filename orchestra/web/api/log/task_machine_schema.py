@@ -323,6 +323,9 @@ class ProviderEventContextRequest(BaseModel):
     audience: str = Field(
         description="Credential audience; must be the event-context read audience.",
     )
+    issued_at: datetime = Field(
+        description="UTC instant when the runtime issued this context fetch.",
+    )
 
 
 class ProviderEventContextResponse(BaseModel):
@@ -341,4 +344,8 @@ class ProviderEventContextResponse(BaseModel):
     )
     source_body: Any = Field(
         description="Decrypted source payload, parsed as JSON when possible.",
+    )
+    expires_at: datetime | None = Field(
+        default=None,
+        description="UTC instant when this context becomes unreadable.",
     )

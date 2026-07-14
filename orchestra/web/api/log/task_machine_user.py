@@ -6,22 +6,21 @@ shapes, but the caller must own the ``assistant_id`` referenced in the
 payload (system/admin keys bypass the check via ``require_owned_assistant``).
 """
 
-import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.provider_triggers.dispatch_request import EVENT_CONTEXT_AUDIENCE
-from orchestra.provider_triggers.private_event_storage import (
-    EventBlobAuthenticationError,
+from orchestra.provider_triggers.event_context_errors import (
+    EventContextAccessError,
+    EventContextErrorReason,
 )
-from orchestra.services.provider_event_blob_service import ProviderEventBlobService
-from orchestra.services.task_machine_state_service import (
-    TASK_MACHINE_PROJECT_NAME,
-    get_task_run_by_run_id,
+from orchestra.services.provider_event_context_service import (
+    ProviderEventContextService,
+    ResolvedEventContext,
 )
+from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 from orchestra.web.api.log.task_machine_admin import (
     _get_internal_project_or_404,
     create_or_adopt_task_outbound_operation_core,
@@ -49,8 +48,23 @@ from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 
 router = APIRouter()
 
-_EVENT_CONTEXT_AUDIENCE_REJECTED = "invalid_event_context_audience"
-_EVENT_CONTEXT_UNAVAILABLE = "event_context_unavailable"
+
+def _event_context_response(
+    bundle: ResolvedEventContext,
+) -> ProviderEventContextResponse:
+    return ProviderEventContextResponse(
+        receipt_id=bundle.receipt_id,
+        run_id=bundle.run_id,
+        event_context_ref=bundle.event_context_ref,
+        envelope=bundle.envelope,
+        curated_projection=bundle.curated_projection,
+        source_body=bundle.source_body,
+        expires_at=bundle.expires_at,
+    )
+
+
+def _raise_event_context_http(exc: EventContextAccessError) -> None:
+    raise HTTPException(status_code=404, detail=exc.reason.value) from exc
 
 
 def _require_owned_task_assistant(
@@ -192,11 +206,37 @@ def get_provider_event_context(
     if request.audience != EVENT_CONTEXT_AUDIENCE:
         raise HTTPException(
             status_code=400,
-            detail=_EVENT_CONTEXT_AUDIENCE_REJECTED,
+            detail=EventContextErrorReason.invalid_audience.value,
         )
     _require_owned_task_assistant(request_fastapi, request.assistant_id, session)
     actor = getattr(request_fastapi.state, "user_id", None) or "unity"
-    return _read_provider_event_context(session, request, actor=actor)
+    project = _get_internal_project_or_404(
+        session,
+        project_name=TASK_MACHINE_PROJECT_NAME,
+        assistant_id=request.assistant_id,
+    )
+    try:
+        assistant_id = int(str(request.assistant_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=EventContextErrorReason.unavailable.value,
+        ) from exc
+    try:
+        bundle = ProviderEventContextService(session).read_for_service(
+            project_id=project.id,
+            assistant_id=assistant_id,
+            task_id=request.task_id,
+            run_id=request.run_id,
+            receipt_id=request.receipt_id,
+            event_context_ref=request.event_context_ref,
+            audience=request.audience,
+            issued_at=request.issued_at,
+            actor=actor,
+        )
+    except EventContextAccessError as exc:
+        _raise_event_context_http(exc)
+    return _event_context_response(bundle)
 
 
 @router.post(
@@ -231,85 +271,60 @@ def patch_task_outbound_operation(
     return patch_task_outbound_operation_core(session, request)
 
 
-def _read_provider_event_context(
+def read_owned_task_event_context(
     session,
-    request: ProviderEventContextRequest,
     *,
+    project_id: int,
+    assistant_id: int,
+    task_id: int,
+    run_id: int,
     actor: str,
+    export: bool = False,
 ) -> ProviderEventContextResponse:
-    """Resolve, authorize, and decrypt one provider-event context bundle.
+    """Return one owned provider-event context bundle."""
 
-    The audience is validated by the caller. Every failure below collapses to
-    the same 404 so ownership, missing rows, receipt drift, and storage errors
-    are indistinguishable to the client.
-    """
-
+    service = ProviderEventContextService(session)
     try:
-        assistant_id = int(str(request.assistant_id))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=_EVENT_CONTEXT_UNAVAILABLE,
-        ) from exc
+        if export:
+            bundle = service.export_for_user(
+                project_id=project_id,
+                assistant_id=assistant_id,
+                task_id=task_id,
+                run_id=run_id,
+                actor=actor,
+            )
+        else:
+            bundle = service.read_for_user(
+                project_id=project_id,
+                assistant_id=assistant_id,
+                task_id=task_id,
+                run_id=run_id,
+                actor=actor,
+            )
+    except EventContextAccessError as exc:
+        _raise_event_context_http(exc)
+    return _event_context_response(bundle)
 
-    project = _get_internal_project_or_404(
-        session,
-        project_name=TASK_MACHINE_PROJECT_NAME,
-        assistant_id=request.assistant_id,
-    )
-    run = get_task_run_by_run_id(session, project.id, run_id=request.run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=_EVENT_CONTEXT_UNAVAILABLE)
-    run_data = dict(run.data or {})
-    if str(run_data.get("task_id")) != str(request.task_id):
-        raise HTTPException(status_code=404, detail=_EVENT_CONTEXT_UNAVAILABLE)
-    run_assistant_id = run_data.get("assistant_id")
-    if run_assistant_id is not None and str(run_assistant_id) != str(
-        request.assistant_id,
-    ):
-        raise HTTPException(status_code=404, detail=_EVENT_CONTEXT_UNAVAILABLE)
 
-    _, receipt, _ = ProviderTriggerDAO(session).get_event_blob_for_authorized_read(
-        assistant_id=assistant_id,
-        task_id=request.task_id,
-        receipt_id=request.receipt_id,
-    )
-    if receipt is None:
-        raise HTTPException(status_code=404, detail=_EVENT_CONTEXT_UNAVAILABLE)
-    if (
-        not receipt.event_context_ref
-        or receipt.event_context_ref != request.event_context_ref
-    ):
-        raise HTTPException(status_code=404, detail=_EVENT_CONTEXT_UNAVAILABLE)
+def delete_owned_task_event_context(
+    session,
+    *,
+    project_id: int,
+    assistant_id: int,
+    task_id: int,
+    run_id: int,
+    actor: str,
+) -> None:
+    """Delete one owned provider-event context bundle."""
 
+    service = ProviderEventContextService(session)
     try:
-        source_bytes = ProviderEventBlobService(session).read_authorized(
+        service.delete_for_user(
+            project_id=project_id,
             assistant_id=assistant_id,
-            task_id=request.task_id,
-            receipt_id=request.receipt_id,
+            task_id=task_id,
+            run_id=run_id,
             actor=actor,
-            audience=request.audience,
         )
-    except (PermissionError, EventBlobAuthenticationError) as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=_EVENT_CONTEXT_UNAVAILABLE,
-        ) from exc
-
-    return ProviderEventContextResponse(
-        receipt_id=receipt.receipt_id,
-        run_id=request.run_id,
-        event_context_ref=receipt.event_context_ref,
-        envelope=dict(receipt.stable_envelope_json or {}),
-        curated_projection=dict(receipt.curated_projection_json or {}),
-        source_body=_parse_source_body(source_bytes),
-    )
-
-
-def _parse_source_body(raw: bytes):
-    """Return the decrypted body as parsed JSON, falling back to text."""
-
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return raw.decode("utf-8", errors="replace")
+    except EventContextAccessError as exc:
+        _raise_event_context_http(exc)
