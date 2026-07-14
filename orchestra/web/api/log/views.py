@@ -2644,6 +2644,11 @@ def _update_logs(
             tasks_context_name=ctx_obj_cache.name,
         )
 
+    # Commit before the response leaves the process. Request-scoped
+    # get_db_session only commits after the body is sent, so a client that
+    # immediately GETs the updated rows can miss an uncommitted write.
+    session.commit()
+
     # Return response with modified_keys for derived log recomputation
     return {
         "info": "Logs updated successfully!",
@@ -3273,6 +3278,11 @@ def _delete_logs(
             task_ids=pre_sync_task_ids,
             tasks_context_name=context_name,
         )
+
+    # Commit before the response leaves the process. Request-scoped
+    # get_db_session only commits after the body is sent, so a client that
+    # immediately GETs after delete can still see uncommitted rows.
+    session.commit()
 
     return {"info": "Logs and fields deleted successfully!"}
 
