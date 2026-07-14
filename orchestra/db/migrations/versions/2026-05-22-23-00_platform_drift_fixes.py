@@ -104,18 +104,19 @@ _RENAMES: tuple[tuple[str, str, str], ...] = (
 
 
 def _rename_if_present(table: str, old: str, new: str) -> None:
-    """Rename a constraint only when the legacy name still exists.
+    """Rename a constraint only when the table and legacy name still exist.
 
     `user` is a reserved keyword so the table reference must be quoted.
+    Use ``to_regclass`` so a missing table is a no-op (``::regclass`` raises).
     """
     quoted = f'"{table}"' if table == "user" else table
     op.execute(f"""
         DO $$
         BEGIN
-            IF EXISTS (
+            IF to_regclass('public.{table}') IS NOT NULL AND EXISTS (
                 SELECT 1 FROM pg_constraint
                 WHERE conname = '{old}'
-                  AND conrelid = 'public.{table}'::regclass
+                  AND conrelid = to_regclass('public.{table}')
             ) THEN
                 ALTER TABLE public.{quoted}
                     RENAME CONSTRAINT {old} TO {new};
