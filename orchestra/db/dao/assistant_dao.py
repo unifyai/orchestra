@@ -409,8 +409,6 @@ class AssistantDAO:
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
         agent_id: Optional[int] = None,
-        include_demo: bool = False,
-        demo_only: bool = False,
     ) -> List[Assistant]:
         """
         List assistants accessible to a user based on API key context.
@@ -425,8 +423,6 @@ class AssistantDAO:
 
         :param user_id: User ID.
         :param organization_id: Organization ID from API key context (None = personal).
-        :param include_demo: If True, include demo assistants in results.
-        :param demo_only: If True, only return demo assistants.
         :return: List of assistants.
         """
         if organization_id is not None:
@@ -441,12 +437,6 @@ class AssistantDAO:
                 Assistant.user_id == user_id,
                 Assistant.organization_id.is_(None),
             )
-
-        # Demo filtering
-        if demo_only:
-            stmt = stmt.where(Assistant.demo_id.isnot(None))
-        elif not include_demo:
-            stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if (
             phone is not None
@@ -492,8 +482,6 @@ class AssistantDAO:
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
         agent_id: Optional[int] = None,
-        include_demo: bool = False,
-        demo_only: bool = False,
     ) -> List[Assistant]:
         """
         List ALL assistants in an organization (for list_all_org=True).
@@ -508,8 +496,6 @@ class AssistantDAO:
         :param organization_id: Organization ID.
         :param requesting_user_id: Optional caller user_id for coordinator
             visibility filtering.
-        :param include_demo: If True, include demo assistants in results.
-        :param demo_only: If True, only return demo assistants.
         :return: List of all assistants in the organization.
         """
         stmt = select(Assistant).where(
@@ -522,12 +508,6 @@ class AssistantDAO:
                     Assistant.user_id == requesting_user_id,
                 ),
             )
-
-        # Demo filtering
-        if demo_only:
-            stmt = stmt.where(Assistant.demo_id.isnot(None))
-        elif not include_demo:
-            stmt = stmt.where(Assistant.demo_id.is_(None))
 
         if (
             phone is not None
@@ -1097,7 +1077,6 @@ class AssistantDAO:
         self,
         followup_cutoff: datetime,
         limit: Optional[int] = None,
-        include_demo: bool = False,
         include_local: bool = False,
     ) -> List[Assistant]:
         """Return personal Coordinators whose owner is due a follow-up.
@@ -1129,8 +1108,6 @@ class AssistantDAO:
         :param followup_cutoff: Activity older than this triggers a
             follow-up.
         :param limit: Optional cap on the returned batch.
-        :param include_demo: Include demo assistants in the activity
-            aggregate and as Coordinators (default: False).
         :param include_local: Include ``is_local=True`` assistants
             (default: False).
         :return: Personal Coordinator rows to follow up with.
@@ -1139,8 +1116,6 @@ class AssistantDAO:
             Assistant.user_id.label("user_id"),
             func.max(Assistant.last_correspondence_at).label("last_activity"),
         ).where(Assistant.user_id.isnot(None))
-        if not include_demo:
-            activity_query = activity_query.where(Assistant.demo_id.is_(None))
         if not include_local:
             activity_query = activity_query.where(Assistant.is_local.is_(False))
         activity_subq = activity_query.group_by(Assistant.user_id).subquery()
@@ -1163,8 +1138,6 @@ class AssistantDAO:
                 ),
             )
         )
-        if not include_demo:
-            stmt = stmt.where(Assistant.demo_id.is_(None))
         if not include_local:
             stmt = stmt.where(Assistant.is_local.is_(False))
         stmt = stmt.order_by(activity_subq.c.last_activity.asc())

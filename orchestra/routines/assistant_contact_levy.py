@@ -266,7 +266,6 @@ def _levy_in_session(
             .filter(
                 AssistantContact.status.in_(["active", "grace_period"]),
                 AssistantContact.provisioned_by == "platform",
-                Assistant.demo_id.is_(None),  # exclude demo assistants
                 Assistant.is_coordinator.is_(False),  # exclude Twin/Coordinator
                 or_(
                     AssistantContact.last_billed_month.is_(None),

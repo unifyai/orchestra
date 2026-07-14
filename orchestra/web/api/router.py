@@ -22,7 +22,6 @@ from orchestra.web.api import (  # noqa: WPS235
     users,
 )
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
-from orchestra.web.api.assistant import demo_router as assistant_demo_router
 from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.context.views import admin_router as context_admin_router
 from orchestra.web.api.dashboard.views import admin_router as dashboard_admin_router
@@ -244,13 +243,6 @@ api_router.include_router(
 
 api_router.include_router(
     assistant_router,
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    assistant_demo_router,
-    prefix="/demo",
-    tags=["Demo Assistants"],
-    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

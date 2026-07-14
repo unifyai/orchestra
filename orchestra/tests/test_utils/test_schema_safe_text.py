@@ -16,11 +16,7 @@ from orchestra.web.api.admin.schema import (
     BillingPlanTemplateCreate,
     PlanGroupCreateRequest,
 )
-from orchestra.web.api.assistant.schema import (
-    AssistantUpdate,
-    DemoAssistantCreate,
-    VoiceCreate,
-)
+from orchestra.web.api.assistant.schema import AssistantUpdate, VoiceCreate
 from orchestra.web.api.dashboard.schema import DashboardActionRecord
 from orchestra.web.api.interface.schema import (
     UpdateInterfaceRequest,
@@ -40,16 +36,6 @@ SCHEMA_CASES = [
     ("surname", lambda: AssistantUpdate(surname=PAYLOAD)),
     ("about", lambda: AssistantUpdate(about=PAYLOAD)),
     ("job_title", lambda: AssistantUpdate(job_title=PAYLOAD)),
-    (
-        "label",
-        lambda: DemoAssistantCreate(
-            source_assistant_id=1,
-            label=PAYLOAD,
-            first_name="Lucy",
-            surname="Demo",
-            demoer_phone="+14155559999",
-        ),
-    ),
     (
         "name",
         lambda: VoiceCreate(

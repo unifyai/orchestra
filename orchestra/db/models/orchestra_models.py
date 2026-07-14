@@ -1836,45 +1836,6 @@ class FavoriteProject(Base):
     )
 
 
-class DemoAssistantMeta(Base):
-    """Model class for demo assistant metadata.
-
-    Stores metadata about demo assistants created by Unify employees
-    for demonstrating the product to prospects. Each demo assistant
-    has a corresponding entry in this table linked via demo_id.
-    """
-
-    __tablename__ = "demo_assistant_meta"
-
-    id = Column(Integer, primary_key=True)
-    source_assistant_id = Column(
-        Integer,
-        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    demoer_user_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    label = Column(String, nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-
-    # Optional prospect details (for pre-populating boss contact in Unity)
-    prospect_first_name = Column(String, nullable=True)
-    prospect_surname = Column(String, nullable=True)
-    prospect_email = Column(String, nullable=True)
-    prospect_phone = Column(String, nullable=True)
-
-    # Relationships
-    demoer = relationship(
-        "User",
-        foreign_keys=[demoer_user_id],
-        backref="created_demos",
-    )
-
-
 class UserDesktop(Base):
     """Registered user desktop machines.
 
@@ -2093,20 +2054,6 @@ class Assistant(Base):
         server_default="false",
     )
 
-    # Demo assistant metadata FK (NULL for regular assistants)
-    demo_id = Column(
-        Integer,
-        ForeignKey("demo_assistant_meta.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-
-    # Relationship to demo metadata
-    demo_meta = relationship(
-        "DemoAssistantMeta",
-        backref=backref("assistant", uselist=False),
-        foreign_keys=[demo_id],
-    )
     console_config = relationship(
         "AssistantConsoleConfig",
         uselist=False,

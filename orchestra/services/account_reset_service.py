@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.onboarding_status_dao import OnboardingStatusDAO
-from orchestra.db.models.orchestra_models import DemoAssistantMeta, User
+from orchestra.db.models.orchestra_models import User
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_spec_from_assistant,
@@ -69,7 +69,6 @@ async def reset_personal_account(
     personal_assistants = dao.list_assistants_for_user(
         user_id,
         organization_id=None,
-        include_demo=True,
     )
     hired = [a for a in personal_assistants if not a.is_coordinator]
     coordinators = [a for a in personal_assistants if a.is_coordinator]
@@ -108,10 +107,6 @@ async def reset_personal_account(
     for assistant in personal_assistants:
         assistant_id = int(assistant.agent_id)
         result.deleted_assistant_ids.append(assistant_id)
-        if assistant.demo_id:
-            demo_meta = session.get(DemoAssistantMeta, assistant.demo_id)
-            if demo_meta is not None:
-                session.delete(demo_meta)
         session.delete(assistant)
         purge_assistant_owner(
             session,
