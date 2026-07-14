@@ -249,6 +249,10 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
     assert run["provider_event_matched_filters"]
     assert run["provider_event_identity_hmac"] == receipt.provider_event_identity_hmac
     assert run["source_ref"] == payload["id"]
+    assert receipt.event_context_expires_at is not None
+    assert (
+        run["event_context_expires_at"] == receipt.event_context_expires_at.isoformat()
+    )
 
 
 @pytest.mark.anyio
@@ -295,6 +299,7 @@ async def test_signed_composio_webhook_with_unmatched_filters_records_ignored_re
     assert receipts[0].stable_envelope_json is None
     assert receipts[0].curated_projection_json is None
     assert receipts[0].event_context_ref is None
+    assert receipts[0].event_context_expires_at is None
 
     dispatches = (
         dbsession.execute(
