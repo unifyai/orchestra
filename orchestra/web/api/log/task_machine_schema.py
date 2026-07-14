@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 
@@ -299,4 +299,46 @@ class TaskOutboundOperationMutationResponse(BaseModel):
     created: Optional[bool] = Field(
         default=None,
         description="Whether the mutation created a new outbound operation row.",
+    )
+
+
+class ProviderEventContextRequest(BaseModel):
+    """Ownership-scoped fetch of one provider-event's decrypted context.
+
+    The assistant runtime presents the run/receipt identifiers it received in
+    the dispatch envelope; the handler fails closed unless the caller owns the
+    assistant, the run resolves to the referenced task, and the receipt still
+    exposes the requested event-context reference.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    assistant_id: str = Field(description="Assistant identifier that owns the run.")
+    task_id: int = Field(description="Logical task identifier for the run.")
+    run_id: int = Field(description="Stable run identifier (the run's log_event id).")
+    receipt_id: str = Field(description="Durable provider-event receipt identifier.")
+    event_context_ref: str = Field(
+        description="Opaque reference to the receipt's committed event context.",
+    )
+    audience: str = Field(
+        description="Credential audience; must be the event-context read audience.",
+    )
+
+
+class ProviderEventContextResponse(BaseModel):
+    """Decrypted provider-event context bundle for one accepted run."""
+
+    receipt_id: str = Field(description="Durable provider-event receipt identifier.")
+    run_id: int = Field(description="Run identifier echoed from the request.")
+    event_context_ref: str = Field(
+        description="Opaque reference to the receipt's committed event context.",
+    )
+    envelope: Dict[str, Any] = Field(
+        description="Stable provider-event envelope recorded on the receipt.",
+    )
+    curated_projection: Dict[str, Any] = Field(
+        description="Curated provider-event projection recorded on the receipt.",
+    )
+    source_body: Any = Field(
+        description="Decrypted source payload, parsed as JSON when possible.",
     )

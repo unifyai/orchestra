@@ -1308,6 +1308,35 @@ def get_task_run(
     )
 
 
+def get_task_run_by_run_id(
+    session: Session,
+    project_id: int,
+    *,
+    run_id: int,
+) -> LogEvent | None:
+    """Return one task run row by its stable ``run_id`` (the run's log_event id).
+
+    Runs live under an assistant-scoped ``.../Tasks/Runs`` context and their
+    ``run_id`` equals the backing ``LogEvent.id``. Callers pass the run id
+    received out-of-band (for example on a provider-event dispatch) and get the
+    row back only when it is genuinely a task-run row in the given project.
+    """
+
+    return (
+        session.query(LogEvent)
+        .join(LogEventContext, log_event_context_join())
+        .join(Context, Context.id == LogEventContext.context_id)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
+            Context.project_id == project_id,
+            LogEvent.id == run_id,
+            Context.name.like(f"%{TASK_RUNS_CONTEXT_NAME}"),
+        )
+        .first()
+    )
+
+
 def get_latest_task_run_for_task(
     session: Session,
     project_id: int,
