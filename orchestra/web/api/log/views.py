@@ -501,6 +501,11 @@ def create_logs(
                 tasks_context_name=context_obj.name,
             )
 
+        # Commit before the response leaves the process. Request-scoped
+        # get_db_session only commits after the body is sent, so a client that
+        # immediately GETs the new ids can miss an uncommitted create.
+        session.commit()
+
         return {
             "info": "Logs created successfully!",
             "log_event_ids": result["log_event_ids"],
