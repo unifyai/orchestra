@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.provider_trigger_models import (
@@ -18,6 +18,7 @@ from orchestra.db.models.provider_trigger_models import (
     ProviderEventBlobDeletion,
     ProviderEventDispatch,
     ProviderEventReceipt,
+    ProviderTriggerWorkerHeartbeat,
 )
 from orchestra.provider_triggers.activation_revision import (
     compute_provider_event_activation_revision,
@@ -31,11 +32,14 @@ from orchestra.provider_triggers.runtime_types import (
     DesiredTriggerState,
     DispatchProcessingState,
     GenerationLifecycle,
+    GenerationOperationState,
     ReceiptProcessingState,
 )
 from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
 from orchestra.provider_triggers.trigger_registry import curated_provider_event_filters
 from orchestra.settings import settings
+
+STALE_RECONCILE_PROCESSING = timedelta(minutes=5)
 
 
 class ProviderTriggerDAO:
@@ -97,8 +101,10 @@ class ProviderTriggerDAO:
             entrypoint=entrypoint,
         )
         runtime_health = BindingRuntimeHealth.absent
+        reconcile_next_retry_at = None
         if task_enabled and desired_state is DesiredTriggerState.enabled:
             runtime_health = BindingRuntimeHealth.provisioning
+            reconcile_next_retry_at = datetime.now(timezone.utc)
         binding = EventTriggerBinding(
             binding_id=binding_id,
             project_id=project_id,
@@ -124,6 +130,7 @@ class ProviderTriggerDAO:
             entrypoint=entrypoint,
             runtime_health=runtime_health.value,
             local_acceptance_open=False,
+            reconcile_next_retry_at=reconcile_next_retry_at,
         )
         self.session.add(binding)
         self.session.flush()
@@ -190,6 +197,7 @@ class ProviderTriggerDAO:
         binding.runtime_health = BindingRuntimeHealth.removing.value
         binding.coverage_ended_at = datetime.now(timezone.utc)
         binding.tombstoned_at = datetime.now(timezone.utc)
+        binding.reconcile_next_retry_at = datetime.now(timezone.utc)
         self.session.flush()
         return binding
 
@@ -223,6 +231,8 @@ class ProviderTriggerDAO:
             provider_create_idempotency_key=f"create-{resolved_generation_id}",
             ingress_key=secrets.token_urlsafe(24),
             lifecycle_state=GenerationLifecycle.provisioning.value,
+            create_operation_state=GenerationOperationState.pending.value,
+            next_retry_at=datetime.now(timezone.utc),
         )
         self.session.add(generation)
         self.session.flush()
@@ -551,3 +561,437 @@ class ProviderTriggerDAO:
         self.session.add(deletion)
         self.session.flush()
         return deletion
+
+    def _claimable_binding_filter(self, now: datetime):
+        """Bindings due for reconcile or with an expired reconcile lease."""
+
+        due = and_(
+            EventTriggerBinding.reconcile_next_retry_at.isnot(None),
+            EventTriggerBinding.reconcile_next_retry_at <= now,
+        )
+        lease_available = or_(
+            EventTriggerBinding.reconcile_lease_expires_at.is_(None),
+            EventTriggerBinding.reconcile_lease_expires_at <= now,
+        )
+        stale_cutoff = now - STALE_RECONCILE_PROCESSING
+        stale_processing = and_(
+            EventTriggerBinding.reconcile_processing_started_at.isnot(None),
+            EventTriggerBinding.reconcile_processing_started_at <= stale_cutoff,
+            EventTriggerBinding.reconcile_lease_expires_at.is_(None),
+        )
+        return and_(due, or_(lease_available, stale_processing))
+
+    def claim_bindings_for_reconcile(
+        self,
+        *,
+        lease_owner: str,
+        limit: int,
+        lease_ttl: timedelta,
+    ) -> list[EventTriggerBinding]:
+        """Claim a batch of bindings for reconciliation."""
+
+        now = datetime.now(timezone.utc)
+        claimable = (
+            select(EventTriggerBinding)
+            .where(self._claimable_binding_filter(now))
+            .order_by(EventTriggerBinding.reconcile_next_retry_at.asc().nullsfirst())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        bindings = list(self.session.execute(claimable).scalars())
+        lease_expires_at = now + lease_ttl
+        for binding in bindings:
+            binding.reconcile_lease_owner = lease_owner
+            binding.reconcile_lease_expires_at = lease_expires_at
+            binding.reconcile_processing_started_at = now
+        if bindings:
+            self.session.flush()
+        return bindings
+
+    def release_binding_reconcile_lease(
+        self,
+        *,
+        binding: EventTriggerBinding,
+    ) -> None:
+        """Clear the reconcile lease on one binding."""
+
+        binding.reconcile_lease_owner = None
+        binding.reconcile_lease_expires_at = None
+        binding.reconcile_processing_started_at = None
+        self.session.flush()
+
+    def schedule_binding_reconcile(
+        self,
+        *,
+        binding: EventTriggerBinding,
+        retry_at: datetime | None = None,
+        increment_attempt: bool = False,
+    ) -> EventTriggerBinding:
+        """Schedule a future reconcile attempt for one binding."""
+
+        binding.reconcile_next_retry_at = retry_at or datetime.now(timezone.utc)
+        if increment_attempt:
+            binding.reconcile_attempt_count += 1
+        self.release_binding_reconcile_lease(binding=binding)
+        return binding
+
+    def close_acceptance(self, *, binding: EventTriggerBinding) -> EventTriggerBinding:
+        """Close local acceptance and end coverage when no trusted generation."""
+
+        binding.local_acceptance_open = False
+        if binding.coverage_started_at and binding.coverage_ended_at is None:
+            binding.coverage_ended_at = datetime.now(timezone.utc)
+        self.session.flush()
+        return binding
+
+    def list_generations_for_binding(
+        self,
+        *,
+        binding_id: str,
+    ) -> list[EventTriggerSubscriptionGeneration]:
+        """Return all generations for one binding ordered by creation."""
+
+        rows = self.session.execute(
+            select(EventTriggerSubscriptionGeneration)
+            .where(EventTriggerSubscriptionGeneration.binding_id == binding_id)
+            .order_by(EventTriggerSubscriptionGeneration.id.asc()),
+        ).scalars()
+        return list(rows)
+
+    def get_matching_generation(
+        self,
+        *,
+        binding: EventTriggerBinding,
+    ) -> EventTriggerSubscriptionGeneration | None:
+        """Return the current desired generation if it is provisioning or active."""
+
+        rows = self.list_generations_for_binding(binding_id=binding.binding_id)
+        for generation in reversed(rows):
+            if (
+                generation.desired_activation_revision
+                == binding.desired_activation_revision
+                and generation.acceptance_epoch == binding.acceptance_epoch
+                and generation.lifecycle_state
+                in {
+                    GenerationLifecycle.provisioning.value,
+                    GenerationLifecycle.active.value,
+                }
+            ):
+                return generation
+        return None
+
+    def _claimable_generation_filter(self, now: datetime):
+        """Generations with due create/delete operations and available leases."""
+
+        operation_due = or_(
+            EventTriggerSubscriptionGeneration.create_operation_state.in_(
+                [
+                    GenerationOperationState.pending.value,
+                    GenerationOperationState.retryable.value,
+                ],
+            ),
+            EventTriggerSubscriptionGeneration.delete_operation_state.in_(
+                [
+                    GenerationOperationState.pending.value,
+                    GenerationOperationState.retryable.value,
+                ],
+            ),
+        )
+        retry_due = or_(
+            EventTriggerSubscriptionGeneration.next_retry_at.is_(None),
+            EventTriggerSubscriptionGeneration.next_retry_at <= now,
+        )
+        lease_available = or_(
+            EventTriggerSubscriptionGeneration.lease_expires_at.is_(None),
+            EventTriggerSubscriptionGeneration.lease_expires_at <= now,
+        )
+        return and_(operation_due, retry_due, lease_available)
+
+    def claim_generations_for_operation(
+        self,
+        *,
+        lease_owner: str,
+        limit: int,
+        lease_ttl: timedelta,
+    ) -> list[EventTriggerSubscriptionGeneration]:
+        """Claim a batch of generations for provider create/delete work."""
+
+        now = datetime.now(timezone.utc)
+        claimable = (
+            select(EventTriggerSubscriptionGeneration)
+            .where(self._claimable_generation_filter(now))
+            .order_by(
+                EventTriggerSubscriptionGeneration.next_retry_at.asc().nullsfirst(),
+            )
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        generations = list(self.session.execute(claimable).scalars())
+        lease_expires_at = now + lease_ttl
+        for generation in generations:
+            generation.lease_owner = lease_owner
+            generation.lease_expires_at = lease_expires_at
+            generation.attempt_count += 1
+            if generation.create_operation_state in {
+                GenerationOperationState.pending.value,
+                GenerationOperationState.retryable.value,
+            }:
+                generation.create_operation_state = (
+                    GenerationOperationState.claimed.value
+                )
+            if generation.delete_operation_state in {
+                GenerationOperationState.pending.value,
+                GenerationOperationState.retryable.value,
+            }:
+                generation.delete_operation_state = (
+                    GenerationOperationState.claimed.value
+                )
+        if generations:
+            self.session.flush()
+        return generations
+
+    def release_generation_lease(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+    ) -> None:
+        """Clear the operation lease on one generation."""
+
+        generation.lease_owner = None
+        generation.lease_expires_at = None
+        self.session.flush()
+
+    def journal_generation_create(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+        external_trigger_id: str,
+        signing_secret_ref: str | None = None,
+        signing_secret_version: str | None = None,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Persist a successful provider create before promotion."""
+
+        now = datetime.now(timezone.utc)
+        generation.external_trigger_id = external_trigger_id
+        generation.signing_secret_ref = signing_secret_ref
+        generation.signing_secret_version = signing_secret_version
+        generation.provider_confirmed_at = now
+        generation.create_operation_state = GenerationOperationState.succeeded.value
+        generation.last_stable_error_code = None
+        self.session.flush()
+        return generation
+
+    def mark_generation_create_retryable(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+        error_code: str,
+        retry_at: datetime,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Record a retryable create failure for one generation."""
+
+        generation.create_operation_state = GenerationOperationState.retryable.value
+        generation.last_stable_error_code = error_code
+        generation.next_retry_at = retry_at
+        self.release_generation_lease(generation=generation)
+        return generation
+
+    def mark_generation_create_failed(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+        error_code: str,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Record a terminal create failure for one generation."""
+
+        generation.create_operation_state = GenerationOperationState.failed.value
+        generation.lifecycle_state = GenerationLifecycle.failed.value
+        generation.last_stable_error_code = error_code
+        self.release_generation_lease(generation=generation)
+        return generation
+
+    def enqueue_generation_delete(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Queue provider teardown for one generation."""
+
+        if not generation.provider_delete_idempotency_key:
+            generation.provider_delete_idempotency_key = (
+                f"delete-{generation.generation_id}"
+            )
+        if generation.lifecycle_state == GenerationLifecycle.active.value:
+            generation.lifecycle_state = GenerationLifecycle.draining.value
+            generation.deactivated_at = datetime.now(timezone.utc)
+        generation.create_operation_state = None
+        generation.delete_operation_state = GenerationOperationState.pending.value
+        generation.next_retry_at = datetime.now(timezone.utc)
+        self.session.flush()
+        return generation
+
+    def journal_generation_delete(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Persist a successful provider delete."""
+
+        now = datetime.now(timezone.utc)
+        generation.delete_operation_state = GenerationOperationState.succeeded.value
+        generation.lifecycle_state = GenerationLifecycle.removed.value
+        generation.teardown_completed_at = now
+        generation.last_stable_error_code = None
+        self.release_generation_lease(generation=generation)
+        self.session.flush()
+        return generation
+
+    def mark_generation_delete_retryable(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+        error_code: str,
+        retry_at: datetime,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Record a retryable delete failure for one generation."""
+
+        generation.lifecycle_state = GenerationLifecycle.removing.value
+        generation.delete_operation_state = GenerationOperationState.retryable.value
+        generation.last_stable_error_code = error_code
+        generation.next_retry_at = retry_at
+        self.release_generation_lease(generation=generation)
+        return generation
+
+    def mark_generation_delete_failed(
+        self,
+        *,
+        generation: EventTriggerSubscriptionGeneration,
+        error_code: str,
+    ) -> EventTriggerSubscriptionGeneration:
+        """Record a terminal delete failure for one generation."""
+
+        generation.delete_operation_state = GenerationOperationState.failed.value
+        generation.last_stable_error_code = error_code
+        self.release_generation_lease(generation=generation)
+        return generation
+
+    def clear_active_generation_if_matches(
+        self,
+        *,
+        binding: EventTriggerBinding,
+        generation: EventTriggerSubscriptionGeneration,
+    ) -> None:
+        """Clear the binding pointer when the removed generation was active."""
+
+        if binding.active_generation_id == generation.generation_id:
+            binding.active_generation_id = None
+            binding.local_acceptance_open = False
+            if binding.coverage_started_at and binding.coverage_ended_at is None:
+                binding.coverage_ended_at = datetime.now(timezone.utc)
+            self.session.flush()
+
+    def mark_binding_teardown_complete(
+        self,
+        *,
+        binding: EventTriggerBinding,
+    ) -> EventTriggerBinding:
+        """Mark tombstone teardown complete when no live generations remain."""
+
+        live_states = {
+            GenerationLifecycle.provisioning.value,
+            GenerationLifecycle.active.value,
+            GenerationLifecycle.draining.value,
+            GenerationLifecycle.removing.value,
+        }
+        for generation in self.list_generations_for_binding(
+            binding_id=binding.binding_id,
+        ):
+            if generation.lifecycle_state in live_states:
+                return binding
+        binding.teardown_completed_at = datetime.now(timezone.utc)
+        self.session.flush()
+        return binding
+
+    def list_bindings_for_health(
+        self,
+        *,
+        limit: int,
+        health_interval: timedelta,
+    ) -> list[EventTriggerBinding]:
+        """Return bindings due for a provider health check."""
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - health_interval
+        rows = self.session.execute(
+            select(EventTriggerBinding)
+            .where(
+                EventTriggerBinding.tombstoned_at.is_(None),
+                EventTriggerBinding.desired_trigger_state
+                == DesiredTriggerState.enabled.value,
+                EventTriggerBinding.runtime_health.in_(
+                    [
+                        BindingRuntimeHealth.healthy.value,
+                        BindingRuntimeHealth.recovering.value,
+                    ],
+                ),
+                or_(
+                    EventTriggerBinding.last_health_check_at.is_(None),
+                    EventTriggerBinding.last_health_check_at <= cutoff,
+                ),
+            )
+            .order_by(EventTriggerBinding.last_health_check_at.asc().nullsfirst())
+            .limit(limit),
+        ).scalars()
+        return list(rows)
+
+    def record_worker_heartbeat(
+        self,
+        *,
+        worker_key: str,
+        lease_owner: str,
+        last_reconcile_at: datetime | None = None,
+        last_health_at: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ProviderTriggerWorkerHeartbeat:
+        """Upsert the provider-trigger worker heartbeat."""
+
+        now = datetime.now(timezone.utc)
+        heartbeat = self.session.execute(
+            select(ProviderTriggerWorkerHeartbeat).where(
+                ProviderTriggerWorkerHeartbeat.worker_key == worker_key,
+            ),
+        ).scalar_one_or_none()
+        if heartbeat is None:
+            heartbeat = ProviderTriggerWorkerHeartbeat(
+                worker_key=worker_key,
+                lease_owner=lease_owner,
+                last_reconcile_at=last_reconcile_at,
+                last_health_at=last_health_at,
+                last_heartbeat_at=now,
+                metadata_json=metadata or {},
+            )
+            self.session.add(heartbeat)
+        else:
+            heartbeat.lease_owner = lease_owner
+            if last_reconcile_at is not None:
+                heartbeat.last_reconcile_at = last_reconcile_at
+            if last_health_at is not None:
+                heartbeat.last_health_at = last_health_at
+            heartbeat.last_heartbeat_at = now
+            if metadata is not None:
+                heartbeat.metadata_json = metadata
+        self.session.flush()
+        return heartbeat
+
+    def get_worker_heartbeat(
+        self,
+        *,
+        worker_key: str,
+    ) -> ProviderTriggerWorkerHeartbeat | None:
+        """Return the latest heartbeat row for one worker key."""
+
+        return self.session.execute(
+            select(ProviderTriggerWorkerHeartbeat).where(
+                ProviderTriggerWorkerHeartbeat.worker_key == worker_key,
+            ),
+        ).scalar_one_or_none()
