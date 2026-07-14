@@ -1089,6 +1089,74 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_task_run_get_returns_precreated_run_or_none(
+    client: AsyncClient,
+    dbsession,
+):
+    """Task-run get returns an existing row by run_key without creating or adopting."""
+
+    await _ensure_task_machine_project(client)
+    assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
+    source_task = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=f"Assistants/{assistant.agent_id}/Tasks",
+        entries=_assistant_scoped_scheduled_entries(
+            user_id=PRIMARY_USER_ID,
+            assistant_id=assistant.agent_id,
+            task_id=101,
+        ),
+    )
+    assert source_task.status_code == 200, source_task.json()
+    source_task_log_id = source_task.json()["log_event_ids"][0]
+    run_key = "offline:provider_event:42:101:binding-a:rev123:abcdef0123456789"
+    create_response = await client.post(
+        "/v0/admin/task-run/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": run_key,
+            "assistant_id": str(assistant.agent_id),
+            "task_id": 101,
+            "source_task_log_id": source_task_log_id,
+            "source_type": "provider_event",
+            "execution_mode": "offline",
+            "activation_revision": "rev-123",
+            "state": "pending",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+    created_run = create_response.json()["run"]
+
+    get_response = await client.post(
+        "/v0/admin/task-run/get",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant.agent_id),
+            "run_key": run_key,
+            "source_task_log_id": source_task_log_id,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert get_response.status_code == 200, get_response.json()
+    fetched_run = get_response.json()["run"]
+    assert fetched_run["run_id"] == created_run["run_id"]
+    assert fetched_run["run_key"] == run_key
+
+    missing_response = await client.post(
+        "/v0/admin/task-run/get",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant.agent_id),
+            "run_key": "offline:provider_event:missing",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert missing_response.status_code == 200, missing_response.json()
+    assert missing_response.json()["run"] is None
+
+
+@pytest.mark.anyio
 async def test_team_task_run_lifecycle_stays_on_team_surface(
     client: AsyncClient,
     dbsession,

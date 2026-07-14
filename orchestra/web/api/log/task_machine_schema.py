@@ -167,6 +167,30 @@ class TaskRunLatestResponse(BaseModel):
     )
 
 
+class TaskRunGetRequest(BaseModel):
+    """Lookup one task run row by its idempotency key."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(description="Assistant identifier that owns the run.")
+    run_key: str = Field(description="Idempotency key for the run to fetch.")
+    source_task_log_id: Optional[int] = Field(
+        default=None,
+        description="Optional Tasks row log id used to resolve assistant-scoped contexts.",
+    )
+
+
+class TaskRunGetResponse(BaseModel):
+    """Task run lookup response keyed by run_key."""
+
+    run: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Run row payload when present, or null when absent.",
+    )
+
+
 class TaskRunMutationResponse(BaseModel):
     """Serialized task run payload returned by internal mutation endpoints."""
 
