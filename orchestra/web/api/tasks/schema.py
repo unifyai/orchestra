@@ -84,6 +84,7 @@ class TriggerHealthResponse(BaseModel):
     coverage_started_at: str | None = None
     coverage_ended_at: str | None = None
     remediation: str | None = None
+    event_storage_configured: bool = False
 
 
 class TriggerCatalogEvent(BaseModel):

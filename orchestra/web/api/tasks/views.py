@@ -18,6 +18,7 @@ from orchestra.services.task_trigger_service import (
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
+from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.tasks.schema import (
     RetryTriggerResponse,
@@ -638,6 +639,14 @@ def get_assistant_task_trigger_health(
             remediation = "Review the provider connection and trigger configuration."
         elif runtime_health == "provisioning":
             remediation = "Trigger provisioning is in progress."
+    event_storage_configured = settings.provider_event_storage_configured
+    if (
+        binding is not None
+        and not event_storage_configured
+        and runtime_health not in {"absent", "removing"}
+    ):
+        runtime_health = "needs_attention"
+        remediation = "Provider-event storage is not configured for this deployment."
     return InfoResponse(
         info=TriggerHealthResponse(
             task_id=task_id,
@@ -653,6 +662,7 @@ def get_assistant_task_trigger_health(
             coverage_started_at=coverage_started_at,
             coverage_ended_at=coverage_ended_at,
             remediation=remediation,
+            event_storage_configured=event_storage_configured,
         ),
     )
 
