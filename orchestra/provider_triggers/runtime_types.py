@@ -65,3 +65,34 @@ class DispatchProcessingState(StrEnum):
     succeeded = "succeeded"
     retryable = "retryable"
     failed = "failed"
+
+
+class BlobCommitState(StrEnum):
+    """Commit lifecycle for one private provider-event blob."""
+
+    uncommitted = "uncommitted"
+    committed = "committed"
+    unavailable = "unavailable"
+    deleted = "deleted"
+
+
+class BlobAuditAction(StrEnum):
+    """Append-only audit actions for private provider-event blobs."""
+
+    write = "write"
+    read = "read"
+    read_denied = "read_denied"
+    rewrap = "rewrap"
+    export = "export"
+    mark_unavailable = "mark_unavailable"
+    delete = "delete"
+
+
+class BlobDeletionState(StrEnum):
+    """Processing state for one queued blob deletion."""
+
+    pending = "pending"
+    claimed = "claimed"
+    succeeded = "succeeded"
+    retryable = "retryable"
+    failed = "failed"
