@@ -347,6 +347,49 @@ class Settings(BaseSettings):
     trigger_event_deletion_batch_size: int = int(
         os.environ.get("TRIGGER_EVENT_DELETION_BATCH_SIZE", "25"),
     )
+    orchestra_trigger_callback_base_url: Optional[str] = os.environ.get(
+        "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL",
+    )
+    provider_trigger_reconcile_interval_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_RECONCILE_INTERVAL_SECONDS", "60"),
+    )
+    provider_trigger_health_interval_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_HEALTH_INTERVAL_SECONDS", "300"),
+    )
+    provider_trigger_reconcile_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_RECONCILE_BATCH_SIZE", "25"),
+    )
+    provider_trigger_generation_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_GENERATION_BATCH_SIZE", "25"),
+    )
+    provider_trigger_health_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_HEALTH_BATCH_SIZE", "50"),
+    )
+    provider_trigger_reconcile_lease_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_RECONCILE_LEASE_SECONDS", "300"),
+    )
+    provider_trigger_generation_lease_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_GENERATION_LEASE_SECONDS", "300"),
+    )
+    provider_trigger_max_reconcile_attempts: int = int(
+        os.environ.get("PROVIDER_TRIGGER_MAX_RECONCILE_ATTEMPTS", "8"),
+    )
+    provider_trigger_max_generation_attempts: int = int(
+        os.environ.get("PROVIDER_TRIGGER_MAX_GENERATION_ATTEMPTS", "8"),
+    )
+    provider_trigger_health_failure_threshold: int = int(
+        os.environ.get("PROVIDER_TRIGGER_HEALTH_FAILURE_THRESHOLD", "3"),
+    )
+
+    @property
+    def provider_trigger_callback_base_url(self) -> str | None:
+        """Return the public HTTPS callback base for provider trigger ingress."""
+
+        configured = (self.orchestra_trigger_callback_base_url or "").strip()
+        if configured:
+            return configured.rstrip("/")
+        public_url = os.environ.get("ORCHESTRA_PUBLIC_URL", "").strip()
+        return public_url.rstrip("/") if public_url else None
 
     @property
     def provider_event_storage_configured(self) -> bool:

@@ -42,6 +42,33 @@ class GenerationLifecycle(StrEnum):
     failed = "failed"
 
 
+class GenerationOperationState(StrEnum):
+    """Processing state for one provider create/delete operation."""
+
+    pending = "pending"
+    claimed = "claimed"
+    succeeded = "succeeded"
+    retryable = "retryable"
+    failed = "failed"
+
+
+class ReconcileErrorCode(StrEnum):
+    """Stable internal error codes for provider-trigger reconciliation."""
+
+    event_storage_unconfigured = "event_storage_unconfigured"
+    callback_url_unconfigured = "callback_url_unconfigured"
+    provider_connection_missing = "provider_connection_missing"
+    connection_not_owned = "connection_not_owned"
+    account_subject_mismatch = "account_subject_mismatch"
+    resource_inaccessible = "resource_inaccessible"
+    unsupported_event = "unsupported_event"
+    provider_permission_denied = "provider_permission_denied"
+    provider_provision_failed = "provider_provision_failed"
+    provider_delete_failed = "provider_delete_failed"
+    provider_health_check_failed = "provider_health_check_failed"
+    provider_connection_not_active = "provider_connection_not_active"
+
+
 class ReceiptProcessingState(StrEnum):
     """Processing state for one durable provider-event receipt."""
 
