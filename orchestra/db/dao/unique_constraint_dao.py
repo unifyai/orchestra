@@ -70,6 +70,39 @@ class UniqueConstraintDAO:
         """Check if lookup table mode is enabled."""
         return settings.unique_validation_mode == UniqueValidationMode.LOOKUP_TABLE
 
+    def _project_id_for_context(
+        self,
+        context_id: int,
+        project_id: Optional[int] = None,
+    ) -> int:
+        """Resolve the denormalized project_id for uniqueness rows."""
+        if project_id is not None:
+            return int(project_id)
+        pid = self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :cid"),
+            {"cid": context_id},
+        ).scalar()
+        if pid is None:
+            raise ValueError(f"Unknown context_id={context_id}")
+        return int(pid)
+
+    @staticmethod
+    def _constraint_row(
+        *,
+        context_id: int,
+        project_id: int,
+        field_name: str,
+        value_hash: str,
+        log_event_id: int,
+    ) -> Dict[str, Any]:
+        return {
+            "context_id": context_id,
+            "project_id": project_id,
+            "field_name": field_name,
+            "value_hash": value_hash,
+            "log_event_id": log_event_id,
+        }
+
     def check_unique_fields_batch(
         self,
         context_id: int,
@@ -97,6 +130,7 @@ class UniqueConstraintDAO:
             return None
 
         exclude_ids = exclude_ids or []
+        resolved_project_id = self._project_id_for_context(context_id, project_id)
 
         # Step 1: Check for duplicates within the batch
         seen: Dict[Tuple[str, str], int] = {}  # (field_name, value_hash) -> log_id
@@ -121,6 +155,7 @@ class UniqueConstraintDAO:
                 entries_to_check.append(
                     {
                         "context_id": context_id,
+                        "project_id": resolved_project_id,
                         "field_name": field_name,
                         "value_hash": value_hash,
                         "log_event_id": log_event_id,
@@ -170,12 +205,13 @@ class UniqueConstraintDAO:
 
         # Build values for batch insert
         values = [
-            {
-                "context_id": e["context_id"],
-                "field_name": e["field_name"],
-                "value_hash": e["value_hash"],
-                "log_event_id": e["log_event_id"],
-            }
+            self._constraint_row(
+                context_id=e["context_id"],
+                project_id=e["project_id"],
+                field_name=e["field_name"],
+                value_hash=e["value_hash"],
+                log_event_id=e["log_event_id"],
+            )
             for e in entries
         ]
 
@@ -307,12 +343,13 @@ class UniqueConstraintDAO:
             return
 
         values = [
-            {
-                "context_id": e["context_id"],
-                "field_name": e["field_name"],
-                "value_hash": e["value_hash"],
-                "log_event_id": e["log_event_id"],
-            }
+            self._constraint_row(
+                context_id=e["context_id"],
+                project_id=e["project_id"],
+                field_name=e["field_name"],
+                value_hash=e["value_hash"],
+                log_event_id=e["log_event_id"],
+            )
             for e in entries
         ]
 
@@ -327,6 +364,7 @@ class UniqueConstraintDAO:
         context_id: int,
         log_entries: List[Tuple[int, Dict[str, Any]]],
         key_columns: List[str],
+        project_id: Optional[int] = None,
     ) -> Optional[Tuple[int, Dict[str, Any]]]:
         """
         Check composite key constraints for a batch of log entries.
@@ -334,10 +372,13 @@ class UniqueConstraintDAO:
         :param context_id: Context ID for the logs.
         :param log_entries: List of (log_event_id, row_data) tuples.
         :param key_columns: Ordered list of columns forming the composite key.
+        :param project_id: Optional project id (resolved from context when omitted).
         :return: (log_event_id, key_values) of first duplicate, or None.
         """
         if not log_entries or not key_columns:
             return None
+
+        resolved_project_id = self._project_id_for_context(context_id, project_id)
 
         # Step 1: Check for duplicates within the batch
         seen: Dict[str, int] = {}  # value_hash -> log_id
@@ -360,6 +401,7 @@ class UniqueConstraintDAO:
             entries_to_check.append(
                 {
                     "context_id": context_id,
+                    "project_id": resolved_project_id,
                     "field_name": COMPOSITE_KEY_FIELD,
                     "value_hash": value_hash,
                     "log_event_id": log_event_id,
@@ -402,12 +444,13 @@ class UniqueConstraintDAO:
             return None
 
         values = [
-            {
-                "context_id": e["context_id"],
-                "field_name": e["field_name"],
-                "value_hash": e["value_hash"],
-                "log_event_id": e["log_event_id"],
-            }
+            self._constraint_row(
+                context_id=e["context_id"],
+                project_id=e["project_id"],
+                field_name=e["field_name"],
+                value_hash=e["value_hash"],
+                log_event_id=e["log_event_id"],
+            )
             for e in entries
         ]
 
@@ -527,12 +570,13 @@ class UniqueConstraintDAO:
             return
 
         values = [
-            {
-                "context_id": e["context_id"],
-                "field_name": e["field_name"],
-                "value_hash": e["value_hash"],
-                "log_event_id": e["log_event_id"],
-            }
+            self._constraint_row(
+                context_id=e["context_id"],
+                project_id=e["project_id"],
+                field_name=e["field_name"],
+                value_hash=e["value_hash"],
+                log_event_id=e["log_event_id"],
+            )
             for e in entries
         ]
 
@@ -542,27 +586,46 @@ class UniqueConstraintDAO:
         )
         self.session.execute(stmt)
 
-    def remove_constraints_for_logs(self, log_event_ids: List[int]) -> int:
+    def remove_constraints_for_logs(
+        self,
+        log_event_ids: List[int],
+        *,
+        context_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+    ) -> int:
         """
-        Remove all constraints for the given log event IDs.
+        Remove constraints for the given log event IDs.
 
-        Called when logs are deleted or when validation fails and we need
-        to rollback inserted constraints.
+        Prefer passing ``context_id`` and/or ``project_id`` so the DELETE hits
+        the (context_id, log_event_id) / (project_id, log_event_id) indexes
+        instead of scanning the global log_event_id index under concurrent
+        INSERT … ON CONFLICT traffic.
 
         :param log_event_ids: List of log event IDs to remove constraints for.
+        :param context_id: Optional context scope for the delete.
+        :param project_id: Optional project scope for the delete.
         :return: Number of constraints removed.
         """
         if not log_event_ids:
             return 0
 
+        clauses = ["log_event_id = ANY(:log_ids)"]
+        params: Dict[str, Any] = {"log_ids": log_event_ids}
+        if context_id is not None:
+            clauses.append("context_id = :context_id")
+            params["context_id"] = context_id
+        if project_id is not None:
+            clauses.append("project_id = :project_id")
+            params["project_id"] = project_id
+
         result = self.session.execute(
             text(
-                """
+                f"""
                 DELETE FROM log_unique_constraint
-                WHERE log_event_id = ANY(:log_ids)
-            """,
+                WHERE {' AND '.join(clauses)}
+                """,
             ),
-            {"log_ids": log_event_ids},
+            params,
         )
         return result.rowcount
 
@@ -573,6 +636,7 @@ class UniqueConstraintDAO:
         field_name: str,
         old_value: Any,
         new_value: Any,
+        project_id: Optional[int] = None,
     ) -> Optional[str]:
         """
         Update a constraint when a unique field value changes.
@@ -582,6 +646,7 @@ class UniqueConstraintDAO:
         :param field_name: Name of the unique field.
         :param old_value: Previous value (to delete old constraint).
         :param new_value: New value (to insert new constraint).
+        :param project_id: Optional project id (resolved from context when omitted).
         :return: Error message if duplicate found, None on success.
         """
         if not self._use_lookup_table():
@@ -592,6 +657,8 @@ class UniqueConstraintDAO:
 
         if old_hash == new_hash:
             return None  # No change
+
+        resolved_project_id = self._project_id_for_context(context_id, project_id)
 
         # Delete old constraint
         self.session.execute(
@@ -615,6 +682,7 @@ class UniqueConstraintDAO:
         # Try to insert new constraint
         stmt = insert(LogUniqueConstraint).values(
             context_id=context_id,
+            project_id=resolved_project_id,
             field_name=field_name,
             value_hash=new_hash,
             log_event_id=log_event_id,

@@ -246,7 +246,8 @@ def _drop_source_logs(
     )
     session.execute(
         text(
-            "DELETE FROM log_unique_constraint WHERE log_event_id = ANY(:log_ids)",
+            "DELETE FROM log_unique_constraint "
+            "WHERE log_event_id = ANY(:log_ids) AND project_id = :project_id",
         ),
         params,
     )
@@ -939,6 +940,7 @@ def _rebuild_unique_constraints(
             values.append(
                 {
                     "context_id": target.id,
+                    "project_id": project_id,
                     "field_name": field_name,
                     "value_hash": UniqueConstraintDAO.hash_value(value),
                     "log_event_id": log_id,
@@ -950,6 +952,7 @@ def _rebuild_unique_constraints(
                 values.append(
                     {
                         "context_id": target.id,
+                        "project_id": project_id,
                         "field_name": COMPOSITE_KEY_FIELD,
                         "value_hash": UniqueConstraintDAO.hash_composite(
                             key_values,
@@ -987,9 +990,10 @@ def _finalize_pair_merge(
                 """
                 DELETE FROM log_unique_constraint
                 WHERE log_event_id = ANY(:log_ids)
+                  AND project_id = :project_id
                 """,
             ),
-            {"log_ids": moved_log_ids},
+            {"log_ids": moved_log_ids, "project_id": project_id},
         )
         # Union the field metadata first so the constraint rebuild sees
         # source-only unique fields (conflicts were vetted in the

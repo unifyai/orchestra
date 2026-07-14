@@ -364,8 +364,10 @@ def convert_legacy_to_partitioned(conn: Connection) -> None:
     (brief exclusive locks; acceptable with a maintenance window).
 
     Assumes ``log_event`` carries ``project_id`` already and that the child
-    tables derive theirs from it. ``log_unique_constraint`` is not partitioned;
-    it only loses its FK to ``log_event`` (handled in phase 1).
+    tables derive theirs from it. ``log_unique_constraint`` is not LIST-partitioned
+    yet; it carries a denormalized ``project_id`` (and lost its FK to
+    ``log_event`` in phase 1) so create/delete can scope rows by project today
+    and a future LIST(project_id) promotion can reuse that column.
     """
     from orchestra.db.meta import meta
     from orchestra.db.models import load_all_models

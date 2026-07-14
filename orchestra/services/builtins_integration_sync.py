@@ -1136,11 +1136,13 @@ def _upsert_constraint(
     session: Session,
     *,
     context_id: int,
+    project_id: int,
     log_event_id: int,
     value_hash: str,
 ) -> None:
     stmt = pg_insert(LogUniqueConstraint).values(
         context_id=context_id,
+        project_id=project_id,
         field_name=COMPOSITE_KEY_FIELD,
         value_hash=value_hash,
         log_event_id=log_event_id,
@@ -1156,11 +1158,13 @@ def _insert_new_constraint(
     session: Session,
     *,
     context_id: int,
+    project_id: int,
     log_event_id: int,
     value_hash: str,
 ) -> bool:
     stmt = pg_insert(LogUniqueConstraint).values(
         context_id=context_id,
+        project_id=project_id,
         field_name=COMPOSITE_KEY_FIELD,
         value_hash=value_hash,
         log_event_id=log_event_id,
@@ -1280,6 +1284,7 @@ def upsert_context_rows(
             inserted_constraint = _insert_new_constraint(
                 session,
                 context_id=context_id,
+                project_id=project_id,
                 log_event_id=int(new_log_event_id),
                 value_hash=key_hash,
             )
@@ -1355,6 +1360,7 @@ def upsert_context_rows(
             _upsert_constraint(
                 session,
                 context_id=context_id,
+                project_id=project_id,
                 log_event_id=int(log_event_id),
                 value_hash=key_hash,
             )

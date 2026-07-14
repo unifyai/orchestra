@@ -374,6 +374,10 @@ class LogUniqueConstraint(Base):
     Supports:
     - Single unique fields: field_name = 'row_id', value_hash = md5(value)
     - Composite keys: field_name = '__composite__', value_hash = md5(json(combo))
+
+    ``project_id`` is denormalized from ``context`` so create/delete can scope
+    uniqueness rows with the same project key as the partitioned kernel tables.
+    The FK to ``log_event`` remains dropped (composite PK / partition drops).
     """
 
     __tablename__ = "log_unique_constraint"
@@ -385,11 +389,25 @@ class LogUniqueConstraint(Base):
     # and is partitioned, so a single-column FK can no longer reference it.
     # Orphan rows are cleaned by the application / coordinated partition drops.
     log_event_id = Column(BigInteger, nullable=False)
+    # Denormalized from context.project_id so deletes can prune by project and
+    # so a future LIST(project_id) partition of this table is a schema change
+    # rather than another application rewrite.
+    project_id = Column(Integer, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
         sa.PrimaryKeyConstraint("context_id", "field_name", "value_hash"),
         Index("idx_log_unique_constraint_log_event", "log_event_id"),
+        Index(
+            "idx_log_unique_constraint_context_log_event",
+            "context_id",
+            "log_event_id",
+        ),
+        Index(
+            "idx_log_unique_constraint_project_log_event",
+            "project_id",
+            "log_event_id",
+        ),
     )
 
 
