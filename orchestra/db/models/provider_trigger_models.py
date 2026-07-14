@@ -228,6 +228,8 @@ class ProviderEventReceipt(Base):
     event_context_size_bytes = Column(Integer, nullable=True)
     event_context_content_type = Column(String, nullable=True)
     event_context_key_version = Column(String, nullable=True)
+    event_context_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    event_context_unavailable_reason = Column(String, nullable=True)
 
     run_key = Column(String(128), nullable=True, index=True)
     run_id = Column(Integer, nullable=True)
