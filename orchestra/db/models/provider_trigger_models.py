@@ -82,6 +82,7 @@ class EventTriggerBinding(Base):
     coverage_ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
     last_accepted_event_at = Column(TIMESTAMP(timezone=True), nullable=True)
     last_health_check_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    consecutive_health_failures = Column(Integer, nullable=False, server_default="0")
 
     tombstoned_at = Column(TIMESTAMP(timezone=True), nullable=True)
     teardown_completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
@@ -350,7 +351,12 @@ class ProviderEventBlob(Base):
     size_bytes = Column(Integer, nullable=False)
     content_type = Column(String, nullable=False)
 
-    commit_state = Column(String(32), nullable=False, server_default="uncommitted", index=True)
+    commit_state = Column(
+        String(32),
+        nullable=False,
+        server_default="uncommitted",
+        index=True,
+    )
     committed_at = Column(TIMESTAMP(timezone=True), nullable=True)
     unavailable_at = Column(TIMESTAMP(timezone=True), nullable=True)
     deleted_at = Column(TIMESTAMP(timezone=True), nullable=True)
@@ -429,4 +435,25 @@ class ProviderEventBlobDeletion(Base):
             "lease_expires_at",
             "processing_state",
         ),
+    )
+
+
+class ProviderTriggerWorkerHeartbeat(Base):
+    """Last-seen heartbeat for the provider-trigger worker."""
+
+    __tablename__ = "provider_trigger_worker_heartbeats"
+
+    id = Column(Integer, primary_key=True)
+    worker_key = Column(String(64), nullable=False, unique=True, index=True)
+    lease_owner = Column(String, nullable=True)
+    last_reconcile_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    last_health_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    last_heartbeat_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    metadata_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_OBJECT)
+
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
     )
