@@ -23,7 +23,7 @@ def _binding_id() -> str:
     return f"binding-{uuid.uuid4().hex[:12]}"
 
 
-def test_typed_provider_trigger_accepts_matching_task_revision_and_projects_runtime_state(
+def test_typed_provider_trigger_mutation_cas_advances_revision_and_acceptance_epoch(
     dbsession: Session,
 ) -> None:
     binding_id = _binding_id()
@@ -42,17 +42,8 @@ def test_typed_provider_trigger_accepts_matching_task_revision_and_projects_runt
     assert mutated.task_revision == 2
     assert mutated.acceptance_epoch == 2
 
-    accepted = attempt_event_acceptance(
-        dbsession,
-        binding_id=binding_id,
-        acceptance_epoch=mutated.acceptance_epoch,
-    )
-    assert accepted.accepted is True
-    assert accepted.receipt_id is not None
-    assert accepted.receipt_id.startswith("receipt-")
 
-
-def test_unity_provider_trigger_accepts_matching_task_revision_and_projects_runtime_state(
+def test_unity_origin_provider_trigger_mutation_cas_advances_revision(
     dbsession: Session,
 ) -> None:
     binding_id = _binding_id()

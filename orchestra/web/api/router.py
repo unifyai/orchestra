@@ -21,6 +21,9 @@ from orchestra.web.api import (  # noqa: WPS235
     teams,
     users,
 )
+from orchestra.web.api.admin import (
+    provider_event_dispatch as provider_event_dispatch_admin,
+)
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.context.views import admin_router as context_admin_router
@@ -50,6 +53,7 @@ from orchestra.web.api.table_view.views import admin_router as table_view_admin_
 from orchestra.web.api.table_view.views import router as table_view_router
 from orchestra.web.api.tasks import router as tasks_router
 from orchestra.web.api.utils.assistant_infra import fetch_comms_features
+from orchestra.web.api.webhooks import provider_triggers as provider_trigger_webhooks
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 from orchestra.web.api.whatsapp import admin_router as whatsapp_admin_router
 from orchestra.web.api.whatsapp import router as whatsapp_router
@@ -133,6 +137,13 @@ api_router.include_router(
     log_admin_router,
     prefix="/admin",
     tags=["Logs"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    provider_event_dispatch_admin.router,
+    prefix="/admin",
+    tags=["Provider Event Dispatch"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
@@ -368,6 +379,7 @@ api_router.include_router(
 # NO AUTH
 
 api_router.include_router(stripe_webhooks.router)
+api_router.include_router(provider_trigger_webhooks.router)
 # White-label OAuth redirect proxy (provider browsers hit this with no auth).
 api_router.include_router(integrations.public_router)
 

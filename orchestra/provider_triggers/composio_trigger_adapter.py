@@ -123,8 +123,11 @@ def github_resource_from_filters(
 ) -> str | None:
     """Derive the owner/name resource from authored repository filters.
 
-    TODO: Replace with registry/adapter resource resolution so reconciliation
-    does not hardcode GitHub repository extraction outside the adapter.
+    # TODO: Purge/Replace — replace with registry/adapter resource resolution
+    so reconciliation and signed ingress do not hardcode GitHub repository
+    extraction outside the adapter. Call sites:
+    ``provider_trigger_reconciliation_service``, ``ingress_acceptance``.
+    See vault: Provider event trigger contracts#Interim remnants.
     """
 
     if not filters:

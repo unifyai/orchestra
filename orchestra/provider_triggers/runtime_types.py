@@ -82,6 +82,17 @@ class ReceiptProcessingState(StrEnum):
     failed = "failed"
 
 
+class ReceiptClassificationReason(StrEnum):
+    """Stable classification for one durable provider-event receipt."""
+
+    matched = "matched"
+    unmatched = "unmatched"
+    inactive = "inactive"
+    stale = "stale"
+    unauthorized = "unauthorized"
+    unsupported = "unsupported"
+
+
 class DispatchProcessingState(StrEnum):
     """Processing state for one provider-event dispatch operation."""
 
@@ -94,6 +105,28 @@ class DispatchProcessingState(StrEnum):
     failed = "failed"
 
 
+class DispatchErrorCode(StrEnum):
+    """Stable internal error codes for provider-event dispatch delivery."""
+
+    dispatch_rail_unconfigured = "dispatch_rail_unconfigured"
+    dispatch_request_expired = "dispatch_request_expired"
+    dispatch_validation_failed = "dispatch_validation_failed"
+    dispatch_inbox_mismatch = "dispatch_inbox_mismatch"
+    dispatch_transport_failed = "dispatch_transport_failed"
+    dispatch_downstream_rejected = "dispatch_downstream_rejected"
+    dispatch_run_terminal_failed = "dispatch_run_terminal_failed"
+    dispatch_max_attempts_exceeded = "dispatch_max_attempts_exceeded"
+
+
+class DownstreamAdoptionStatus(StrEnum):
+    """Public downstream adoption vocabulary mirrored on dispatch rows."""
+
+    adopted = "adopted"
+    started = "started"
+    terminal = "terminal"
+    published = "published"
+
+
 class BlobCommitState(StrEnum):
     """Commit lifecycle for one private provider-event blob."""
 
@@ -101,6 +134,13 @@ class BlobCommitState(StrEnum):
     committed = "committed"
     unavailable = "unavailable"
     deleted = "deleted"
+
+
+class EventContextUnavailableReason(StrEnum):
+    """Why one receipt's event context is no longer readable."""
+
+    deleted = "deleted"
+    expired = "expired"
 
 
 class BlobAuditAction(StrEnum):

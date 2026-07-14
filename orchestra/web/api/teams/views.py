@@ -2,7 +2,16 @@
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -273,6 +282,7 @@ async def create_team(
         created_at=team.created_at,
         member_count=len(team_dao.get_team_members(team.id)),
         is_org_wide_sharing=team.is_org_wide_sharing,
+        image=team.image,
     )
 
 
@@ -329,6 +339,7 @@ def list_teams(
             members=(members := team_dao.get_team_members(team.id)),
             member_count=len(members),
             is_org_wide_sharing=team.is_org_wide_sharing,
+            image=team.image,
         )
         for team in teams
     ]
@@ -395,6 +406,7 @@ def get_team(
         created_at=team.created_at,
         members=members,
         is_org_wide_sharing=team.is_org_wide_sharing,
+        image=team.image,
     )
 
 
@@ -498,7 +510,134 @@ async def update_team(
         created_at=team.created_at,
         member_count=len(team_dao.get_team_members(team_id)),
         is_org_wide_sharing=team.is_org_wide_sharing,
+        image=team.image,
     )
+
+
+@router.post(
+    "/organizations/{organization_id}/teams/{team_id}/photo/upload",
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload team profile photo",
+    tags=["Teams"],
+)
+async def upload_team_photo(
+    request_fastapi: Request,
+    organization_id: int,
+    team_id: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+):
+    """Upload a profile photo for a non-managed team. Requires org:write."""
+    from orchestra.services.bucket_service import create_bucket_service
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this team",
+        )
+
+    team = team_dao.get(team_id)
+    if not team or team.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team with id {team_id} not found in this organization",
+        )
+    _require_active_team(team)
+    _require_unmanaged_team(team)
+
+    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if not file.content_type or file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_IMAGE_TYPES)}",
+        )
+
+    MAX_SIZE_BYTES = 5 * 1024 * 1024
+    file_content = await file.read()
+    if len(file_content) > MAX_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_SIZE_BYTES // (1024 * 1024)}MB limit.",
+        )
+
+    bucket_service = create_bucket_service()
+    gcs_url = bucket_service.upload_team_photo_file(
+        file_content=file_content,
+        org_id=organization_id,
+        team_id=team_id,
+        content_type=file.content_type,
+    )
+
+    team.image = gcs_url
+    session.commit()
+
+    return {"gcs_url": gcs_url}
+
+
+@router.delete(
+    "/organizations/{organization_id}/teams/{team_id}/photo",
+    summary="Remove team profile photo",
+    tags=["Teams"],
+)
+def remove_team_photo(
+    request_fastapi: Request,
+    organization_id: int,
+    team_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """Clear a team's profile photo. Requires org:write. Managed Org team rejected."""
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update this team",
+        )
+
+    team = team_dao.get(team_id)
+    if not team or team.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team with id {team_id} not found in this organization",
+        )
+    _require_active_team(team)
+    _require_unmanaged_team(team)
+
+    team.image = None
+    session.commit()
+    return {"ok": True}
 
 
 @router.delete(
@@ -711,6 +850,7 @@ async def add_team_members(
         created_at=team.created_at,
         members=members,
         is_org_wide_sharing=team.is_org_wide_sharing,
+        image=team.image,
     )
 
 
@@ -810,6 +950,7 @@ async def remove_team_member(
         created_at=team.created_at,
         members=members,
         is_org_wide_sharing=team.is_org_wide_sharing,
+        image=team.image,
     )
 
 

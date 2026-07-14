@@ -12,6 +12,15 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
+from orchestra.services.provider_event_blob_cleanup_service import (
+    ProviderEventBlobCleanupService,
+)
+from orchestra.services.provider_event_context_service import (
+    ProviderEventContextService,
+)
+from orchestra.services.provider_event_dispatch_delivery_service import (
+    ProviderEventDispatchDeliveryService,
+)
 from orchestra.services.provider_trigger_reconciliation_service import (
     ProviderTriggerReconciliationService,
 )
@@ -34,11 +43,7 @@ def run_worker_cycle(
     *,
     lease_owner: str | None = None,
 ) -> dict[str, int]:
-    """Run one reconcile, generation, and health cycle.
-
-    TODO: Add dispatch claim/send/reclaim so persisted provider_event_dispatches
-    are delivered to Communication or Unity and downstream adoption converges.
-    """
+    """Run one reconcile, generation, health, and dispatch cycle."""
 
     resolved_owner = lease_owner or f"trigger-worker-{uuid.uuid4().hex[:8]}"
     totals = {
@@ -47,6 +52,20 @@ def run_worker_cycle(
         "generations_claimed": 0,
         "generations_processed": 0,
         "bindings_checked": 0,
+        "dispatches_claimed": 0,
+        "dispatches_delivered": 0,
+        "dispatches_started": 0,
+        "dispatches_retryable": 0,
+        "dispatches_failed": 0,
+        "dispatches_duplicate_prevented": 0,
+        "dispatches_converged": 0,
+        "dispatches_still_in_flight": 0,
+        "dispatches_terminal_failed": 0,
+        "dispatches_terminal_succeeded": 0,
+        "dispatch_backlog_oldest_age_seconds": None,
+        "blob_deletions_processed": 0,
+        "blob_orphans_removed": 0,
+        "event_contexts_expired": 0,
     }
     with sessionmaker(bind=get_engine(), expire_on_commit=False)() as session:
         service = ProviderTriggerReconciliationService(
@@ -59,6 +78,25 @@ def run_worker_cycle(
         totals.update(reconcile_stats)
         totals.update(generation_stats)
         totals.update(health_stats)
+
+        dispatch_service = ProviderEventDispatchDeliveryService(
+            session,
+            lease_owner=resolved_owner,
+        )
+        dispatch_stats = dispatch_service.process_dispatch_batch()
+        converge_stats = dispatch_service.process_status_convergence_batch()
+        totals.update(dispatch_stats)
+        totals.update(converge_stats)
+        totals["dispatch_backlog_oldest_age_seconds"] = (
+            dispatch_service.backlog_oldest_age_seconds()
+        )
+
+        cleanup_service = ProviderEventBlobCleanupService(session)
+        totals["blob_deletions_processed"] = cleanup_service.process_deletion_batch()
+        totals["blob_orphans_removed"] = cleanup_service.sweep_orphan_uncommitted()
+        totals["event_contexts_expired"] = ProviderEventContextService(
+            session,
+        ).sweep_expired_contexts()
 
         dao = ProviderTriggerDAO(session)
         dao.record_worker_heartbeat(

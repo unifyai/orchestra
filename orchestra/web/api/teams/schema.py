@@ -44,6 +44,7 @@ class TeamResponse(BaseModel):
     member_count: Optional[int] = None  # Populated when needed
     members: Optional[List[str]] = None  # User IDs, included when listing teams
     is_org_wide_sharing: bool = False
+    image: Optional[str] = None
 
 
 class TeamWithMembersResponse(BaseModel):
@@ -56,6 +57,7 @@ class TeamWithMembersResponse(BaseModel):
     created_at: datetime
     members: List[str]  # User IDs
     is_org_wide_sharing: bool = False
+    image: Optional[str] = None
 
 
 class TeamSummary(BaseModel):

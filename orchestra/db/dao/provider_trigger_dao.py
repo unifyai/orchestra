@@ -30,6 +30,7 @@ from orchestra.provider_triggers.runtime_types import (
     BlobCommitState,
     BlobDeletionState,
     DesiredTriggerState,
+    DispatchErrorCode,
     DispatchProcessingState,
     GenerationLifecycle,
     GenerationOperationState,
@@ -40,6 +41,8 @@ from orchestra.provider_triggers.trigger_registry import curated_provider_event_
 from orchestra.settings import settings
 
 STALE_RECONCILE_PROCESSING = timedelta(minutes=5)
+BASE_DISPATCH_RETRY_DELAY_MINUTES = 5
+MAX_DISPATCH_RETRY_DELAY_MINUTES = 60
 
 
 class ProviderTriggerDAO:
@@ -238,6 +241,45 @@ class ProviderTriggerDAO:
         self.session.flush()
         return generation
 
+    def get_generation(
+        self,
+        *,
+        generation_id: str,
+        for_update: bool = False,
+    ) -> EventTriggerSubscriptionGeneration | None:
+        """Return one subscription generation by id."""
+
+        query = select(EventTriggerSubscriptionGeneration).where(
+            EventTriggerSubscriptionGeneration.generation_id == generation_id,
+        )
+        if for_update:
+            query = query.with_for_update()
+        return self.session.execute(query).scalar_one_or_none()
+
+    def get_generation_by_ingress_key(
+        self,
+        *,
+        backend_id: str,
+        ingress_key: str,
+    ) -> tuple[EventTriggerSubscriptionGeneration, EventTriggerBinding] | None:
+        """Resolve one generation and its binding from the public ingress key."""
+
+        row = self.session.execute(
+            select(EventTriggerSubscriptionGeneration, EventTriggerBinding)
+            .join(
+                EventTriggerBinding,
+                EventTriggerBinding.binding_id
+                == EventTriggerSubscriptionGeneration.binding_id,
+            )
+            .where(
+                EventTriggerSubscriptionGeneration.ingress_key == ingress_key,
+                EventTriggerBinding.backend_id == backend_id,
+            ),
+        ).one_or_none()
+        if row is None:
+            return None
+        return row[0], row[1]
+
     def promote_generation(
         self,
         *,
@@ -282,6 +324,22 @@ class ProviderTriggerDAO:
         self.session.flush()
         return binding
 
+    def get_receipt_by_identity(
+        self,
+        *,
+        binding_id: str,
+        provider_event_identity_hmac: str,
+    ) -> ProviderEventReceipt | None:
+        """Return the durable receipt for one binding/event identity when present."""
+
+        return self.session.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.binding_id == binding_id,
+                ProviderEventReceipt.provider_event_identity_hmac
+                == provider_event_identity_hmac,
+            ),
+        ).scalar_one_or_none()
+
     def adopt_receipt(
         self,
         *,
@@ -290,17 +348,19 @@ class ProviderTriggerDAO:
         provider_event_identity_hmac: str,
         receipt_id: str | None = None,
         acceptance_authorization_json: dict[str, Any] | None = None,
+        processing_state: str = ReceiptProcessingState.accepted.value,
+        classification_reason: str = "matched",
+        stable_envelope_json: dict[str, Any] | None = None,
+        curated_projection_json: dict[str, Any] | None = None,
+        event_context_expires_at: datetime | None = None,
     ) -> ProviderEventReceipt:
         """Insert or adopt one receipt under the binding identity constraint."""
 
         resolved_receipt_id = receipt_id or f"receipt-{uuid.uuid4().hex[:12]}"
-        existing = self.session.execute(
-            select(ProviderEventReceipt).where(
-                ProviderEventReceipt.binding_id == binding.binding_id,
-                ProviderEventReceipt.provider_event_identity_hmac
-                == provider_event_identity_hmac,
-            ),
-        ).scalar_one_or_none()
+        existing = self.get_receipt_by_identity(
+            binding_id=binding.binding_id,
+            provider_event_identity_hmac=provider_event_identity_hmac,
+        )
         if existing is not None:
             return existing
 
@@ -312,14 +372,18 @@ class ProviderTriggerDAO:
             accepted_activation_revision=generation.desired_activation_revision,
             acceptance_epoch=generation.acceptance_epoch,
             schema_version=binding.schema_version,
-            processing_state=ReceiptProcessingState.accepted.value,
+            processing_state=processing_state,
             acceptance_authorization_json=acceptance_authorization_json or {},
-            classification_reason="matched",
+            classification_reason=classification_reason,
+            stable_envelope_json=stable_envelope_json,
+            curated_projection_json=curated_projection_json,
+            event_context_expires_at=event_context_expires_at,
         )
         self.session.add(receipt)
         self.session.flush()
-        binding.last_accepted_event_at = datetime.now(timezone.utc)
-        self.session.flush()
+        if processing_state != ReceiptProcessingState.ignored.value:
+            binding.last_accepted_event_at = datetime.now(timezone.utc)
+            self.session.flush()
         return receipt
 
     def adopt_dispatch(
@@ -327,16 +391,17 @@ class ProviderTriggerDAO:
         *,
         receipt: ProviderEventReceipt,
         binding: EventTriggerBinding,
+        run_id: int,
+        run_key: str,
+        audience: str,
         operation_id: str | None = None,
-        run_id: int | None = None,
-        run_key: str | None = None,
-        audience: str = "unity",
     ) -> ProviderEventDispatch:
-        """Insert or adopt one dispatch operation for a receipt.
+        """Insert or adopt one dispatch operation for a receipt."""
 
-        TODO: Require the real run_id and run_key from ingress acceptance;
-        remove synthetic defaults once the acceptance transaction creates runs.
-        """
+        if run_id is None or not run_key:
+            raise ValueError("dispatch_requires_run_identity")
+        if not audience:
+            raise ValueError("dispatch_requires_audience")
 
         existing = self.session.execute(
             select(ProviderEventDispatch).where(
@@ -347,16 +412,14 @@ class ProviderTriggerDAO:
             return existing
 
         resolved_operation_id = operation_id or f"op-{uuid.uuid4().hex[:12]}"
-        resolved_run_id = run_id if run_id is not None else 0
-        resolved_run_key = run_key or f"run-{resolved_operation_id}"
         dispatch = ProviderEventDispatch(
             operation_id=resolved_operation_id,
             receipt_id=receipt.receipt_id,
             binding_id=binding.binding_id,
             assistant_id=binding.assistant_id,
             task_id=binding.task_id,
-            run_id=resolved_run_id,
-            run_key=resolved_run_key,
+            run_id=run_id,
+            run_key=run_key,
             dispatch_mode=binding.execution_mode,
             accepted_activation_revision=receipt.accepted_activation_revision,
             event_context_ref=receipt.event_context_ref,
@@ -371,6 +434,353 @@ class ProviderTriggerDAO:
         receipt.run_id = dispatch.run_id
         receipt.dispatch_mode = dispatch.dispatch_mode
         receipt.processing_state = ReceiptProcessingState.dispatch_pending.value
+        self.session.flush()
+        return dispatch
+
+    def get_dispatch_by_operation_id(
+        self,
+        *,
+        operation_id: str,
+        for_update: bool = False,
+    ) -> ProviderEventDispatch | None:
+        """Return one dispatch operation by its immutable operation id."""
+
+        query = select(ProviderEventDispatch).where(
+            ProviderEventDispatch.operation_id == operation_id,
+        )
+        if for_update:
+            query = query.with_for_update()
+        return self.session.execute(query).scalar_one_or_none()
+
+    def get_receipt_by_id(
+        self,
+        *,
+        receipt_id: str,
+    ) -> ProviderEventReceipt | None:
+        """Return one durable receipt by receipt id."""
+
+        return self.session.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.receipt_id == receipt_id,
+            ),
+        ).scalar_one_or_none()
+
+    def _claimable_dispatch_filter(self, now: datetime):
+        """Dispatches due for delivery with an available or expired lease."""
+
+        state_due = ProviderEventDispatch.processing_state.in_(
+            [
+                DispatchProcessingState.pending.value,
+                DispatchProcessingState.retryable.value,
+                DispatchProcessingState.claimed.value,
+            ],
+        )
+        retry_due = or_(
+            ProviderEventDispatch.next_retry_at.is_(None),
+            ProviderEventDispatch.next_retry_at <= now,
+        )
+        lease_available = or_(
+            ProviderEventDispatch.lease_expires_at.is_(None),
+            ProviderEventDispatch.lease_expires_at <= now,
+        )
+        return and_(state_due, retry_due, lease_available)
+
+    def claim_dispatches_for_delivery(
+        self,
+        *,
+        lease_owner: str,
+        limit: int,
+        lease_ttl: timedelta,
+    ) -> list[ProviderEventDispatch]:
+        """Claim a batch of dispatch operations for outbound delivery."""
+
+        now = datetime.now(timezone.utc)
+        claimable = (
+            select(ProviderEventDispatch)
+            .where(self._claimable_dispatch_filter(now))
+            .order_by(ProviderEventDispatch.next_retry_at.asc().nullsfirst())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        dispatches = list(self.session.execute(claimable).scalars())
+        lease_expires_at = now + lease_ttl
+        for dispatch in dispatches:
+            dispatch.processing_state = DispatchProcessingState.claimed.value
+            dispatch.lease_owner = lease_owner
+            dispatch.lease_expires_at = lease_expires_at
+            dispatch.attempt_count += 1
+        if dispatches:
+            self.session.flush()
+        return dispatches
+
+    def _convergeable_dispatch_filter(self, now: datetime):
+        """Dispatches due for downstream status convergence polling."""
+
+        state_due = ProviderEventDispatch.processing_state.in_(
+            [
+                DispatchProcessingState.delivered.value,
+                DispatchProcessingState.started.value,
+            ],
+        )
+        retry_due = or_(
+            ProviderEventDispatch.next_retry_at.is_(None),
+            ProviderEventDispatch.next_retry_at <= now,
+        )
+        return and_(state_due, retry_due)
+
+    def list_dispatches_for_status_convergence(
+        self,
+        *,
+        limit: int,
+    ) -> list[ProviderEventDispatch]:
+        """Return dispatches due for downstream status convergence."""
+
+        now = datetime.now(timezone.utc)
+        rows = self.session.execute(
+            select(ProviderEventDispatch)
+            .where(self._convergeable_dispatch_filter(now))
+            .order_by(ProviderEventDispatch.next_retry_at.asc().nullsfirst())
+            .limit(limit),
+        ).scalars()
+        return list(rows)
+
+    def list_dispatch_backlog(
+        self,
+        *,
+        limit: int,
+    ) -> list[ProviderEventDispatch]:
+        """Return the oldest non-terminal dispatch operations."""
+
+        terminal_states = {
+            DispatchProcessingState.succeeded.value,
+            DispatchProcessingState.failed.value,
+        }
+        rows = self.session.execute(
+            select(ProviderEventDispatch)
+            .where(
+                ProviderEventDispatch.processing_state.notin_(terminal_states),
+            )
+            .order_by(ProviderEventDispatch.created_at.asc())
+            .limit(limit),
+        ).scalars()
+        return list(rows)
+
+    def release_dispatch_lease(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+    ) -> None:
+        """Clear the delivery lease on one dispatch operation."""
+
+        dispatch.lease_owner = None
+        dispatch.lease_expires_at = None
+        self.session.flush()
+
+    def _dispatch_retry_at(self, attempt_count: int) -> datetime:
+        delay_minutes = min(
+            BASE_DISPATCH_RETRY_DELAY_MINUTES * (2 ** max(0, attempt_count - 1)),
+            MAX_DISPATCH_RETRY_DELAY_MINUTES,
+        )
+        return datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+
+    def _sync_receipt_processing_state(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        receipt_state: str,
+    ) -> None:
+        receipt = self.get_receipt_by_id(receipt_id=dispatch.receipt_id)
+        if receipt is None:
+            return
+        receipt.processing_state = receipt_state
+        now = datetime.now(timezone.utc)
+        receipt.last_attempt_at = now
+        if receipt.first_attempt_at is None:
+            receipt.first_attempt_at = now
+        self.session.flush()
+
+    def record_downstream_adoption(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+    ) -> ProviderEventDispatch:
+        """Persist the latest downstream adoption observation."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.downstream_adoption_status = adoption_status
+        dispatch.downstream_adoption_ref = adoption_ref
+        dispatch.downstream_status_at = now
+        self.session.flush()
+        return dispatch
+
+    def mark_dispatch_delivered(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+        poll_after_seconds: int | None = None,
+    ) -> ProviderEventDispatch:
+        """Record successful handoff to the execution rail."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.delivered.value
+        dispatch.delivered_at = now
+        dispatch.terminal_error_code = None
+        poll_seconds = poll_after_seconds or (
+            settings.provider_trigger_dispatch_poll_interval_seconds
+        )
+        dispatch.next_retry_at = now + timedelta(seconds=poll_seconds)
+        self.record_downstream_adoption(
+            dispatch=dispatch,
+            adoption_status=adoption_status,
+            adoption_ref=adoption_ref,
+        )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.dispatched.value,
+        )
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_started(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+        poll_after_seconds: int | None = None,
+    ) -> ProviderEventDispatch:
+        """Record that downstream execution has started."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.started.value
+        if dispatch.started_at is None:
+            dispatch.started_at = now
+        dispatch.terminal_error_code = None
+        poll_seconds = poll_after_seconds or (
+            settings.provider_trigger_dispatch_poll_interval_seconds
+        )
+        dispatch.next_retry_at = now + timedelta(seconds=poll_seconds)
+        self.record_downstream_adoption(
+            dispatch=dispatch,
+            adoption_status=adoption_status,
+            adoption_ref=adoption_ref,
+        )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.started.value,
+        )
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_succeeded(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        adoption_status: str,
+        adoption_ref: str | None = None,
+    ) -> ProviderEventDispatch:
+        """Record terminal success for one dispatch operation."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.succeeded.value
+        dispatch.terminal_at = now
+        dispatch.next_retry_at = None
+        self.record_downstream_adoption(
+            dispatch=dispatch,
+            adoption_status=adoption_status,
+            adoption_ref=adoption_ref,
+        )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.succeeded.value,
+        )
+        receipt = self.get_receipt_by_id(receipt_id=dispatch.receipt_id)
+        if receipt is not None:
+            receipt.terminal_at = now
+            receipt.terminal_reason = adoption_status
+            self.session.flush()
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_failed(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        error_code: str,
+        adoption_status: str | None = None,
+        adoption_ref: str | None = None,
+    ) -> ProviderEventDispatch:
+        """Record terminal failure for one dispatch operation."""
+
+        now = datetime.now(timezone.utc)
+        dispatch.processing_state = DispatchProcessingState.failed.value
+        dispatch.terminal_error_code = error_code
+        dispatch.terminal_at = now
+        dispatch.next_retry_at = None
+        if adoption_status is not None:
+            self.record_downstream_adoption(
+                dispatch=dispatch,
+                adoption_status=adoption_status,
+                adoption_ref=adoption_ref,
+            )
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.failed.value,
+        )
+        receipt = self.get_receipt_by_id(receipt_id=dispatch.receipt_id)
+        if receipt is not None:
+            receipt.terminal_at = now
+            receipt.terminal_reason = error_code
+            self.session.flush()
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def mark_dispatch_retryable(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+        error_code: str,
+    ) -> ProviderEventDispatch:
+        """Schedule a retryable dispatch delivery failure."""
+
+        dispatch.processing_state = DispatchProcessingState.retryable.value
+        dispatch.terminal_error_code = error_code
+        if dispatch.attempt_count >= settings.provider_trigger_dispatch_max_attempts:
+            return self.mark_dispatch_failed(
+                dispatch=dispatch,
+                error_code=DispatchErrorCode.dispatch_max_attempts_exceeded.value,
+            )
+        dispatch.next_retry_at = self._dispatch_retry_at(dispatch.attempt_count)
+        self._sync_receipt_processing_state(
+            dispatch=dispatch,
+            receipt_state=ReceiptProcessingState.retryable.value,
+        )
+        self.release_dispatch_lease(dispatch=dispatch)
+        return dispatch
+
+    def requeue_dispatch_for_repair(
+        self,
+        *,
+        dispatch: ProviderEventDispatch,
+    ) -> ProviderEventDispatch:
+        """Requeue one non-terminal dispatch operation for worker delivery."""
+
+        if dispatch.processing_state in {
+            DispatchProcessingState.succeeded.value,
+            DispatchProcessingState.failed.value,
+            DispatchProcessingState.delivered.value,
+            DispatchProcessingState.started.value,
+        }:
+            raise ValueError("dispatch_not_repairable")
+        dispatch.processing_state = DispatchProcessingState.pending.value
+        dispatch.next_retry_at = datetime.now(timezone.utc)
+        dispatch.lease_owner = None
+        dispatch.lease_expires_at = None
+        dispatch.terminal_error_code = None
         self.session.flush()
         return dispatch
 
@@ -433,34 +843,38 @@ class ProviderTriggerDAO:
         self,
         *,
         receipt: ProviderEventReceipt,
+        reason: str | None = None,
     ) -> tuple[ProviderEventReceipt, ProviderEventBlob | None]:
-        """Mark one receipt's event context unavailable."""
+        """Mark one receipt's event context unavailable and clear readable fields."""
 
-        if not receipt.event_context_ref:
+        if not receipt.event_context_ref and not receipt.stable_envelope_json:
+            if reason and not receipt.event_context_unavailable_reason:
+                receipt.event_context_unavailable_reason = reason
+                self.session.flush()
             return receipt, None
 
-        blob = self.session.execute(
-            select(ProviderEventBlob).where(
-                ProviderEventBlob.blob_id == receipt.event_context_ref,
-            ),
-        ).scalar_one_or_none()
-        if blob is None:
-            receipt.event_context_ref = None
-            receipt.event_context_integrity_hash = None
-            receipt.event_context_size_bytes = None
-            receipt.event_context_content_type = None
-            receipt.event_context_key_version = None
-            self.session.flush()
-            return receipt, None
+        blob = None
+        if receipt.event_context_ref:
+            blob = self.session.execute(
+                select(ProviderEventBlob).where(
+                    ProviderEventBlob.blob_id == receipt.event_context_ref,
+                ),
+            ).scalar_one_or_none()
 
         now = datetime.now(timezone.utc)
-        blob.commit_state = BlobCommitState.unavailable.value
-        blob.unavailable_at = now
+        if blob is not None:
+            blob.commit_state = BlobCommitState.unavailable.value
+            blob.unavailable_at = now
+
         receipt.event_context_ref = None
         receipt.event_context_integrity_hash = None
         receipt.event_context_size_bytes = None
         receipt.event_context_content_type = None
         receipt.event_context_key_version = None
+        receipt.stable_envelope_json = None
+        receipt.curated_projection_json = None
+        if reason:
+            receipt.event_context_unavailable_reason = reason
         self.session.flush()
         return receipt, blob
 

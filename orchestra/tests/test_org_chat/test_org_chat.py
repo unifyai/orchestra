@@ -92,6 +92,18 @@ async def test_presence_heartbeat_reflected_in_roster(client: AsyncClient):
     assert beat.status_code == status.HTTP_200_OK
     assert beat.json() == {"online": True}
 
+    profile_update = await client.put(
+        "/v0/admin/user",
+        headers=ADMIN_HEADERS,
+        json={
+            "user_id": member["id"],
+            "bio": "Roster profile bio",
+            "job_title": "Engineer",
+            "timezone": "America/New_York",
+        },
+    )
+    assert profile_update.status_code == status.HTTP_200_OK, profile_update.json()
+
     roster_response = await client.get(
         f"/v0/organizations/{org['id']}/roster",
         headers=org["headers"],
@@ -104,6 +116,9 @@ async def test_presence_heartbeat_reflected_in_roster(client: AsyncClient):
     assert humans_by_id[member["id"]]["online"] is True
     assert humans_by_id[member["id"]]["last_seen_at"] is not None
     assert humans_by_id[member["id"]]["email"] == f"presence-member@test.com"
+    assert humans_by_id[member["id"]]["bio"] == "Roster profile bio"
+    assert humans_by_id[member["id"]]["job_title"] == "Engineer"
+    assert humans_by_id[member["id"]]["timezone"] == "America/New_York"
 
     assert owner["id"] in humans_by_id
     assert humans_by_id[owner["id"]]["online"] is False

@@ -1,6 +1,7 @@
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, Path, Response, status
 from fastapi.routing import APIRouter
@@ -8,6 +9,7 @@ from starlette.requests import Request
 
 from orchestra.db.dependencies import get_db_session, transient_request_db_session
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
+from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 from orchestra.services.task_mutation_contract import (
     TaskRevisionConflict,
     format_task_etag,
@@ -20,6 +22,12 @@ from orchestra.services.task_trigger_service import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import InfoResponse
+from orchestra.web.api.log.task_machine_admin import _get_internal_project_or_404
+from orchestra.web.api.log.task_machine_schema import ProviderEventContextResponse
+from orchestra.web.api.log.task_machine_user import (
+    delete_owned_task_event_context,
+    read_owned_task_event_context,
+)
 from orchestra.web.api.tasks.schema import (
     RetryTriggerResponse,
     TaskRevisionConflictResponse,
@@ -43,6 +51,34 @@ router = APIRouter()
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
+
+
+@dataclass(frozen=True)
+class _OwnedTaskEventContextScope:
+    assistant_id: int
+    project_id: int
+    actor: str
+
+
+def _owned_task_event_context_scope(
+    request: Request,
+    assistant_id: int,
+    session,
+    *,
+    write: bool,
+) -> _OwnedTaskEventContextScope:
+    assistant = require_owned_assistant(request, assistant_id, session, write=write)
+    project = _get_internal_project_or_404(
+        session,
+        project_name=TASK_MACHINE_PROJECT_NAME,
+        assistant_id=str(assistant.agent_id),
+    )
+    actor = getattr(request.state, "user_id", None) or str(assistant.user_id)
+    return _OwnedTaskEventContextScope(
+        assistant_id=assistant.agent_id,
+        project_id=project.id,
+        actor=actor,
+    )
 
 
 async def _dispatch_task_trigger(target: TaskTriggerTarget) -> str:
@@ -665,6 +701,99 @@ def get_assistant_task_trigger_health(
             event_storage_configured=event_storage_configured,
         ),
     )
+
+
+@router.get(
+    "/assistants/{assistant_id}/tasks/{task_id}/runs/{run_id}/event-context",
+    response_model=InfoResponse[ProviderEventContextResponse],
+    tags=["Tasks"],
+    summary="Inspect one provider-event run context",
+)
+def get_assistant_task_run_event_context(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    run_id: int = Path(..., description="Stable run identifier."),
+    session=Depends(get_db_session),
+) -> InfoResponse[ProviderEventContextResponse]:
+    scope = _owned_task_event_context_scope(
+        request,
+        assistant_id,
+        session,
+        write=False,
+    )
+    return InfoResponse(
+        info=read_owned_task_event_context(
+            session,
+            project_id=scope.project_id,
+            assistant_id=scope.assistant_id,
+            task_id=task_id,
+            run_id=run_id,
+            actor=scope.actor,
+        ),
+    )
+
+
+@router.post(
+    "/assistants/{assistant_id}/tasks/{task_id}/runs/{run_id}/event-context/export",
+    response_model=InfoResponse[ProviderEventContextResponse],
+    tags=["Tasks"],
+    summary="Export one provider-event run context",
+)
+def export_assistant_task_run_event_context(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    run_id: int = Path(..., description="Stable run identifier."),
+    session=Depends(get_db_session),
+) -> InfoResponse[ProviderEventContextResponse]:
+    scope = _owned_task_event_context_scope(
+        request,
+        assistant_id,
+        session,
+        write=False,
+    )
+    return InfoResponse(
+        info=read_owned_task_event_context(
+            session,
+            project_id=scope.project_id,
+            assistant_id=scope.assistant_id,
+            task_id=task_id,
+            run_id=run_id,
+            actor=scope.actor,
+            export=True,
+        ),
+    )
+
+
+@router.delete(
+    "/assistants/{assistant_id}/tasks/{task_id}/runs/{run_id}/event-context",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Tasks"],
+    summary="Delete one provider-event run context",
+)
+def delete_assistant_task_run_event_context(
+    request: Request,
+    assistant_id: int = Path(..., description="Assistant agent id."),
+    task_id: int = Path(..., description="Logical task id."),
+    run_id: int = Path(..., description="Stable run identifier."),
+    session=Depends(get_db_session),
+) -> Response:
+    scope = _owned_task_event_context_scope(
+        request,
+        assistant_id,
+        session,
+        write=True,
+    )
+    delete_owned_task_event_context(
+        session,
+        project_id=scope.project_id,
+        assistant_id=scope.assistant_id,
+        task_id=task_id,
+        run_id=run_id,
+        actor=scope.actor,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

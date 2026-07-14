@@ -80,8 +80,9 @@ def initialize_binding(
 ) -> MutationResult:
     """Create a synthetic binding for lifecycle and concurrency tests.
 
-    TODO: Remove once typed task mutations and ingress acceptance provide the
-    same coverage without synthetic project/task identifiers.
+    # TODO: Purge/Delete — remove once production-path tests cover binding
+    fence/CAS cases via typed Tasks mutations (no synthetic project/task ids).
+    See vault: Provider event trigger contracts#Interim remnants.
     """
 
     resolved_binding_id = binding_id or f"binding-{uuid.uuid4().hex[:12]}"
@@ -224,10 +225,12 @@ def attempt_event_acceptance(
     acceptance_epoch: int,
     provider_event_identity_hmac: str = "identity-test",
 ) -> AcceptanceResult:
-    """Try to accept one provider event under the shared binding lock.
+    """Synthetic acceptance helper retained only for fence-ordering tests.
 
-    TODO: Remove once signed ingress performs real acceptance with payload
-    retention, run creation, and dispatch operation creation.
+    # TODO: Purge/Delete — remove once signed-ingress production-path tests
+    cover pause/edit/delete vs acceptance ordering through
+    ``POST /v0/webhooks/integrations/...`` (real receipt/run/dispatch).
+    See vault: Provider event trigger contracts#Interim remnants.
     """
 
     from sqlalchemy import select
@@ -268,7 +271,8 @@ def attempt_event_acceptance(
         generation=generation_row,
         provider_event_identity_hmac=provider_event_identity_hmac,
     )
-    dao.adopt_dispatch(receipt=receipt, binding=binding)
+    # Synthetic fence tests only need receipt uniqueness under the binding lock.
+    # Production ingress creates the run and dispatch operation instead.
     return AcceptanceResult(
         binding_id=binding.binding_id,
         accepted=True,

@@ -12,16 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Context, LogEvent, Project
-from orchestra.db.models.provider_trigger_models import (
-    EventTriggerBinding,
-    ProviderEventDispatch,
-    ProviderEventReceipt,
-)
-from orchestra.provider_triggers.provider_trigger_mutation import (
-    attempt_event_acceptance,
-    initialize_binding,
-    promote_active_generation,
-)
+from orchestra.db.models.provider_trigger_models import EventTriggerBinding
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     build_task_activation_context_name,
@@ -272,44 +263,5 @@ async def test_delete_tombstones_binding_and_removes_activation(
     assert remaining == []
 
 
-def test_duplicate_acceptance_adopts_one_receipt_and_dispatch(
-    dbsession: Session,
-) -> None:
-    binding_id = initialize_binding(dbsession, desired_state="enabled").binding_id
-    promoted = promote_active_generation(dbsession, binding_id=binding_id)
-
-    first = attempt_event_acceptance(
-        dbsession,
-        binding_id=binding_id,
-        acceptance_epoch=promoted.acceptance_epoch,
-        provider_event_identity_hmac="same-event",
-    )
-    second = attempt_event_acceptance(
-        dbsession,
-        binding_id=binding_id,
-        acceptance_epoch=promoted.acceptance_epoch,
-        provider_event_identity_hmac="same-event",
-    )
-
-    assert first.receipt_id == second.receipt_id
-    receipts = (
-        dbsession.execute(
-            select(ProviderEventReceipt).where(
-                ProviderEventReceipt.binding_id == binding_id,
-            ),
-        )
-        .scalars()
-        .all()
-    )
-    assert len(receipts) == 1
-
-    dispatches = (
-        dbsession.execute(
-            select(ProviderEventDispatch).where(
-                ProviderEventDispatch.binding_id == binding_id,
-            ),
-        )
-        .scalars()
-        .all()
-    )
-    assert len(dispatches) == 1
+# Duplicate receipt/run/dispatch adoption is covered by the signed ingress
+# production-path suite in test_signed_ingress_acceptance.py.

@@ -407,6 +407,27 @@ class LocalBucketService:
             content_type=content_type,
         )
 
+    def upload_team_photo_file(
+        self,
+        file_content: bytes,
+        org_id: int,
+        team_id: int,
+        content_type: str = "image/jpeg",
+    ) -> str:
+        extension = (
+            content_type.split("/")[-1]
+            if content_type and "/" in content_type
+            else "jpg"
+        )
+        file_name = self._generate_unique_filename(file_content)
+        object_path = f"organization/{org_id}/team/{team_id}/{file_name}.{extension}"
+        return self._write_object(
+            self.account_photo_bucket_name,
+            object_path,
+            file_content,
+            content_type=content_type,
+        )
+
     def upload_temp_file(
         self,
         file_content: bytes,

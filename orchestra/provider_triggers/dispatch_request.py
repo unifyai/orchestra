@@ -13,6 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 # names the short-lived credential rail for delivering the dispatch itself.
 EVENT_CONTEXT_AUDIENCE = "orchestra:event-context"
 
+# Short-lived internal credential audiences for delivering one dispatch operation
+# to the live Unity or offline Communication execution rail.
+UNITY_DISPATCH_AUDIENCE = "unity:provider-event-dispatch"
+COMMUNICATION_DISPATCH_AUDIENCE = "communication:provider-event-dispatch"
+
 
 class ProviderEventDispatchRequest(BaseModel):
     """Internal dispatch authorization passed to Communication or Unity."""

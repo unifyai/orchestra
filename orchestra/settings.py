@@ -347,6 +347,15 @@ class Settings(BaseSettings):
     trigger_event_deletion_batch_size: int = int(
         os.environ.get("TRIGGER_EVENT_DELETION_BATCH_SIZE", "25"),
     )
+    trigger_event_context_retention_days: int = int(
+        os.environ.get("TRIGGER_EVENT_CONTEXT_RETENTION_DAYS", "30"),
+    )
+    trigger_event_context_request_ttl_seconds: int = int(
+        os.environ.get("TRIGGER_EVENT_CONTEXT_REQUEST_TTL_SECONDS", "300"),
+    )
+    trigger_event_context_expiry_batch_size: int = int(
+        os.environ.get("TRIGGER_EVENT_CONTEXT_EXPIRY_BATCH_SIZE", "25"),
+    )
     orchestra_trigger_callback_base_url: Optional[str] = os.environ.get(
         "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL",
     )
@@ -379,6 +388,30 @@ class Settings(BaseSettings):
     )
     provider_trigger_health_failure_threshold: int = int(
         os.environ.get("PROVIDER_TRIGGER_HEALTH_FAILURE_THRESHOLD", "3"),
+    )
+    provider_trigger_ingress_max_body_bytes: int = int(
+        os.environ.get("PROVIDER_TRIGGER_INGRESS_MAX_BODY_BYTES", str(1_048_576)),
+    )
+    provider_trigger_ingress_rate_limit_per_minute: int = int(
+        os.environ.get("PROVIDER_TRIGGER_INGRESS_RATE_LIMIT_PER_MINUTE", "120"),
+    )
+    provider_trigger_dispatch_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_BATCH_SIZE", "25"),
+    )
+    provider_trigger_dispatch_status_batch_size: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_STATUS_BATCH_SIZE", "50"),
+    )
+    provider_trigger_dispatch_lease_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_LEASE_SECONDS", "300"),
+    )
+    provider_trigger_dispatch_max_attempts: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_MAX_ATTEMPTS", "8"),
+    )
+    provider_trigger_dispatch_http_timeout_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_HTTP_TIMEOUT_SECONDS", "30"),
+    )
+    provider_trigger_dispatch_poll_interval_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_DISPATCH_POLL_INTERVAL_SECONDS", "10"),
     )
 
     @property
