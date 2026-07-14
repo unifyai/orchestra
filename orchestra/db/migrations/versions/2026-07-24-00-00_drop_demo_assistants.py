@@ -1,7 +1,10 @@
 """Drop sales demo assistant tables and columns.
 
-Fails loud if any ``assistants.demo_id`` rows remain so those assistants must
-be deleted before this migration can run.
+On databases that still have ``assistants.demo_id``, fails loud if any
+non-null rows remain so those assistants must be deleted first.
+
+On fresh installs where the squashed initial schema never created demo
+tables/columns, this is a no-op aside from ``DROP TABLE IF EXISTS``.
 
 Revision ID: drop_demo_assistants
 Revises: provider_trigger_worker
@@ -16,6 +19,24 @@ revision = "drop_demo_assistants"
 down_revision = "provider_trigger_worker"
 branch_labels = None
 depends_on = None
+
+
+def _column_exists(bind, *, table: str, column: str) -> bool:
+    return (
+        bind.execute(
+            sa.text(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = :table
+                  AND column_name = :column
+                """,
+            ),
+            {"table": table, "column": column},
+        ).scalar()
+        is not None
+    )
 
 
 def _drop_fk_on_column(bind, *, table: str, column: str) -> None:
@@ -42,20 +63,22 @@ def _drop_fk_on_column(bind, *, table: str, column: str) -> None:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    remaining = bind.execute(
-        sa.text("SELECT COUNT(*) FROM assistants WHERE demo_id IS NOT NULL"),
-    ).scalar()
-    if remaining:
-        raise RuntimeError(
-            f"Cannot drop demo assistant schema: {remaining} assistant(s) still "
-            "have demo_id set. Delete those assistants (and their "
-            "demo_assistant_meta rows), then re-run this migration.",
-        )
+    if _column_exists(bind, table="assistants", column="demo_id"):
+        remaining = bind.execute(
+            sa.text("SELECT COUNT(*) FROM assistants WHERE demo_id IS NOT NULL"),
+        ).scalar()
+        if remaining:
+            raise RuntimeError(
+                f"Cannot drop demo assistant schema: {remaining} assistant(s) still "
+                "have demo_id set. Delete those assistants (and their "
+                "demo_assistant_meta rows), then re-run this migration.",
+            )
 
-    _drop_fk_on_column(bind, table="assistants", column="demo_id")
-    op.drop_index("idx_assistants_demo_id", table_name="assistants")
-    op.drop_column("assistants", "demo_id")
-    op.drop_table("demo_assistant_meta")
+        _drop_fk_on_column(bind, table="assistants", column="demo_id")
+        op.execute("DROP INDEX IF EXISTS idx_assistants_demo_id")
+        op.execute("ALTER TABLE assistants DROP COLUMN IF EXISTS demo_id")
+
+    op.execute("DROP TABLE IF EXISTS demo_assistant_meta")
 
 
 def downgrade() -> None:
