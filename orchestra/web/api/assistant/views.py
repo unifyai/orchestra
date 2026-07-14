@@ -8210,70 +8210,79 @@ def admin_list_contacts(
         None,
         description="Filter by whatsapp_number",
     ),
+    limit: int = Query(1000, ge=1, le=1000, description="Max contacts to return"),
     session: Session = Depends(get_db_session),
 ) -> List[Contact]:
     """
-    Retrieve all contact logs stored in any context containing "Contacts" (case-sensitive).
-    Supports optional filtering on email, phone, or WhatsApp number.
+    Retrieve contact-context logs matching email / phone / WhatsApp filters.
+
+    At least one filter is required — unbounded cross-tenant Contacts scans are
+    refused (partition prune + memory safety).
     """
     from typing import Any, Dict
 
-    # Find all context IDs whose name contains 'Contacts' (case-sensitive)
-    ctx_ids = (
-        session.execute(select(Context.id).where(Context.name.like("%Contacts%")))
-        .scalars()
-        .all()
-    )
-    if not ctx_ids:
-        return []
-
-    # Build field filters
-    filters = {}
+    filters: Dict[str, Any] = {}
     if email_address is not None:
         filters["email_address"] = email_address
     if phone_number is not None:
         filters["phone_number"] = normalize_phone_parameter(phone_number)
     if whatsapp_number is not None:
         filters["whatsapp_number"] = normalize_phone_parameter(whatsapp_number)
+    if not filters:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "At least one of email_address, phone_number, or "
+                "whatsapp_number is required"
+            ),
+        )
 
-    # Retrieve matching log_event IDs
+    # Contexts named …Contacts… with their project_id (needed for prune).
+    ctx_rows = session.execute(
+        select(Context.id, Context.project_id).where(Context.name.like("%Contacts%")),
+    ).all()
+    if not ctx_rows:
+        return []
+
+    by_project: Dict[int, List[int]] = {}
+    for ctx_id, project_id in ctx_rows:
+        by_project.setdefault(int(project_id), []).append(int(ctx_id))
+
     log_event_dao = LogEventDAO(session)
-    if filters:
-        event_ids = log_event_dao.get_ids_by_filter(
-            project_id=None,
+    event_ids: List[int] = []
+    for project_id, ctx_ids in by_project.items():
+        if len(event_ids) >= limit:
+            break
+        remaining = limit - len(event_ids)
+        ids = log_event_dao.get_ids_by_filter(
+            project_id=project_id,
             filters=filters,
             context_ids=ctx_ids,
         )
-    else:
-        event_ids = []
-        for cid in ctx_ids:
-            rows = log_event_dao.filter(context_id=cid)
-            for r in rows:
-                evt = r[0]
-                event_ids.append(evt.id)
+        event_ids.extend(ids[:remaining])
     if not event_ids:
         return []
 
-    # Fetch log entries and assemble contacts per event
     grouped: Dict[int, Dict[str, Any]] = {}
-
-    # Query LogEvent.data directly
-    query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
-    rows = session.execute(query).all()
-
-    for event_id, data in rows:
-        # data is already a dict from JSONB column
+    rows = session.execute(
+        select(LogEvent.id, LogEvent.data, LogEvent.project_id).where(
+            LogEvent.id.in_(event_ids),
+            LogEvent.project_id.in_(list(by_project.keys())),
+        ),
+    ).all()
+    for event_id, data, _pid in rows:
         grouped[event_id] = dict(data) if data else {}
 
-    # Fetch user_id for each log_event via project
-    rows = session.execute(
+    user_rows = session.execute(
         select(LogEvent.id, Project.user_id)
         .join(Project, LogEvent.project_id == Project.id)
-        .where(LogEvent.id.in_(event_ids)),
+        .where(
+            LogEvent.id.in_(event_ids),
+            LogEvent.project_id.in_(list(by_project.keys())),
+        ),
     )
-    user_map = {evt: uid for evt, uid in rows}
+    user_map = {evt: uid for evt, uid in user_rows}
 
-    # Build final contact list with user_id
     results = []
     for eid, data in grouped.items():
         contact: Dict[str, Any] = {}

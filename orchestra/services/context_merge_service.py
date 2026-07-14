@@ -175,27 +175,54 @@ def _target_name(source_name: str, *, source_prefix: str, target_prefix: str) ->
     return target_prefix + source_name[len(source_prefix) :]
 
 
+_CONTEXT_LOG_PAGE = 2000
+
+
+def _iter_context_log_rows(
+    session: Session,
+    project_id: int,
+    context_id: int,
+    *,
+    page_size: int = _CONTEXT_LOG_PAGE,
+):
+    """Keyset-iterate ``(id, data)`` for a context (never one giant fetch)."""
+    last_id = 0
+    while True:
+        rows = session.execute(
+            text(
+                """
+                SELECT le.id, le.data
+                FROM log_event le
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                 AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
+                  AND le.id > :last_id
+                ORDER BY le.id
+                LIMIT :limit
+                """,
+            ),
+            {
+                "project_id": project_id,
+                "context_id": context_id,
+                "last_id": last_id,
+                "limit": page_size,
+            },
+        ).fetchall()
+        if not rows:
+            return
+        for row in rows:
+            yield int(row[0]), row[1]
+        last_id = int(rows[-1][0])
+
+
 def _context_log_rows(
     session: Session,
     project_id: int,
     context_id: int,
 ) -> List[Tuple[int, Dict[str, Any]]]:
-    rows = session.execute(
-        text(
-            """
-            SELECT le.id, le.data
-            FROM log_event le
-            JOIN log_event_context lec
-              ON lec.log_event_id = le.id
-             AND lec.project_id = le.project_id
-            WHERE le.project_id = :project_id
-              AND lec.context_id = :context_id
-            ORDER BY le.id
-            """,
-        ),
-        {"project_id": project_id, "context_id": context_id},
-    ).fetchall()
-    return [(row[0], row[1]) for row in rows]
+    return list(_iter_context_log_rows(session, project_id, context_id))
 
 
 def _log_rows_by_ids(
@@ -831,23 +858,42 @@ def _apply_remap_to_field(
         )
         return
 
-    for log_id, data in _context_log_rows(session, project_id, context_id):
+    pending: List[Tuple[int, str]] = []
+    for log_id, data in _iter_context_log_rows(session, project_id, context_id):
         if _remap_nested_value(data, segments, remap):
-            session.execute(
-                text(
-                    """
-                    UPDATE log_event
-                    SET data = CAST(:data AS jsonb)
-                    WHERE project_id = :project_id
-                      AND id = :log_id
-                    """,
-                ),
-                {
-                    "project_id": project_id,
-                    "log_id": log_id,
-                    "data": json.dumps(data),
-                },
-            )
+            pending.append((log_id, json.dumps(data)))
+        if len(pending) >= 500:
+            _flush_remap_updates(session, project_id, pending)
+            pending.clear()
+    if pending:
+        _flush_remap_updates(session, project_id, pending)
+
+
+def _flush_remap_updates(
+    session: Session,
+    project_id: int,
+    pending: List[Tuple[int, str]],
+) -> None:
+    """Apply a batch of remapped JSONB payloads via unnest."""
+    if not pending:
+        return
+    ids = [p[0] for p in pending]
+    payloads = [p[1] for p in pending]
+    session.execute(
+        text(
+            """
+            UPDATE log_event le
+            SET data = CAST(v.payload AS jsonb)
+            FROM unnest(
+                CAST(:ids AS bigint[]),
+                CAST(:payloads AS text[])
+            ) AS v(id, payload)
+            WHERE le.project_id = :project_id
+              AND le.id = v.id
+            """,
+        ),
+        {"project_id": project_id, "ids": ids, "payloads": payloads},
+    )
 
 
 def _propagate_key_remaps(

@@ -11,7 +11,7 @@ from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.log_queries import log_event_context_join, project_scope
+from orchestra.db.log_queries import project_scope
 from orchestra.db.models.core_models import (
     ActiveDerivedLog,
     Context,
@@ -660,27 +660,24 @@ class ContextDAO:
 
         ref_context_id = ref_context[0][0].id
 
-        # Check if the referenced value exists
-        json_str = json.dumps(fk_value)
-
-        query = text(
-            """
-            SELECT COUNT(*)
-            FROM log l
-            JOIN log_event_log lel ON l.id = lel.log_id
-            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
-            WHERE lec.context_id = :context_id
-              AND l.key = :column_name
-              AND l.value = CAST(:json_str AS jsonb)
-        """,
-        )
-
+        # JSONB containment against the referenced context (EAV tables are gone).
         result = self.session.execute(
-            query,
+            text(
+                """
+                SELECT COUNT(*)
+                FROM log_event le
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                 AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
+                  AND le.data @> CAST(:json_obj AS jsonb)
+                """,
+            ),
             {
+                "project_id": project_id,
                 "context_id": ref_context_id,
-                "column_name": ref_column_name,
-                "json_str": json_str,
+                "json_obj": json.dumps({ref_column_name: fk_value}),
             },
         )
         count = result.scalar()
@@ -743,34 +740,31 @@ class ContextDAO:
 
         ref_context_id = ref_context[0][0].id
 
-        # Validate all extracted values exist in referenced table
-        json_values = [json.dumps(v) for v in values]
-        placeholders = ", ".join([f":val_{i}" for i in range(len(json_values))])
-
-        query = text(
-            f"""
-            SELECT DISTINCT l.value
-            FROM log l
-            JOIN log_event_log lel ON l.id = lel.log_id
-            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
-            WHERE lec.context_id = :context_id
-              AND l.key = :column_name
-              AND l.value::text IN ({placeholders})
-        """,
-        )
-
-        params = {
-            "context_id": ref_context_id,
-            "column_name": ref_column_name,
-        }
-        for i, json_val in enumerate(json_values):
-            params[f"val_{i}"] = json_val
-
-        result = self.session.execute(query, params)
-        valid_values = set(row[0] for row in result.fetchall())
-
-        # Check for invalid values
-        invalid_values = set(values) - valid_values
+        # Validate extracted values exist in referenced table (JSONB @>).
+        invalid_values = []
+        for fk_value in values:
+            exists = self.session.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
+                    WHERE le.project_id = :project_id
+                      AND lec.context_id = :context_id
+                      AND le.data @> CAST(:json_obj AS jsonb)
+                    LIMIT 1
+                    """,
+                ),
+                {
+                    "project_id": project_id,
+                    "context_id": ref_context_id,
+                    "json_obj": json.dumps({ref_column_name: fk_value}),
+                },
+            ).scalar()
+            if not exists:
+                invalid_values.append(fk_value)
         if invalid_values:
             # Format invalid values for error message
             invalid_str = ", ".join([str(v) for v in list(invalid_values)[:3]])
@@ -3763,128 +3757,6 @@ class ContextDAO:
                 unique_keys=None,
             )
 
-    def check_for_duplicates(self, context_id: int, log_event_id: int) -> bool:
-        """
-        Check if a log event would create duplicates in the context using a single SQL query.
-
-        Args:
-            context_id: ID of the context to check
-            log_event_id: ID of the log event to check for duplicates
-
-        Returns:
-            True if duplicates are found, False otherwise
-        """
-        query = """
-        WITH new_log_pairs AS (
-            SELECT l.key, l.value
-            FROM log l
-            JOIN log_event_log lel ON l.id = lel.log_id
-            WHERE lel.log_event_id = :log_event_id
-        ),
-        context_log_events AS (
-            SELECT le.id
-            FROM log_event le
-            JOIN log_event_context lec ON le.id = lec.log_event_id
-            AND le.project_id = lec.project_id
-            WHERE le.project_id = :project_id
-              AND lec.context_id = :context_id AND le.id != :log_event_id
-        ),
-        potential_duplicates AS (
-            SELECT
-                cle.id,
-                COUNT(*) as pair_count
-            FROM context_log_events cle
-            JOIN log_event_log lel ON cle.id = lel.log_event_id
-            JOIN log l ON lel.log_id = l.id
-            GROUP BY cle.id
-            HAVING COUNT(*) = (SELECT COUNT(*) FROM new_log_pairs)
-        ),
-        matching_pairs AS (
-            SELECT
-                pd.id,
-                COUNT(*) as matching_count
-            FROM potential_duplicates pd
-            JOIN log_event_log lel ON pd.id = lel.log_event_id
-            JOIN log l ON lel.log_id = l.id
-            JOIN new_log_pairs nlp ON l.key = nlp.key AND l.value = nlp.value
-            GROUP BY pd.id
-        )
-        SELECT EXISTS (
-            SELECT 1 FROM matching_pairs mp
-            JOIN potential_duplicates pd ON mp.id = pd.id
-            WHERE mp.matching_count = pd.pair_count
-        ) as has_duplicate
-        """
-        project_id = self._project_id_for_context(context_id)
-        result = self.session.execute(
-            text(query),
-            {
-                "context_id": context_id,
-                "log_event_id": log_event_id,
-                "project_id": project_id,
-            },
-        )
-        return result.scalar()
-
-    def check_for_duplicates_subset(
-        self,
-        context_id: int,
-        log_event_id: int,
-        keys_to_check: List[str],
-    ) -> bool:
-        """
-        Check for duplicates based only on a subset of keys.
-
-        Returns True if there exists another log_event in the same context whose
-        values for keys_to_check match the updated log_event's values for those keys.
-
-        Note: For batch operations, use `check_for_duplicates_subset_batch` to avoid
-        N+1 queries. This method executes one query per call.
-        """
-        if not keys_to_check:
-            return False
-
-        query = """
-        WITH updated_pairs AS (
-            SELECT l.key, l.value
-            FROM log l
-            JOIN log_event_log lel ON l.id = lel.log_id
-            WHERE lel.log_event_id = :log_event_id AND l.key = ANY(:keys)
-        ),
-        context_other_events AS (
-            SELECT le.id
-            FROM log_event le
-            JOIN log_event_context lec ON le.id = lec.log_event_id
-            AND le.project_id = lec.project_id
-            WHERE le.project_id = :project_id
-              AND lec.context_id = :context_id AND le.id != :log_event_id
-        ),
-        matching_other AS (
-            SELECT cle.id, COUNT(*) AS match_count
-            FROM context_other_events cle
-            JOIN log_event_log lel ON cle.id = lel.log_event_id
-            JOIN log l ON lel.log_id = l.id
-            JOIN updated_pairs up ON up.key = l.key AND up.value = l.value
-            WHERE l.key = ANY(:keys)
-            GROUP BY cle.id
-        )
-        SELECT EXISTS (
-            SELECT 1 FROM matching_other WHERE match_count = :num_keys
-        ) AS has_duplicate
-        """
-        project_id = self._project_id_for_context(context_id)
-        result = self.session.execute(
-            text(query),
-            {
-                "context_id": context_id,
-                "log_event_id": log_event_id,
-                "keys": keys_to_check,
-                "num_keys": len(keys_to_check),
-                "project_id": project_id,
-            },
-        )
-        return result.scalar()
-
     def check_for_duplicates_subset_batch(
         self,
         context_id: int,
@@ -4335,27 +4207,11 @@ class ContextDAO:
         project_version: Optional[ProjectVersion] = None,
         prev_commit_hash: Optional[str] = None,
     ) -> None:
-        """Creates a snapshot of the context's current state."""
-        return self.create_version_snapshot(
-            context=context,
-            commit_hash=commit_hash,
-            commit_message=commit_message,
-            project_version=project_version,
-            prev_commit_hash=prev_commit_hash,
-        )
-
-    def create_version_snapshot(
-        self,
-        context: Context,
-        commit_hash: str,
-        commit_message: Optional[str] = None,
-        project_version: Optional[ProjectVersion] = None,
-        prev_commit_hash: Optional[str] = None,
-    ) -> None:
         """Creates a snapshot of the context's current state.
 
         This method stores complete JSONB documents in LogEventVersion (one row per event),
-        capturing both data and key_order for each log event.
+        capturing both data and key_order for each log event. Uses ``INSERT … SELECT``
+        so large contexts never materialize every row in Python.
         """
         if not context.is_versioned:
             return
@@ -4389,41 +4245,35 @@ class ContextDAO:
                     commit_hash,
                 ]
 
-        # 2. Get all LogEvents for the context with their JSONB data
-        log_events = (
-            self.session.query(
-                LogEvent.id,
-                LogEvent.data,
-                LogEvent.key_order,
-                LogEvent.created_at,
-                LogEvent.updated_at,
-            )
-            .join(LogEventContext, log_event_context_join())
-            .filter(
-                LogEvent.project_id == context.project_id,
-                LogEventContext.context_id == context.id,
-            )
-            .all()
+        # 2. Snapshot via INSERT…SELECT (set-based; no Python materialization)
+        self.session.execute(
+            text(
+                """
+                INSERT INTO log_event_version (
+                    context_version_id, log_event_id, data, key_order,
+                    created_at, updated_at
+                )
+                SELECT
+                    :context_version_id,
+                    le.id,
+                    le.data,
+                    le.key_order,
+                    le.created_at,
+                    le.updated_at
+                FROM log_event le
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                 AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
+                """,
+            ),
+            {
+                "context_version_id": context_version.id,
+                "project_id": context.project_id,
+                "context_id": context.id,
+            },
         )
-
-        if not log_events:
-            return
-
-        # 3. Create LogEventVersion snapshots
-        log_event_versions = [
-            LogEventVersion(
-                context_version_id=context_version.id,
-                log_event_id=le.id,
-                data=le.data,
-                key_order=le.key_order,
-                created_at=le.created_at,
-                updated_at=le.updated_at,
-            )
-            for le in log_events
-        ]
-
-        # 4. Bulk insert the log event snapshots for efficiency
-        self.session.bulk_save_objects(log_event_versions)
 
     def rollback_to_version(
         self,
@@ -4437,17 +4287,9 @@ class ContextDAO:
 
         This method only prepares the operations and does NOT commit.
         """
-        # 1. Query all LogEventVersion snapshots for the target version
-        log_event_versions = (
-            self.session.query(LogEventVersion)
-            .filter_by(context_version_id=context_version_id)
-            .all()
-        )
-
-        # 2. Get the context for project_id
         context = self.session.query(Context).filter_by(id=context_id).one()
 
-        # 3. Clear existing context associations (project-scoped so the
+        # Clear existing context associations (project-scoped so the
         # partitioned delete prunes to one partition).
         self.session.query(LogEventContext).filter(
             LogEventContext.project_id == context.project_id,
@@ -4456,47 +4298,62 @@ class ContextDAO:
             synchronize_session=False,
         )
 
-        if not log_event_versions:
-            return
-
         from orchestra.db.scope import owner_key_for_context
 
         ok = owner_key_for_context(self.session, context_id)
-
-        # 4. Bulk insert new LogEvents with RETURNING to get IDs
-        stmt = (
-            pg_insert(LogEvent)
-            .values(
-                [
-                    {
-                        "project_id": context.project_id,
-                        "data": lev.data,
-                        "key_order": lev.key_order,
-                        "created_at": lev.created_at,
-                        "updated_at": lev.updated_at,
-                        "owner_key": ok,
-                    }
-                    for lev in log_event_versions
-                ],
+        _ROLLBACK_PAGE = 2000
+        last_lev_id = 0
+        restored_any = False
+        while True:
+            page = (
+                self.session.query(LogEventVersion)
+                .filter(
+                    LogEventVersion.context_version_id == context_version_id,
+                    LogEventVersion.id > last_lev_id,
+                )
+                .order_by(LogEventVersion.id)
+                .limit(_ROLLBACK_PAGE)
+                .all()
             )
-            .returning(LogEvent.id)
-        )
-        result = self.session.execute(stmt)
-        new_log_event_ids = [row[0] for row in result]
+            if not page:
+                break
+            restored_any = True
+            last_lev_id = page[-1].id
+            stmt = (
+                pg_insert(LogEvent)
+                .values(
+                    [
+                        {
+                            "project_id": context.project_id,
+                            "data": lev.data,
+                            "key_order": lev.key_order,
+                            "created_at": lev.created_at,
+                            "updated_at": lev.updated_at,
+                            "owner_key": ok,
+                        }
+                        for lev in page
+                    ],
+                )
+                .returning(LogEvent.id)
+            )
+            new_log_event_ids = [row[0] for row in self.session.execute(stmt)]
+            if new_log_event_ids:
+                self.session.execute(
+                    pg_insert(LogEventContext).values(
+                        [
+                            {
+                                "project_id": context.project_id,
+                                "log_event_id": le_id,
+                                "context_id": context_id,
+                                "owner_key": ok,
+                            }
+                            for le_id in new_log_event_ids
+                        ],
+                    ),
+                )
 
-        # 5. Bulk insert LogEventContext associations
-        if new_log_event_ids:
-            assoc_values = [
-                {
-                    "project_id": context.project_id,
-                    "log_event_id": le_id,
-                    "context_id": context_id,
-                    "owner_key": ok,
-                }
-                for le_id in new_log_event_ids
-            ]
-            stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
-            self.session.execute(stmt_assoc)
+        if not restored_any:
+            return
 
         # The restored rows carry their counter columns (e.g. row_id) verbatim
         # and bypass get_next_composite_ids, so re-sync the materialized counter
@@ -4512,26 +4369,40 @@ class ContextDAO:
     # Deep-copy helpers (used by admin_copy_context endpoint)
     # -------------------------------------------------------------------------
 
+    def iter_log_event_id_pages(
+        self,
+        context_id: int,
+        *,
+        page_size: int = 10_000,
+    ):
+        """Yield ordered pages of log event IDs (keyset; never one giant list)."""
+        pid = self._project_id_for_context(context_id)
+        last_id = 0
+        while True:
+            stmt = select(LogEventContext.log_event_id).where(
+                LogEventContext.context_id == context_id,
+                LogEventContext.log_event_id > last_id,
+            )
+            if pid is not None:
+                stmt = stmt.where(LogEventContext.project_id == pid)
+            rows = self.session.execute(
+                stmt.order_by(LogEventContext.log_event_id).limit(page_size),
+            ).fetchall()
+            if not rows:
+                return
+            ids = [int(row[0]) for row in rows]
+            yield ids
+            last_id = ids[-1]
+
     def get_log_event_ids(self, context_id: int) -> List[int]:
         """Return ordered list of log event IDs in a context.
 
-        Args:
-            context_id: The context to query.
-
-        Returns:
-            Sorted list of log event IDs.
+        Prefer :meth:`iter_log_event_id_pages` for large contexts.
         """
-        stmt = select(LogEventContext.log_event_id).where(
-            LogEventContext.context_id == context_id,
-        )
-        # Redundant project_id predicate to prune the LIST(project_id) partitions.
-        pid = self._project_id_for_context(context_id)
-        if pid is not None:
-            stmt = stmt.where(LogEventContext.project_id == pid)
-        rows = self.session.execute(
-            stmt.order_by(LogEventContext.log_event_id),
-        ).fetchall()
-        return [row[0] for row in rows]
+        out: List[int] = []
+        for page in self.iter_log_event_id_pages(context_id):
+            out.extend(page)
+        return out
 
     def batch_copy_log_events(
         self,
@@ -4694,14 +4565,16 @@ class ContextDAO:
         for offset in range(0, len(old_ids), batch_size):
             batch_old = old_ids[offset : offset + batch_size]
 
-            rows = (
-                self.session.query(LogUniqueConstraint)
-                .filter(
-                    LogUniqueConstraint.context_id == source_context_id,
-                    LogUniqueConstraint.log_event_id.in_(batch_old),
-                )
-                .all()
+            source_project_id = self._project_id_for_context(source_context_id)
+            luc_q = self.session.query(LogUniqueConstraint).filter(
+                LogUniqueConstraint.context_id == source_context_id,
+                LogUniqueConstraint.log_event_id.in_(batch_old),
             )
+            if source_project_id is not None:
+                luc_q = luc_q.filter(
+                    LogUniqueConstraint.project_id == source_project_id,
+                )
+            rows = luc_q.all()
             if not rows:
                 continue
 

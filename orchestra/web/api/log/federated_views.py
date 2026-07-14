@@ -248,10 +248,15 @@ def get_federated_logs(
     exact_window = all(spec.missing == "last" for spec in request.sorting)
     window = request.offset + request.limit
     count_only = request.limit == 0
+    # Cap branch fetches even for missing='first' so large contexts cannot
+    # unbounded-materialize. Over-fetch a window multiple for approximate merge.
+    _FEDERATED_BRANCH_HARD_CAP = 10_000
     if count_only:
         branch_limit: Optional[int] = 1
+    elif exact_window:
+        branch_limit = window
     else:
-        branch_limit = window if exact_window else None
+        branch_limit = min(max(window * 5, window), _FEDERATED_BRANCH_HARD_CAP)
 
     backend_sorting = None
     if request.sorting:

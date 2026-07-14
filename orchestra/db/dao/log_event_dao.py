@@ -2096,7 +2096,19 @@ class LogEventDAO:
             if project_id:
                 setattr(entry, "project_id", project_id)
 
-    def delete(self, id: Union[int, List[int]]):
+    def delete(
+        self,
+        id: Union[int, List[int]],
+        *,
+        commit: bool = True,
+        project_id: Optional[int] = None,
+    ):
+        """Delete log events and their lec / luc / embedding children.
+
+        ``commit=False`` keeps the work in the caller's transaction (e.g. unique-
+        conflict rollback mid-create). When ``project_id`` is known, pass it so
+        embedding cleanup always prunes; otherwise it is resolved from the rows.
+        """
         ids = id if isinstance(id, list) else [id]
         if not ids:
             return
@@ -2107,18 +2119,25 @@ class LogEventDAO:
             # them all. Logs deleted together share a project in practice; handle
             # multiple defensively via IN, and only pass a scalar project_id to the
             # embedding cleanup (its pruning hint) when it is unambiguous.
-            project_ids = [
-                row[0]
-                for row in self.session.query(LogEvent.project_id)
-                .filter(LogEvent.id.in_(ids))
-                .distinct()
-                .all()
-            ]
-            scope_pid = project_ids[0] if len(project_ids) == 1 else None
+            if project_id is not None:
+                project_ids = [project_id]
+            else:
+                project_ids = [
+                    row[0]
+                    for row in self.session.query(LogEvent.project_id)
+                    .filter(LogEvent.id.in_(ids))
+                    .distinct()
+                    .all()
+                ]
+            if len(project_ids) != 1:
+                raise ValueError(
+                    "LogEventDAO.delete requires a single project_id scope; "
+                    f"got {project_ids!r} for {len(ids)} ids",
+                )
+            scope_pid = project_ids[0]
 
             # Delete associated GCS media BEFORE deleting DB records.
-            if project_ids:
-                self._bulk_delete_gcs_media(ids, project_ids[0])
+            self._bulk_delete_gcs_media(ids, scope_pid)
 
             # Embedding cleanup before hard delete: cancel pending queue items
             # (prevents worker race conditions), soft-delete embeddings (excludes
@@ -2134,43 +2153,38 @@ class LogEventDAO:
                 project_id=scope_pid,
                 reason="Log deleted",
             )
-            embedding_dao.soft_delete(log_event_ids=ids, project_id=scope_pid)
+            embedding_dao.soft_delete(
+                log_event_ids=ids,
+                project_id=scope_pid,
+                commit=commit,
+            )
             embedding_dao.null_ref_ids(log_event_ids=ids, project_id=scope_pid)
 
             # First, delete the association rows referencing these log events
-            lec_query = self.session.query(LogEventContext).filter(
+            self.session.query(LogEventContext).filter(
                 LogEventContext.log_event_id.in_(ids),
-            )
-            if project_ids:
-                lec_query = lec_query.filter(
-                    LogEventContext.project_id.in_(project_ids),
-                )
-            lec_query.delete(synchronize_session=False)
+                LogEventContext.project_id == scope_pid,
+            ).delete(synchronize_session=False)
 
             # The log_unique_constraint -> log_event FK was removed for
             # partitioning, so its rows are no longer cascade-deleted; remove
-            # them explicitly to avoid orphaned uniqueness rows. Prefer
-            # project_id scope when known so the delete hits the project index.
-            luc_query = self.session.query(LogUniqueConstraint).filter(
+            # them explicitly to avoid orphaned uniqueness rows.
+            self.session.query(LogUniqueConstraint).filter(
                 LogUniqueConstraint.log_event_id.in_(ids),
-            )
-            if project_ids:
-                luc_query = luc_query.filter(
-                    LogUniqueConstraint.project_id.in_(project_ids),
-                )
-            luc_query.delete(synchronize_session=False)
+                LogUniqueConstraint.project_id == scope_pid,
+            ).delete(synchronize_session=False)
 
-            # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)
-            le_query = self.session.query(LogEvent).filter(
+            # Then, delete the log event(s) themselves
+            self.session.query(LogEvent).filter(
                 LogEvent.id.in_(ids),
-            )
-            if project_ids:
-                le_query = le_query.filter(LogEvent.project_id.in_(project_ids))
-            le_query.delete(synchronize_session=False)
+                LogEvent.project_id == scope_pid,
+            ).delete(synchronize_session=False)
 
-            self.session.commit()
+            if commit:
+                self.session.commit()
         except Exception as e:
-            self.session.rollback()
+            if commit:
+                self.session.rollback()
             raise ValueError(f"Failed to delete log events: {e}")
 
     def reproject_logs(

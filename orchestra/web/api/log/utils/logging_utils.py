@@ -2073,16 +2073,14 @@ def _create_logs_internal(
                 if conflicts:
                     surviving_updates = []
                     surviving_indices = []
+                    conflict_ids: List[int] = []
                     for idx, (log_event_id, log_data, key_order) in enumerate(
                         log_data_updates,
                     ):
                         compacted_index = successful_indices[idx]
                         if log_event_id in conflicts:
                             field_name, _value = conflicts[log_event_id]
-                            try:
-                                log_event_dao.delete(log_event_id)
-                            except Exception:
-                                pass
+                            conflict_ids.append(log_event_id)
                             failed_logs.append(
                                 {
                                     "index": original_index_map[compacted_index],
@@ -2097,6 +2095,15 @@ def _create_logs_internal(
                                 (log_event_id, log_data, key_order),
                             )
                             surviving_indices.append(compacted_index)
+                    if conflict_ids:
+                        try:
+                            log_event_dao.delete(
+                                conflict_ids,
+                                commit=False,
+                                project_id=project_id,
+                            )
+                        except Exception:
+                            pass
                     log_data_updates = surviving_updates
                     successful_indices = surviving_indices
                     new_log_ids = [
@@ -2120,11 +2127,14 @@ def _create_logs_internal(
                             context_id=context_id,
                             project_id=project_id,
                         )
-                        for log_event_id in new_log_ids:
-                            try:
-                                log_event_dao.delete(log_event_id)
-                            except Exception:
-                                pass
+                        try:
+                            log_event_dao.delete(
+                                new_log_ids,
+                                commit=False,
+                                project_id=project_id,
+                            )
+                        except Exception:
+                            pass
                         raise HTTPException(
                             status_code=400,
                             detail=(
@@ -2143,7 +2153,7 @@ def _create_logs_internal(
                 )
 
                 if duplicate:
-                    dup_log_id, field_name, _ = duplicate
+                    _dup_log_id, field_name, _ = duplicate
 
                     # Clean up: remove constraints for all new logs
                     unique_dao.remove_constraints_for_logs(
@@ -2152,12 +2162,14 @@ def _create_logs_internal(
                         project_id=project_id,
                     )
 
-                    # Delete all the log events we just created
-                    for log_event_id in new_log_ids:
-                        try:
-                            log_event_dao.delete(log_event_id)
-                        except Exception:
-                            pass
+                    try:
+                        log_event_dao.delete(
+                            new_log_ids,
+                            commit=False,
+                            project_id=project_id,
+                        )
+                    except Exception:
+                        pass
 
                     raise HTTPException(
                         status_code=400,
@@ -4581,30 +4593,30 @@ def _join_logs_internal(
             project_id=project_id,
         )
 
-        # --- Phase 3: Execute the join query ---
-        result_rows = session.execute(joined_query).fetchall()
-
-        if not result_rows:
-            return []
-
-        # Get source context IDs for field type lookups
-        source_contexts = {}
-        context_a_id = context_dao.get_or_create(project_id, name=context_a)
-        context_b_id = context_dao.get_or_create(project_id, name=context_b)
-        source_contexts["A"] = context_a_id
-        source_contexts["B"] = context_b_id
-
-        # --- Phase 4: Create new log entries from joined results ---
-        new_log_ids = _create_logs_from_joined_rows(
-            result_rows=result_rows,
-            project_id=project_id,
-            context_id=context_id,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            source_contexts=source_contexts,
-            columns=columns,
-        )
+        # --- Phase 3/4: Stream join results into creates (no full cartesian hold) ---
+        source_contexts = {
+            "A": context_dao.get_or_create(project_id, name=context_a),
+            "B": context_dao.get_or_create(project_id, name=context_b),
+        }
+        result = session.execute(joined_query)
+        new_log_ids: List[int] = []
+        _JOIN_CREATE_CHUNK = 2000
+        while True:
+            chunk = result.fetchmany(_JOIN_CREATE_CHUNK)
+            if not chunk:
+                break
+            new_log_ids.extend(
+                _create_logs_from_joined_rows(
+                    result_rows=chunk,
+                    project_id=project_id,
+                    context_id=context_id,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                    source_contexts=source_contexts,
+                    columns=columns,
+                ),
+            )
 
         # --- Phase 5: Commit ---
         session.commit()

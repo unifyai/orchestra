@@ -297,7 +297,7 @@ def admin_filter_bridge(
     logs_out, _ = _format_logs(
         rows=rows,
         field_types=field_types,
-        value_limit=None,
+        value_limit=1000,
         column_context=body.column_context,
         field_order_map=field_order_map,
         from_fields=body.from_fields,

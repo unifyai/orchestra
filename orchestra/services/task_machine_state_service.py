@@ -2188,6 +2188,7 @@ def _delete_activation_rows_by_task_destination(
         .all()
     )
     deleted_payloads: list[dict[str, Any]] = []
+    log_ids_by_context: dict[int, list[int]] = {}
     for log_event, context_id in rows:
         payload = dict(log_event.data or {})
         activation_key = _coerce_optional_str(
@@ -2195,14 +2196,34 @@ def _delete_activation_rows_by_task_destination(
         )
         if not activation_key:
             continue
-        if _delete_machine_row_by_unique_field(
+        log_ids_by_context.setdefault(int(context_id), []).append(int(log_event.id))
+        deleted_payloads.append(payload)
+
+    all_log_ids: list[int] = []
+    for context_id, log_ids in log_ids_by_context.items():
+        all_log_ids.extend(log_ids)
+        session.execute(
+            delete(LogUniqueConstraint).where(
+                LogUniqueConstraint.project_id == project_id,
+                LogUniqueConstraint.context_id == context_id,
+                LogUniqueConstraint.log_event_id.in_(log_ids),
+            ),
+        )
+        session.execute(
+            delete(LogEventContext).where(
+                LogEventContext.project_id == project_id,
+                LogEventContext.context_id == context_id,
+                LogEventContext.log_event_id.in_(log_ids),
+            ),
+        )
+    if all_log_ids:
+        delete_orphaned_log_events(
             session=session,
             project_id=project_id,
-            context_id=context_id,
-            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-            unique_field_value=activation_key,
-        ):
-            deleted_payloads.append(payload)
+            skip_embedding_cleanup=True,
+            log_event_ids=all_log_ids,
+        )
+        session.flush()
     return deleted_payloads
 
 

@@ -8,7 +8,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from orchestra.db.dao.embedding_dao import EmbeddingDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
 from orchestra.settings import UniqueValidationMode, settings
 
 from . import HEADERS, _create_project
@@ -271,3 +273,170 @@ async def test_bulk_merge_data_scopes_project(dbsession):
     ).scalar_one()
     assert data["a"] == 1
     assert data["b"] == 2
+
+
+@pytest.mark.anyio
+async def test_flat_group_by_null_bucket_and_groups_only(client: AsyncClient):
+    """Flat view-pane grouping uses SQL GROUP BY + null via EXCEPT."""
+    project_name = f"flat-group-{uuid.uuid4().hex[:8]}"
+    await _create_project(client, project_name)
+
+    for entries in (
+        {"color": "red", "n": 1},
+        {"color": "red", "n": 2},
+        {"color": "blue", "n": 3},
+        {"n": 4},  # missing color → null bucket
+    ):
+        create = await client.post(
+            "/v0/logs",
+            json={"project_name": project_name, "entries": entries},
+            headers=HEADERS,
+        )
+        assert create.status_code == 200, create.json()
+
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/color"],
+            "nested_groups": False,
+            "groups_only": True,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+    body = resp.json()
+    assert body.get("logs") == []
+    groups = body["groups"]["entries/color"]
+    assert groups["count"] == 4
+    assert groups["group_count"] == 3
+    assert set(groups["red"]) | set(groups["blue"]) | set(groups["null"])
+    assert len(groups["red"]) == 2
+    assert len(groups["blue"]) == 1
+    assert len(groups["null"]) == 1
+
+
+@pytest.mark.anyio
+async def test_logs_groups_uses_distinct_not_full_scan(client: AsyncClient):
+    project_name = f"groups-distinct-{uuid.uuid4().hex[:8]}"
+    await _create_project(client, project_name)
+
+    for i in range(5):
+        create = await client.post(
+            "/v0/logs",
+            json={
+                "project_name": project_name,
+                "entries": {"tag": "alpha" if i < 3 else "beta", "i": i},
+            },
+            headers=HEADERS,
+        )
+        assert create.status_code == 200, create.json()
+
+    resp = await client.get(
+        f"/v0/logs/groups?project_name={project_name}&key=tag",
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+    values = set(resp.json().values())
+    assert values == {"alpha", "beta"}
+
+
+@pytest.mark.anyio
+async def test_embedding_dao_requires_project_id_with_ids(dbsession):
+    dao = EmbeddingDAO(dbsession)
+    with pytest.raises(ValueError, match="project_id is required"):
+        dao.cancel_queue(log_event_ids=[1], project_id=None)
+    with pytest.raises(ValueError, match="project_id is required"):
+        dao.soft_delete(log_event_ids=[1], project_id=None)
+
+
+@pytest.mark.anyio
+async def test_unique_field_conflict_lookup_is_batched(dbsession):
+    project_id = dbsession.execute(
+        text(
+            "INSERT INTO project (name, user_id) VALUES (:n, :u) RETURNING id",
+        ),
+        {"n": f"luc-batch-{uuid.uuid4().hex[:8]}", "u": "audit-user"},
+    ).scalar_one()
+    context_id = dbsession.execute(
+        text(
+            "INSERT INTO context (project_id, name, allow_duplicates) "
+            "VALUES (:pid, 'c', true) RETURNING id",
+        ),
+        {"pid": project_id},
+    ).scalar_one()
+    existing_id = dbsession.execute(
+        text(
+            "INSERT INTO log_event (project_id, owner_key, data) "
+            "VALUES (:pid, 'sys', '{\"email\": \"a@example.com\"}'::jsonb) "
+            "RETURNING id",
+        ),
+        {"pid": project_id},
+    ).scalar_one()
+    dao = UniqueConstraintDAO(dbsession)
+    value_hash = dao.hash_value("a@example.com")
+    dbsession.execute(
+        text(
+            "INSERT INTO log_unique_constraint "
+            "(context_id, project_id, field_name, value_hash, log_event_id) "
+            "VALUES (:cid, :pid, 'email', :vh, :lid)",
+        ),
+        {
+            "cid": context_id,
+            "pid": project_id,
+            "vh": value_hash,
+            "lid": existing_id,
+        },
+    )
+    candidate_id = dbsession.execute(
+        text(
+            "INSERT INTO log_event (project_id, owner_key, data) "
+            "VALUES (:pid, 'sys', '{\"email\": \"a@example.com\"}'::jsonb) "
+            "RETURNING id",
+        ),
+        {"pid": project_id},
+    ).scalar_one()
+    dbsession.commit()
+
+    conflicts = dao.find_unique_field_conflict_log_ids(
+        context_id=context_id,
+        project_id=project_id,
+        log_entries=[(candidate_id, {"email": "a@example.com"})],
+        unique_fields={"email"},
+    )
+    assert candidate_id in conflicts
+    assert conflicts[candidate_id][0] == "email"
+
+
+@pytest.mark.anyio
+async def test_log_event_delete_batch_with_commit_false(dbsession):
+    project_id = dbsession.execute(
+        text(
+            "INSERT INTO project (name, user_id) VALUES (:n, :u) RETURNING id",
+        ),
+        {"n": f"del-batch-{uuid.uuid4().hex[:8]}", "u": "audit-user"},
+    ).scalar_one()
+    ids = []
+    for i in range(3):
+        ids.append(
+            dbsession.execute(
+                text(
+                    "INSERT INTO log_event (project_id, owner_key, data) "
+                    "VALUES (:pid, 'sys', CAST(:d AS jsonb)) RETURNING id",
+                ),
+                {"pid": project_id, "d": f'{{"n": {i}}}'},
+            ).scalar_one(),
+        )
+    dbsession.commit()
+
+    LogEventDAO(dbsession).delete(ids, commit=False, project_id=project_id)
+    dbsession.commit()
+
+    remaining = dbsession.execute(
+        text(
+            "SELECT count(*) FROM log_event "
+            "WHERE project_id = :pid AND id = ANY(:ids)",
+        ),
+        {"pid": project_id, "ids": ids},
+    ).scalar_one()
+    assert remaining == 0

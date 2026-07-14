@@ -1233,14 +1233,20 @@ def admin_copy_context(
     # ------------------------------------------------------------------
     # 5. Batch copy log events (returns old→new ID mapping)
     # ------------------------------------------------------------------
-    source_le_ids = context_dao.get_log_event_ids(source_context.id)
-    id_map = context_dao.batch_copy_log_events(
-        source_log_event_ids=source_le_ids,
-        target_context_id=target_context_id,
-        target_project_id=target_project.id,
-        source_project_id=source_context.project_id,
-        batch_size=request.batch_size,
-    )
+    id_map: dict[int, int] = {}
+    for source_le_ids in context_dao.iter_log_event_id_pages(
+        source_context.id,
+        page_size=request.batch_size,
+    ):
+        id_map.update(
+            context_dao.batch_copy_log_events(
+                source_log_event_ids=source_le_ids,
+                target_context_id=target_context_id,
+                target_project_id=target_project.id,
+                source_project_id=source_context.project_id,
+                batch_size=request.batch_size,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # 6. Copy unique constraints (remapped via id_map)
