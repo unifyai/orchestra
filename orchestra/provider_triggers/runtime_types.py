@@ -136,6 +136,13 @@ class BlobCommitState(StrEnum):
     deleted = "deleted"
 
 
+class EventContextUnavailableReason(StrEnum):
+    """Why one receipt's event context is no longer readable."""
+
+    deleted = "deleted"
+    expired = "expired"
+
+
 class BlobAuditAction(StrEnum):
     """Append-only audit actions for private provider-event blobs."""
 

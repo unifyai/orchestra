@@ -347,6 +347,15 @@ class Settings(BaseSettings):
     trigger_event_deletion_batch_size: int = int(
         os.environ.get("TRIGGER_EVENT_DELETION_BATCH_SIZE", "25"),
     )
+    trigger_event_context_retention_days: int = int(
+        os.environ.get("TRIGGER_EVENT_CONTEXT_RETENTION_DAYS", "30"),
+    )
+    trigger_event_context_request_ttl_seconds: int = int(
+        os.environ.get("TRIGGER_EVENT_CONTEXT_REQUEST_TTL_SECONDS", "300"),
+    )
+    trigger_event_context_expiry_batch_size: int = int(
+        os.environ.get("TRIGGER_EVENT_CONTEXT_EXPIRY_BATCH_SIZE", "25"),
+    )
     orchestra_trigger_callback_base_url: Optional[str] = os.environ.get(
         "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL",
     )
