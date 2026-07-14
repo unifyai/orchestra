@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from orchestra.db.models.provider_trigger_models import (
     EventTriggerBinding,
     EventTriggerSubscriptionGeneration,
+    ProviderEventBlob,
+    ProviderEventBlobAudit,
+    ProviderEventBlobDeletion,
     ProviderEventDispatch,
     ProviderEventReceipt,
 )
@@ -20,13 +23,18 @@ from orchestra.provider_triggers.activation_revision import (
     compute_provider_event_activation_revision,
     normalize_provider_event_filters,
 )
+from orchestra.provider_triggers.private_event_storage import EncryptedEventObject
 from orchestra.provider_triggers.runtime_types import (
     BindingRuntimeHealth,
+    BlobAuditAction,
+    BlobCommitState,
+    BlobDeletionState,
     DesiredTriggerState,
     DispatchProcessingState,
     GenerationLifecycle,
     ReceiptProcessingState,
 )
+from orchestra.settings import settings
 from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
 
 
@@ -227,6 +235,14 @@ class ProviderTriggerDAO:
         if binding.tombstoned_at is not None:
             raise ValueError("cannot_promote_tombstoned_binding")
 
+        if not settings.provider_event_storage_configured:
+            binding.runtime_health = BindingRuntimeHealth.needs_attention.value
+            binding.local_acceptance_open = False
+            binding.last_stable_error_code = "event_storage_unconfigured"
+            generation.lifecycle_state = GenerationLifecycle.failed.value
+            self.session.flush()
+            return binding
+
         if (
             binding.active_generation_id
             and binding.active_generation_id != generation.generation_id
@@ -339,3 +355,192 @@ class ProviderTriggerDAO:
         receipt.processing_state = ReceiptProcessingState.dispatch_pending.value
         self.session.flush()
         return dispatch
+
+    def create_uncommitted_blob(
+        self,
+        *,
+        blob_id: str,
+        binding_id: str,
+        receipt_id: str,
+        encrypted: EncryptedEventObject,
+    ) -> ProviderEventBlob:
+        """Insert one uncommitted private event blob metadata row."""
+
+        blob = ProviderEventBlob(
+            blob_id=blob_id,
+            namespace_key=encrypted.namespace_key,
+            binding_id=binding_id,
+            receipt_id=receipt_id,
+            algorithm=encrypted.algorithm,
+            wrap_algorithm=encrypted.wrap_algorithm,
+            wrapping_key_version=encrypted.wrapping_key_version,
+            wrapped_data_key=encrypted.wrapped_data_key,
+            integrity_hash=encrypted.integrity_hash,
+            size_bytes=encrypted.size_bytes,
+            content_type=encrypted.content_type,
+            commit_state=BlobCommitState.uncommitted.value,
+        )
+        self.session.add(blob)
+        self.session.flush()
+        return blob
+
+    def attach_event_context(
+        self,
+        *,
+        receipt: ProviderEventReceipt,
+        blob: ProviderEventBlob,
+    ) -> ProviderEventReceipt:
+        """Commit one blob and attach thin refs to the receipt."""
+
+        if blob.commit_state != BlobCommitState.uncommitted.value:
+            raise ValueError("blob_not_uncommitted")
+        if blob.binding_id != receipt.binding_id or blob.receipt_id != receipt.receipt_id:
+            raise ValueError("blob_receipt_mismatch")
+
+        now = datetime.now(timezone.utc)
+        blob.commit_state = BlobCommitState.committed.value
+        blob.committed_at = now
+        receipt.event_context_ref = blob.blob_id
+        receipt.event_context_integrity_hash = blob.integrity_hash
+        receipt.event_context_size_bytes = blob.size_bytes
+        receipt.event_context_content_type = blob.content_type
+        receipt.event_context_key_version = blob.wrapping_key_version
+        self.session.flush()
+        return receipt
+
+    def mark_event_context_unavailable(
+        self,
+        *,
+        receipt: ProviderEventReceipt,
+    ) -> tuple[ProviderEventReceipt, ProviderEventBlob | None]:
+        """Mark one receipt's event context unavailable."""
+
+        if not receipt.event_context_ref:
+            return receipt, None
+
+        blob = self.session.execute(
+            select(ProviderEventBlob).where(
+                ProviderEventBlob.blob_id == receipt.event_context_ref,
+            ),
+        ).scalar_one_or_none()
+        if blob is None:
+            receipt.event_context_ref = None
+            receipt.event_context_integrity_hash = None
+            receipt.event_context_size_bytes = None
+            receipt.event_context_content_type = None
+            receipt.event_context_key_version = None
+            self.session.flush()
+            return receipt, None
+
+        now = datetime.now(timezone.utc)
+        blob.commit_state = BlobCommitState.unavailable.value
+        blob.unavailable_at = now
+        receipt.event_context_ref = None
+        receipt.event_context_integrity_hash = None
+        receipt.event_context_size_bytes = None
+        receipt.event_context_content_type = None
+        receipt.event_context_key_version = None
+        self.session.flush()
+        return receipt, blob
+
+    def get_event_blob_for_authorized_read(
+        self,
+        *,
+        assistant_id: int,
+        task_id: int,
+        receipt_id: str,
+    ) -> tuple[
+        ProviderEventBlob | None,
+        ProviderEventReceipt | None,
+        EventTriggerBinding | None,
+    ]:
+        """Return one committed blob when the caller owns the receipt."""
+
+        receipt = self.session.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.receipt_id == receipt_id,
+            ),
+        ).scalar_one_or_none()
+        if receipt is None:
+            return None, None, None
+
+        binding = self.get_binding(binding_id=receipt.binding_id)
+        if binding is None:
+            return None, receipt, None
+        if binding.assistant_id != assistant_id or binding.task_id != task_id:
+            return None, receipt, binding
+
+        if not receipt.event_context_ref:
+            return None, receipt, binding
+
+        blob = self.session.execute(
+            select(ProviderEventBlob).where(
+                ProviderEventBlob.blob_id == receipt.event_context_ref,
+            ),
+        ).scalar_one_or_none()
+        if blob is None or blob.commit_state != BlobCommitState.committed.value:
+            return None, receipt, binding
+        return blob, receipt, binding
+
+    def record_blob_audit(
+        self,
+        *,
+        action: BlobAuditAction,
+        actor: str,
+        blob: ProviderEventBlob | None = None,
+        receipt: ProviderEventReceipt | None = None,
+        audience: str | None = None,
+        assistant_id: int | None = None,
+        task_id: int | None = None,
+        receipt_id: str | None = None,
+        reason: str | None = None,
+    ) -> ProviderEventBlobAudit:
+        """Append one audit record for private blob access."""
+
+        audit = ProviderEventBlobAudit(
+            action=action.value,
+            actor=actor,
+            audience=audience,
+            blob_id=blob.blob_id if blob is not None else None,
+            binding_id=(
+                blob.binding_id
+                if blob is not None
+                else receipt.binding_id if receipt is not None else None
+            ),
+            receipt_id=(
+                blob.receipt_id
+                if blob is not None
+                else receipt.receipt_id if receipt is not None else receipt_id
+            ),
+            assistant_id=assistant_id,
+            task_id=task_id,
+            reason=reason,
+        )
+        self.session.add(audit)
+        self.session.flush()
+        return audit
+
+    def enqueue_blob_deletion(
+        self,
+        *,
+        blob: ProviderEventBlob,
+    ) -> ProviderEventBlobDeletion:
+        """Queue physical deletion for one unavailable blob."""
+
+        existing = self.session.execute(
+            select(ProviderEventBlobDeletion).where(
+                ProviderEventBlobDeletion.blob_id == blob.blob_id,
+            ),
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        deletion = ProviderEventBlobDeletion(
+            blob_id=blob.blob_id,
+            namespace_key=blob.namespace_key,
+            processing_state=BlobDeletionState.pending.value,
+            next_retry_at=datetime.now(timezone.utc),
+        )
+        self.session.add(deletion)
+        self.session.flush()
+        return deletion
