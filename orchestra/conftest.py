@@ -6,6 +6,7 @@ import traceback
 import warnings
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qsl
@@ -101,6 +102,27 @@ def stub_coordinator_pubsub_boundary():
         mock_delete_org_pubsub.return_value = {"success": True}
         mock_delete_auth_pubsub.return_value = {"success": True}
         yield
+
+
+@pytest.fixture(autouse=True)
+def _provider_event_storage_test_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default self-host storage settings for provider-trigger tests."""
+
+    if not settings.trigger_event_wrapping_master_key:
+        monkeypatch.setattr(
+            settings,
+            "trigger_event_wrapping_master_key",
+            "test-master-key-material",
+        )
+    monkeypatch.setattr(
+        settings,
+        "trigger_event_private_root",
+        str(tmp_path / "provider-event-private"),
+    )
+    monkeypatch.setenv("SELF_HOST", "1")
 
 
 @pytest.fixture(scope="session")
