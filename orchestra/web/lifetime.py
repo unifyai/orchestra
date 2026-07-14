@@ -198,6 +198,7 @@ def register_startup_event(
 
     @app.on_event("startup")
     def _startup() -> None:  # noqa: WPS430
+        settings.assert_unique_validation_mode_safe()
         app.middleware_stack = None
         _setup_db(app)
         setup_observability(app)

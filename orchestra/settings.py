@@ -28,11 +28,11 @@ class UniqueValidationMode(str, enum.Enum):
     """
     Mode for unique field validation.
 
-    JSONB_SCAN: Original behavior - scan all logs with JSONB containment (slow, O(N×M))
-    LOOKUP_TABLE: New behavior - use lookup table with B-tree index (fast, O(M×log N))
+    LOOKUP_TABLE: Use lookup table with B-tree index (fast, O(M×log N)). Default.
+    JSONB_SCAN: Scan all logs with JSONB containment (slow, O(N×M)). Dev/test only.
 
     Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE environment variable.
-    Default is JSONB_SCAN for backward compatibility during migration.
+    Production must use LOOKUP_TABLE; jsonb_scan is refused at startup outside tests.
     """
 
     JSONB_SCAN = "jsonb_scan"
@@ -692,10 +692,8 @@ class Settings(BaseSettings):
         Get the unique field validation mode.
 
         Controls how unique field constraints are checked:
-        - jsonb_scan: Original O(N×M) JSONB containment scan (slow)
-        - lookup_table: New O(M×log N) lookup table approach (fast)
-
-        Default is jsonb_scan for backward compatibility during migration.
+        - lookup_table: O(M×log N) lookup table approach (default, required in prod)
+        - jsonb_scan: O(N×M) JSONB containment scan (dev/test only)
 
         :return: The configured validation mode.
         """
@@ -707,6 +705,28 @@ class Settings(BaseSettings):
             return UniqueValidationMode(mode_str)
         except ValueError:
             return UniqueValidationMode.LOOKUP_TABLE
+
+    def assert_unique_validation_mode_safe(self) -> None:
+        """Refuse jsonb_scan outside explicitly allowed environments."""
+        mode = self.unique_validation_mode
+        if mode != UniqueValidationMode.JSONB_SCAN:
+            return
+        allow = os.environ.get(
+            "ORCHESTRA_ALLOW_JSONB_SCAN_UNIQUE_MODE",
+            "",
+        ).lower() in {"1", "true", "yes"}
+        is_test = bool(os.environ.get("PYTEST_CURRENT_TEST")) or os.environ.get(
+            "ORCHESTRA_ENVIRONMENT",
+            "",
+        ).lower() in {"test", "testing"}
+        if allow or is_test:
+            return
+        raise RuntimeError(
+            "ORCHESTRA_UNIQUE_VALIDATION_MODE=jsonb_scan is not allowed in this "
+            "environment (O(N×M) on large contexts). Use lookup_table, or set "
+            "ORCHESTRA_ALLOW_JSONB_SCAN_UNIQUE_MODE=true only for deliberate "
+            "local experiments.",
+        )
 
     model_config = SettingsConfigDict(
         env_file=".env",

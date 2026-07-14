@@ -823,10 +823,21 @@ def create_from_logs(
                 field_names=list(field_types.keys()),
             )
 
-            # 2) Get the filtered log events
+            # 2) Scope computation to resolved / context logs (never whole project)
+            resolved_ids_dict = {}
+            for key, ids in resolved_ids.items():
+                resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
+            filtered_log_ids = list(
+                {int(i) for ids in resolved_ids_dict.values() for i in ids},
+            )
             log_event_ids_subq = (
                 session.query(LogEvent.id)
-                .filter(project_obj.id == LogEvent.project_id)
+                .join(LogEventContext, log_event_context_join())
+                .filter(LogEvent.project_id == project_obj.id)
+                .filter(
+                    LogEventContext.context_id == context_id,
+                    LogEvent.id.in_(filtered_log_ids),
+                )
                 .subquery(name="log_event_ids_subq")
             )
 
@@ -2424,23 +2435,21 @@ def _update_logs(
         columns_being_updated = set(u["key"] for u in all_flat_updates)
         log_ids_being_updated = list(set(u["log_event_id"] for u in all_flat_updates))
 
-        # Get OLD values for these columns from logs being updated
+        # Get OLD values for these columns from logs being updated (one bulk load)
         columns_values_map: Dict[str, List[Any]] = {}
-        for log_id in log_ids_being_updated:
-            log_event = (
-                session.query(LogEvent.data)
-                .filter(
-                    LogEvent.id == log_id,
-                    LogEvent.project_id == project_id,
-                )
-                .one_or_none()
+        logs_data = (
+            session.query(LogEvent.id, LogEvent.data)
+            .filter(
+                LogEvent.id.in_(log_ids_being_updated),
+                project_scope(LogEvent, project_id),
             )
-            if log_event and log_event.data:
+            .all()
+        )
+        for _log_id, data in logs_data:
+            if data:
                 for key in columns_being_updated:
-                    if key in log_event.data and log_event.data[key] is not None:
-                        columns_values_map.setdefault(key, []).append(
-                            log_event.data[key],
-                        )
+                    if key in data and data[key] is not None:
+                        columns_values_map.setdefault(key, []).append(data[key])
 
         # Apply FK actions (CASCADE UPDATE, SET NULL)
         if columns_values_map:
@@ -2867,28 +2876,28 @@ def _delete_logs(
         # Add fields to the deleted_fields set
         deleted_fields.update(fields)
 
-        # Collect for media deletion
-        context_wide_ids = get_context_log_ids()
-        all_log_event_ids_for_media.extend(context_wide_ids)
-        all_field_names_for_media.extend(fields)
-
-        # Apply FK CASCADE and SET NULL actions before deletion
+        # FK value harvest via context join (no full ID list materialization)
         columns_values_to_delete: Dict[str, List[Any]] = {}
-        logs_data = (
-            session.query(LogEvent.data)
-            .filter(
-                LogEvent.id.in_(context_wide_ids),
-                project_scope(LogEvent, project_id),
-            )
-            .all()
-        )
+        logs_data = session.execute(
+            text(
+                """
+                SELECT le.data
+                FROM log_event le
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                 AND lec.project_id = le.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
+                """,
+            ),
+            {"project_id": project_id, "context_id": context_id},
+        ).fetchall()
         for (data,) in logs_data:
             if data:
                 for key in fields:
                     if key in data and data[key] is not None:
                         columns_values_to_delete.setdefault(key, []).append(data[key])
 
-        # Apply FK actions (CASCADE DELETE, SET NULL)
         if columns_values_to_delete:
             context_dao.apply_fk_actions(
                 project_id=project_id,
@@ -2897,28 +2906,62 @@ def _delete_logs(
                 action="DELETE",
             )
 
-        # Delete GCS files BEFORE any DB operations
-        log_dao._bulk_delete_gcs_media(
-            log_event_ids=context_wide_ids,
-            project_id=project_id,
-            field_names=fields,
-        )
+        # GCS media: keyset-paginate rather than bind every context id
+        last_media_id = 0
+        while True:
+            media_batch = session.execute(
+                text(
+                    """
+                    SELECT le.id
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
+                    WHERE le.project_id = :project_id
+                      AND lec.context_id = :context_id
+                      AND le.id > :last_id
+                    ORDER BY le.id
+                    LIMIT 5000
+                    """,
+                ),
+                {
+                    "project_id": project_id,
+                    "context_id": context_id,
+                    "last_id": last_media_id,
+                },
+            ).fetchall()
+            if not media_batch:
+                break
+            batch_ids = [row[0] for row in media_batch]
+            all_log_event_ids_for_media.extend(batch_ids)
+            all_field_names_for_media.extend(fields)
+            log_dao._bulk_delete_gcs_media(
+                log_event_ids=batch_ids,
+                project_id=project_id,
+                field_names=fields,
+            )
+            last_media_id = batch_ids[-1]
 
-        # Remove ALL fields from LogEvent.data in a SINGLE UPDATE using array subtraction
-        # PostgreSQL: data - ARRAY['field1', 'field2', ...] removes multiple keys at once
-        fields_array = cast(fields, ARRAY(TEXT))
-        deleted_count = (
-            session.query(LogEvent)
-            .filter(
-                LogEvent.project_id == project_id,
-                LogEvent.id.in_(context_wide_ids),
-            )
-            .update(
-                {LogEvent.data: LogEvent.data.op("-")(fields_array)},
-                synchronize_session=False,
-            )
-        )
-        if deleted_count > 0:
+        # Set-based field strip via JOIN — no Python ID array
+        deleted_count = session.execute(
+            text(
+                """
+                UPDATE log_event le
+                SET data = le.data - CAST(:fields AS text[])
+                FROM log_event_context lec
+                WHERE le.project_id = :project_id
+                  AND lec.project_id = :project_id
+                  AND lec.context_id = :context_id
+                  AND lec.log_event_id = le.id
+                """,
+            ),
+            {
+                "project_id": project_id,
+                "context_id": context_id,
+                "fields": fields,
+            },
+        ).rowcount
+        if deleted_count and deleted_count > 0:
             context_description.append(
                 f"Deleted {len(fields)} field(s) from {deleted_count} logs (JSONB)",
             )
@@ -3649,7 +3692,15 @@ def get_logs(
         description="The fields which cannot be returned from the search. None of the listed fields will be returned, even if the fields are valid as per the filtering expression etc. This argument *cannot* be set if `from_fields` is set.",
         example="score&response",
     ),
-    limit: Optional[int] = Query(None, ge=1, le=1000),
+    limit: Optional[int] = Query(
+        1000,
+        ge=1,
+        le=1000,
+        description=(
+            "Maximum number of logs to return. Defaults to 1000. "
+            "Omit is no longer unbounded — pass an explicit page size ≤ 1000."
+        ),
+    ),
     offset: int = Query(0, ge=0),
     group_by: Optional[List[str]] = Query(
         None,
@@ -3876,8 +3927,12 @@ def get_logs(
             context_id=context_id,
         )
         if return_ids_only:
-            all_ids = session.query(event_ids_subq).all()  # each row is a tuple (id,)
-            event_ids = [r[0] for r in all_ids]
+            q = session.query(event_ids_subq)
+            if limit:
+                q = q.limit(limit)
+            if offset:
+                q = q.offset(offset)
+            event_ids = [r[0] for r in q.all()]
             return list(dict.fromkeys(event_ids))
 
         # -----------------------------------------------------------
@@ -4181,60 +4236,68 @@ def query_logs_post(
             "count": actual_count,
         }
     else:
-        # Handle grouped case - similar to GET /logs grouped logic
-        all_rows, context_len, total_count = _get_all_filtered_log_event_ids(
+        # Grouped case — keep IDs as a subquery (same as GET /logs)
+        event_ids_subq, total_count = _get_all_filtered_log_event_ids(
             request_fastapi=request_fastapi,
             project_name=body.project_name,
-            column_context=body.column_context,
             context=body.context,
             filter_expr=body.filter_expr,
-            sorting=body.sorting,
             from_ids=body.from_ids,
             exclude_ids=body.exclude_ids,
-            from_fields=body.from_fields,
-            exclude_fields=body.exclude_fields,
             project_dao=project_dao,
-            field_type_dao=field_type_dao,
             context_dao=context_dao,
+            field_type_dao=field_type_dao,
             session=session,
-            randomize=body.randomize,
-            seed=body.seed,
+            as_subquery=True,
         )
-
-        # Build grouped structure
-        grouped_result = _build_grouped_data(
-            group_by=body.group_by,
-            all_log_event_ids=all_rows,
-            request_fastapi=request_fastapi,
-            project_name=body.project_name,
-            column_context=body.column_context,
-            context=body.context,
-            filter_expr=body.filter_expr,
-            sorting=body.sorting,
-            group_sorting=body.group_sorting,
-            from_ids=body.from_ids,
-            exclude_ids=body.exclude_ids,
-            from_fields=body.from_fields,
-            exclude_fields=body.exclude_fields,
-            limit=body.limit,
-            offset=body.offset,
-            group_limit=body.group_limit,
-            group_offset=body.group_offset,
-            group_depth=body.group_depth,
-            nested_groups=body.nested_groups,
-            groups_only=body.groups_only,
-            return_timestamps=body.return_timestamps,
-            return_ids_only=body.return_ids_only,
-            value_limit=body.value_limit,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            project_id=project_id,
+        field_order_map = field_type_dao.get_ordered_field_names(
+            project_id,
             context_id=context_id,
         )
+        field_map = field_type_dao.get_field_types(
+            project_id,
+            context_id=context_id,
+        )
+        if body.return_ids_only:
+            q = session.query(event_ids_subq)
+            if body.limit:
+                q = q.limit(body.limit)
+            if body.offset:
+                q = q.offset(body.offset)
+            event_ids = [r[0] for r in q.all()]
+            return list(dict.fromkeys(event_ids))
 
-        return grouped_result
+        grouped_result = _build_grouped_data(
+            request_fastapi=request_fastapi,
+            project_id=project_id,
+            log_event_ids=event_ids_subq,
+            field_order_map=field_order_map,
+            field_types=field_map,
+            group_by=body.group_by,
+            group_depth=body.group_depth,
+            group_limit=body.group_limit,
+            group_offset=body.group_offset,
+            group_sorting=body.group_sorting,
+            level=0,
+            limit=body.limit,
+            offset=body.offset,
+            column_context=body.column_context,
+            context=body.context,
+            from_fields=body.from_fields,
+            exclude_fields=body.exclude_fields,
+            sorting=body.sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=body.value_limit,
+            groups_only=body.groups_only or False,
+            return_timestamps=body.return_timestamps or False,
+        )
+        return {
+            "logs": grouped_result,
+            "count": total_count,
+        }
 
 
 @router.get(
@@ -5832,45 +5895,60 @@ def delete_fields(
 
     for field_name in request.fields:
         try:
-            # Get log events where the field exists in LogEvent.data
-            jsonb_log_events = (
-                session.query(LogEvent.id)
-                .join(LogEventContext, log_event_context_join())
-                .filter(
-                    LogEvent.project_id == project_id,
-                    LogEventContext.context_id == context_id,
-                    LogEvent.data.has_key(field_name),
-                )
-                .distinct()
-            )
-            event_ids = [event_id[0] for event_id in jsonb_log_events.all()]
+            from sqlalchemy import text
 
-            if event_ids:
-                # Delete GCS media files before updating database records
-                log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
-
-                # Remove the field from LogEvent.data JSONB column
-                # This is a single bulk UPDATE - O(1) query regardless of number of log events
-                if event_ids:
-                    from sqlalchemy import text
-
-                    session.execute(
-                        text(
-                            """
-                            UPDATE log_event
-                            SET data = data - :field_name
-                            WHERE project_id = :project_id
-                            AND id = ANY(:event_ids)
-                            AND data ? :field_name
+            # GCS media: keyset-paginate IDs that hold the field (avoid full ID list)
+            last_id = 0
+            while True:
+                batch = session.execute(
+                    text(
+                        """
+                        SELECT le.id
+                        FROM log_event le
+                        JOIN log_event_context lec
+                          ON lec.log_event_id = le.id
+                         AND lec.project_id = le.project_id
+                        WHERE le.project_id = :project_id
+                          AND lec.context_id = :context_id
+                          AND le.data ? :field_name
+                          AND le.id > :last_id
+                        ORDER BY le.id
+                        LIMIT 5000
                         """,
-                        ),
-                        {
-                            "field_name": field_name,
-                            "event_ids": event_ids,
-                            "project_id": project_id,
-                        },
-                    )
-                total_updated_events += len(event_ids)
+                    ),
+                    {
+                        "project_id": project_id,
+                        "context_id": context_id,
+                        "field_name": field_name,
+                        "last_id": last_id,
+                    },
+                ).fetchall()
+                if not batch:
+                    break
+                event_ids = [row[0] for row in batch]
+                log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
+                last_id = event_ids[-1]
+
+            result = session.execute(
+                text(
+                    """
+                    UPDATE log_event le
+                    SET data = le.data - :field_name
+                    FROM log_event_context lec
+                    WHERE le.project_id = :project_id
+                      AND lec.project_id = :project_id
+                      AND lec.context_id = :context_id
+                      AND lec.log_event_id = le.id
+                      AND le.data ? :field_name
+                    """,
+                ),
+                {
+                    "field_name": field_name,
+                    "project_id": project_id,
+                    "context_id": context_id,
+                },
+            )
+            total_updated_events += int(result.rowcount or 0)
 
             # Delete field type record
             field_type_dao.delete_field_type(
@@ -6183,6 +6261,7 @@ def update_active_derived_logs(
                         .filter(
                             LogEvent.project_id == project_id,
                             LogEventContext.context_id == context_id,
+                            embedding_scope(Embedding, project_id),
                             Embedding.key.in_(emb_keys),
                             Embedding.is_deleted == False,  # noqa: E712
                         )

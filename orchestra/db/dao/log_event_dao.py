@@ -415,37 +415,53 @@ class LogEventDAO:
         Rename a field across all log events in LogEvent.data.
         """
         try:
-            log_event_query = select(LogEvent.id).where(
-                LogEvent.project_id == project_id,
-            )
-            if context_id:
-                log_event_query = log_event_query.join(
-                    LogEventContext,
-                    log_event_context_join(),
-                ).where(LogEventContext.context_id == context_id)
+            params = {
+                "old_key": old_field_name,
+                "new_key": new_field_name,
+                "project_id": project_id,
+            }
+            if context_id is not None:
+                params["context_id"] = context_id
+                result = self.session.execute(
+                    text(
+                        """
+                        UPDATE log_event le
+                        SET data = (le.data - :old_key)
+                            || jsonb_build_object(:new_key, le.data->:old_key)
+                        FROM log_event_context lec
+                        WHERE le.project_id = :project_id
+                          AND lec.project_id = :project_id
+                          AND lec.context_id = :context_id
+                          AND lec.log_event_id = le.id
+                          AND le.data ? :old_key
+                        """,
+                    ),
+                    params,
+                )
+            else:
+                result = self.session.execute(
+                    text(
+                        """
+                        UPDATE log_event
+                        SET data = (data - :old_key)
+                            || jsonb_build_object(:new_key, data->:old_key)
+                        WHERE project_id = :project_id
+                          AND data ? :old_key
+                        """,
+                    ),
+                    params,
+                )
 
-            log_event_ids = [row[0] for row in self.session.execute(log_event_query)]
-
-            if not log_event_ids:
-                raise ValueError(f"No log events found for project_id {project_id}")
-
-            self.session.execute(
-                text(
-                    """
-                    UPDATE log_event
-                    SET data = (data - :old_key) || jsonb_build_object(:new_key, data->:old_key)
-                    WHERE id = ANY(:log_event_ids)
-                    AND project_id = :project_id
-                    AND data ? :old_key
-                    """,
-                ),
-                {
-                    "old_key": old_field_name,
-                    "new_key": new_field_name,
-                    "log_event_ids": log_event_ids,
-                    "project_id": project_id,
-                },
-            )
+            if result.rowcount == 0:
+                # Distinguish "no logs in scope" from "field absent on all rows"
+                scope_q = select(LogEvent.id).where(LogEvent.project_id == project_id)
+                if context_id is not None:
+                    scope_q = scope_q.join(
+                        LogEventContext,
+                        log_event_context_join(),
+                    ).where(LogEventContext.context_id == context_id)
+                if self.session.execute(scope_q.limit(1)).first() is None:
+                    raise ValueError(f"No log events found for project_id {project_id}")
 
             self.session.commit()
 
@@ -1907,6 +1923,7 @@ class LogEventDAO:
 
             is_image_embedding = "embed_image(" in template.equation
             embedding_objects: list = []
+            merge_entries: List[Dict[str, Any]] = []
 
             from orchestra.db.scope import owner_key_for_context
 
@@ -1936,26 +1953,25 @@ class LogEventDAO:
                         if val is not None:
                             non_null_val = val
 
-                    stmt = (
-                        update(LogEvent)
-                        .where(
-                            LogEvent.project_id == template.project_id,
-                            LogEvent.id == log_event_id,
-                        )
-                        .values(
-                            data=LogEvent.data.concat(
-                                func.jsonb_build_object(template.key, val),
-                            ),
-                            updated_at=datetime.now(timezone.utc),
-                        )
+                    merge_entries.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "key": template.key,
+                            "value": val,
+                        },
                     )
-                    self.session.execute(stmt)
                     updates_count += 1
                 except Exception as e:
                     logger.warning(
                         f"Failed to recompute derived log for log_event_id={log_event_id}: {e}",
                     )
                     continue
+
+            if merge_entries:
+                self.bulk_merge_data(
+                    merge_entries,
+                    project_id=template.project_id,
+                )
 
             if embedding_objects:
                 self.session.bulk_save_objects(embedding_objects)
@@ -1985,7 +2001,11 @@ class LogEventDAO:
             logger.error(f"Error in recompute_derived_logs: {e}")
             raise e
 
-    def bulk_merge_data(self, entries: List[Dict[str, Any]]) -> None:
+    def bulk_merge_data(
+        self,
+        entries: List[Dict[str, Any]],
+        project_id: Optional[int] = None,
+    ) -> None:
         """
         Bulk merge entry key/value pairs into LogEvent.data.
         """
@@ -2007,21 +2027,29 @@ class LogEventDAO:
             (le_id, json.dumps(fields)) for le_id, fields in entries_by_log.items()
         ]
 
+        project_filter = (
+            "AND le.project_id = :project_id" if project_id is not None else ""
+        )
+        params: Dict[str, Any] = {
+            "now": datetime.now(timezone.utc),
+            "ids": [v[0] for v in update_values],
+            "fields": [v[1] for v in update_values],
+        }
+        if project_id is not None:
+            params["project_id"] = int(project_id)
+
         self.session.execute(
             text(
-                """
+                f"""
                 UPDATE log_event le
-                SET data = COALESCE(le.data, '{}'::jsonb) || v.fields_json::jsonb,
+                SET data = COALESCE(le.data, '{{}}'::jsonb) || v.fields_json::jsonb,
                     updated_at = :now
                 FROM (SELECT unnest(:ids) AS id, unnest(:fields) AS fields_json) AS v
                 WHERE le.id = v.id
+                  {project_filter}
                 """,
             ),
-            {
-                "now": datetime.now(timezone.utc),
-                "ids": [v[0] for v in update_values],
-                "fields": [v[1] for v in update_values],
-            },
+            params,
         )
         self.session.flush()
 
@@ -2153,12 +2181,14 @@ class LogEventDAO:
         """Move log events to ``new_project_id``, keeping the partition key consistent.
 
         ``log_event`` is the source of truth for ``project_id``; the child tables
-        (``log_event_context``, ``embedding``, ``embedding_queue``) carry a
-        denormalized copy that IS the ``LIST (project_id)`` partition key. Whenever
-        a log's project changes (e.g. transferring an assistant to an organization)
-        the children MUST move in lockstep -- otherwise they desync from their
-        parent: ``project_id`` pruning and the ``le.project_id = lec.project_id``
-        equijoin stop matching, and once real partitions exist the children route
+        (``log_event_context``, ``embedding``, ``embedding_queue``,
+        ``log_unique_constraint``) carry a denormalized copy that IS the
+        ``LIST (project_id)`` partition key (or scopes project-pruned deletes).
+        Whenever a log's project changes (e.g. transferring an assistant to an
+        organization) the children MUST move in lockstep -- otherwise they desync
+        from their parent: ``project_id`` pruning and the
+        ``le.project_id = lec.project_id`` equijoin stop matching, uniqueness
+        cleanup misses rows, and once real partitions exist the children route
         to the wrong partition and become orphaned.
 
         Uses ``= ANY(:ids)`` (a single array bind) so an arbitrarily large id list
@@ -2188,6 +2218,13 @@ class LogEventDAO:
             text(
                 "UPDATE embedding_queue SET project_id = :pid "
                 "WHERE ref_id = ANY(:ids)",
+            ),
+            params,
+        )
+        self.session.execute(
+            text(
+                "UPDATE log_unique_constraint SET project_id = :pid "
+                "WHERE log_event_id = ANY(:ids)",
             ),
             params,
         )

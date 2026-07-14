@@ -1290,15 +1290,14 @@ class ContextDAO:
                     ]
 
                     if fk_action == "CASCADE" and action == "DELETE":
-                        # CASCADE DELETE: Delete entire log events containing the nested FK value
-                        for old_value in non_null_values:
-                            json_str = json.dumps(old_value)
-                            stats["cascaded_deletes"] += self._cascade_delete_nested(
-                                ref_context.id,
-                                fk_column,
-                                path_segments,
-                                json_str,
-                            )
+                        # CASCADE DELETE: batch nested values in one pass
+                        json_values = [json.dumps(v) for v in non_null_values]
+                        stats["cascaded_deletes"] += self._cascade_delete_nested_batch(
+                            ref_context.id,
+                            fk_column,
+                            path_segments,
+                            json_values,
+                        )
                     elif fk_action == "CASCADE" and action == "UPDATE":
                         # CASCADE UPDATE: Update nested values
                         if new_values and ref_column_name in new_values:
@@ -1324,14 +1323,12 @@ class ContextDAO:
                 else:
                     # Simple FK: Use existing methods
                     if fk_action == "CASCADE" and action == "DELETE":
-                        # CASCADE DELETE requires per-value processing for recursive cascading
-                        for old_value in non_null_values:
-                            json_str = json.dumps(old_value)
-                            stats["cascaded_deletes"] += self._cascade_delete(
-                                ref_context.id,
-                                fk_column,
-                                json_str,
-                            )
+                        json_values = [json.dumps(v) for v in non_null_values]
+                        stats["cascaded_deletes"] += self._cascade_delete_batch(
+                            ref_context.id,
+                            fk_column,
+                            json_values,
+                        )
                     elif fk_action == "CASCADE" and action == "UPDATE":
                         # CASCADE UPDATE: Batch update all values at once
                         if new_values and ref_column_name in new_values:
@@ -1394,61 +1391,59 @@ class ContextDAO:
         fk_column: str,
         old_value_json: str,
     ) -> int:
-        """Delete all log events where FK column matches old value."""
-        return self._cascade_delete(context_id, fk_column, old_value_json)
+        """JSONB mode: Delete all log events where FK column matches old value."""
+        return self._cascade_delete_batch(context_id, fk_column, [old_value_json])
 
-    def _cascade_delete(
+    def _cascade_delete_batch(
         self,
         context_id: int,
         fk_column: str,
-        old_value_json: str,
+        old_values_json: List[str],
     ) -> int:
-        """JSONB mode: Delete all log events where FK column matches old value."""
-        # Find all log_event_ids that reference this value in LogEvent.data.
-        # The redundant project_id predicate (derived from the context) lets the
-        # LIST(project_id) pruner skip other projects' partitions; guarded so a
-        # missing project never silently narrows the matched set.
+        """Delete all log events matching any of the FK values in one query."""
+        if not old_values_json:
+            return 0
+
         pid = self._project_id_for_context(context_id)
         project_filter = "AND le.project_id = :project_id\n" if pid is not None else ""
+        array_elements = ", ".join(
+            [f"CAST(:old_val_{i} AS jsonb)" for i in range(len(old_values_json))],
+        )
         query = text(
             f"""
             SELECT DISTINCT le.id, le.project_id, le.data
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
+            CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
             WHERE lec.context_id = :context_id
-              {project_filter}AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
+              {project_filter}AND le.data @> jsonb_build_object(:fk_column, old_val.v)
         """,
         )
 
-        params = {
+        params: Dict[str, Any] = {
             "context_id": context_id,
             "fk_column": fk_column,
-            "json_str": old_value_json,
         }
         if pid is not None:
             params["project_id"] = pid
-        result = self.session.execute(query, params)
-        rows = result.fetchall()
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+        rows = self.session.execute(query, params).fetchall()
 
         if not rows:
             return 0
 
         log_event_ids = [row[0] for row in rows]
-        project_id = rows[0][1]  # All should have same project_id
+        project_id = rows[0][1]
 
-        # Before deleting, collect all column values from JSONB data
-        # to trigger cascading deletes recursively
         columns_values: Dict[str, List[Any]] = {}
         for _, _, data in rows:
             if data:
                 for key, value in data.items():
                     if value is not None:
-                        if key not in columns_values:
-                            columns_values[key] = []
-                        columns_values[key].append(value)
+                        columns_values.setdefault(key, []).append(value)
 
-        # Recursively apply FK actions for the context being deleted
         if columns_values:
             self.apply_fk_actions(
                 project_id=project_id,
@@ -1457,12 +1452,9 @@ class ContextDAO:
                 action="DELETE",
             )
 
-        # Now delete the log events
         from orchestra.db.dao.log_event_dao import LogEventDAO
 
-        log_event_dao = LogEventDAO(self.session)
-        log_event_dao.delete(log_event_ids)
-
+        LogEventDAO(self.session).delete(log_event_ids)
         return len(log_event_ids)
 
     def _cascade_update(
@@ -1886,39 +1878,6 @@ class ContextDAO:
         """Handle CASCADE DELETE for nested paths.
 
         Behavior depends on whether the path contains wildcards:
-
-        - Wildcard paths (image_ids[*], images[*].image_id):
-          Remove matching elements from arrays, keep the log
-
-        - Non-wildcard paths (metadata.author.user_id):
-          Delete the entire log event (standard CASCADE behavior)
-
-        Args:
-            context_id: Context ID where FKs are defined
-            fk_path: Full path string (e.g., 'images[*].image_id')
-            path_segments: Parsed path segments from FKPathParser
-            old_value_json: JSON-serialized value to find
-
-        Returns:
-            Number of log events deleted or updated
-        """
-        return self._cascade_delete_nested(
-            context_id,
-            fk_path,
-            path_segments,
-            old_value_json,
-        )
-
-    def _cascade_delete_nested(
-        self,
-        context_id: int,
-        fk_path: str,
-        path_segments: List,
-        old_value_json: str,
-    ) -> int:
-        """Handle CASCADE DELETE for nested paths.
-
-        Behavior depends on whether the path contains wildcards:
         - Wildcard paths: Remove matching elements from arrays
         - Non-wildcard paths: Delete entire log events
         """
@@ -2010,6 +1969,94 @@ class ContextDAO:
         log_event_dao = LogEventDAO(self.session)
         log_event_dao.delete(matching_log_event_ids)
 
+        return len(matching_log_event_ids)
+
+    def _cascade_delete_nested_batch(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+    ) -> int:
+        """Batch CASCADE DELETE for nested FK values."""
+        if not old_values_json:
+            return 0
+
+        from orchestra.db.utils import FKPathParser
+
+        has_wildcard = FKPathParser.has_wildcard(path_segments)
+        if has_wildcard:
+            return self._cascade_delete_nested_remove_elements(
+                context_id,
+                fk_path,
+                path_segments,
+                old_values_json,
+            )
+
+        if len(old_values_json) == 1:
+            return self._cascade_delete_nested(
+                context_id,
+                fk_path,
+                path_segments,
+                old_values_json[0],
+            )
+
+        root_field = FKPathParser.get_root_field(fk_path)
+        old_values = [json.loads(v) for v in old_values_json]
+        project_id = self._project_id_for_context(context_id)
+        result = self.session.execute(
+            text(
+                """
+                SELECT DISTINCT le.id, le.data, le.project_id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                AND le.project_id = lec.project_id
+                WHERE le.project_id = :project_id
+                  AND lec.context_id = :context_id
+                  AND le.data ? :root_field
+                """,
+            ),
+            {
+                "context_id": context_id,
+                "project_id": project_id,
+                "root_field": root_field,
+            },
+        )
+
+        matching_log_event_ids: List[int] = []
+        resolved_project_id = None
+        columns_values: Dict[str, List[Any]] = {}
+
+        for row in result.fetchall():
+            log_event_id = row[0]
+            data = row[1]
+            if resolved_project_id is None:
+                resolved_project_id = row[2]
+            try:
+                extracted_values = FKPathParser.extract_values(data, path_segments)
+                if any(old_value in extracted_values for old_value in old_values):
+                    matching_log_event_ids.append(log_event_id)
+                    if data:
+                        for key, value in data.items():
+                            if value is not None:
+                                columns_values.setdefault(key, []).append(value)
+            except Exception:
+                continue
+
+        if not matching_log_event_ids:
+            return 0
+
+        if columns_values and resolved_project_id is not None:
+            self.apply_fk_actions(
+                project_id=resolved_project_id,
+                context_id=context_id,
+                columns_values=columns_values,
+                action="DELETE",
+            )
+
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        LogEventDAO(self.session).delete(matching_log_event_ids)
         return len(matching_log_event_ids)
 
     def _cascade_delete_nested_remove_elements(
@@ -3642,11 +3689,15 @@ class ContextDAO:
 
             # Check for duplicates if the context doesn't allow them
             if not context.allow_duplicates:
-                for log_event in log_events:
-                    if self.check_for_duplicates(context_id, log_event.id):
-                        raise ValueError(
-                            f"Duplicate log entry detected. Context '{context.name}' does not allow duplicates.",
-                        )
+                dup_ids = self.check_for_duplicates_batch(
+                    context_id,
+                    [log_event.id for log_event in log_events],
+                )
+                if dup_ids:
+                    raise ValueError(
+                        f"Duplicate log entry detected. Context '{context.name}' "
+                        f"does not allow duplicates. Conflicting ids: {dup_ids}",
+                    )
 
             # Owner homogeneity invariant: an assistant/team context may only
             # hold logs owned by that same assistant/team, so its owner_key
@@ -3858,17 +3909,29 @@ class ContextDAO:
         if not log_event_ids or not keys_to_check:
             return []
 
-        # Build the key extraction for JSONB comparison
-        # We extract the specified keys from LogEvent.data and compare them
+        # Project only the keys under comparison (not full-row JSONB) and hash
+        # those projections so large contexts do not TOAST-decompress every row.
         query = """
         WITH check_logs AS (
-            SELECT le.id, le.data
+            SELECT
+                le.id,
+                (
+                    SELECT jsonb_object_agg(k, le.data->k)
+                    FROM unnest(:keys) AS k
+                    WHERE le.data ? k
+                ) AS projected
             FROM log_event le
             WHERE le.id = ANY(:log_event_ids)
               AND le.project_id = :project_id
         ),
         existing_logs AS (
-            SELECT le.id, le.data
+            SELECT
+                le.id,
+                (
+                    SELECT jsonb_object_agg(k, le.data->k)
+                    FROM unnest(:keys) AS k
+                    WHERE le.data ? k
+                ) AS projected
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
@@ -3879,18 +3942,11 @@ class ContextDAO:
         duplicates AS (
             SELECT DISTINCT cl.id
             FROM check_logs cl
-            WHERE EXISTS (
-                SELECT 1 FROM existing_logs el
-                WHERE (
-                    SELECT jsonb_object_agg(k, el.data->k)
-                    FROM unnest(:keys) AS k
-                    WHERE el.data ? k
-                ) = (
-                    SELECT jsonb_object_agg(k, cl.data->k)
-                    FROM unnest(:keys) AS k
-                    WHERE cl.data ? k
-                )
-            )
+            JOIN existing_logs el
+              ON md5(COALESCE(el.projected, '{}'::jsonb)::text)
+               = md5(COALESCE(cl.projected, '{}'::jsonb)::text)
+             AND COALESCE(el.projected, '{}'::jsonb)
+               = COALESCE(cl.projected, '{}'::jsonb)
         )
         SELECT id FROM duplicates
         """
@@ -3928,17 +3984,17 @@ class ContextDAO:
         if not log_event_ids:
             return []
 
-        # Use a single SQL query to find all duplicates in the batch
-        # This compares LogEvent.data JSONB columns for exact matches
+        # Hash-first compare avoids TOAST-decompressing every existing row's
+        # full JSONB into a CTE join; equality is verified only on hash hits.
         query = """
         WITH new_logs AS (
-            SELECT le.id, le.data
+            SELECT le.id, md5(le.data::text) AS data_hash, le.data
             FROM log_event le
             WHERE le.id = ANY(:log_event_ids)
               AND le.project_id = :project_id
         ),
-        existing_logs AS (
-            SELECT le.id, le.data
+        existing_hashes AS (
+            SELECT le.id, md5(le.data::text) AS data_hash
             FROM log_event le
             JOIN log_event_context lec ON le.id = lec.log_event_id
             AND le.project_id = lec.project_id
@@ -3946,13 +4002,17 @@ class ContextDAO:
               AND lec.context_id = :context_id
               AND le.id != ALL(:log_event_ids)
         ),
-        duplicates AS (
-            SELECT DISTINCT nl.id
+        hash_hits AS (
+            SELECT DISTINCT nl.id AS new_id, eh.id AS existing_id
             FROM new_logs nl
-            WHERE EXISTS (
-                SELECT 1 FROM existing_logs el
-                WHERE el.data = nl.data
-            )
+            JOIN existing_hashes eh ON eh.data_hash = nl.data_hash
+        ),
+        duplicates AS (
+            SELECT DISTINCT hh.new_id AS id
+            FROM hash_hits hh
+            JOIN log_event el ON el.id = hh.existing_id AND el.project_id = :project_id
+            JOIN new_logs nl ON nl.id = hh.new_id
+            WHERE el.data = nl.data
         )
         SELECT id FROM duplicates
         """
@@ -4006,57 +4066,62 @@ class ContextDAO:
             )
             enforce_owner = context_owner_key != "sys"
 
-            # Process each log event
-            for original_log_id in log_ids:
-                # Query the original LogEvent (scoped to the context's project so
-                # the partitioned point lookup prunes instead of scanning all
-                # partitions; the source logs live in this project).
-                original_log_event = (
-                    self.session.query(LogEvent)
-                    .filter(
-                        LogEvent.id == original_log_id,
-                        LogEvent.project_id == context.project_id,
-                    )
-                    .one_or_none()
+            originals = (
+                self.session.query(LogEvent)
+                .filter(
+                    LogEvent.id.in_(log_ids),
+                    LogEvent.project_id == context.project_id,
                 )
-                if not original_log_event:
-                    raise ValueError(f"Log event with id {original_log_id} not found")
+                .all()
+            )
+            found_by_id = {le.id: le for le in originals}
+            missing_ids = set(log_ids) - set(found_by_id)
+            if missing_ids:
+                raise ValueError(f"Log events with ids {missing_ids} not found")
+
+            ordered_originals = [found_by_id[lid] for lid in log_ids]
+            for original_log_event in ordered_originals:
                 if enforce_owner and original_log_event.owner_key != context_owner_key:
                     raise ValueError(
                         "Cannot copy logs owned by a different assistant or team "
                         "to this context (owner_key mismatch).",
                     )
 
-                # Check for duplicates if the context doesn't allow them
-                if not context.allow_duplicates:
-                    if self.check_for_duplicates(context_id, original_log_event.id):
-                        raise ValueError(
-                            f"Duplicate log entry detected. Context '{context.name}' does not allow duplicates.",
-                        )
-
-                # Create a new LogEvent by copying necessary fields
-                new_log_event_data = {
-                    "project_id": original_log_event.project_id,
-                    "created_at": current_time,
-                    "updated_at": current_time,
-                    "data": original_log_event.data,
-                    "key_order": original_log_event.key_order,
-                    "owner_key": original_log_event.owner_key,
-                }
-
-                new_log_event = LogEvent(**new_log_event_data)
-                self.session.add(new_log_event)
-                self.session.flush()  # Get the new ID
-
-                # Create association between the new log event and context
-                association = LogEventContext(
-                    project_id=new_log_event.project_id,
-                    log_event_id=new_log_event.id,
-                    context_id=context_id,
-                    owner_key=new_log_event.owner_key,
+            if not context.allow_duplicates:
+                dup_ids = self.check_for_duplicates_batch(
+                    context_id,
+                    [le.id for le in ordered_originals],
                 )
-                self.session.add(association)
-            # Commit all changes
+                if dup_ids:
+                    raise ValueError(
+                        f"Duplicate log entry detected. Context '{context.name}' "
+                        f"does not allow duplicates. Conflicting ids: {dup_ids}",
+                    )
+
+            new_events: List[LogEvent] = []
+            for original_log_event in ordered_originals:
+                new_log_event = LogEvent(
+                    project_id=original_log_event.project_id,
+                    created_at=current_time,
+                    updated_at=current_time,
+                    data=original_log_event.data,
+                    key_order=original_log_event.key_order,
+                    owner_key=original_log_event.owner_key,
+                )
+                self.session.add(new_log_event)
+                new_events.append(new_log_event)
+
+            self.session.flush()
+
+            for new_log_event in new_events:
+                self.session.add(
+                    LogEventContext(
+                        project_id=new_log_event.project_id,
+                        log_event_id=new_log_event.id,
+                        context_id=context_id,
+                        owner_key=new_log_event.owner_key,
+                    ),
+                )
             self.session.commit()
 
         except Exception as e:
@@ -4172,6 +4237,26 @@ class ContextDAO:
 
             context = self.session.query(Context).filter_by(id=context_id).one()
 
+            # Capture pre-rollback membership so orphan GC stays scoped to
+            # logs that lose this context association (not the whole project).
+            candidate_log_ids = [
+                int(row[0])
+                for row in self.session.execute(
+                    text(
+                        """
+                        SELECT log_event_id
+                        FROM log_event_context
+                        WHERE project_id = :project_id
+                          AND context_id = :context_id
+                        """,
+                    ),
+                    {
+                        "project_id": context.project_id,
+                        "context_id": context_id,
+                    },
+                ).fetchall()
+            ]
+
             # Step 1: Restore the state
             self.rollback_to_version(context_id, context_version.id)
             context.updated_at = datetime.now(timezone.utc)
@@ -4182,7 +4267,11 @@ class ContextDAO:
             self.session.commit()
 
             # Step 2: Garbage collection in a new transaction
-            delete_orphaned_log_events(self.session, context.project_id)
+            delete_orphaned_log_events(
+                self.session,
+                context.project_id,
+                log_event_ids=candidate_log_ids,
+            )
             cleanup_orphaned_field_types(self.session, context_id)
             cleanup_orphaned_derived_log_templates(self.session, context_id)
 
