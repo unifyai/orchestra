@@ -7577,15 +7577,30 @@ def _raise_if_ambiguous_universal_admin_contact_lookup(
         )
 
 
+# Broad fleet listing without an explicit page size used to hydrate every
+# assistant in one request (minutes under load). Cap the default page and
+# skip expensive hydration unless the caller opts in via from_fields / a
+# narrow filter (agent_id or contact identity).
+_ADMIN_LIST_DEFAULT_LIMIT = 100
+
+
 def _admin_list_uses_slim_hydration(
     *,
     requested_fields: Optional[set[str]],
     has_contact_filter: bool,
+    is_narrow_lookup: bool,
 ) -> bool:
-    """Skip expensive per-assistant hydration unless a full fleet read was requested."""
+    """Skip expensive per-assistant hydration unless a full narrow read was requested.
+
+    Narrow lookups (``agent_id`` or contact filter) keep full hydration when
+    ``from_fields`` is omitted so single-assistant admin reads stay complete.
+    Broad fleet lists always slim unless the caller names the fields they need.
+    """
     if has_contact_filter:
         return True
     if requested_fields is not None:
+        return True
+    if not is_narrow_lookup:
         return True
     return False
 
@@ -7593,8 +7608,10 @@ def _admin_list_uses_slim_hydration(
 @admin_router.get(
     "/assistant",
     summary="Admin: list all assistants",
-    description="Retrieve every assistant in the system, optionally filtered by phone or email. "
-    "Use 'fields' parameter for selective field retrieval to improve performance.",
+    description="List assistants with optional filtering. Broad fleet lists default to "
+    "a page size of 100 and slim hydration; pass limit/offset and from_fields to page "
+    "or opt into expensive fields. Narrow lookups (agent_id / contact filter) keep "
+    "full hydration when from_fields is omitted.",
     tags=["Assistants", "Admin"],
 )
 def admin_list_all_assistants(
@@ -7640,7 +7657,9 @@ def admin_list_all_assistants(
         ge=1,
         le=1000,
         description="Maximum number of assistants to return (pagination over a stable "
-        "agent_id ordering). Combine with 'offset' to page through results.",
+        "agent_id ordering). Combine with 'offset' to page through results. Broad "
+        f"fleet lists default to {_ADMIN_LIST_DEFAULT_LIMIT} when omitted; narrow "
+        "lookups (agent_id / contact filter) stay uncapped.",
     ),
     offset: int = Query(
         0,
@@ -7650,19 +7669,21 @@ def admin_list_all_assistants(
     from_fields: Optional[str] = Query(
         None,
         description="Comma-separated list of fields to return (e.g., 'email,agent_id,phone'). "
-        "If omitted, returns full AssistantRead objects. Using this parameter skips "
-        "expensive lookups (api_key, user info) when those fields aren't requested.",
+        "On broad fleet lists, omitting this skips expensive lookups (api_key, teams, "
+        "contact identity roots, secrets). Narrow lookups (agent_id / contact filter) "
+        "still return full AssistantRead objects when from_fields is omitted.",
         example="email,agent_id,first_name",
     ),
     session: Session = Depends(get_db_session),
 ):
     """
-    List all assistants in the system with optional filtering and field selection.
+    List assistants with optional filtering and field selection.
 
-    When 'from_fields' is specified, returns only the requested fields, skipping expensive
-    database lookups for unrequested fields like api_key and user details.
-
-    When 'from_fields' is omitted, returns full AssistantRead objects.
+    Broad fleet lists (no agent_id / contact filter) default to a page size of
+    100 and slim hydration so callers cannot accidentally hydrate the whole
+    fleet in one request. Pass ``limit`` + ``offset`` to page, and ``from_fields``
+    to opt into specific expensive fields. Narrow lookups keep full hydration
+    when ``from_fields`` is omitted.
     """
     # Normalize filter parameters to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
@@ -7715,6 +7736,9 @@ def admin_list_all_assistants(
         user_whatsapp_number=user_whatsapp_number,
         assistant_whatsapp_number=assistant_whatsapp_number,
     )
+    is_narrow_lookup = agent_id is not None or has_contact_filter
+    if not is_narrow_lookup and limit is None:
+        limit = _ADMIN_LIST_DEFAULT_LIMIT
     _raise_if_ambiguous_universal_admin_contact_lookup(
         agent_id=agent_id,
         phone=phone,
@@ -7724,7 +7748,10 @@ def admin_list_all_assistants(
     use_slim_hydration = _admin_list_uses_slim_hydration(
         requested_fields=requested_fields,
         has_contact_filter=has_contact_filter,
+        is_narrow_lookup=is_narrow_lookup,
     )
+    # Full default hydrate only for narrow lookups without from_fields.
+    load_expensive_defaults = requested_fields is None and not use_slim_hydration
 
     try:
         assistants = assistant_dao.list_all_assistants(
@@ -7753,34 +7780,43 @@ def admin_list_all_assistants(
         # Perform expensive lookups only if needed
         api_keys = (
             [get_api_key_for_assistant(a) for a in assistants]
-            if (requested_fields is None or "api_key" in requested_fields)
+            if (
+                load_expensive_defaults
+                or (requested_fields is not None and "api_key" in requested_fields)
+            )
             else None
         )
         users = (
             [user_dao.get_by_id(a.user_id)[0] for a in assistants]
             if (
-                requested_fields is None
-                or bool(
-                    requested_fields
-                    & {
-                        "user_email",
-                        "user_first_name",
-                        "user_last_name",
-                        "user_image",
-                        "user_whatsapp_number",
-                    },
+                load_expensive_defaults
+                or (
+                    requested_fields is not None
+                    and bool(
+                        requested_fields
+                        & {
+                            "user_email",
+                            "user_first_name",
+                            "user_last_name",
+                            "user_image",
+                            "user_whatsapp_number",
+                        },
+                    )
                 )
             )
             else None
         )
 
-        skip_teams = requested_fields is not None and "team_ids" not in requested_fields
+        skip_teams = (
+            requested_fields is not None and "team_ids" not in requested_fields
+        ) or (requested_fields is None and use_slim_hydration)
         skip_team_summaries = (
             requested_fields is not None and "team_summaries" not in requested_fields
         ) or use_slim_hydration
-        skip_contact_ids = requested_fields is not None and not (
-            {"self_contact_id", "boss_contact_id"} & requested_fields
-        )
+        skip_contact_ids = (
+            requested_fields is not None
+            and not ({"self_contact_id", "boss_contact_id"} & requested_fields)
+        ) or (requested_fields is None and use_slim_hydration)
         skip_contact_identity_roots = use_slim_hydration and (
             requested_fields is None or "contact_identity_roots" not in requested_fields
         )
@@ -7813,7 +7849,7 @@ def admin_list_all_assistants(
 
         skip_secrets = (
             requested_fields is not None and "secrets" not in requested_fields
-        )
+        ) or (requested_fields is None and use_slim_hydration)
         secrets_by_assistant: dict[int, dict[str, str]] = {}
         if not skip_secrets:
             agent_ids = [a.agent_id for a in assistants]

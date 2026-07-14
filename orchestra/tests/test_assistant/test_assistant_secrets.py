@@ -816,6 +816,63 @@ class TestAdminSecretsInResponse:
         assert [int(i["agent_id"]) for i in page2.json()["info"]] == expected[2:4]
 
     @pytest.mark.anyio
+    async def test_admin_broad_list_defaults_to_slim_hydration(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+    ):
+        """Fleet-wide list without from_fields must not hydrate api_key / secrets."""
+        agent_id = await _create_assistant(client)
+        await client.post(
+            f"/v0/assistant/{agent_id}/secret",
+            json={"secret_name": "KEEP", "secret_value": "v"},
+            headers=HEADERS,
+        )
+
+        broad = await client.get(
+            "/v0/admin/assistant",
+            headers=ADMIN_HEADERS,
+        )
+        assert broad.status_code == status.HTTP_200_OK
+        target = next(i for i in broad.json()["info"] if int(i["agent_id"]) == agent_id)
+        assert not target.get("api_key")
+        assert not target.get("secrets")
+
+        narrow = await client.get(
+            "/v0/admin/assistant",
+            params={"agent_id": agent_id},
+            headers=ADMIN_HEADERS,
+        )
+        assert narrow.status_code == status.HTTP_200_OK
+        narrow_row = narrow.json()["info"][0]
+        assert narrow_row.get("api_key")
+        assert narrow_row.get("secrets", {}).get("KEEP") == "v"
+
+    @pytest.mark.anyio
+    async def test_admin_broad_list_default_page_size(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+        mock_infra,
+        monkeypatch,
+    ):
+        """Broad lists without limit use the hardened default page size."""
+        from orchestra.web.api.assistant import views as assistant_views
+
+        monkeypatch.setattr(assistant_views, "_ADMIN_LIST_DEFAULT_LIMIT", 2)
+        for i in range(3):
+            await _create_named_assistant(client, f"Cap{i}")
+
+        page = await client.get(
+            "/v0/admin/assistant",
+            params={"from_fields": "agent_id"},
+            headers=ADMIN_HEADERS,
+        )
+        assert page.status_code == status.HTTP_200_OK
+        assert len(page.json()["info"]) == 2
+
+    @pytest.mark.anyio
     async def test_non_admin_response_excludes_secrets(
         self,
         client: AsyncClient,
