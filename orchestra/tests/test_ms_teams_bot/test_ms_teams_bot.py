@@ -129,12 +129,13 @@ class TestInstallDAO:
         dbsession: Session,
     ) -> None:
         dao = MsTeamsBotDAO(dbsession)
-        install = dao.ensure_pending_install(
+        install, created = dao.ensure_pending_install(
             tenant_id="tenant-pending",
             bot_app_id="app-guid-001",
             tenant_name="Contoso",
             service_url="https://smba.example/",
         )
+        assert created is True
         assert install.organization_id is None
         assert install.user_id is None
         assert install.bind_nonce
@@ -145,16 +146,19 @@ class TestInstallDAO:
         dbsession: Session,
     ) -> None:
         dao = MsTeamsBotDAO(dbsession)
-        first = dao.ensure_pending_install(
+        first, created_first = dao.ensure_pending_install(
             tenant_id="tenant-idem",
             bot_app_id="app-guid-001",
         )
+        assert created_first is True
         nonce = first.bind_nonce
-        second = dao.ensure_pending_install(
+        second, created_second = dao.ensure_pending_install(
             tenant_id="tenant-idem",
             bot_app_id="app-guid-001",
             service_url="https://smba.updated/",
         )
+        # A refresh of the existing tenant install is not a create.
+        assert created_second is False
         assert second.id == first.id
         # Existing row refreshed in place; nonce/ownership untouched.
         assert second.bind_nonce == nonce
@@ -167,7 +171,7 @@ class TestInstallDAO:
         dao = MsTeamsBotDAO(dbsession)
         user = _make_user(dbsession, "bind")
         org = _make_org(dbsession, user, "bind")
-        pending = dao.ensure_pending_install(
+        pending, _ = dao.ensure_pending_install(
             tenant_id="tenant-bind",
             bot_app_id="app-guid-001",
         )
@@ -184,7 +188,7 @@ class TestInstallDAO:
         dao = MsTeamsBotDAO(dbsession)
         user = _make_user(dbsession, "bindxor")
         org = _make_org(dbsession, user, "bindxor")
-        pending = dao.ensure_pending_install(
+        pending, _ = dao.ensure_pending_install(
             tenant_id="tenant-bindxor",
             bot_app_id="app-guid-001",
         )
@@ -284,10 +288,12 @@ class TestInstallDAO:
         first = _make_install(dbsession, user=user, tenant_id="tenant-revbind")
         dao.revoke_install(first.id)
 
-        pending = dao.ensure_pending_install(
+        pending, created = dao.ensure_pending_install(
             tenant_id="tenant-revbind",
             bot_app_id="app-guid-001",
         )
+        # The revoked leftover is skipped, so this mints a fresh pending row.
+        assert created is True
         assert pending.id != first.id
 
         bound = dao.bind_install(pending.id, user_id=user.id)
@@ -312,10 +318,11 @@ class TestInstallDAO:
         )
         dao.revoke_install(first.id)
 
-        pending = dao.ensure_pending_install(
+        pending, created = dao.ensure_pending_install(
             tenant_id="tenant-revbindorg",
             bot_app_id="app-guid-001",
         )
+        assert created is True
         assert pending.id != first.id
 
         bound = dao.bind_install(pending.id, organization_id=org.id)
@@ -350,7 +357,7 @@ class TestInstallDAO:
 
     def test_get_install_by_nonce(self, dbsession: Session) -> None:
         dao = MsTeamsBotDAO(dbsession)
-        pending = dao.ensure_pending_install(
+        pending, _ = dao.ensure_pending_install(
             tenant_id="tenant-nonce",
             bot_app_id="app-guid-001",
         )
@@ -804,6 +811,19 @@ class TestAdminEndpoints:
         body = pending.json()
         assert body["pending"] is True
         assert body["bind_nonce"]
+        # First call inserted the row, so the adapter should welcome once.
+        assert body["created"] is True
+        assert body["connect_url"] and body["bind_nonce"] in body["connect_url"]
+
+        # A repeat add-event refreshes the same row and must not re-welcome.
+        again = await client.post(
+            "/v0/admin/ms-teams-bot/pending-install",
+            json={"tenant_id": "tenant-http", "bot_app_id": "app-guid-001"},
+            headers=ADMIN_HEADERS,
+        )
+        assert again.status_code == status.HTTP_200_OK
+        assert again.json()["created"] is False
+        assert again.json()["id"] == body["id"]
 
         bound = await client.post(
             "/v0/admin/ms-teams-bot/bind",
@@ -852,7 +872,46 @@ class TestAdminEndpoints:
             headers=ADMIN_HEADERS,
         )
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.json()["handled"] is False
+        body = resp.json()
+        assert body["handled"] is False
+        assert body["install_state"] == "none"
+        assert body["connect_url"] is None
+
+    async def test_dispatch_pending_install_returns_connect_url(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        """A message on a still-pending install must surface the connect link
+        so the adapter can reply with it (Store-review path: reviewer DMs the
+        bot before binding)."""
+        dbsession.commit()
+        pending = await client.post(
+            "/v0/admin/ms-teams-bot/pending-install",
+            json={"tenant_id": "tenant-pending-disp", "bot_app_id": "app-guid-001"},
+            headers=ADMIN_HEADERS,
+        )
+        nonce = pending.json()["bind_nonce"]
+
+        resp = await client.post(
+            "/v0/admin/ms-teams-bot/dispatch",
+            json={
+                "tenant_id": "tenant-pending-disp",
+                "conversation_id": "conv-pending",
+                "conversation_type": "personal",
+                "sender_aad_object_id": "aad-1",
+                "bot_mentioned": False,
+                "addressed_text": "hi",
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        body = resp.json()
+        assert body["handled"] is False
+        assert body["install_state"] == "pending"
+        assert body["install_id"] == pending.json()["id"]
+        assert body["bot_app_id"] == "app-guid-001"
+        assert body["connect_url"] and nonce in body["connect_url"]
 
     async def test_dispatch_personal_happy_path(
         self,
@@ -884,6 +943,7 @@ class TestAdminEndpoints:
         assert resp.status_code == status.HTTP_200_OK
         body = resp.json()
         assert body["handled"] is True
+        assert body["install_state"] == "bound"
         assert body["assistant_id"] == coord.agent_id
         assert body["routing_metadata"]["reason"] == "initial_chat"
 

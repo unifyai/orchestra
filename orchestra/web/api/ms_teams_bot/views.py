@@ -96,6 +96,16 @@ class InstallResponse(BaseModel):
     scopes: Optional[str] = None
     pending: bool = False
     revoked: bool = False
+    created: bool = Field(
+        False,
+        description=(
+            "True only when the pending-install call inserted a brand-new row. "
+            "The adapter sends the install welcome exactly once off this flag — "
+            "a Teams add fires both an installationUpdate and a "
+            "conversationUpdate, so welcoming on every event would spam. Only "
+            "meaningful on the pending-install response."
+        ),
+    )
     bind_nonce: Optional[str] = Field(
         None,
         description=(
@@ -185,6 +195,24 @@ class DispatchResponse(BaseModel):
             "contact instead of minting a per-display-name Teams contact."
         ),
     )
+    install_state: str = Field(
+        "none",
+        description=(
+            "Owner-binding state of the tenant's install for this activity: "
+            "'none' (no install), 'pending' (installed but not yet bound to a "
+            "Unify owner), or 'bound'. Lets the adapter reply to a message that "
+            "lands on a still-pending install with a connect link rather than "
+            "dropping it silently."
+        ),
+    )
+    connect_url: Optional[str] = Field(
+        None,
+        description=(
+            "One-click Console URL to bind a pending install (carries the "
+            "``bind_nonce`` as ``ms_teams_bind``). Populated only when "
+            "``install_state == 'pending'``."
+        ),
+    )
 
 
 class ChannelBindingRequest(BaseModel):
@@ -238,6 +266,7 @@ def _install_to_response(
     install: MsTeamsBotInstall,
     *,
     include_nonce: bool = False,
+    created: bool = False,
 ) -> InstallResponse:
     pending = install.organization_id is None and install.user_id is None
     nonce = install.bind_nonce if include_nonce else None
@@ -253,6 +282,7 @@ def _install_to_response(
         scopes=install.scopes,
         pending=pending,
         revoked=install.revoked_at is not None,
+        created=created,
         bind_nonce=nonce,
         connect_url=_build_connect_url(nonce) if nonce else None,
     )
@@ -302,7 +332,7 @@ def ensure_pending_install(
     ``bind_nonce`` (returned here) for the tenant-to-org handshake.
     """
     dao = MsTeamsBotDAO(session)
-    install = dao.ensure_pending_install(
+    install, created = dao.ensure_pending_install(
         tenant_id=body.tenant_id,
         bot_app_id=body.bot_app_id,
         tenant_name=body.tenant_name,
@@ -310,7 +340,7 @@ def ensure_pending_install(
         installer_aad_object_id=body.installer_aad_object_id,
     )
     session.commit()
-    return _install_to_response(install, include_nonce=True)
+    return _install_to_response(install, include_nonce=True, created=created)
 
 
 @admin_router.post("/ms-teams-bot/bind")
@@ -469,12 +499,37 @@ def dispatch_inbound(
             sender_identity_provided=body.sender_identity_provided,
         )
         if resolution is None:
+            # Nothing to route to. Tell the adapter *why* so it can reply to a
+            # message on a still-pending install with a connect link (a common
+            # Store-review path: reviewer messages the bot before binding).
+            install = MsTeamsBotDAO(session).get_install_by_tenant(body.tenant_id)
             session.commit()
-            return DispatchResponse(handled=False)
+            if install is None:
+                return DispatchResponse(handled=False, install_state="none")
+            pending = install.organization_id is None and install.user_id is None
+            if pending:
+                return DispatchResponse(
+                    handled=False,
+                    install_state="pending",
+                    install_id=install.id,
+                    bot_app_id=install.bot_app_id,
+                    service_url=install.service_url,
+                    connect_url=(
+                        _build_connect_url(install.bind_nonce)
+                        if install.bind_nonce
+                        else None
+                    ),
+                )
+            return DispatchResponse(
+                handled=False,
+                install_state="bound",
+                install_id=install.id,
+            )
 
         session.commit()
         return DispatchResponse(
             handled=True,
+            install_state="bound",
             install_id=resolution.install.id,
             organization_id=resolution.install.organization_id,
             user_id=resolution.install.user_id,

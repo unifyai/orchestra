@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
@@ -141,7 +142,7 @@ class MsTeamsBotDAO:
         tenant_name: Optional[str] = None,
         service_url: Optional[str] = None,
         installer_aad_object_id: Optional[str] = None,
-    ) -> MsTeamsBotInstall:
+    ) -> tuple[MsTeamsBotInstall, bool]:
         """Create (or refresh) a *pending* install for a Microsoft tenant.
 
         Called on the first ``conversationUpdate`` (bot added to a tenant)
@@ -151,6 +152,15 @@ class MsTeamsBotDAO:
         and it is returned unchanged in ownership. A freshly created row
         carries a random ``bind_nonce`` used to complete the
         tenant-to-org handshake via :meth:`bind_install`.
+
+        Returns ``(install, created)`` where ``created`` is ``True`` only
+        when this call inserted a brand-new row. Callers use it to send the
+        install welcome exactly once — a Teams add emits both an
+        ``installationUpdate`` and a ``conversationUpdate`` (and may repeat),
+        so welcoming on every event would spam the installer. The insert is
+        race-safe: if a concurrent event wins the unique ``tenant_id`` slot
+        first, the collision is caught and the now-existing row is returned
+        with ``created=False``.
         """
         existing = self.get_install_by_tenant(tenant_id)
         if existing is not None:
@@ -162,7 +172,7 @@ class MsTeamsBotDAO:
             if installer_aad_object_id is not None:
                 existing.installer_aad_object_id = installer_aad_object_id
             self.session.flush()
-            return existing
+            return existing, False
 
         install = MsTeamsBotInstall(
             organization_id=None,
@@ -175,8 +185,18 @@ class MsTeamsBotDAO:
             bind_nonce=secrets.token_urlsafe(32),
         )
         self.session.add(install)
-        self.session.flush()
-        return install
+        try:
+            with self.session.begin_nested():
+                self.session.flush()
+        except IntegrityError:
+            # A concurrent add-event inserted the active row for this tenant
+            # between our lookup and flush; fall back to the winner.
+            self.session.expunge(install)
+            existing = self.get_install_by_tenant(tenant_id)
+            if existing is None:
+                raise
+            return existing, False
+        return install, True
 
     def bind_install(
         self,
