@@ -21,6 +21,9 @@ from orchestra.web.api import (  # noqa: WPS235
     teams,
     users,
 )
+from orchestra.web.api.admin import (
+    provider_event_dispatch as provider_event_dispatch_admin,
+)
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.context.views import admin_router as context_admin_router
@@ -134,6 +137,13 @@ api_router.include_router(
     log_admin_router,
     prefix="/admin",
     tags=["Logs"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    provider_event_dispatch_admin.router,
+    prefix="/admin",
+    tags=["Provider Event Dispatch"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
