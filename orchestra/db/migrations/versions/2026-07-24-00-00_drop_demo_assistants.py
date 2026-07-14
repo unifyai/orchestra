@@ -1,7 +1,7 @@
 """Drop sales demo assistant tables and columns.
 
-Fails loud if any ``assistants.demo_id`` rows remain so ops must delete
-demo assistants first (see ``scripts/delete_demo_assistants.py``).
+Fails loud if any ``assistants.demo_id`` rows remain so those assistants must
+be deleted before this migration can run.
 
 Revision ID: drop_demo_assistants
 Revises: provider_trigger_worker
@@ -48,9 +48,8 @@ def upgrade() -> None:
     if remaining:
         raise RuntimeError(
             f"Cannot drop demo assistant schema: {remaining} assistant(s) still "
-            "have demo_id set. Delete them first with "
-            "`poetry run python scripts/delete_demo_assistants.py`, then re-run "
-            "this migration.",
+            "have demo_id set. Delete those assistants (and their "
+            "demo_assistant_meta rows), then re-run this migration.",
         )
 
     _drop_fk_on_column(bind, table="assistants", column="demo_id")
