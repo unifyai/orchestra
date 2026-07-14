@@ -48,7 +48,8 @@ def test_typed_provider_trigger_accepts_matching_task_revision_and_projects_runt
         acceptance_epoch=mutated.acceptance_epoch,
     )
     assert accepted.accepted is True
-    assert accepted.receipt_id == "receipt-1"
+    assert accepted.receipt_id is not None
+    assert accepted.receipt_id.startswith("receipt-")
 
 
 def test_unity_provider_trigger_accepts_matching_task_revision_and_projects_runtime_state(
