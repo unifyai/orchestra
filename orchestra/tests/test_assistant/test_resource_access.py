@@ -2890,3 +2890,17 @@ async def test_transfer_keeps_denormalized_project_id_consistent(
         {"lid": log_id},
     ).scalar()
     assert emb_drift == 0, "embedding.project_id drifted from parent after transfer"
+
+    luc_drift = dbsession.execute(
+        text(
+            """
+            SELECT count(*) FROM log_unique_constraint luc
+            JOIN log_event le ON le.id = luc.log_event_id
+            WHERE luc.log_event_id = :lid AND luc.project_id <> le.project_id
+            """,
+        ),
+        {"lid": log_id},
+    ).scalar()
+    assert (
+        luc_drift == 0
+    ), "log_unique_constraint.project_id drifted from parent after transfer"

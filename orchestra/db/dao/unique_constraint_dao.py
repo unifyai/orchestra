@@ -9,8 +9,8 @@ Supports:
 
 Migration Strategy:
 - Controlled by ORCHESTRA_UNIQUE_VALIDATION_MODE env var
-- Default: jsonb_scan (old behavior) - for backward compatibility
-- After backfill: lookup_table (new behavior) - for performance
+- Default: lookup_table (required for production / large contexts)
+- jsonb_scan is refused at startup outside tests unless explicitly allowed
 """
 
 import hashlib

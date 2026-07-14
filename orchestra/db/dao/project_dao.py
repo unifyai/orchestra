@@ -376,6 +376,18 @@ class ProjectDAO:
                             WHERE project_id = :project_id
                             LIMIT :batch_size
                             FOR UPDATE SKIP LOCKED
+                        ),
+                        deleted_luc AS (
+                            DELETE FROM log_unique_constraint
+                            WHERE project_id = :project_id
+                              AND log_event_id IN (SELECT id FROM batch)
+                            RETURNING log_event_id
+                        ),
+                        deleted_lec AS (
+                            DELETE FROM log_event_context
+                            WHERE project_id = :project_id
+                              AND log_event_id IN (SELECT id FROM batch)
+                            RETURNING log_event_id
                         )
                         DELETE FROM log_event
                         WHERE project_id = :project_id
@@ -421,9 +433,22 @@ class ProjectDAO:
                                 WHERE project_id = :project_id
                                 LIMIT :batch_size
                                 FOR UPDATE
+                            ),
+                            deleted_luc AS (
+                                DELETE FROM log_unique_constraint
+                                WHERE project_id = :project_id
+                                  AND log_event_id IN (SELECT id FROM batch)
+                                RETURNING log_event_id
+                            ),
+                            deleted_lec AS (
+                                DELETE FROM log_event_context
+                                WHERE project_id = :project_id
+                                  AND log_event_id IN (SELECT id FROM batch)
+                                RETURNING log_event_id
                             )
                             DELETE FROM log_event
-                            WHERE id IN (SELECT id FROM batch)
+                            WHERE project_id = :project_id
+                              AND id IN (SELECT id FROM batch)
                         """,
                         ),
                         {"project_id": id, "batch_size": batch_size},
@@ -441,12 +466,12 @@ class ProjectDAO:
                     f"Phase 3: Deleted {total_log_events_deleted} log_events in batches",
                 )
 
-            # log_unique_constraint is keyed by context_id with no FK to
-            # context/project, so the project cascade does not remove it; clear
-            # this project's rows explicitly before deleting the project.
+            # Safety net: clear any residual uniqueness rows for this project
+            # (no FK from luc → context/project).
             self.session.execute(
                 text(
-                    "DELETE FROM log_unique_constraint WHERE context_id IN "
+                    "DELETE FROM log_unique_constraint WHERE project_id = :pid "
+                    "OR context_id IN "
                     "(SELECT id FROM context WHERE project_id = :pid)",
                 ),
                 {"pid": id},

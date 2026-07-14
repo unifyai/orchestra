@@ -839,7 +839,15 @@ class QueryLogsPostBody(BaseModel):
         description="Fields to exclude",
         example="score&response",
     )
-    limit: Optional[int] = Field(None, ge=1, le=1000)
+    limit: Optional[int] = Field(
+        1000,
+        ge=1,
+        le=1000,
+        description=(
+            "Maximum number of logs to return. Defaults to 1000; "
+            "unbounded reads are no longer supported."
+        ),
+    )
     offset: int = Field(0, ge=0)
     group_by: Optional[List[str]] = Field(
         None,

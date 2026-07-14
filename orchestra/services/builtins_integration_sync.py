@@ -26,6 +26,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.embedding_dao import ACTIVE_QUEUE_STATUSES
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dao.unique_constraint_dao import (
@@ -1299,12 +1300,32 @@ def upsert_context_rows(
                 )
                 if winner_id is None:
                     raise RuntimeError("Unique-key race lost but no winner was found")
+                # lec→le FK was dropped for partitioning; clear association (and
+                # any luc row) before deleting the losing log_event.
+                loser_params = {
+                    "project_id": project_id,
+                    "log_event_id": new_log_event_id,
+                }
+                session.execute(
+                    text(
+                        "DELETE FROM log_event_context "
+                        "WHERE project_id = :project_id AND log_event_id = :log_event_id",
+                    ),
+                    loser_params,
+                )
+                session.execute(
+                    text(
+                        "DELETE FROM log_unique_constraint "
+                        "WHERE project_id = :project_id AND log_event_id = :log_event_id",
+                    ),
+                    loser_params,
+                )
                 session.execute(
                     text(
                         "DELETE FROM log_event "
                         "WHERE project_id = :project_id AND id = :log_event_id",
                     ),
-                    {"project_id": project_id, "log_event_id": new_log_event_id},
+                    loser_params,
                 )
                 log_event_id = winner_id
                 session.execute(
@@ -1386,6 +1407,43 @@ def upsert_context_rows(
     return {"inserted": inserted, "updated": updated, "total": len(rows_by_key)}
 
 
+def _cleanup_embeddings_for_log_ids(
+    session: Session,
+    *,
+    project_id: int,
+    log_ids: list[int],
+) -> None:
+    """Cancel queue rows and soft-delete embeddings for logs about to be removed."""
+    if not log_ids:
+        return
+    params = {"project_id": project_id, "log_ids": log_ids}
+    session.execute(
+        text(
+            f"""
+            UPDATE embedding_queue
+            SET status = 'cancelled',
+                error_message = 'Pruned during Builtins catalog sync'
+            WHERE project_id = :project_id
+              AND ref_id = ANY(:log_ids)
+              AND status IN {ACTIVE_QUEUE_STATUSES}
+            """,
+        ),
+        params,
+    )
+    session.execute(
+        text(
+            """
+            UPDATE embedding
+            SET is_deleted = true,
+                ref_id = NULL
+            WHERE project_id = :project_id
+              AND ref_id = ANY(:log_ids)
+            """,
+        ),
+        params,
+    )
+
+
 def _delete_stale_context_rows(
     session: Session,
     *,
@@ -1416,10 +1474,11 @@ def _delete_stale_context_rows(
         )
         params["app_slugs"] = normalized_app_slugs
 
-    deleted_ids = session.execute(
-        text(
-            f"""
-            WITH stale AS (
+    stale_ids = [
+        int(row[0])
+        for row in session.execute(
+            text(
+                f"""
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec
@@ -1431,41 +1490,60 @@ def _delete_stale_context_rows(
                   AND le.data ->> 'backend_id' = :backend_id
                   AND (le.data ->> '{key_column}') <> ALL(CAST(:keep_values AS text[]))
                   {app_slug_filter}
+                """,
             ),
-            deleted_unique AS (
-                DELETE FROM log_unique_constraint luc
-                USING stale
-                WHERE luc.context_id = :context_id
-                  AND luc.log_event_id = stale.id
-                RETURNING luc.log_event_id
-            ),
-            deleted_context AS (
-                DELETE FROM log_event_context lec
-                USING stale
-                WHERE lec.project_id = :project_id
-                  AND lec.context_id = :context_id
-                  AND lec.log_event_id = stale.id
-                RETURNING lec.log_event_id
-            ),
-            deleted_orphans AS (
-                DELETE FROM log_event le
-                USING stale
-                WHERE le.project_id = :project_id
-                  AND le.id = stale.id
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM log_event_context remaining
-                      WHERE remaining.project_id = :project_id
-                        AND remaining.log_event_id = le.id
-                  )
-                RETURNING le.id
-            )
-            SELECT COUNT(*) FROM stale
+            params,
+        ).fetchall()
+    ]
+    if not stale_ids:
+        return 0
+
+    _cleanup_embeddings_for_log_ids(
+        session,
+        project_id=project_id,
+        log_ids=stale_ids,
+    )
+    params["stale_ids"] = stale_ids
+
+    session.execute(
+        text(
+            """
+            DELETE FROM log_unique_constraint
+            WHERE project_id = :project_id
+              AND context_id = :context_id
+              AND log_event_id = ANY(:stale_ids)
             """,
         ),
         params,
-    ).scalar_one()
-    return int(deleted_ids or 0)
+    )
+    session.execute(
+        text(
+            """
+            DELETE FROM log_event_context
+            WHERE project_id = :project_id
+              AND context_id = :context_id
+              AND log_event_id = ANY(:stale_ids)
+            """,
+        ),
+        params,
+    )
+    session.execute(
+        text(
+            """
+            DELETE FROM log_event le
+            WHERE le.project_id = :project_id
+              AND le.id = ANY(:stale_ids)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM log_event_context remaining
+                  WHERE remaining.project_id = :project_id
+                    AND remaining.log_event_id = le.id
+              )
+            """,
+        ),
+        params,
+    )
+    return len(stale_ids)
 
 
 def prune_stale_app_rows(
@@ -1529,10 +1607,17 @@ def prune_tool_rows_for_unlisted_apps(
     )
     if not normalized_keep:
         return 0
-    deleted_ids = session.execute(
-        text(
-            """
-            WITH stale AS (
+    params = {
+        "project_id": project_id,
+        "context_id": context_id,
+        "backend_id": backend_id,
+        "keep_app_slugs": normalized_keep,
+    }
+    stale_ids = [
+        int(row[0])
+        for row in session.execute(
+            text(
+                """
                 SELECT le.id
                 FROM log_event le
                 JOIN log_event_context lec
@@ -1544,46 +1629,59 @@ def prune_tool_rows_for_unlisted_apps(
                   AND le.data ->> 'backend_id' = :backend_id
                   AND (le.data #>> '{metadata,integration,app_slug}')
                       <> ALL(CAST(:keep_app_slugs AS text[]))
+                """,
             ),
-            deleted_unique AS (
-                DELETE FROM log_unique_constraint luc
-                USING stale
-                WHERE luc.context_id = :context_id
-                  AND luc.log_event_id = stale.id
-                RETURNING luc.log_event_id
-            ),
-            deleted_context AS (
-                DELETE FROM log_event_context lec
-                USING stale
-                WHERE lec.project_id = :project_id
-                  AND lec.context_id = :context_id
-                  AND lec.log_event_id = stale.id
-                RETURNING lec.log_event_id
-            ),
-            deleted_orphans AS (
-                DELETE FROM log_event le
-                USING stale
-                WHERE le.project_id = :project_id
-                  AND le.id = stale.id
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM log_event_context remaining
-                      WHERE remaining.project_id = :project_id
-                        AND remaining.log_event_id = le.id
-                  )
-                RETURNING le.id
-            )
-            SELECT COUNT(*) FROM stale
+            params,
+        ).fetchall()
+    ]
+    if not stale_ids:
+        return 0
+
+    _cleanup_embeddings_for_log_ids(
+        session,
+        project_id=project_id,
+        log_ids=stale_ids,
+    )
+    params["stale_ids"] = stale_ids
+    session.execute(
+        text(
+            """
+            DELETE FROM log_unique_constraint
+            WHERE project_id = :project_id
+              AND context_id = :context_id
+              AND log_event_id = ANY(:stale_ids)
             """,
         ),
-        {
-            "project_id": project_id,
-            "context_id": context_id,
-            "backend_id": backend_id,
-            "keep_app_slugs": normalized_keep,
-        },
-    ).scalar_one()
-    return int(deleted_ids or 0)
+        params,
+    )
+    session.execute(
+        text(
+            """
+            DELETE FROM log_event_context
+            WHERE project_id = :project_id
+              AND context_id = :context_id
+              AND log_event_id = ANY(:stale_ids)
+            """,
+        ),
+        params,
+    )
+    session.execute(
+        text(
+            """
+            DELETE FROM log_event le
+            WHERE le.project_id = :project_id
+              AND le.id = ANY(:stale_ids)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM log_event_context remaining
+                  WHERE remaining.project_id = :project_id
+                    AND remaining.log_event_id = le.id
+              )
+            """,
+        ),
+        params,
+    )
+    return len(stale_ids)
 
 
 def _meta_id(kind: str, *parts: Any) -> int:

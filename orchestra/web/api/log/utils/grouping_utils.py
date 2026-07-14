@@ -411,14 +411,17 @@ def _get_all_filtered_log_event_ids(
     context_dao: ContextDAO,
     field_type_dao: FieldTypeDAO,
     session=Depends(get_db_session),
-    as_subquery: bool = False,
+    as_subquery: bool = True,
 ) -> Union[Tuple[List[int], int], Tuple[Subquery, int]]:
     """
     Return all log_event_ids (no pagination, no field-level filtering) that match
     these top-level filters: from_ids, exclude_ids, filter_expr, context, and project.
 
+    Prefer ``as_subquery=True`` (the default) so large contexts never materialize
+    every matching id into Python.
+
     Returns:
-        (event_ids, total_count)
+        (event_ids_or_subquery, total_count)
     """
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
