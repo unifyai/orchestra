@@ -368,8 +368,10 @@ class ProviderTriggerReconciliationService:
             )
             return False
 
-        # TODO: Resolve resource via curated registry + TriggerProviderAdapter
-        # (purge github_resource_from_filters call sites outside the adapter).
+        # TODO: Purge/Replace — resolve resource via curated registry +
+        # TriggerProviderAdapter; delete github_resource_from_filters call sites
+        # outside the adapter (also used from ingress_acceptance).
+        # See vault: Provider event trigger contracts#Interim remnants.
         resource_id = github_resource_from_filters(binding.filters_json)
         if not resource_id:
             self._mark_binding_terminal(
@@ -469,8 +471,10 @@ class ProviderTriggerReconciliationService:
             return
 
         adapter = self._adapter_for_binding(binding)
-        # TODO: Resolve resource via curated registry + TriggerProviderAdapter
-        # (purge github_resource_from_filters call sites outside the adapter).
+        # TODO: Purge/Replace — resolve resource via curated registry +
+        # TriggerProviderAdapter; delete github_resource_from_filters call sites
+        # outside the adapter (also used from ingress_acceptance).
+        # See vault: Provider event trigger contracts#Interim remnants.
         resource_id = github_resource_from_filters(binding.filters_json) or ""
         callback_base = settings.provider_trigger_callback_base_url or ""
         callback_url = (
