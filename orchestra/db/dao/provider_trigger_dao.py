@@ -21,7 +21,6 @@ from orchestra.db.models.provider_trigger_models import (
 )
 from orchestra.provider_triggers.activation_revision import (
     compute_provider_event_activation_revision,
-    normalize_provider_event_filters,
 )
 from orchestra.provider_triggers.private_event_storage import EncryptedEventObject
 from orchestra.provider_triggers.runtime_types import (
@@ -34,8 +33,9 @@ from orchestra.provider_triggers.runtime_types import (
     GenerationLifecycle,
     ReceiptProcessingState,
 )
-from orchestra.settings import settings
 from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
+from orchestra.provider_triggers.trigger_registry import curated_provider_event_filters
+from orchestra.settings import settings
 
 
 class ProviderTriggerDAO:
@@ -115,7 +115,9 @@ class ProviderTriggerDAO:
             canonical_app_slug=trigger.canonical_app_slug,
             event_slug=trigger.event_slug,
             schema_version=trigger.schema_version,
-            filters_json=normalize_provider_event_filters(
+            filters_json=curated_provider_event_filters(
+                trigger.event_slug,
+                trigger.schema_version,
                 [item.model_dump() for item in trigger.filters],
             ),
             execution_mode=execution_mode,
@@ -157,7 +159,9 @@ class ProviderTriggerDAO:
         binding.canonical_app_slug = trigger.canonical_app_slug
         binding.event_slug = trigger.event_slug
         binding.schema_version = trigger.schema_version
-        binding.filters_json = normalize_provider_event_filters(
+        binding.filters_json = curated_provider_event_filters(
+            trigger.event_slug,
+            trigger.schema_version,
             [item.model_dump() for item in trigger.filters],
         )
         binding.execution_mode = execution_mode
@@ -394,7 +398,10 @@ class ProviderTriggerDAO:
 
         if blob.commit_state != BlobCommitState.uncommitted.value:
             raise ValueError("blob_not_uncommitted")
-        if blob.binding_id != receipt.binding_id or blob.receipt_id != receipt.receipt_id:
+        if (
+            blob.binding_id != receipt.binding_id
+            or blob.receipt_id != receipt.receipt_id
+        ):
             raise ValueError("blob_receipt_mismatch")
 
         now = datetime.now(timezone.utc)
