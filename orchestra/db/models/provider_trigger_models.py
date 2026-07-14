@@ -324,3 +324,109 @@ class ProviderEventDispatch(Base):
             "processing_state",
         ),
     )
+
+
+class ProviderEventBlob(Base):
+    """Private encrypted provider-event payload metadata."""
+
+    __tablename__ = "provider_event_blobs"
+
+    id = Column(Integer, primary_key=True)
+    blob_id = Column(String(64), nullable=False, unique=True, index=True)
+    namespace_key = Column(String(256), nullable=False, unique=True, index=True)
+    binding_id = Column(
+        String(64),
+        ForeignKey("event_trigger_bindings.binding_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    receipt_id = Column(String(64), nullable=False, index=True)
+
+    algorithm = Column(String(32), nullable=False)
+    wrap_algorithm = Column(String(32), nullable=False)
+    wrapping_key_version = Column(String(128), nullable=False)
+    wrapped_data_key = Column(sa.LargeBinary, nullable=False)
+    integrity_hash = Column(String(128), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    content_type = Column(String, nullable=False)
+
+    commit_state = Column(String(32), nullable=False, server_default="uncommitted", index=True)
+    committed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    unavailable_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    deleted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_provider_event_blob_orphan_sweep",
+            "commit_state",
+            "created_at",
+        ),
+    )
+
+
+class ProviderEventBlobAudit(Base):
+    """Append-only audit trail for private provider-event blob access."""
+
+    __tablename__ = "provider_event_blob_audit"
+
+    id = Column(Integer, primary_key=True)
+    action = Column(String(32), nullable=False, index=True)
+    actor = Column(String, nullable=False)
+    audience = Column(String, nullable=True)
+    blob_id = Column(String(64), nullable=True, index=True)
+    binding_id = Column(String(64), nullable=True, index=True)
+    receipt_id = Column(String(64), nullable=True, index=True)
+    assistant_id = Column(Integer, nullable=True, index=True)
+    task_id = Column(Integer, nullable=True, index=True)
+    reason = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), index=True)
+
+
+class ProviderEventBlobDeletion(Base):
+    """Queue for physical deletion of private provider-event ciphertext."""
+
+    __tablename__ = "provider_event_blob_deletions"
+
+    id = Column(Integer, primary_key=True)
+    blob_id = Column(
+        String(64),
+        ForeignKey("provider_event_blobs.blob_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    namespace_key = Column(String(256), nullable=False)
+
+    processing_state = Column(
+        String(32),
+        nullable=False,
+        server_default="pending",
+        index=True,
+    )
+    lease_owner = Column(String, nullable=True)
+    lease_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    attempt_count = Column(Integer, nullable=False, server_default="0")
+    next_retry_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    terminal_reason = Column(String, nullable=True)
+
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_provider_event_blob_deletion_claim",
+            "next_retry_at",
+            "lease_expires_at",
+            "processing_state",
+        ),
+    )
