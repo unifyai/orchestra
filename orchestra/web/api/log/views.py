@@ -375,6 +375,12 @@ def create_logs(
     - `row_ids`: Object with `names` (unique key column names) and `ids` (nested list of values)
     - `auto_counting`: Dictionary mapping auto-counting column names to their generated/provided values.
       Empty dict `{}` when no auto-counting is configured.
+    - `failed`: Optional list of per-row failures (including skipped unique-key /
+      unique-field collisions when `on_duplicate=skip`)
+
+    Set `on_duplicate` to `skip` to insert non-conflicting rows in a batch when
+    unique keys or unique fields collide; the default `error` rejects the whole
+    request on the first collision.
 
     This method returns the ids of the new stored logs along with any auto-counting values.
     """
@@ -2486,22 +2492,83 @@ def _update_logs(
                 exclude_ids = list(updates_by_log.keys())
 
                 # Check for duplicates
-                duplicate = unique_dao.check_unique_fields_batch(
-                    context_id=ctx_id,
-                    project_id=project_id,
-                    log_entries=log_entries,
-                    unique_fields=unique_fields,
-                    exclude_ids=exclude_ids,
-                )
-
-                if duplicate:
-                    _, field_name, _ = duplicate
-                    # Clean up any constraints that were inserted
-                    unique_dao.remove_constraints_for_logs(exclude_ids)
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Duplicate entry for unique field '{field_name}'.",
+                if (
+                    getattr(body, "on_duplicate", None) is not None
+                    and str(
+                        getattr(body.on_duplicate, "value", body.on_duplicate),
+                    ).lower()
+                    == "skip"
+                ):
+                    conflicts = unique_dao.find_unique_field_conflict_log_ids(
+                        context_id=ctx_id,
+                        project_id=project_id,
+                        log_entries=log_entries,
+                        unique_fields=unique_fields,
+                        exclude_ids=exclude_ids,
                     )
+                    if conflicts:
+                        # Drop conflicting log updates; continue with the rest.
+                        conflict_ids = set(conflicts.keys())
+                        all_flat_updates = [
+                            update
+                            for update in all_flat_updates
+                            if update.get("log_event_id") not in conflict_ids
+                        ]
+                        for log_id, (field_name, _value) in conflicts.items():
+                            failed_updates.append(
+                                {
+                                    "log_event_id": log_id,
+                                    "error": (
+                                        "Duplicate entry for unique field "
+                                        f"'{field_name}'."
+                                    ),
+                                },
+                            )
+                        # Rebuild updates_by_log for any remaining constraint path
+                        updates_by_log = {
+                            log_id: data
+                            for log_id, data in updates_by_log.items()
+                            if log_id not in conflict_ids
+                        }
+                        log_entries = [
+                            (log_id, log_data)
+                            for log_id, log_data in updates_by_log.items()
+                        ]
+                        exclude_ids = list(updates_by_log.keys())
+                    if log_entries:
+                        duplicate = unique_dao.check_unique_fields_batch(
+                            context_id=ctx_id,
+                            project_id=project_id,
+                            log_entries=log_entries,
+                            unique_fields=unique_fields,
+                            exclude_ids=exclude_ids,
+                        )
+                        if duplicate:
+                            unique_dao.remove_constraints_for_logs(exclude_ids)
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"Duplicate entry for unique field "
+                                    f"'{duplicate[1]}'."
+                                ),
+                            )
+                else:
+                    duplicate = unique_dao.check_unique_fields_batch(
+                        context_id=ctx_id,
+                        project_id=project_id,
+                        log_entries=log_entries,
+                        unique_fields=unique_fields,
+                        exclude_ids=exclude_ids,
+                    )
+
+                    if duplicate:
+                        _, field_name, _ = duplicate
+                        # Clean up any constraints that were inserted
+                        unique_dao.remove_constraints_for_logs(exclude_ids)
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Duplicate entry for unique field '{field_name}'.",
+                        )
 
         try:
             # Call bulk_update with all updates

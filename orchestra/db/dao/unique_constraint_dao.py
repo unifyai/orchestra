@@ -630,3 +630,222 @@ class UniqueConstraintDAO:
             return f"Duplicate entry for unique field '{field_name}'."
 
         return None
+
+    def find_composite_duplicate_indices(
+        self,
+        context_id: int,
+        key_columns: List[str],
+        rows: List[Dict[str, Any]],
+    ) -> Dict[int, Dict[str, Any]]:
+        """Return indices that collide within ``rows`` or already exist in context.
+
+        First occurrence of a composite key in ``rows`` wins. Does not insert
+        constraint rows — check-only for ``on_duplicate=skip`` pre-filtering.
+
+        :return: ``{index: key_values}`` for rows that should be skipped.
+        """
+        if not rows or not key_columns:
+            return {}
+
+        skipped: Dict[int, Dict[str, Any]] = {}
+        seen_hashes: Dict[str, int] = {}
+        index_by_hash: Dict[str, int] = {}
+        hashes_in_order: List[str] = []
+
+        for index, row in enumerate(rows):
+            key_values = {col: row.get(col) for col in key_columns}
+            if None in key_values.values():
+                continue
+            value_hash = self.hash_composite(key_values, key_columns)
+            if value_hash in seen_hashes:
+                skipped[index] = key_values
+                continue
+            seen_hashes[value_hash] = index
+            index_by_hash[value_hash] = index
+            hashes_in_order.append(value_hash)
+
+        if not hashes_in_order:
+            return skipped
+
+        existing_hashes = self._existing_composite_hashes(
+            context_id=context_id,
+            key_columns=key_columns,
+            rows=rows,
+            candidate_hashes=hashes_in_order,
+            index_by_hash=index_by_hash,
+        )
+        for value_hash in existing_hashes:
+            index = index_by_hash[value_hash]
+            if index not in skipped:
+                skipped[index] = {col: rows[index].get(col) for col in key_columns}
+
+        return skipped
+
+    def _existing_composite_hashes(
+        self,
+        *,
+        context_id: int,
+        key_columns: List[str],
+        rows: List[Dict[str, Any]],
+        candidate_hashes: List[str],
+        index_by_hash: Dict[str, int],
+    ) -> Set[str]:
+        """Return subset of ``candidate_hashes`` already present in the context."""
+        if self._use_lookup_table():
+            result = self.session.execute(
+                text(
+                    """
+                    SELECT value_hash FROM log_unique_constraint
+                    WHERE context_id = :context_id
+                      AND field_name = :field_name
+                      AND value_hash = ANY(:hashes)
+                    """,
+                ),
+                {
+                    "context_id": context_id,
+                    "field_name": COMPOSITE_KEY_FIELD,
+                    "hashes": candidate_hashes,
+                },
+            )
+            return {row.value_hash for row in result.fetchall()}
+
+        # JSONB scan: find which candidate key combos already exist.
+        params: Dict[str, Any] = {"context_id": context_id}
+        or_conditions = []
+        hash_by_param: Dict[str, str] = {}
+        for i, value_hash in enumerate(candidate_hashes):
+            index = index_by_hash[value_hash]
+            key_values = {col: rows[index].get(col) for col in key_columns}
+            param = f"combo_{i}"
+            params[param] = json.dumps(key_values)
+            hash_by_param[param] = value_hash
+            or_conditions.append(f"le.data @> CAST(:{param} AS jsonb)")
+
+        pid = self.session.execute(
+            text("SELECT project_id FROM context WHERE id = :cid"),
+            {"cid": context_id},
+        ).scalar()
+        project_filter = ""
+        if pid is not None:
+            project_filter = "AND le.project_id = :project_id\n"
+            params["project_id"] = pid
+
+        owner_key_filter = single_owner_key_for_context(self.session, context_id)
+        owner_filter = ""
+        if owner_key_filter is not None:
+            owner_filter = (
+                "AND le.owner_key = :owner_key AND lec.owner_key = :owner_key\n"
+            )
+            params["owner_key"] = owner_key_filter
+
+        query = f"""
+            SELECT le.data
+            FROM log_event le
+            JOIN log_event_context lec ON lec.log_event_id = le.id
+              AND le.project_id = lec.project_id
+            WHERE lec.context_id = :context_id
+            {project_filter}{owner_filter}AND ({' OR '.join(or_conditions)})
+        """
+        existing: Set[str] = set()
+        for row in self.session.execute(text(query), params).fetchall():
+            data = row.data or {}
+            combo = {col: data.get(col) for col in key_columns}
+            existing.add(self.hash_composite(combo, key_columns))
+        return existing & set(candidate_hashes)
+
+    def find_unique_field_conflict_log_ids(
+        self,
+        context_id: int,
+        project_id: int,
+        log_entries: List[Tuple[int, Dict[str, Any]]],
+        unique_fields: Set[str],
+        exclude_ids: Optional[List[int]] = None,
+    ) -> Dict[int, Tuple[str, Any]]:
+        """Return ``{log_event_id: (field_name, value)}`` for unique-field clashes.
+
+        Check-only (no constraint inserts). Within-batch: first log wins.
+        """
+        if not log_entries or not unique_fields:
+            return {}
+
+        exclude_ids = exclude_ids or []
+        conflicts: Dict[int, Tuple[str, Any]] = {}
+        seen: Dict[Tuple[str, str], int] = {}
+        entries_to_check: List[Dict] = []
+
+        for log_event_id, log_data in log_entries:
+            for field_name in unique_fields:
+                if field_name not in log_data:
+                    continue
+                value = log_data[field_name]
+                if value is None:
+                    continue
+                value_hash = self.hash_value(value)
+                key = (field_name, value_hash)
+                if key in seen and seen[key] != log_event_id:
+                    conflicts[log_event_id] = (field_name, value)
+                    continue
+                seen[key] = log_event_id
+                entries_to_check.append(
+                    {
+                        "context_id": context_id,
+                        "field_name": field_name,
+                        "value_hash": value_hash,
+                        "log_event_id": log_event_id,
+                        "value": value,
+                    },
+                )
+
+        if not entries_to_check:
+            return conflicts
+
+        if self._use_lookup_table():
+            for entry in entries_to_check:
+                if entry["log_event_id"] in conflicts:
+                    continue
+                existing = self.session.execute(
+                    text(
+                        """
+                        SELECT log_event_id FROM log_unique_constraint
+                        WHERE context_id = :context_id
+                          AND field_name = :field_name
+                          AND value_hash = :value_hash
+                          AND NOT (log_event_id = ANY(:exclude_ids))
+                        LIMIT 1
+                        """,
+                    ),
+                    {
+                        "context_id": entry["context_id"],
+                        "field_name": entry["field_name"],
+                        "value_hash": entry["value_hash"],
+                        "exclude_ids": exclude_ids or [0],
+                    },
+                ).fetchone()
+                if existing and existing.log_event_id != entry["log_event_id"]:
+                    conflicts[entry["log_event_id"]] = (
+                        entry["field_name"],
+                        entry["value"],
+                    )
+        else:
+            duplicate = self._check_via_jsonb_scan(
+                context_id,
+                project_id,
+                entries_to_check,
+                exclude_ids,
+            )
+            # jsonb helper returns first only — walk remaining by filtering
+            remaining = list(entries_to_check)
+            while duplicate:
+                dup_id, field_name, value = duplicate
+                conflicts[dup_id] = (field_name, value)
+                remaining = [e for e in remaining if e["log_event_id"] != dup_id]
+                if not remaining:
+                    break
+                duplicate = self._check_via_jsonb_scan(
+                    context_id,
+                    project_id,
+                    remaining,
+                    exclude_ids,
+                )
+
+        return conflicts

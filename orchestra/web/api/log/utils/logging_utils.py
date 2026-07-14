@@ -1656,6 +1656,7 @@ def _create_logs_internal(
     field_type_dao: FieldTypeDAO,
     log_event_dao: LogEventDAO,
     context_dao: ContextDAO,
+    on_duplicate: Union[str, Any] = "error",
 ) -> dict:
     """
     JSONB-based log creation implementation.
@@ -1750,6 +1751,58 @@ def _create_logs_internal(
         # 3. Construct the `provided_unique_ids` list for the DAO
         provided_unique_ids = all_composite_values
 
+    # Opt-in skip: drop composite-key collisions before creating events so one
+    # duplicate does not abort the rest of the batch.
+    skip_duplicates = (
+        str(
+            getattr(on_duplicate, "value", on_duplicate) or "error",
+        ).lower()
+        == "skip"
+    )
+    original_index_map: list[int] = list(range(total_logs))
+    failed_logs: list = []
+    if (
+        skip_duplicates
+        and context_obj
+        and context_obj.unique_keys
+        and provided_unique_ids is not None
+    ):
+        from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
+        unique_key_columns = list(context_obj.unique_keys.keys())
+        unique_dao = UniqueConstraintDAO(log_event_dao.session)
+        skipped = unique_dao.find_composite_duplicate_indices(
+            context_id=context_id,
+            key_columns=unique_key_columns,
+            rows=provided_unique_ids,
+        )
+        if skipped:
+            keep_indices = [i for i in range(total_logs) if i not in skipped]
+            for index, key_values in sorted(skipped.items()):
+                failed_logs.append(
+                    {
+                        "index": index,
+                        "error": (
+                            "Duplicate composite key already exists for this "
+                            f"context: {key_values}"
+                        ),
+                    },
+                )
+            if not keep_indices:
+                return {
+                    "log_event_ids": [],
+                    "row_ids": {"names": [], "ids": []},
+                    "auto_counting": {},
+                    "failed": failed_logs,
+                }
+            entries_list = [entries_list[min(i, entries_len - 1)] for i in keep_indices]
+            # Deep-copy not required: entries were already mutated for key pops
+            # on the originals; rebuild from kept slots only.
+            entries_len = len(entries_list)
+            total_logs = len(keep_indices)
+            provided_unique_ids = [provided_unique_ids[i] for i in keep_indices]
+            original_index_map = keep_indices
+
     # Bulk create all log events in one operation
     log_event_ids, row_ids = log_event_dao.bulk_create(
         project_id=project_id,
@@ -1761,7 +1814,6 @@ def _create_logs_internal(
 
     # Prepare collections for bulk operations
     new_field_types = []
-    failed_logs = []
     successful_indices = []
     log_data_updates = []  # List of (log_event_id, data_dict) tuples
 
@@ -1947,7 +1999,7 @@ def _create_logs_internal(
                 pass
             failed_logs.append(
                 {
-                    "index": i,
+                    "index": original_index_map[i],
                     "error": getattr(http_err, "detail", str(http_err)),
                 },
             )
@@ -1957,7 +2009,9 @@ def _create_logs_internal(
                 log_event_dao.delete(log_event_id)
             except Exception:
                 pass
-            failed_logs.append({"index": i, "error": str(e)})
+            failed_logs.append(
+                {"index": original_index_map[i], "error": str(e)},
+            )
             continue
 
     # Bulk create new field types if any
@@ -2005,32 +2059,102 @@ def _create_logs_internal(
             # Exclude newly created log_event_ids from duplicate check
             new_log_ids = [log_event_id for log_event_id, _, _ in log_data_updates]
 
-            # Check for duplicates (handles both lookup table and JSONB scan)
-            duplicate = unique_dao.check_unique_fields_batch(
-                context_id=context_id,
-                project_id=project_id,
-                log_entries=log_entries,
-                unique_fields=unique_fields,
-                exclude_ids=new_log_ids,
-            )
-
-            if duplicate:
-                dup_log_id, field_name, _ = duplicate
-
-                # Clean up: remove constraints for all new logs
-                unique_dao.remove_constraints_for_logs(new_log_ids)
-
-                # Delete all the log events we just created
-                for log_event_id in new_log_ids:
-                    try:
-                        log_event_dao.delete(log_event_id)
-                    except Exception:
-                        pass
-
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Duplicate entry for unique field '{field_name}'.",
+            if skip_duplicates:
+                conflicts = unique_dao.find_unique_field_conflict_log_ids(
+                    context_id=context_id,
+                    project_id=project_id,
+                    log_entries=[
+                        (log_event_id, log_data)
+                        for log_event_id, log_data, _ in log_data_updates
+                    ],
+                    unique_fields=unique_fields,
+                    exclude_ids=new_log_ids,
                 )
+                if conflicts:
+                    surviving_updates = []
+                    surviving_indices = []
+                    for idx, (log_event_id, log_data, key_order) in enumerate(
+                        log_data_updates,
+                    ):
+                        compacted_index = successful_indices[idx]
+                        if log_event_id in conflicts:
+                            field_name, _value = conflicts[log_event_id]
+                            try:
+                                log_event_dao.delete(log_event_id)
+                            except Exception:
+                                pass
+                            failed_logs.append(
+                                {
+                                    "index": original_index_map[compacted_index],
+                                    "error": (
+                                        "Duplicate entry for unique field "
+                                        f"'{field_name}'."
+                                    ),
+                                },
+                            )
+                        else:
+                            surviving_updates.append(
+                                (log_event_id, log_data, key_order),
+                            )
+                            surviving_indices.append(compacted_index)
+                    log_data_updates = surviving_updates
+                    successful_indices = surviving_indices
+                    new_log_ids = [
+                        log_event_id for log_event_id, _, _ in log_data_updates
+                    ]
+
+                if log_data_updates:
+                    duplicate = unique_dao.check_unique_fields_batch(
+                        context_id=context_id,
+                        project_id=project_id,
+                        log_entries=[
+                            (log_event_id, log_data)
+                            for log_event_id, log_data, _ in log_data_updates
+                        ],
+                        unique_fields=unique_fields,
+                        exclude_ids=new_log_ids,
+                    )
+                    if duplicate:
+                        unique_dao.remove_constraints_for_logs(new_log_ids)
+                        for log_event_id in new_log_ids:
+                            try:
+                                log_event_dao.delete(log_event_id)
+                            except Exception:
+                                pass
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"Duplicate entry for unique field "
+                                f"'{duplicate[1]}'."
+                            ),
+                        )
+            else:
+                # Check for duplicates (handles both lookup table and JSONB scan)
+                duplicate = unique_dao.check_unique_fields_batch(
+                    context_id=context_id,
+                    project_id=project_id,
+                    log_entries=log_entries,
+                    unique_fields=unique_fields,
+                    exclude_ids=new_log_ids,
+                )
+
+                if duplicate:
+                    dup_log_id, field_name, _ = duplicate
+
+                    # Clean up: remove constraints for all new logs
+                    unique_dao.remove_constraints_for_logs(new_log_ids)
+
+                    # Delete all the log events we just created
+                    for log_event_id in new_log_ids:
+                        try:
+                            log_event_dao.delete(log_event_id)
+                        except Exception:
+                            pass
+
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Duplicate entry for unique field '{field_name}'.",
+                    )
 
     # Batch update LogEvent.data and key_order columns for all successful logs
     created_event_ids = [log_event_ids[i] for i in successful_indices]
@@ -2095,7 +2219,12 @@ def _create_logs_internal(
                         log_event_dao.delete(log_event_id)
                     except Exception:
                         pass
-                    failed_logs.append({"index": original_index, "error": str(inner_e)})
+                    failed_logs.append(
+                        {
+                            "index": original_index_map[original_index],
+                            "error": str(inner_e),
+                        },
+                    )
 
     # =========================================================================
     # BATCH DUPLICATE CHECK: Use JSONB-aware batch duplicate checking (O(1) query)
@@ -2108,19 +2237,48 @@ def _create_logs_internal(
             created_event_ids,
         )
         if duplicate_ids:
-            # Delete all duplicate logs in one batch
-            for dup_id in duplicate_ids:
-                try:
-                    log_event_dao.delete(dup_id)
-                except Exception:
-                    pass
-                # Remove from created_event_ids
-                if dup_id in created_event_ids:
-                    created_event_ids.remove(dup_id)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Duplicate log(s) detected in context '{context_obj.name}' which doesn't allow duplicates. Log event IDs: {duplicate_ids}",
-            )
+            if skip_duplicates:
+                id_to_compacted = {log_event_ids[i]: i for i in successful_indices}
+                for dup_id in duplicate_ids:
+                    try:
+                        log_event_dao.delete(dup_id)
+                    except Exception:
+                        pass
+                    if dup_id in created_event_ids:
+                        created_event_ids.remove(dup_id)
+                    compacted = id_to_compacted.get(dup_id)
+                    if compacted is not None:
+                        failed_logs.append(
+                            {
+                                "index": original_index_map[compacted],
+                                "error": (
+                                    f"Duplicate log(s) detected in context "
+                                    f"'{context_obj.name}' which doesn't allow "
+                                    f"duplicates. Log event IDs: {[dup_id]}"
+                                ),
+                            },
+                        )
+                        successful_indices = [
+                            i for i in successful_indices if i != compacted
+                        ]
+            else:
+                # Delete all duplicate logs in one batch
+                for dup_id in duplicate_ids:
+                    try:
+                        log_event_dao.delete(dup_id)
+                    except Exception:
+                        pass
+                    # Remove from created_event_ids
+                    if dup_id in created_event_ids:
+                        created_event_ids.remove(dup_id)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Duplicate log(s) detected in context "
+                        f"'{context_obj.name}' which doesn't allow duplicates. "
+                        f"Log event IDs: {duplicate_ids}"
+                    ),
+                )
 
     if context_obj and context_obj.is_versioned:
         context_obj.updated_at = datetime.now(timezone.utc)
@@ -2227,6 +2385,7 @@ def create_logs_internal(
         field_type_dao=field_type_dao,
         log_event_dao=log_event_dao,
         context_dao=context_dao,
+        on_duplicate=getattr(request, "on_duplicate", None) or "error",
     )
 
 

@@ -1,8 +1,16 @@
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field, model_validator
 
 from orchestra.web.api.context.schema import ContextCreateRequest
+
+
+class OnDuplicateMode(str, Enum):
+    """How create/update should treat unique-key or unique-field collisions."""
+
+    ERROR = "error"
+    SKIP = "skip"
 
 
 class RowIDs(BaseModel):
@@ -205,6 +213,16 @@ class CreateLogConfig(BaseModel):
         "using active ActiveDerivedLog templates. Suitable for small batches; "
         "for large ingestion workflows, leave False and rely on periodic backfill.",
     )
+    on_duplicate: OnDuplicateMode = Field(
+        default=OnDuplicateMode.ERROR,
+        description=(
+            "How to handle unique-key / unique-field collisions in a batch. "
+            "'error' (default) rejects the whole request on the first collision. "
+            "'skip' inserts non-conflicting rows and reports collisions in `failed` "
+            "(first occurrence of a key in the batch wins; later copies and keys "
+            "already present in the context are skipped)."
+        ),
+    )
 
 
 class CreateDerivedEntriesConfig(BaseModel):
@@ -303,6 +321,14 @@ class UpdateLogRequest(BaseModel):
         default=False,
         description="Whether to overwrite existing logs",
         example=False,
+    )
+    on_duplicate: OnDuplicateMode = Field(
+        default=OnDuplicateMode.ERROR,
+        description=(
+            "How to handle unique-field collisions during update. "
+            "'error' (default) rejects the whole request on the first collision. "
+            "'skip' applies non-conflicting updates and reports collisions in `failed`."
+        ),
     )
 
 
