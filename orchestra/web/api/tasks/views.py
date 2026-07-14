@@ -674,35 +674,15 @@ def get_assistant_task_trigger_health(
     summary="List supported provider-event trigger catalog entries",
 )
 def get_task_trigger_catalog() -> InfoResponse[TriggerCatalogResponse]:
-    # TODO: replace this static skeleton with a live Composio/Pipedream-backed
-    # trigger registry once the curated provider catalog adapter lands.
+    from orchestra.provider_triggers.trigger_registry import (
+        list_trigger_catalog_payloads,
+    )
+
     return InfoResponse(
         info=TriggerCatalogResponse(
             events=[
-                TriggerCatalogEvent(
-                    event_slug="github.issue_created",
-                    canonical_app_slug="github",
-                    schema_version="1",
-                    filters=[
-                        {
-                            "field": "repository",
-                            "operator": "is",
-                        },
-                        {
-                            "field": "author",
-                            "operator": "is",
-                        },
-                        {
-                            "field": "labels",
-                            "operator": "contains",
-                        },
-                        {
-                            "field": "title",
-                            "operator": "contains",
-                        },
-                    ],
-                    backends=["composio", "pipedream"],
-                ),
+                TriggerCatalogEvent.model_validate(payload)
+                for payload in list_trigger_catalog_payloads()
             ],
         ),
     )
