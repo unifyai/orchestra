@@ -1079,10 +1079,6 @@ def mock_all_infra(dbsession):
                     side_effect=_mock_get_db_session_generator(dbsession),
                 ):
                     with (
-                        patch(
-                            "orchestra.web.api.assistant.views.asyncio.sleep",
-                            new_callable=AsyncMock,
-                        ),
                         patch("orchestra.web.api.assistant.views.time.sleep"),
                         patch(
                             "orchestra.services.bucket_service.BucketService.__init__",
