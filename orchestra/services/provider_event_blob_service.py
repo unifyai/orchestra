@@ -23,10 +23,7 @@ from orchestra.provider_triggers.private_event_storage import (
     binding_dedup_wrap_purpose,
     create_event_blob_service,
 )
-from orchestra.provider_triggers.runtime_types import (
-    BlobAuditAction,
-    BlobCommitState,
-)
+from orchestra.provider_triggers.runtime_types import BlobAuditAction
 
 
 class ProviderEventBlobService:
@@ -244,10 +241,14 @@ class ProviderEventBlobService:
     @staticmethod
     def _infer_wrap_algorithm(wrapping_key_version: str) -> str:
         if wrapping_key_version.startswith("kms:"):
-            from orchestra.provider_triggers.private_event_storage import KMS_WRAP_ALGORITHM
+            from orchestra.provider_triggers.private_event_storage import (
+                KMS_WRAP_ALGORITHM,
+            )
 
             return KMS_WRAP_ALGORITHM
-        from orchestra.provider_triggers.private_event_storage import SELF_HOST_WRAP_ALGORITHM
+        from orchestra.provider_triggers.private_event_storage import (
+            SELF_HOST_WRAP_ALGORITHM,
+        )
 
         return SELF_HOST_WRAP_ALGORITHM
 

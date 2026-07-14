@@ -16,7 +16,6 @@ from orchestra.db.models.provider_trigger_models import (
     ProviderEventBlob,
     ProviderEventBlobAudit,
     ProviderEventBlobDeletion,
-    ProviderEventReceipt,
 )
 from orchestra.provider_triggers.private_event_storage import (
     EventBlobAuthenticationError,
@@ -135,11 +134,15 @@ def test_uncommitted_write_attach_and_read_round_trip(
     )
     assert plaintext == b'{"issue":"opened"}'
 
-    audits = dbsession.execute(
-        select(ProviderEventBlobAudit).where(
-            ProviderEventBlobAudit.blob_id == blob.blob_id,
-        ),
-    ).scalars().all()
+    audits = (
+        dbsession.execute(
+            select(ProviderEventBlobAudit).where(
+                ProviderEventBlobAudit.blob_id == blob.blob_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
     actions = {audit.action for audit in audits}
     assert BlobAuditAction.write.value in actions
     assert BlobAuditAction.read.value in actions

@@ -234,7 +234,12 @@ class TriggerKeyWrappingService:
                 "wrapped key authentication failed",
             ) from exc
 
-    def rewrap(self, wrapped: WrappedKeyMaterial, *, purpose: str) -> WrappedKeyMaterial:
+    def rewrap(
+        self,
+        wrapped: WrappedKeyMaterial,
+        *,
+        purpose: str,
+    ) -> WrappedKeyMaterial:
         """Rewrap a symmetric key under the current wrapping key version."""
 
         key_material = self.unwrap_key(wrapped, purpose=purpose)
@@ -397,7 +402,10 @@ class EventBlobService:
 
         if hashlib.sha256(ciphertext).hexdigest() != encrypted.integrity_hash:
             raise EventBlobAuthenticationError("ciphertext integrity check failed")
-        self._object_store.put(namespace_key=encrypted.namespace_key, ciphertext=ciphertext)
+        self._object_store.put(
+            namespace_key=encrypted.namespace_key,
+            ciphertext=ciphertext,
+        )
 
     def encrypt_and_store(
         self,
