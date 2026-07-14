@@ -108,6 +108,7 @@ class ProviderEventBlobService:
         receipt_id: str,
         actor: str,
         audience: str | None = None,
+        audit_action: BlobAuditAction = BlobAuditAction.read,
     ) -> bytes:
         """Decrypt one committed blob after ownership checks."""
 
@@ -149,7 +150,7 @@ class ProviderEventBlobService:
             raise
 
         self._dao.record_blob_audit(
-            action=BlobAuditAction.read,
+            action=audit_action,
             actor=actor,
             audience=audience,
             blob=blob,
@@ -168,7 +169,10 @@ class ProviderEventBlobService:
     ) -> ProviderEventReceipt:
         """Mark one receipt's event context unavailable and queue deletion."""
 
-        receipt, blob = self._dao.mark_event_context_unavailable(receipt=receipt)
+        receipt, blob = self._dao.mark_event_context_unavailable(
+            receipt=receipt,
+            reason=reason,
+        )
         if blob is not None:
             self._dao.enqueue_blob_deletion(blob=blob)
             self._dao.record_blob_audit(

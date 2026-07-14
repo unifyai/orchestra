@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
+from orchestra.services.provider_event_blob_cleanup_service import (
+    ProviderEventBlobCleanupService,
+)
+from orchestra.services.provider_event_context_service import (
+    ProviderEventContextService,
+)
 from orchestra.services.provider_event_dispatch_delivery_service import (
     ProviderEventDispatchDeliveryService,
 )
@@ -57,6 +63,9 @@ def run_worker_cycle(
         "dispatches_terminal_failed": 0,
         "dispatches_terminal_succeeded": 0,
         "dispatch_backlog_oldest_age_seconds": None,
+        "blob_deletions_processed": 0,
+        "blob_orphans_removed": 0,
+        "event_contexts_expired": 0,
     }
     with sessionmaker(bind=get_engine(), expire_on_commit=False)() as session:
         service = ProviderTriggerReconciliationService(
@@ -81,6 +90,13 @@ def run_worker_cycle(
         totals["dispatch_backlog_oldest_age_seconds"] = (
             dispatch_service.backlog_oldest_age_seconds()
         )
+
+        cleanup_service = ProviderEventBlobCleanupService(session)
+        totals["blob_deletions_processed"] = cleanup_service.process_deletion_batch()
+        totals["blob_orphans_removed"] = cleanup_service.sweep_orphan_uncommitted()
+        totals["event_contexts_expired"] = ProviderEventContextService(
+            session,
+        ).sweep_expired_contexts()
 
         dao = ProviderTriggerDAO(session)
         dao.record_worker_heartbeat(
