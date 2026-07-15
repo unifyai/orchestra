@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 import orchestra.db.models.coordinator_voice  # noqa: F401 — register ORM listeners
@@ -41,17 +42,8 @@ def _configure_session_timeouts(dbapi_connection, connection_record) -> None:
         cursor.close()
 
 
-def _setup_db(app: FastAPI) -> None:  # pragma: no cover
-    """
-    Creates connection to the database.
-
-    This function creates SQLAlchemy engine instance,
-    session_factory for creating sessions
-    and stores them in the application's state property.
-
-    :param app: fastAPI application.
-    """
-    global _engine
+def create_database_engine() -> Engine:
+    """Create the configured SQLAlchemy engine with shared runtime safeguards."""
 
     # Use standard SQLAlchemy connection if not using Cloud SQL
     if not settings.use_cloud_sql:
@@ -97,13 +89,28 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
 
     event.listen(engine, "connect", _configure_session_timeouts)
 
+    # Instrument the connection pool for bottleneck detection
+    instrument_db_pool(engine)
+    return engine
+
+
+def _setup_db(app: FastAPI) -> None:  # pragma: no cover
+    """
+    Creates connection to the database.
+
+    This function creates SQLAlchemy engine instance,
+    session_factory for creating sessions
+    and stores them in the application's state property.
+
+    :param app: fastAPI application.
+    """
+    global _engine
+
+    engine = create_database_engine()
     session_factory = sessionmaker(
         engine,
         expire_on_commit=False,
     )
-
-    # Instrument the connection pool for bottleneck detection
-    instrument_db_pool(engine)
 
     # Store engine and session_factory in app state
     app.state.db_engine = engine
