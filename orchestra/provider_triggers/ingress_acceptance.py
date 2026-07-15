@@ -79,7 +79,7 @@ def process_provider_webhook_delivery(
     session: Session,
     *,
     backend_id: str,
-    ingress_key: str,
+    ingress_key: str | None,
     headers: Mapping[str, str],
     raw_body: bytes,
     adapter: TriggerProviderAdapter | None = None,
@@ -91,22 +91,60 @@ def process_provider_webhook_delivery(
     """
 
     dao = ProviderTriggerDAO(session)
-    resolved = dao.get_generation_by_ingress_key(
-        backend_id=backend_id,
-        ingress_key=ingress_key,
-    )
+    trigger_adapter = adapter or get_trigger_provider_adapter(backend_id)
+
+    if ingress_key is not None:
+        resolved = dao.get_generation_by_ingress_key(
+            backend_id=backend_id,
+            ingress_key=ingress_key,
+        )
+        unknown_reason = "unknown_ingress_key"
+    else:
+        if not trigger_adapter.verify_unrouted_delivery(
+            headers=headers,
+            raw_body=raw_body,
+        ):
+            logger.info(
+                {
+                    "event": "provider_trigger_ingress_auth_failed",
+                    "reason": "signature_invalid",
+                    "backend_id": backend_id,
+                },
+            )
+            raise IngressAuthenticationError("authentication_failed")
+        try:
+            external_trigger_id = trigger_adapter.delivery_external_trigger_id(
+                headers=headers,
+                raw_body=raw_body,
+            )
+        except (UnicodeDecodeError, ValueError):
+            logger.info(
+                {
+                    "event": "provider_trigger_ingress_auth_failed",
+                    "reason": "unroutable_delivery",
+                    "backend_id": backend_id,
+                },
+            )
+            raise IngressAuthenticationError("authentication_failed") from None
+        if not external_trigger_id:
+            raise IngressAuthenticationError("authentication_failed")
+        resolved = dao.get_generation_by_external_trigger_id(
+            backend_id=backend_id,
+            external_trigger_id=external_trigger_id,
+        )
+        unknown_reason = "unknown_external_trigger_id"
+
     if resolved is None:
         logger.info(
             {
                 "event": "provider_trigger_ingress_auth_failed",
-                "reason": "unknown_ingress_key",
+                "reason": unknown_reason,
                 "backend_id": backend_id,
             },
         )
         raise IngressAuthenticationError("authentication_failed")
 
     generation, binding = resolved
-    trigger_adapter = adapter or get_trigger_provider_adapter(backend_id)
     secrets = accepted_signing_secrets_for_generation(generation)
     if not trigger_adapter.verify_delivery(
         headers=headers,

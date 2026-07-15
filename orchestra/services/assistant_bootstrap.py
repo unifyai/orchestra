@@ -3,7 +3,7 @@
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, text
+from sqlalchemy import Numeric, cast, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -157,7 +157,7 @@ def _find_contact_log_by_contact_id(
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data.has_key("contact_id"),
-            LogEvent.data.op("->>")("contact_id") == str(contact_id),
+            cast(LogEvent.data.op("->>")("contact_id"), Numeric) == contact_id,
         )
         .order_by(LogEvent.id.asc())
         .limit(1),

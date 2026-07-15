@@ -1273,9 +1273,7 @@ def admin_copy_context(
     # ------------------------------------------------------------------
     # 8. Return summary
     # ------------------------------------------------------------------
-    batch_count = (
-        math.ceil(len(source_le_ids) / request.batch_size) if source_le_ids else 0
-    )
+    batch_count = math.ceil(len(id_map) / request.batch_size) if id_map else 0
 
     return {
         "info": (

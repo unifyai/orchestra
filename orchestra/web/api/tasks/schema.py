@@ -96,6 +96,8 @@ class TriggerCatalogEvent(BaseModel):
 
 
 class TriggerCatalogResponse(BaseModel):
+    available: bool = True
+    unavailable_reason: str | None = None
     events: list[TriggerCatalogEvent]
 
 

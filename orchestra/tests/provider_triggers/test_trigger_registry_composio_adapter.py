@@ -31,6 +31,9 @@ from orchestra.provider_triggers.trigger_registry import (
     require_canonical_trigger_event,
     validate_authored_filters,
 )
+from orchestra.tests.provider_triggers.conftest import (
+    stub_healthy_provider_trigger_topology,
+)
 from orchestra.web.api.tasks.schema import TriggerCatalogResponse
 from orchestra.web.api.tasks.views import get_task_trigger_catalog
 
@@ -325,9 +328,9 @@ def test_composio_provision_and_delivery_authorization_fail_closed() -> None:
     assert ("POST", f"{adapter.base_url}/trigger_instances") in calls
 
 
-def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_created() -> (
-    None
-):
+def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_created(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payloads = list_trigger_catalog_payloads()
     assert [item["event_slug"] for item in payloads] == [GITHUB_ISSUE_CREATED]
     event = payloads[0]
@@ -343,8 +346,12 @@ def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_create
     assert operators_by_field["title"] == {"contains", "does not contain"}
     assert "contains" not in operators_by_field["labels"]
 
-    response = get_task_trigger_catalog()
+    # Endpoint takes a FastAPI Depends session; call with an explicit None and a
+    # healthy topology stub so this unit test does not need a live DB session.
+    stub_healthy_provider_trigger_topology(monkeypatch)
+    response = get_task_trigger_catalog(session=None)
     catalog = TriggerCatalogResponse.model_validate(response.info.model_dump())
+    assert catalog.available is True
     assert len(catalog.events) == 1
     assert catalog.events[0].event_slug == GITHUB_ISSUE_CREATED
     assert catalog.events[0].backends == ["composio"]

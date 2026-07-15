@@ -21,8 +21,8 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import delete
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
@@ -158,9 +158,11 @@ class MsTeamsBotDAO:
         install welcome exactly once — a Teams add emits both an
         ``installationUpdate`` and a ``conversationUpdate`` (and may repeat),
         so welcoming on every event would spam the installer. The insert is
-        race-safe: if a concurrent event wins the unique ``tenant_id`` slot
-        first, the collision is caught and the now-existing row is returned
-        with ``created=False``.
+        race-safe: a concurrent event that wins the active ``tenant_id`` slot
+        is absorbed by ``ON CONFLICT DO NOTHING`` and the now-existing row is
+        returned with ``created=False`` — no exception, so the request's
+        transaction is never poisoned (which previously surfaced as a 500 and
+        stranded the adapter's install welcome).
         """
         existing = self.get_install_by_tenant(tenant_id)
         if existing is not None:
@@ -174,28 +176,43 @@ class MsTeamsBotDAO:
             self.session.flush()
             return existing, False
 
-        install = MsTeamsBotInstall(
-            organization_id=None,
-            user_id=None,
-            tenant_id=tenant_id,
-            tenant_name=tenant_name,
-            bot_app_id=bot_app_id,
-            service_url=service_url,
-            installer_aad_object_id=installer_aad_object_id,
-            bind_nonce=secrets.token_urlsafe(32),
+        # A single ``INSERT ... ON CONFLICT DO NOTHING`` against the partial
+        # active-tenant unique index handles the concurrent add-event race
+        # (conversationUpdate + installationUpdate for the same tenant landing
+        # at once) without a SAVEPOINT: a colliding concurrent insert is a
+        # clean no-op rather than an IntegrityError, so the outer transaction
+        # stays usable and we simply fall back to the committed winner below.
+        stmt = (
+            pg_insert(MsTeamsBotInstall)
+            .values(
+                organization_id=None,
+                user_id=None,
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                bot_app_id=bot_app_id,
+                service_url=service_url,
+                installer_aad_object_id=installer_aad_object_id,
+                bind_nonce=secrets.token_urlsafe(32),
+            )
+            .on_conflict_do_nothing(
+                index_elements=["tenant_id"],
+                index_where=text("revoked_at IS NULL"),
+            )
+            .returning(MsTeamsBotInstall.id)
         )
-        self.session.add(install)
-        try:
-            with self.session.begin_nested():
-                self.session.flush()
-        except IntegrityError:
-            # A concurrent add-event inserted the active row for this tenant
-            # between our lookup and flush; fall back to the winner.
-            self.session.expunge(install)
+        inserted_id = self.session.execute(stmt).scalar_one_or_none()
+        if inserted_id is None:
+            # A concurrent add-event won the active row for this tenant; return
+            # the committed winner (visible now that its transaction settled).
             existing = self.get_install_by_tenant(tenant_id)
             if existing is None:
-                raise
+                raise RuntimeError(
+                    "ms_teams_bot pending install conflicted but no active row "
+                    f"exists for tenant {tenant_id!r}",
+                )
             return existing, False
+        install = self.session.get(MsTeamsBotInstall, inserted_id)
+        assert install is not None  # just inserted in this transaction
         return install, True
 
     def bind_install(

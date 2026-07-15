@@ -116,7 +116,7 @@ All responses include: `X-Content-Type-Options`, `X-Frame-Options`, `Strict-Tran
 
 ### Managed Infrastructure
 
-Managed deployments rely on GCP services such as Cloud SQL, Secret Manager, Cloud Storage, Cloud Scheduler, and Cloud Armor. Those operational settings live outside this repo and are intentionally not reproduced here.
+Managed deployments rely on GCP services such as Cloud SQL, Secret Manager, Cloud Storage, Cloud Scheduler, and Cloud Armor. Those operational settings live outside this repo and are intentionally not reproduced here. Provider-event trigger hosted topology prerequisites and ops steps are documented in `deploy/provider-trigger-topology.md`.
 
 ## Project structure
 

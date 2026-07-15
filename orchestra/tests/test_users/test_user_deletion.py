@@ -14,7 +14,7 @@ import os
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -320,10 +320,11 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
     ) as mock_enqueue_cleanup, patch(
         "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
     ) as mock_run_cleanup, patch(
-        "orchestra.services.bucket_service.BucketService",
-    ) as mock_bucket_cls:
+        "orchestra.services.bucket_service.create_bucket_service",
+    ) as mock_create_bucket:
         mock_enqueue_cleanup.return_value = [SimpleNamespace(id=901)]
-        mock_bucket = mock_bucket_cls.return_value
+        mock_bucket = MagicMock()
+        mock_create_bucket.return_value = mock_bucket
         mock_bucket.delete_all_assistant_data.return_value = {
             "media": 0,
             "recordings": 0,
@@ -396,9 +397,10 @@ async def test_self_service_delete_schedules_background_runtime_cleanup(
     ), patch(
         "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
     ) as mock_run_cleanup, patch(
-        "orchestra.services.bucket_service.BucketService",
-    ) as mock_bucket_cls:
-        mock_bucket = mock_bucket_cls.return_value
+        "orchestra.services.bucket_service.create_bucket_service",
+    ) as mock_create_bucket:
+        mock_bucket = MagicMock()
+        mock_create_bucket.return_value = mock_bucket
         mock_bucket.delete_all_assistant_data.return_value = {
             "media": 0,
             "recordings": 0,

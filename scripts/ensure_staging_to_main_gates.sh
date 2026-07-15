@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Keep staging->main release gates aligned with .github/workflows/tests.yml.
-# The aggregate "pytest" check comes from the pytest-required job; individual
-# matrix shards ("pytest (0)".."pytest (N)") are not branch-protection contexts.
+# The aggregate "pytest" check comes from the pytest-required job, which only
+# publishes when should-run-tests enabled the matrix. Individual shards
+# ("pytest (0)".."pytest (N)") are not branch-protection contexts.
 
 REPO="${REPO:-unifyai/orchestra}"
 RULESET_ID="${RULESET_ID:-17691842}"
