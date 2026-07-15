@@ -2071,6 +2071,13 @@ class Assistant(Base):
         back_populates="assistant",
         passive_deletes=True,
     )
+    external_ip = relationship(
+        "AssistantExternalIP",
+        back_populates="assistant",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     contact_memberships = relationship(
         "ContactMembership",
         back_populates="assistant",
@@ -2117,6 +2124,84 @@ class Assistant(Base):
             postgresql_where=text("is_coordinator AND organization_id IS NOT NULL"),
         ),
     )
+
+
+class AssistantExternalIP(Base):
+    """Persistent external-IP allocation intent for an assistant desktop.
+
+    The row belongs to the assistant rather than a pool VM, so it survives
+    desktop release and later re-assignment.  Deployment reconciliation owns
+    the GCP address fields; Orchestra only records the desired lifecycle.
+    """
+
+    __tablename__ = "assistant_external_ips"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    gcp_address_name = Column(String, nullable=True, unique=True)
+    gcp_address_id = Column(String, nullable=True, unique=True)
+    address = Column(String, nullable=True)
+    region = Column(String, nullable=True)
+    hostname = Column(String, nullable=True)
+    state = Column(String, nullable=False, default="pending", server_default="pending")
+    active_operation = Column(String, nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    retained_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    assistant = relationship("Assistant", back_populates="external_ip")
+    history = relationship(
+        "AssistantExternalIPHistory",
+        back_populates="external_ip",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AssistantExternalIPHistory.recorded_at.asc()",
+    )
+
+
+class AssistantExternalIPHistory(Base):
+    """Append-only lifecycle audit entries for :class:`AssistantExternalIP`."""
+
+    __tablename__ = "assistant_external_ip_history"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    external_ip_id = Column(
+        BigInteger,
+        ForeignKey("assistant_external_ips.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    state = Column(String, nullable=False)
+    operation = Column(String, nullable=False)
+    details = Column(JSONB, nullable=True)
+    recorded_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    external_ip = relationship("AssistantExternalIP", back_populates="history")
 
 
 class AssistantConsoleConfig(Base):

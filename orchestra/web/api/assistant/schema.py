@@ -1852,6 +1852,35 @@ class ManagedDesktopEnable(BaseModel):
     )
 
 
+class ManagedDesktopNetworkIdentityRead(BaseModel):
+    """Persistent assistant-owned egress identity, if requested."""
+
+    gcp_address_name: Optional[str] = Field(
+        None,
+        description="GCP regional address name once reserved.",
+    )
+    address: Optional[str] = Field(
+        None,
+        description="Reserved external IPv4 address once allocated.",
+    )
+    region: Optional[str] = Field(
+        None,
+        description="GCP region containing the reserved address.",
+    )
+    hostname: Optional[str] = Field(
+        None,
+        description="Stable hostname associated with the address.",
+    )
+    state: str = Field(
+        ...,
+        description="Allocation lifecycle state.",
+    )
+    active_operation: Optional[str] = Field(
+        None,
+        description="Current reconciliation operation, if any.",
+    )
+
+
 class ManagedDesktopStatusRead(BaseModel):
     """Managed Computer Use billing state for an assistant."""
 
@@ -1874,6 +1903,10 @@ class ManagedDesktopStatusRead(BaseModel):
     managed_desktop_grace_period_started_at: Optional[datetime] = Field(
         None,
         description="When the unpaid grace period started, if applicable.",
+    )
+    network_identity: Optional[ManagedDesktopNetworkIdentityRead] = Field(
+        None,
+        description="Persistent assistant-owned egress identity and allocation state.",
     )
 
 
