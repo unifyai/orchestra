@@ -17,6 +17,7 @@ from orchestra.provider_triggers.ingress_acceptance import (
 )
 from orchestra.provider_triggers.ingress_rate_limit import get_ingress_rate_limiter
 from orchestra.settings import settings
+from orchestra.web.api.utils.auth_rate_limiting import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,17 @@ router = APIRouter()
 
 
 @router.post(
+    "/webhooks/integrations/{backend_id}",
+    include_in_schema=False,
+)
+@router.post(
     "/webhooks/integrations/{backend_id}/{ingress_key}",
     include_in_schema=False,
 )
 async def provider_trigger_webhook(
     backend_id: str,
-    ingress_key: str,
     request: Request,
+    ingress_key: str | None = None,
     session: Session = Depends(get_db_session),
 ) -> JSONResponse:
     """Receive one signed provider delivery and durably accept or ignore it."""
@@ -38,7 +43,8 @@ async def provider_trigger_webhook(
     limiter = get_ingress_rate_limiter(
         limit_per_minute=settings.provider_trigger_ingress_rate_limit_per_minute,
     )
-    if not limiter.allow(backend_id=backend_id, ingress_key=ingress_key):
+    rate_limit_key = ingress_key or f"source:{get_client_ip(request)}"
+    if not limiter.allow(backend_id=backend_id, ingress_key=rate_limit_key):
         logger.info(
             {
                 "event": "provider_trigger_ingress_rate_limited",

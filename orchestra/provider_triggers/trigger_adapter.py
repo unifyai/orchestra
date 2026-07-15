@@ -139,6 +139,20 @@ class TriggerProviderAdapter(ABC):
     ) -> bool:
         """Return True when the delivery authenticates against accepted secrets."""
 
+    def verify_unrouted_delivery(
+        self,
+        *,
+        headers: Mapping[str, str],
+        raw_body: bytes,
+    ) -> bool:
+        """Verify a project-level delivery before its subscription is known."""
+
+        return self.verify_delivery(
+            headers=headers,
+            raw_body=raw_body,
+            signing_secrets=(),
+        )
+
     @abstractmethod
     def normalize_delivery(
         self,
@@ -147,6 +161,19 @@ class TriggerProviderAdapter(ABC):
         raw_body: bytes | Mapping[str, Any],
     ) -> NormalizedProviderDelivery:
         """Normalize a verified delivery into the curated projection contract."""
+
+    def delivery_external_trigger_id(
+        self,
+        *,
+        headers: Mapping[str, str],
+        raw_body: bytes,
+    ) -> str | None:
+        """Extract the provider subscription id used to route a delivery."""
+
+        return self.normalize_delivery(
+            headers=headers,
+            raw_body=raw_body,
+        ).external_trigger_id
 
     @abstractmethod
     def stable_event_identity(

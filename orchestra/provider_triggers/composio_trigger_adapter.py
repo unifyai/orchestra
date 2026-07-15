@@ -181,6 +181,31 @@ def _extract_trigger_id(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _parse_delivery_payload(
+    raw_body: bytes | Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = (
+        dict(raw_body)
+        if isinstance(raw_body, Mapping)
+        else json.loads(raw_body.decode("utf-8"))
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("Composio delivery payload must be a JSON object")
+    return payload
+
+
+def _delivery_trigger_id(payload: Mapping[str, Any]) -> str | None:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    trigger_id = metadata.get("trigger_id")
+    return (
+        trigger_id.strip()
+        if isinstance(trigger_id, str) and trigger_id.strip()
+        else None
+    )
+
+
 class ComposioTriggerAdapter(TriggerProviderAdapter):
     """Composio adapter for the curated github.issue_created trigger."""
 
@@ -427,6 +452,17 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             for secret in secrets
         )
 
+    def delivery_external_trigger_id(
+        self,
+        *,
+        headers: Mapping[str, str],
+        raw_body: bytes,
+    ) -> str | None:
+        """Extract the Composio trigger-instance id without projecting the event."""
+
+        _ = headers
+        return _delivery_trigger_id(_parse_delivery_payload(raw_body))
+
     def normalize_delivery(
         self,
         *,
@@ -436,12 +472,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         # TODO: Dispatch projection by registry mapping for the delivery's
         # provider trigger slug instead of hard-requiring the GitHub issue
         # created Composio slug.
-        if isinstance(raw_body, Mapping):
-            payload = dict(raw_body)
-        else:
-            payload = json.loads(raw_body.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("Composio delivery payload must be a JSON object")
+        payload = _parse_delivery_payload(raw_body)
         identity = self.stable_event_identity(payload)
         if not identity:
             raise ValueError("Composio delivery is missing retry-stable identity")
@@ -458,7 +489,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         resource_id = projection.get("repository")
         connected_account_id = metadata.get("connected_account_id")
         provider_user_id = metadata.get("user_id")
-        external_trigger_id = metadata.get("trigger_id")
+        external_trigger_id = _delivery_trigger_id(payload)
         occurred_at = payload.get("timestamp")
         envelope = {
             "backend_id": self.backend_id,
@@ -475,9 +506,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         return NormalizedProviderDelivery(
             provider_event_identity=identity,
             provider_trigger_slug=trigger_slug,
-            external_trigger_id=(
-                str(external_trigger_id) if external_trigger_id else None
-            ),
+            external_trigger_id=external_trigger_id,
             connected_account_id=(
                 str(connected_account_id) if connected_account_id else None
             ),

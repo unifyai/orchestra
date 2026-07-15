@@ -280,6 +280,33 @@ class ProviderTriggerDAO:
             return None
         return row[0], row[1]
 
+    def get_generation_by_external_trigger_id(
+        self,
+        *,
+        backend_id: str,
+        external_trigger_id: str,
+    ) -> tuple[EventTriggerSubscriptionGeneration, EventTriggerBinding] | None:
+        """Resolve an unambiguous generation from a provider trigger identifier."""
+
+        rows = self.session.execute(
+            select(EventTriggerSubscriptionGeneration, EventTriggerBinding)
+            .join(
+                EventTriggerBinding,
+                EventTriggerBinding.binding_id
+                == EventTriggerSubscriptionGeneration.binding_id,
+            )
+            .where(
+                EventTriggerSubscriptionGeneration.external_trigger_id
+                == external_trigger_id,
+                EventTriggerBinding.backend_id == backend_id,
+            )
+            .limit(2),
+        ).all()
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        return row[0], row[1]
+
     def promote_generation(
         self,
         *,
