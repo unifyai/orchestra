@@ -18,6 +18,9 @@ from orchestra.services.task_machine_state_service import (
     build_task_activation_context_name,
 )
 from orchestra.services.task_mutation_contract import format_task_etag
+from orchestra.tests.provider_triggers.conftest import (
+    stub_healthy_provider_trigger_topology,
+)
 from orchestra.tests.test_tasks.test_trigger_task import _auth_user_id
 from orchestra.tests.utils import HEADERS
 
@@ -187,7 +190,11 @@ async def test_trigger_health_and_retry_use_durable_binding_state(
     client: AsyncClient,
     assistant_id: int,
     dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Health overlays binding state with deployment topology; keep topology healthy
+    # so this test asserts durable binding runtime health, not env prerequisites.
+    stub_healthy_provider_trigger_topology(monkeypatch)
     created = await _create_provider_event_task(client, assistant_id=assistant_id)
     health = await client.get(
         f"/v0/assistants/{assistant_id}/tasks/{created['task_id']}/trigger-health",
