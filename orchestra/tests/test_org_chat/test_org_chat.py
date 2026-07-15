@@ -300,20 +300,32 @@ async def test_dm_send_and_history(
     org_chat_dispatch_mock: AsyncMock,
 ):
     owner, member, org = await _create_org_with_member(client, "dm")
+    attachment = {
+        "id": "att-1",
+        "filename": "spec.pdf",
+        "gs_url": "gs://bucket/spec.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": 1234,
+    }
 
     send_response = await client.post(
         f"/v0/organizations/{org['id']}/dms/{member['id']}/messages",
         headers=org["headers"],
-        json={"content": "Hi there"},
+        json={"content": "Hi there", "attachments": [attachment]},
     )
     assert send_response.status_code == status.HTTP_201_CREATED, send_response.json()
     sent = send_response.json()
     assert sent["content"] == "Hi there"
     assert sent["sender_user_id"] == owner["id"]
+    assert sent["attachments"][0]["id"] == attachment["id"]
+    assert sent["attachments"][0]["filename"] == attachment["filename"]
+    assert sent["attachments"][0]["gs_url"] == attachment["gs_url"]
 
     payload = org_chat_dispatch_mock.await_args.args[0]
     assert payload["kind"] == "dm"
     assert set(payload["message"]["user_ids"]) == {owner["id"], member["id"]}
+    assert payload["message"]["attachments"][0]["filename"] == attachment["filename"]
+    assert payload["message"]["attachments"][0]["gs_url"] == attachment["gs_url"]
 
     history_response = await client.get(
         f"/v0/organizations/{org['id']}/dms/{member['id']}/messages",
@@ -322,6 +334,10 @@ async def test_dm_send_and_history(
     assert history_response.status_code == status.HTTP_200_OK
     history = history_response.json()
     assert [entry["content"] for entry in history["messages"]] == ["Hi there"]
+    assert (
+        history["messages"][0]["attachments"][0]["filename"] == attachment["filename"]
+    )
+    assert history["messages"][0]["attachments"][0]["gs_url"] == attachment["gs_url"]
     assert set(history["user_ids"]) == {owner["id"], member["id"]}
 
     # Reverse direction resolves the same thread.
@@ -331,6 +347,41 @@ async def test_dm_send_and_history(
     )
     assert member_history.status_code == status.HTTP_200_OK
     assert member_history.json()["thread_id"] == history["thread_id"]
+
+
+@pytest.mark.anyio
+async def test_dm_call_create(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    owner, member, org = await _create_org_with_member(client, "dm-call")
+
+    create_response = await client.post(
+        f"/v0/organizations/{org['id']}/dms/{member['id']}/calls",
+        headers=org["headers"],
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    body = create_response.json()
+    assert body["status"] == "ringing"
+    assert body["caller_user_id"] == owner["id"]
+    assert body["callee_user_id"] == member["id"]
+
+    from orchestra.db.models.orchestra_models import HumanCallSession
+
+    call_session = dbsession.get(HumanCallSession, body["call_id"])
+    assert call_session is not None
+    assert body["room_name"] == f"unity_org_{org['id']}_dm_{call_session.thread_id}"
+
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "dm_call"
+    assert payload["action"] == "incoming"
+    assert payload["call"]["call_id"] == body["call_id"]
+    assert payload["call"]["room_name"] == body["room_name"]
+    assert payload["call"]["caller_user_id"] == owner["id"]
+    assert payload["call"]["callee_user_id"] == member["id"]
 
 
 @pytest.mark.anyio

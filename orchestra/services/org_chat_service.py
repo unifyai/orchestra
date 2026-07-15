@@ -137,6 +137,7 @@ def persist_team_message(
     sender_name: str,
     content: str,
     mentions: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Append one message to the team's GroupChat thread.
 
@@ -158,6 +159,7 @@ def persist_team_message(
         "sender_name": sender_name,
         "content": content,
         "mentions": mentions or [],
+        "attachments": attachments or [],
     }
     # None-valued fields are omitted so field types are always inferred from
     # real values (sender_user_id for humans, sender_assistant_id for AIs).
@@ -236,10 +238,60 @@ def list_team_messages(
             not isinstance(message_id, int) or message_id >= before_message_id
         ):
             continue
+        data.setdefault("mentions", [])
+        data.setdefault("attachments", [])
         data["team_id"] = team.id
         data["organization_id"] = team.organization_id
         messages.append(data)
     return messages
+
+
+def search_team_messages(
+    session: Session,
+    *,
+    team: Team,
+    q: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Most-recent-first content matches for a team's GroupChat thread."""
+    needle = q.strip()
+    if not needle:
+        return []
+    project = _resolve_org_assistants_project(
+        session,
+        organization_id=team.organization_id,
+    )
+    context = session.scalar(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == group_chat_context_name(team.id),
+        ),
+    )
+    if context is None:
+        return []
+
+    query = (
+        project_scoped_log_events(
+            context.project_id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data["content"].astext.ilike(f"%{needle}%"),
+        )
+        .order_by(LogEvent.id.desc())
+        .limit(limit)
+    )
+    rows = session.scalars(query).all()
+    matches = []
+    for row in rows:
+        data = dict(row.data)
+        data.setdefault("mentions", [])
+        data.setdefault("attachments", [])
+        data["team_id"] = team.id
+        data["organization_id"] = team.organization_id
+        matches.append(data)
+    return matches
 
 
 def team_chat_participants(
@@ -336,5 +388,6 @@ def build_team_dispatch_payload(
             "sender_assistant_id": message.get("sender_assistant_id"),
             "sender_email": sender_email,
             "sender_name": message.get("sender_name") or "",
+            "attachments": message.get("attachments") or [],
         },
     }

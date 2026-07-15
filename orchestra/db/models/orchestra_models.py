@@ -1015,6 +1015,11 @@ class DmMessage(Base):
         nullable=True,
     )
     content = Column(Text, nullable=False)
+    attachments = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    )
     created_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
@@ -1022,6 +1027,62 @@ class DmMessage(Base):
     )
 
     __table_args__ = (Index("ix_dm_message_thread_id_id", "thread_id", "id"),)
+
+
+class HumanCallSession(Base):
+    """One human-to-human voice call session inside an organization."""
+
+    __tablename__ = "human_call_session"
+
+    id = Column(String, primary_key=True, default=_new_string_uuid)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    caller_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    callee_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    livekit_room = Column(String, nullable=False)
+    status = Column(String, nullable=False, server_default="ringing")
+    thread_id = Column(
+        Integer,
+        ForeignKey("dm_thread.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    answered_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('ringing', 'active', 'ended', 'declined')",
+            name="ck_human_call_session_status",
+        ),
+        Index(
+            "ix_human_call_session_org_callee_status",
+            "organization_id",
+            "callee_user_id",
+            "status",
+        ),
+    )
 
 
 # Account table (for external providers like Google, GitHub)
