@@ -56,6 +56,7 @@ from orchestra.db.models.orchestra_models import (
     TEAM_STATUS_ACTIVE,
     Assistant,
     AssistantConsoleConfig,
+    AssistantExternalIPRotation,
     ContactMembership,
     Context,
     LogEvent,
@@ -79,6 +80,8 @@ from orchestra.services.assistant_cleanup_service import (
 from orchestra.services.assistant_external_ip_service import (
     ensure_pending_assistant_external_ip,
     reconcile_assistant_external_ip,
+    request_assistant_external_ip_rotation,
+    run_assistant_external_ip_rotation,
     retain_assistant_external_ip,
 )
 from orchestra.services.assistant_team_ownership_service import (
@@ -191,6 +194,7 @@ from orchestra.web.api.assistant.schema import (
     GrantedFeaturesResponse,
     InfoResponse,
     ManagedDesktopEnable,
+    ManagedDesktopIPRotationRead,
     ManagedDesktopNetworkIdentityRead,
     ManagedDesktopStatusRead,
     OnboardingCatalog,
@@ -2322,6 +2326,14 @@ def _build_managed_desktop_status_read(
     elif assistant.managed_desktop_monthly_cost is not None:
         monthly_cost = float(assistant.managed_desktop_monthly_cost)
     external_ip = assistant.external_ip
+    rotation = (
+        session.query(AssistantExternalIPRotation)
+        .filter(AssistantExternalIPRotation.external_ip_id == external_ip.id)
+        .order_by(AssistantExternalIPRotation.requested_at.desc())
+        .first()
+        if external_ip is not None
+        else None
+    )
     return ManagedDesktopStatusRead(
         desktop_mode=assistant.desktop_mode,
         managed_desktop_status=assistant.managed_desktop_status,
@@ -2338,6 +2350,20 @@ def _build_managed_desktop_status_read(
                 hostname=external_ip.hostname,
                 state=external_ip.state,
                 active_operation=external_ip.active_operation,
+                rotation=(
+                    ManagedDesktopIPRotationRead(
+                        id=rotation.id,
+                        state=rotation.state,
+                        error=rotation.error,
+                        old_address=rotation.old_address,
+                        candidate_address=rotation.candidate_address,
+                        rollback_expires_at=rotation.rollback_expires_at,
+                        requested_at=rotation.requested_at,
+                        completed_at=rotation.completed_at,
+                    )
+                    if rotation is not None
+                    else None
+                ),
             )
             if external_ip is not None
             else None
@@ -2372,6 +2398,125 @@ def get_managed_desktop_status(
             detail="Assistant not found.",
         )
     return InfoResponse(info=_build_managed_desktop_status_read(session, assistant))
+
+
+@router.post(
+    "/assistant/{assistant_id}/managed-desktop/network-identity/rotate",
+    response_model=InfoResponse[ManagedDesktopIPRotationRead],
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["Assistant Management"],
+)
+async def rotate_managed_desktop_network_identity(
+    assistant_id: int,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ManagedDesktopIPRotationRead]:
+    """Request a guarded, asynchronous egress-IP rotation for a desktop."""
+
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant = AssistantDAO(session).get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant not found.")
+    _require_assistant_write_access(
+        session,
+        request=request,
+        assistant=assistant,
+        assistant_id=assistant_id,
+    )
+    if not managed_desktop_entitled(assistant):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Computer Use must be active before rotating its IP.",
+        )
+    try:
+        rotation = request_assistant_external_ip_rotation(session, assistant=assistant)
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    background_tasks.add_task(
+        run_assistant_external_ip_rotation,
+        request.app.state.db_session_factory,
+        assistant_id=assistant_id,
+        operation_id=rotation.id,
+    )
+    return InfoResponse(
+        info=ManagedDesktopIPRotationRead(
+            id=rotation.id,
+            state=rotation.state,
+            error=rotation.error,
+            old_address=rotation.old_address,
+            candidate_address=rotation.candidate_address,
+            rollback_expires_at=rotation.rollback_expires_at,
+            requested_at=rotation.requested_at,
+            completed_at=rotation.completed_at,
+        ),
+    )
+
+
+@router.get(
+    "/assistant/{assistant_id}/managed-desktop/network-identity/rotation",
+    response_model=InfoResponse[ManagedDesktopIPRotationRead],
+    tags=["Assistant Management"],
+)
+def get_managed_desktop_network_identity_rotation(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[ManagedDesktopIPRotationRead]:
+    """Read the newest rotation operation visible to the assistant owner."""
+
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant = AssistantDAO(session).get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant or _is_hidden_workspace_coordinator_for_user(
+        assistant,
+        user_id=user_id,
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant not found.")
+    _require_assistant_write_access(
+        session,
+        request=request,
+        assistant=assistant,
+        assistant_id=assistant_id,
+    )
+    external_ip = assistant.external_ip
+    rotation = (
+        session.query(AssistantExternalIPRotation)
+        .filter(AssistantExternalIPRotation.external_ip_id == external_ip.id)
+        .order_by(AssistantExternalIPRotation.requested_at.desc())
+        .first()
+        if external_ip is not None
+        else None
+    )
+    if rotation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rotation not found.")
+    return InfoResponse(
+        info=ManagedDesktopIPRotationRead(
+            id=rotation.id,
+            state=rotation.state,
+            error=rotation.error,
+            old_address=rotation.old_address,
+            candidate_address=rotation.candidate_address,
+            rollback_expires_at=rotation.rollback_expires_at,
+            requested_at=rotation.requested_at,
+            completed_at=rotation.completed_at,
+        ),
+    )
 
 
 @router.post(

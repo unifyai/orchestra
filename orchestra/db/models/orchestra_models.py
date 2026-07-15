@@ -2413,6 +2413,13 @@ class AssistantExternalIP(Base):
         passive_deletes=True,
         order_by="AssistantExternalIPHistory.recorded_at.asc()",
     )
+    rotations = relationship(
+        "AssistantExternalIPRotation",
+        back_populates="external_ip",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AssistantExternalIPRotation.requested_at.desc()",
+    )
 
 
 class AssistantExternalIPHistory(Base):
@@ -2443,6 +2450,49 @@ class AssistantExternalIPHistory(Base):
     )
 
     external_ip = relationship("AssistantExternalIP", back_populates="history")
+
+
+class AssistantExternalIPRotation(Base):
+    """Durable, idempotent external-IP rotation operation for one assistant."""
+
+    __tablename__ = "assistant_external_ip_rotations"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    external_ip_id = Column(
+        BigInteger,
+        ForeignKey("assistant_external_ips.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    state = Column(String, nullable=False, server_default="requested")
+    vm_name = Column(String, nullable=True)
+    binding_id = Column(String, nullable=True)
+    old_address_name = Column(String, nullable=True)
+    old_address = Column(String, nullable=True)
+    candidate_address_name = Column(String, nullable=True)
+    candidate_address = Column(String, nullable=True)
+    error = Column(String, nullable=True)
+    rollback_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    requested_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    external_ip = relationship("AssistantExternalIP", back_populates="rotations")
 
 
 class AssistantConsoleConfig(Base):
