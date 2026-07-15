@@ -9,15 +9,33 @@ from orchestra.provider_triggers.composio_trigger_adapter import ComposioTrigger
 from orchestra.provider_triggers.local_composio_trigger_adapter import (
     LocalComposioTriggerAdapter,
 )
+from orchestra.provider_triggers.local_pipedream_trigger_adapter import (
+    LocalPipedreamTriggerAdapter,
+)
+from orchestra.provider_triggers.pipedream_trigger_adapter import (
+    PipedreamTriggerAdapter,
+)
 from orchestra.provider_triggers.trigger_adapter import TriggerProviderAdapter
-from orchestra.provider_triggers.trigger_registry import COMPOSIO_BACKEND_ID
+from orchestra.provider_triggers.trigger_registry import (
+    COMPOSIO_BACKEND_ID,
+    PIPEDREAM_BACKEND_ID,
+)
 
 TRIGGER_PROVIDER_ADAPTERS: dict[str, Type[TriggerProviderAdapter]] = {
-    # TODO: Register Pipedream (and any other inbound backends) here once their
-    # TriggerProviderAdapter implementation exists. Catalog backends track this
-    # map so unmapped backends are not advertised as provisionable.
     COMPOSIO_BACKEND_ID: ComposioTriggerAdapter,
+    PIPEDREAM_BACKEND_ID: PipedreamTriggerAdapter,
 }
+
+
+def _pipedream_credentials_configured() -> bool:
+    return all(
+        os.getenv(name, "").strip()
+        for name in (
+            "PIPEDREAM_CLIENT_ID",
+            "PIPEDREAM_CLIENT_SECRET",
+            "PIPEDREAM_PROJECT_ID",
+        )
+    )
 
 
 def get_trigger_provider_adapter(
@@ -35,4 +53,8 @@ def get_trigger_provider_adapter(
         if not os.getenv("COMPOSIO_API_KEY"):
             return LocalComposioTriggerAdapter(timeout_seconds=timeout_seconds)
         return ComposioTriggerAdapter(timeout_seconds=timeout_seconds)
+    if adapter_cls is PipedreamTriggerAdapter:
+        if not _pipedream_credentials_configured():
+            return LocalPipedreamTriggerAdapter(timeout_seconds=timeout_seconds)
+        return PipedreamTriggerAdapter(timeout_seconds=timeout_seconds)
     raise LookupError(f"No trigger provider adapter registered for {backend_id!r}")
