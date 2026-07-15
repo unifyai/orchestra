@@ -14,6 +14,7 @@ class AuthoredTaskField(StrEnum):
     trigger = "trigger"
     enabled = "enabled"
     offline = "offline"
+    browser_target = "browser_target"
     entrypoint = "entrypoint"
     priority = "priority"
     repeat = "repeat"

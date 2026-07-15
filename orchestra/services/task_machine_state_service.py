@@ -1723,6 +1723,7 @@ def _project_activation_payload(
         "instance_id": _coerce_int(row.data.get("instance_id")),
         "activation_kind": activation_kind,
         "execution_mode": execution_mode,
+        "browser_target": _coerce_optional_str(row.data.get("browser_target")),
         "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
@@ -1909,6 +1910,7 @@ def _scheduled_activation_snapshot(
         "scheduled_for": scheduled_for,
         "execution_mode": _coerce_optional_str(activation.get("execution_mode"))
         or "live",
+        "browser_target": _coerce_optional_str(activation.get("browser_target")),
     }
 
 
