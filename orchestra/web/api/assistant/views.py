@@ -2498,13 +2498,19 @@ async def disable_managed_desktop_endpoint(
     retain_assistant_external_ip(session, assistant=assistant)
     session.commit()
 
-    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+    from orchestra.web.api.utils.assistant_infra import stop_assistant_session_runtime
 
     try:
-        await reawaken_assistant(str(assistant_id))
+        stop_result = await stop_assistant_session_runtime(str(assistant_id))
+        if not stop_result.get("success"):
+            logging.warning(
+                "Failed to stop assistant runtime %s after disabling Computer Use: %s",
+                assistant_id,
+                stop_result,
+            )
     except Exception as exc:
         logging.warning(
-            "Failed to reawaken assistant %s after disabling Computer Use: %s",
+            "Failed to stop assistant runtime %s after disabling Computer Use: %s",
             assistant_id,
             exc,
         )
