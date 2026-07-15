@@ -15,6 +15,7 @@ from orchestra.db.models.core_models import Project
 from orchestra.db.models.integration_provider_models import IntegrationConnection
 from orchestra.db.models.orchestra_models import Assistant
 from orchestra.db.models.provider_trigger_models import (
+    EventTriggerBinding,
     ProviderEventBlob,
     ProviderEventDispatch,
     ProviderEventReceipt,
@@ -24,6 +25,7 @@ from orchestra.provider_triggers.ingress_rate_limit import (
     reset_ingress_rate_limiter_for_tests,
 )
 from orchestra.provider_triggers.run_key import build_provider_event_run_key
+from orchestra.provider_triggers.runtime_types import DesiredTriggerState
 from orchestra.provider_triggers.task_trigger import (
     ProviderEventTrigger,
     ProviderEventTriggerFilter,
@@ -46,6 +48,7 @@ def _seed_active_ingress_binding(
     dbsession: Session,
     *,
     extra_filters: list[ProviderEventTriggerFilter] | None = None,
+    execution_mode: str = "live",
 ) -> tuple[str, str, int, int]:
     """Return ingress_key, binding_id, assistant_id, task_id for one live binding."""
 
@@ -107,7 +110,7 @@ def _seed_active_ingress_binding(
         assistant_id=assistant.agent_id,
         task_revision=1,
         trigger=trigger,
-        execution_mode="live",
+        execution_mode=execution_mode,
         entrypoint=None,
     )
     generation = dao.create_generation(binding=binding)
@@ -396,3 +399,97 @@ async def test_provider_trigger_webhook_rate_limits_before_acceptance(
         .all()
     )
     assert len(receipts) == 1
+
+
+@pytest.mark.anyio
+async def test_signed_delivery_before_pause_remains_accepted(
+    dbsession: Session,
+    client: AsyncClient,
+) -> None:
+    ingress_key, binding_id, _assistant_id, _task_id = _seed_active_ingress_binding(
+        dbsession,
+    )
+    payload = load_composio_github_issue_fixture()
+    accepted = await deliver_signed_composio_webhook(
+        client,
+        ingress_key=ingress_key,
+        payload=payload,
+        signing_secret=WEBHOOK_SECRET,
+        webhook_id="msg_before_pause_1",
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "accepted"
+
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    binding.desired_trigger_state = DesiredTriggerState.paused.value
+    binding.local_acceptance_open = False
+    binding.acceptance_epoch += 1
+    dbsession.flush()
+
+    receipts = (
+        dbsession.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.binding_id == binding_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    dispatches = (
+        dbsession.execute(
+            select(ProviderEventDispatch).where(
+                ProviderEventDispatch.binding_id == binding_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    assert len(receipts) == 1
+    assert receipts[0].processing_state == "dispatch_pending"
+    assert len(dispatches) == 1
+    assert dispatches[0].run_id == receipts[0].run_id
+
+
+@pytest.mark.anyio
+async def test_pause_before_signed_delivery_ignores_matched_event(
+    dbsession: Session,
+    client: AsyncClient,
+) -> None:
+    ingress_key, binding_id, _, _ = _seed_active_ingress_binding(dbsession)
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    binding.desired_trigger_state = DesiredTriggerState.paused.value
+    binding.local_acceptance_open = False
+    binding.acceptance_epoch += 1
+    dbsession.flush()
+
+    payload = load_composio_github_issue_fixture()
+    response = await deliver_signed_composio_webhook(
+        client,
+        ingress_key=ingress_key,
+        payload=payload,
+        signing_secret=WEBHOOK_SECRET,
+        webhook_id="msg_after_pause_1",
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ignored"
+    assert body["classification_reason"] == "inactive"
+
+    dispatches = (
+        dbsession.execute(
+            select(ProviderEventDispatch).where(
+                ProviderEventDispatch.binding_id == binding_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    assert dispatches == []
