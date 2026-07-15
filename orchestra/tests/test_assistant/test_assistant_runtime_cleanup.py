@@ -380,6 +380,55 @@ async def test_process_assistant_cleanup_tasks_with_task_ids_ignores_retry_backo
 
 
 @pytest.mark.anyio
+async def test_process_assistant_cleanup_tasks_with_assistant_id_ignores_retry_backoff(
+    dbsession,
+):
+    task = AssistantCleanupTask(
+        assistant_id=143,
+        desktop_mode="ubuntu",
+        source_flow=CleanupSource.ASSISTANT_DELETE,
+        cleanup_payload={"contacts": []},
+        status="pending",
+        next_retry_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    dbsession.add(task)
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+        new_callable=AsyncMock,
+    ) as mock_teardown, patch(
+        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+        new_callable=AsyncMock,
+    ) as mock_deprovision:
+        mock_teardown.return_value = {
+            "success": True,
+            "assistant_id": "143",
+            "steps": {},
+            "errors": [],
+        }
+        mock_deprovision.return_value = {
+            "success": True,
+            "attempted": 0,
+            "soft_deleted": 0,
+            "errors": [],
+        }
+
+        result = await process_assistant_cleanup_tasks(
+            dbsession,
+            assistant_id=143,
+        )
+
+    dbsession.expire_all()
+    refreshed = dbsession.get(AssistantCleanupTask, task.id)
+    assert result["processed"] == 1
+    assert result["completed"] == 1
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.next_retry_at is None
+
+
+@pytest.mark.anyio
 async def test_process_assistant_cleanup_tasks_without_task_ids_respects_retry_backoff(
     dbsession,
 ):
