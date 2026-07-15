@@ -1133,12 +1133,14 @@ class ProviderTriggerDAO:
                 [
                     GenerationOperationState.pending.value,
                     GenerationOperationState.retryable.value,
+                    GenerationOperationState.claimed.value,
                 ],
             ),
             EventTriggerSubscriptionGeneration.delete_operation_state.in_(
                 [
                     GenerationOperationState.pending.value,
                     GenerationOperationState.retryable.value,
+                    GenerationOperationState.claimed.value,
                 ],
             ),
         )
