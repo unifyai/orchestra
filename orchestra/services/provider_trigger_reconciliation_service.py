@@ -353,18 +353,23 @@ class ProviderTriggerReconciliationService:
         adapter: TriggerProviderAdapter,
         connection: IntegrationConnection,
     ) -> bool:
-        if not settings.provider_event_storage_configured:
-            self._mark_binding_terminal(
-                binding,
-                health=BindingRuntimeHealth.needs_attention,
-                error_code=ReconcileErrorCode.event_storage_unconfigured,
+        from orchestra.provider_triggers.topology import (
+            evaluate_provider_trigger_topology,
+            topology_reason_to_reconcile_error,
+        )
+
+        topology = evaluate_provider_trigger_topology(
+            self._session,
+            require_worker=False,
+        )
+        if not topology.available:
+            error_code = topology_reason_to_reconcile_error(
+                topology.unavailable_reason,
             )
-            return False
-        if not settings.provider_trigger_callback_base_url:
             self._mark_binding_terminal(
                 binding,
                 health=BindingRuntimeHealth.needs_attention,
-                error_code=ReconcileErrorCode.callback_url_unconfigured,
+                error_code=error_code or ReconcileErrorCode.callback_url_unconfigured,
             )
             return False
 

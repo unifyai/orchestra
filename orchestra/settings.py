@@ -413,20 +413,20 @@ class Settings(BaseSettings):
     provider_trigger_dispatch_poll_interval_seconds: int = int(
         os.environ.get("PROVIDER_TRIGGER_DISPATCH_POLL_INTERVAL_SECONDS", "10"),
     )
+    provider_trigger_worker_heartbeat_max_age_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_WORKER_HEARTBEAT_MAX_AGE_SECONDS", "180"),
+    )
+    provider_trigger_worker_readiness_port: int = int(
+        os.environ.get("PORT", "8080"),
+    )
 
     @property
     def provider_trigger_callback_base_url(self) -> str | None:
-        """Return the public HTTPS callback base for provider trigger ingress.
+        """Return the explicit public HTTPS callback base for provider ingress."""
 
-        TODO: Require an explicit externally reachable callback base instead of
-        falling back to ORCHESTRA_PUBLIC_URL before activating subscriptions.
-        """
+        from orchestra.provider_triggers.topology import _callback_base_url
 
-        configured = (self.orchestra_trigger_callback_base_url or "").strip()
-        if configured:
-            return configured.rstrip("/")
-        public_url = os.environ.get("ORCHESTRA_PUBLIC_URL", "").strip()
-        return public_url.rstrip("/") if public_url else None
+        return _callback_base_url()
 
     @property
     def provider_event_storage_configured(self) -> bool:

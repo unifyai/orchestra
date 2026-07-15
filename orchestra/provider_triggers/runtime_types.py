@@ -57,6 +57,8 @@ class ReconcileErrorCode(StrEnum):
 
     event_storage_unconfigured = "event_storage_unconfigured"
     callback_url_unconfigured = "callback_url_unconfigured"
+    signing_secret_unconfigured = "signing_secret_unconfigured"
+    worker_unhealthy = "worker_unhealthy"
     provider_connection_missing = "provider_connection_missing"
     connection_not_owned = "connection_not_owned"
     account_subject_mismatch = "account_subject_mismatch"
