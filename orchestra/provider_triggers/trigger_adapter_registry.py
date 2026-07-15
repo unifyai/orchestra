@@ -6,6 +6,9 @@ import os
 from typing import Type
 
 from orchestra.provider_triggers.composio_trigger_adapter import ComposioTriggerAdapter
+from orchestra.provider_triggers.local_composio_trigger_adapter import (
+    LocalComposioTriggerAdapter,
+)
 from orchestra.provider_triggers.trigger_adapter import TriggerProviderAdapter
 from orchestra.provider_triggers.trigger_registry import COMPOSIO_BACKEND_ID
 
@@ -30,8 +33,6 @@ def get_trigger_provider_adapter(
     adapter_cls = TRIGGER_PROVIDER_ADAPTERS.get(backend_id)
     if adapter_cls is ComposioTriggerAdapter:
         if not os.getenv("COMPOSIO_API_KEY"):
-            # Construction still succeeds so pure verify/normalize paths can run
-            # in tests; live provision/delete raise when the key is required.
-            pass
+            return LocalComposioTriggerAdapter(timeout_seconds=timeout_seconds)
         return ComposioTriggerAdapter(timeout_seconds=timeout_seconds)
     raise LookupError(f"No trigger provider adapter registered for {backend_id!r}")
