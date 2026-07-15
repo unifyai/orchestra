@@ -121,11 +121,47 @@ def ensure_system_builtins_project(session: Session) -> Project:
     return project
 
 
+def ensure_system_assistant_jobs_project(session: Session) -> Project:
+    """Ensure the canonical AssistantJobs project exists as platform-owned data."""
+    from orchestra.web.api.utils.system_project import ASSISTANT_JOBS_PROJECT_NAME
+
+    project = (
+        session.query(Project)
+        .filter(Project.name == ASSISTANT_JOBS_PROJECT_NAME)
+        .order_by(
+            Project.is_system.desc(),
+            Project.id.asc(),
+        )
+        .first()
+    )
+    if project is None:
+        project = Project(
+            name=ASSISTANT_JOBS_PROJECT_NAME,
+            description="Platform fleet audit and Console liveview discovery",
+            is_versioned=False,
+            is_public_read=False,
+            is_system=True,
+        )
+        session.add(project)
+        session.flush()
+    else:
+        project.user_id = None
+        project.organization_id = None
+        project.is_versioned = False
+        project.is_public_read = False
+        project.is_system = True
+        if not project.description:
+            project.description = "Platform fleet audit and Console liveview discovery"
+        session.flush()
+    return project
+
+
 def bootstrap_self_host_platform(session: Session) -> SelfHostBootstrapResult:
     """Create or repair self-host platform defaults without creating users."""
     ensure_platform_billing_defaults(session)
     ensure_provider_integration_backends(session)
     ensure_system_builtins_project(session)
+    ensure_system_assistant_jobs_project(session)
     ensure_builtins_catalog_contexts(session)
     session.commit()
     return SelfHostBootstrapResult()

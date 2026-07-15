@@ -106,12 +106,12 @@ from orchestra.web.api.log.utils import (
     compute_metric_for_key,
     create_logs_internal,
 )
-from orchestra.web.api.utils.builtins_project import (
-    is_builtins_project_name,
-    require_builtins_project_owner,
-)
 from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.system_project import (
+    is_system_project_name,
+    require_system_project_owner,
+)
 
 from .task_machine_admin import router as task_machine_admin_router
 from .task_machine_user import router as task_machine_user_router
@@ -153,8 +153,8 @@ def _check_project_write_permission(
 ) -> None:
     """Enforce project:write for org-context requests. Personal context is always allowed."""
     project = session.get(Project, project_id)
-    if project and is_builtins_project_name(project.name):
-        require_builtins_project_owner(
+    if project and is_system_project_name(project.name):
+        require_system_project_owner(
             project,
             user_id=user_id,
             action="modified",

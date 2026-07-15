@@ -528,24 +528,40 @@ class ProjectDAO:
         Returns:
             List of projects the user has access to
         """
-        if name == "Builtins":
-            builtins_project = self.get_canonical_project_by_name("Builtins")
+        from orchestra.web.api.utils.system_project import (
+            is_private_system_project_name,
+            is_public_system_project_name,
+            is_system_project_name,
+        )
+
+        if name is not None and is_public_system_project_name(name):
+            canonical = self.get_canonical_project_by_name(name)
             if (
-                builtins_project is not None
-                and builtins_project.user_id == user_id
-                and (id is None or id == builtins_project.id)
+                canonical is not None
+                and canonical.user_id == user_id
+                and (id is None or id == canonical.id)
             ):
-                return [(builtins_project,)]
+                return [(canonical,)]
+        elif name is not None and is_private_system_project_name(name):
+            if user_id == "__system__":
+                canonical = self.get_canonical_project_by_name(name)
+                if canonical is not None and (id is None or id == canonical.id):
+                    return [(canonical,)]
+            return []
         elif id is not None:
             requested_project = self.get(id)
-            if requested_project is not None and requested_project.name == "Builtins":
-                builtins_project = self.get_canonical_project_by_name("Builtins")
-                if (
-                    builtins_project is not None
-                    and builtins_project.user_id == user_id
-                    and id == builtins_project.id
-                ):
-                    return [(builtins_project,)]
+            if requested_project is not None and is_system_project_name(
+                requested_project.name,
+            ):
+                canonical = self.get_canonical_project_by_name(requested_project.name)
+                if canonical is None or id != canonical.id:
+                    return []
+                if is_private_system_project_name(requested_project.name):
+                    if user_id == "__system__":
+                        return [(canonical,)]
+                    return []
+                if canonical.user_id == user_id:
+                    return [(canonical,)]
 
         # Get project IDs the user has explicit access to via ResourceAccess
         # (either direct user grants or via team membership)
@@ -630,8 +646,21 @@ class ProjectDAO:
         Returns:
             The project if found, None otherwise
         """
-        if name == "Builtins":
+        from orchestra.web.api.utils.system_project import (
+            is_private_system_project_name,
+            is_public_system_project_name,
+        )
+
+        if is_public_system_project_name(name):
             return self.get_canonical_project_by_name(name)
+        if is_private_system_project_name(name):
+            if user_id != "__system__":
+                return None
+            return self.get_canonical_project_by_name(name)
+        if user_id == "__system__":
+            canonical = self.get_canonical_project_by_name(name)
+            if canonical is not None and getattr(canonical, "is_system", False):
+                return canonical
 
         projects = self.filter_by_user_access(
             user_id=user_id,
