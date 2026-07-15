@@ -7,10 +7,7 @@ reconciliation once the curated registry owns the supported mappings.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -188,23 +185,16 @@ def verify_pipedream_signature(
 ) -> bool:
     """Validate an x-pd-signature header against the documented scheme."""
 
-    parts: dict[str, str] = {}
-    for segment in signature_header.split(","):
-        key, _, value = segment.partition("=")
-        parts[key.strip()] = value.strip()
-    timestamp = parts.get("t")
-    provided = parts.get("v1")
-    if not timestamp or not provided:
-        return False
-    if abs(int(time.time()) - int(timestamp)) > tolerance_seconds:
-        return False
-    signed_payload = f"{timestamp}.".encode("utf-8") + raw_body
-    expected = hmac.new(
-        signing_key.encode("utf-8"),
-        signed_payload,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, provided)
+    from orchestra.provider_triggers.pipedream_signing import (
+        verify_pipedream_signature as _verify,
+    )
+
+    return _verify(
+        signing_key=signing_key,
+        raw_body=raw_body,
+        signature_header=signature_header,
+        tolerance_seconds=tolerance_seconds,
+    )
 
 
 def provider_probes_available() -> bool:

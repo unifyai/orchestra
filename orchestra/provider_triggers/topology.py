@@ -13,12 +13,17 @@ from orchestra.provider_triggers.composio_trigger_adapter import (
     COMPOSIO_WEBHOOK_SECRET_REF,
 )
 from orchestra.provider_triggers.private_event_storage import (
+    TriggerKeyWrappingService,
     provider_event_storage_configured,
 )
 from orchestra.provider_triggers.runtime_types import ReconcileErrorCode
 from orchestra.provider_triggers.signing_secret_refs import resolve_signing_secret_ref
 from orchestra.provider_triggers.trigger_adapter_registry import (
     TRIGGER_PROVIDER_ADAPTERS,
+)
+from orchestra.provider_triggers.trigger_registry import (
+    COMPOSIO_BACKEND_ID,
+    PIPEDREAM_BACKEND_ID,
 )
 from orchestra.settings import settings
 from orchestra.workers.provider_trigger_worker import WORKER_KEY
@@ -87,8 +92,11 @@ def _callback_url_is_public_https(url: str) -> TopologyUnavailableReason | None:
 def signing_secrets_configured() -> bool:
     """Return True when registered trigger adapters have signing material."""
 
-    if "composio" in TRIGGER_PROVIDER_ADAPTERS:
+    if COMPOSIO_BACKEND_ID in TRIGGER_PROVIDER_ADAPTERS:
         if not resolve_signing_secret_ref(COMPOSIO_WEBHOOK_SECRET_REF):
+            return False
+    if PIPEDREAM_BACKEND_ID in TRIGGER_PROVIDER_ADAPTERS:
+        if not TriggerKeyWrappingService.is_configured():
             return False
     return True
 
