@@ -94,7 +94,11 @@ def request_assistant_external_ip_rotation(
     """Persist one rotation intent; the worker may safely replay it."""
 
     external_ip = _get_external_ip(session, assistant.agent_id)
-    if external_ip is None or external_ip.state != "reserved" or not external_ip.address:
+    if (
+        external_ip is None
+        or external_ip.state != "reserved"
+        or not external_ip.address
+    ):
         raise ValueError("A reserved external IP is required before it can be rotated")
     if external_ip.active_operation:
         active = (
@@ -212,7 +216,11 @@ async def run_assistant_external_ip_rotation(
         if not isinstance(payload, dict):
             raise ValueError("deploy returned a non-object rotation response")
     except Exception as exc:
-        _record_rotation_error(session_factory, operation_id=operation_id, error=str(exc))
+        _record_rotation_error(
+            session_factory,
+            operation_id=operation_id,
+            error=str(exc),
+        )
         return
 
     with session_factory() as session:
@@ -231,13 +239,17 @@ async def run_assistant_external_ip_rotation(
         rotation.state = "rollback_pending"
         rotation.candidate_address_name = _optional_string(candidate.get("name"))
         rotation.candidate_address = _optional_string(candidate.get("address"))
-        rotation.rollback_expires_at = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(
+        rotation.rollback_expires_at = _dt.datetime.now(
+            _dt.timezone.utc,
+        ) + _dt.timedelta(
             seconds=IP_ROTATION_ROLLBACK_SECONDS,
         )
         rotation.completed_at = _dt.datetime.now(_dt.timezone.utc)
         external_ip.gcp_address_name = rotation.candidate_address_name
         external_ip.address = rotation.candidate_address
-        external_ip.hostname = _optional_string(payload.get("hostname")) or external_ip.hostname
+        external_ip.hostname = (
+            _optional_string(payload.get("hostname")) or external_ip.hostname
+        )
         external_ip.state = "reserved"
         external_ip.active_operation = None
         record_assistant_external_ip_history(
@@ -281,10 +293,14 @@ async def reconcile_assistant_external_ip(
             raise ValueError("deploy returned a non-object static-IP response")
     except Exception as exc:
         _record_reconcile_error(
-            session_factory, assistant_id=assistant_id, error=str(exc)
+            session_factory,
+            assistant_id=assistant_id,
+            error=str(exc),
         )
         logger.warning(
-            "Assistant external-IP reconcile failed for %s: %s", assistant_id, exc
+            "Assistant external-IP reconcile failed for %s: %s",
+            assistant_id,
+            exc,
         )
         return
 
@@ -339,7 +355,9 @@ async def release_assistant_external_ip(
         external_ip.state = "releasing"
         external_ip.active_operation = "release"
         record_assistant_external_ip_history(
-            session, external_ip, operation="releasing"
+            session,
+            external_ip,
+            operation="releasing",
         )
 
     try:

@@ -81,8 +81,8 @@ from orchestra.services.assistant_external_ip_service import (
     ensure_pending_assistant_external_ip,
     reconcile_assistant_external_ip,
     request_assistant_external_ip_rotation,
-    run_assistant_external_ip_rotation,
     retain_assistant_external_ip,
+    run_assistant_external_ip_rotation,
 )
 from orchestra.services.assistant_team_ownership_service import (
     TeamOwnershipTransferError,
@@ -2425,7 +2425,10 @@ async def rotate_managed_desktop_network_identity(
         assistant,
         user_id=user_id,
     ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
     _require_assistant_write_access(
         session,
         request=request,
@@ -2487,7 +2490,10 @@ def get_managed_desktop_network_identity_rotation(
         assistant,
         user_id=user_id,
     ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
     _require_assistant_write_access(
         session,
         request=request,
@@ -2504,7 +2510,10 @@ def get_managed_desktop_network_identity_rotation(
         else None
     )
     if rotation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rotation not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Rotation not found.",
+        )
     return InfoResponse(
         info=ManagedDesktopIPRotationRead(
             id=rotation.id,
