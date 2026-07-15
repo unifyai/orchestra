@@ -6,11 +6,13 @@ import argparse
 import logging
 import os
 import signal
+import threading
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.observability.provider_trigger_metrics import (
@@ -30,7 +32,7 @@ from orchestra.services.provider_trigger_reconciliation_service import (
     ProviderTriggerReconciliationService,
 )
 from orchestra.settings import settings
-from orchestra.web.lifetime import get_engine
+from orchestra.web.lifetime import create_database_engine, get_engine
 from orchestra.workers.provider_trigger_readiness import (
     ProviderTriggerWorkerReadinessServer,
     default_readiness_evaluator,
@@ -39,20 +41,20 @@ from orchestra.workers.provider_trigger_readiness import (
 logger = logging.getLogger(__name__)
 
 WORKER_KEY = "provider-trigger-worker"
-_shutdown_requested = False
+_shutdown_requested = threading.Event()
 _last_cycle_completed_at: datetime | None = None
 _last_cycle_error: str | None = None
 
 
 def _handle_shutdown(signum: int, _frame: object) -> None:
     del signum
-    global _shutdown_requested
-    _shutdown_requested = True
+    _shutdown_requested.set()
 
 
 def run_worker_cycle(
     *,
     lease_owner: str | None = None,
+    session_factory: Callable[[], Session] | None = None,
 ) -> dict[str, object]:
     """Run one reconcile, generation, health, and dispatch cycle."""
 
@@ -89,7 +91,11 @@ def run_worker_cycle(
     last_reconcile_at = None
     last_health_at = None
     try:
-        with sessionmaker(bind=get_engine(), expire_on_commit=False)() as session:
+        resolved_session_factory = session_factory or sessionmaker(
+            bind=get_engine(),
+            expire_on_commit=False,
+        )
+        with resolved_session_factory() as session:
             service = ProviderTriggerReconciliationService(
                 session,
                 lease_owner=resolved_owner,
@@ -156,23 +162,29 @@ def run_worker_loop(*, once: bool = False) -> None:
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
     lease_owner = f"trigger-worker-{uuid.uuid4().hex[:12]}"
+    engine = create_database_engine()
+    worker_session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     readiness_server: ProviderTriggerWorkerReadinessServer | None = None
-    if not once and os.environ.get("PROVIDER_TRIGGER_WORKER_READINESS", "1") == "1":
-        readiness_server = ProviderTriggerWorkerReadinessServer(
-            host="0.0.0.0",
-            port=settings.provider_trigger_worker_readiness_port,
-            evaluator=lambda: default_readiness_evaluator(
-                last_cycle_completed_at=_last_cycle_completed_at,
-                max_age_seconds=settings.provider_trigger_worker_heartbeat_max_age_seconds,
-                last_cycle_error=_last_cycle_error,
-            ),
-        )
-        readiness_server.start()
 
     try:
-        while not _shutdown_requested:
+        if not once and os.environ.get("PROVIDER_TRIGGER_WORKER_READINESS", "1") == "1":
+            readiness_server = ProviderTriggerWorkerReadinessServer(
+                host="0.0.0.0",
+                port=settings.provider_trigger_worker_readiness_port,
+                evaluator=lambda: default_readiness_evaluator(
+                    last_cycle_completed_at=_last_cycle_completed_at,
+                    max_age_seconds=settings.provider_trigger_worker_heartbeat_max_age_seconds,
+                    last_cycle_error=_last_cycle_error,
+                ),
+            )
+            readiness_server.start()
+
+        while not _shutdown_requested.is_set():
             started = time.monotonic()
-            stats = run_worker_cycle(lease_owner=lease_owner)
+            stats = run_worker_cycle(
+                lease_owner=lease_owner,
+                session_factory=worker_session_factory,
+            )
             logger.info("provider-trigger worker cycle complete stats=%s", stats)
 
             if once:
@@ -183,10 +195,11 @@ def run_worker_loop(*, once: bool = False) -> None:
                 1.0,
                 settings.provider_trigger_reconcile_interval_seconds - elapsed,
             )
-            time.sleep(sleep_seconds)
+            _shutdown_requested.wait(sleep_seconds)
     finally:
         if readiness_server is not None:
             readiness_server.stop()
+        engine.dispose()
 
 
 def main() -> None:
