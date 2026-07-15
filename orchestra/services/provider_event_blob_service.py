@@ -67,6 +67,11 @@ class ProviderEventBlobService:
         try:
             self._blob_service.write_ciphertext(encrypted, ciphertext=ciphertext)
         except Exception:
+            from orchestra.observability.provider_trigger_metrics import (
+                record_storage_failure,
+            )
+
+            record_storage_failure(operation="write")
             self._session.delete(blob)
             self._session.flush()
             raise

@@ -21,6 +21,9 @@ from starlette.types import ASGIApp
 
 from orchestra.observability.inactivity_shutdown import record_activity
 from orchestra.observability.observability import clear_user_context, set_request_id
+from orchestra.observability.provider_trigger_metrics_refresh import (
+    refresh_provider_trigger_metrics,
+)
 
 INFO = Gauge(
     "orchestra_app_info",
@@ -258,6 +261,8 @@ def metrics(request: Request) -> Response:
             status_code=HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
+
+    refresh_provider_trigger_metrics()
 
     return Response(
         generate_latest(REGISTRY),

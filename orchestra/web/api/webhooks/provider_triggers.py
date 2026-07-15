@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
+from orchestra.observability.provider_trigger_metrics import record_ingress_rejection
 from orchestra.provider_triggers.ingress_acceptance import (
     IngressAuthenticationError,
     IngressRetryableError,
@@ -44,6 +45,7 @@ async def provider_trigger_webhook(
                 "backend_id": backend_id,
             },
         )
+        record_ingress_rejection(backend_id=backend_id, reason="rate_limited")
         raise HTTPException(status_code=429, detail="rate_limited")
 
     max_bytes = settings.provider_trigger_ingress_max_body_bytes
@@ -51,6 +53,10 @@ async def provider_trigger_webhook(
     if content_length is not None:
         try:
             if int(content_length) > max_bytes:
+                record_ingress_rejection(
+                    backend_id=backend_id,
+                    reason="body_too_large",
+                )
                 raise HTTPException(status_code=413, detail="body_too_large")
         except ValueError:
             raise HTTPException(
@@ -67,6 +73,7 @@ async def provider_trigger_webhook(
                 "max_bytes": max_bytes,
             },
         )
+        record_ingress_rejection(backend_id=backend_id, reason="body_too_large")
         raise HTTPException(status_code=413, detail="body_too_large")
 
     headers = {key: value for key, value in request.headers.items()}
@@ -81,6 +88,10 @@ async def provider_trigger_webhook(
         session.commit()
     except IngressAuthenticationError:
         session.rollback()
+        record_ingress_rejection(
+            backend_id=backend_id,
+            reason="authentication_failed",
+        )
         raise HTTPException(status_code=401, detail="authentication_failed") from None
     except IngressRetryableError as exc:
         session.rollback()
