@@ -9,6 +9,9 @@ import pytest
 from orchestra.provider_triggers.local_composio_trigger_adapter import (
     reset_local_composio_trigger_state,
 )
+from orchestra.provider_triggers.local_pipedream_trigger_adapter import (
+    reset_local_pipedream_trigger_state,
+)
 from orchestra.provider_triggers.topology import ProviderTriggerTopologyStatus
 from orchestra.settings import settings
 
@@ -18,6 +21,7 @@ def reset_local_composio_stub_state() -> None:
     """Keep process-local stub scenario knobs isolated between tests."""
 
     reset_local_composio_trigger_state()
+    reset_local_pipedream_trigger_state()
 
 
 @pytest.fixture(autouse=True)

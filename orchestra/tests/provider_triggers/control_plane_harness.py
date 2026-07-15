@@ -54,21 +54,25 @@ def seed_integration_connection(
     *,
     assistant_id: int,
     connection_id: str | None = None,
-    provider_connection_id: str = "ca_local_stub",
+    backend_id: str = "composio",
+    provider_connection_id: str | None = None,
     provider_user_id: str = "assistant:provider-trigger-probe",
     status: str = "connected",
 ) -> IntegrationConnection:
-    """Insert one assistant-scoped Composio GitHub connection."""
+    """Insert one assistant-scoped GitHub integration connection."""
 
     resolved_connection_id = connection_id or f"conn-{uuid.uuid4().hex[:10]}"
+    resolved_provider_connection_id = provider_connection_id or (
+        "ca_local_stub" if backend_id == "composio" else "apn_local_stub"
+    )
     connection = IntegrationConnection(
         connection_id=resolved_connection_id,
         owner_scope="assistant",
         assistant_id=assistant_id,
         canonical_app_slug="github",
-        backend_id="composio",
+        backend_id=backend_id,
         provider_app_id="GITHUB",
-        provider_connection_id=provider_connection_id,
+        provider_connection_id=resolved_provider_connection_id,
         provider_user_id=provider_user_id,
         status=status,
         credential_storage="provider_vault",
@@ -81,13 +85,14 @@ def seed_integration_connection(
 def provider_event_trigger_payload(
     *,
     connection_id: str,
+    backend_id: str = "composio",
     state: str = "enabled",
     repository: str = "octocat/Hello-World",
 ) -> ProviderEventTrigger:
     return ProviderEventTrigger(
         state=state,
         connection_id=connection_id,
-        backend_id="composio",
+        backend_id=backend_id,
         canonical_app_slug="github",
         event_slug="github.issue_created",
         schema_version="1",
@@ -106,6 +111,7 @@ def seed_provider_event_binding(
     *,
     assistant_id: int,
     connection_id: str,
+    backend_id: str = "composio",
     state: str = "enabled",
     repository: str = "octocat/Hello-World",
 ) -> EventTriggerBinding:
@@ -126,6 +132,7 @@ def seed_provider_event_binding(
         task_revision=1,
         trigger=provider_event_trigger_payload(
             connection_id=connection_id,
+            backend_id=backend_id,
             state=state,
             repository=repository,
         ),
