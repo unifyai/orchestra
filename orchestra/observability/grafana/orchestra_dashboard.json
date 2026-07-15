@@ -1523,6 +1523,55 @@
       ],
       "title": "DB Query Duration by Query Fingerprint",
       "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 40},
+      "id": 200,
+      "targets": [
+        {
+          "expr": "orchestra_provider_trigger_worker_heartbeat_age_seconds",
+          "legendFormat": "worker heartbeat age",
+          "refId": "A"
+        }
+      ],
+      "title": "Provider Trigger Worker Heartbeat Age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 40},
+      "id": 201,
+      "targets": [
+        {
+          "expr": "orchestra_provider_trigger_dispatch_backlog_age_seconds",
+          "legendFormat": "dispatch backlog",
+          "refId": "A"
+        },
+        {
+          "expr": "orchestra_provider_trigger_reconcile_backlog_age_seconds",
+          "legendFormat": "reconcile backlog",
+          "refId": "B"
+        }
+      ],
+      "title": "Provider Trigger Backlog Age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 40},
+      "id": 202,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(orchestra_provider_trigger_event_to_visible_run_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95 accept to visible run",
+          "refId": "A"
+        }
+      ],
+      "title": "Provider Event Accept To Visible Run p95",
+      "type": "timeseries"
     }
   ],
   "preload": false,

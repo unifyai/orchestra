@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 PROVIDER_TRIGGER_INGRESS_REJECTIONS = Counter(
     "orchestra_provider_trigger_ingress_rejections_total",
@@ -29,6 +29,12 @@ PROVIDER_TRIGGER_STORAGE_FAILURES = Counter(
     "orchestra_provider_trigger_storage_failures_total",
     "Private provider-event storage failures by operation.",
     ["operation"],
+)
+
+PROVIDER_TRIGGER_EVENT_TO_VISIBLE_RUN_SECONDS = Histogram(
+    "orchestra_provider_trigger_event_to_visible_run_seconds",
+    "Seconds from durable matched acceptance to a visible queued/running run.",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60),
 )
 
 
@@ -72,3 +78,9 @@ def set_dispatch_backlog_age_seconds(age_seconds: float | None) -> None:
         PROVIDER_TRIGGER_DISPATCH_BACKLOG_AGE_SECONDS.set(0)
         return
     PROVIDER_TRIGGER_DISPATCH_BACKLOG_AGE_SECONDS.set(age_seconds)
+
+
+def record_event_to_visible_run_latency(*, latency_seconds: float) -> None:
+    """Observe one accept-to-visible-run latency sample."""
+
+    PROVIDER_TRIGGER_EVENT_TO_VISIBLE_RUN_SECONDS.observe(max(0.0, latency_seconds))

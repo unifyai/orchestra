@@ -18,6 +18,9 @@ from orchestra.db.models.provider_trigger_models import (
     EventTriggerSubscriptionGeneration,
     ProviderEventReceipt,
 )
+from orchestra.observability.provider_trigger_metrics import (
+    record_event_to_visible_run_latency,
+)
 from orchestra.provider_triggers.composio_trigger_adapter import (
     github_resource_from_filters,
     provider_account_subject_hmac,
@@ -488,6 +491,7 @@ def _accept_matched_delivery(
         execution_mode=execution_mode,  # type: ignore[arg-type]
     )
     received_at = datetime.now(timezone.utc).isoformat()
+    acceptance_started_at = datetime.now(timezone.utc)
     run_payload = {
         "run_key": run_key,
         "assistant_id": str(locked_binding.assistant_id),
@@ -551,6 +555,12 @@ def _accept_matched_delivery(
             "run_created": run_created,
         },
     )
+    if run_created:
+        record_event_to_visible_run_latency(
+            latency_seconds=(
+                datetime.now(timezone.utc) - acceptance_started_at
+            ).total_seconds(),
+        )
     return IngressAcceptanceResult(
         status="accepted",
         receipt_id=receipt.receipt_id,
