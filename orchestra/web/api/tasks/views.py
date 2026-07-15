@@ -20,7 +20,6 @@ from orchestra.services.task_trigger_service import (
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
-from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import InfoResponse
 from orchestra.web.api.log.task_machine_admin import _get_internal_project_or_404
 from orchestra.web.api.log.task_machine_schema import ProviderEventContextResponse
@@ -51,6 +50,35 @@ router = APIRouter()
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
+
+
+def _topology_remediation(unavailable_reason: str | None) -> str:
+    """Return user-facing remediation copy for one topology failure."""
+
+    messages = {
+        "callback_url_unconfigured": (
+            "Provider-trigger callbacks are not configured for this deployment."
+        ),
+        "callback_url_not_https": (
+            "Provider-trigger callbacks require a public HTTPS callback base URL."
+        ),
+        "callback_url_internal": (
+            "Provider-trigger callbacks require an externally reachable HTTPS URL."
+        ),
+        "event_storage_unconfigured": (
+            "Provider-event storage is not configured for this deployment."
+        ),
+        "signing_secret_unconfigured": (
+            "Provider webhook signing secrets are not configured for this deployment."
+        ),
+        "worker_unhealthy": (
+            "The provider-trigger worker is not healthy for this deployment."
+        ),
+    }
+    return messages.get(
+        unavailable_reason or "",
+        "Provider triggers are unavailable in this deployment.",
+    )
 
 
 @dataclass(frozen=True)
@@ -675,14 +703,17 @@ def get_assistant_task_trigger_health(
             remediation = "Review the provider connection and trigger configuration."
         elif runtime_health == "provisioning":
             remediation = "Trigger provisioning is in progress."
-    event_storage_configured = settings.provider_event_storage_configured
+    from orchestra.provider_triggers.topology import evaluate_provider_trigger_topology
+
+    topology = evaluate_provider_trigger_topology(session)
+    event_storage_configured = topology.event_storage_configured
     if (
         binding is not None
-        and not event_storage_configured
+        and not topology.available
         and runtime_health not in {"absent", "removing"}
     ):
         runtime_health = "needs_attention"
-        remediation = "Provider-event storage is not configured for this deployment."
+        remediation = _topology_remediation(topology.unavailable_reason)
     return InfoResponse(
         info=TriggerHealthResponse(
             task_id=task_id,
@@ -802,16 +833,30 @@ def delete_assistant_task_run_event_context(
     tags=["Tasks"],
     summary="List supported provider-event trigger catalog entries",
 )
-def get_task_trigger_catalog() -> InfoResponse[TriggerCatalogResponse]:
+def get_task_trigger_catalog(
+    session=Depends(get_db_session),
+) -> InfoResponse[TriggerCatalogResponse]:
+    from orchestra.provider_triggers.topology import evaluate_provider_trigger_topology
     from orchestra.provider_triggers.trigger_registry import (
         list_trigger_catalog_payloads,
     )
 
+    topology = evaluate_provider_trigger_topology(session)
+    payloads = list_trigger_catalog_payloads()
+    if not topology.available:
+        payloads = [
+            {
+                **payload,
+                "backends": [],
+            }
+            for payload in payloads
+        ]
     return InfoResponse(
         info=TriggerCatalogResponse(
+            available=topology.available,
+            unavailable_reason=topology.unavailable_reason,
             events=[
-                TriggerCatalogEvent.model_validate(payload)
-                for payload in list_trigger_catalog_payloads()
+                TriggerCatalogEvent.model_validate(payload) for payload in payloads
             ],
         ),
     )
