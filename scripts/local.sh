@@ -1028,8 +1028,20 @@ start_orchestra_server() {
     UNITY_COMMS_URL="http://127.0.0.1:${UNITY_GATEWAY_PORT:-8001}"
   fi
   [[ -n "${UNITY_COMMS_URL:-}" ]] && export UNITY_COMMS_URL
+  [[ -n "${UNITY_ADAPTERS_URL:-}" ]] && export UNITY_ADAPTERS_URL
   [[ -n "${COMMUNICATION_URL:-}" ]] && export COMMUNICATION_URL
   [[ -n "${COMMS_URL:-}" ]] && export COMMS_URL
+
+  if [[ "${SELF_HOST:-0}" == "1" ]]; then
+    [[ -n "${COMPOSIO_API_KEY:-}" ]] && export COMPOSIO_API_KEY
+    [[ -n "${COMPOSIO_WEBHOOK_SECRET:-}" ]] && export COMPOSIO_WEBHOOK_SECRET
+    [[ -n "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}" ]] && export ORCHESTRA_TRIGGER_CALLBACK_BASE_URL
+    [[ -n "${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}" ]] && export TRIGGER_EVENT_WRAPPING_MASTER_KEY
+    if [[ -n "${TRIGGER_EVENT_PRIVATE_ROOT:-}" ]]; then
+      export TRIGGER_EVENT_PRIVATE_ROOT
+      mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
+    fi
+  fi
 
   # Optional logging directories
   if [[ -n "${ORCHESTRA_LOG_DIR:-}" ]]; then
