@@ -368,20 +368,66 @@ async def test_dm_call_create(
     assert body["status"] == "ringing"
     assert body["caller_user_id"] == owner["id"]
     assert body["callee_user_id"] == member["id"]
+    assert body["scope"] == "dm"
+    assert set(body["user_ids"]) == {owner["id"], member["id"]}
+    assert body["room_name"] == f"unity_org_{org['id']}_call_{body['call_id']}"
 
-    from orchestra.db.models.orchestra_models import HumanCallSession
+    from orchestra.db.models.orchestra_models import OrgCallSession
 
-    call_session = dbsession.get(HumanCallSession, body["call_id"])
+    call_session = dbsession.get(OrgCallSession, body["call_id"])
     assert call_session is not None
-    assert body["room_name"] == f"unity_org_{org['id']}_dm_{call_session.thread_id}"
+    assert call_session.livekit_room == body["room_name"]
 
     payload = org_chat_dispatch_mock.await_args.args[0]
-    assert payload["kind"] == "dm_call"
+    assert payload["kind"] == "org_call"
     assert payload["action"] == "incoming"
     assert payload["call"]["call_id"] == body["call_id"]
     assert payload["call"]["room_name"] == body["room_name"]
     assert payload["call"]["caller_user_id"] == owner["id"]
     assert payload["call"]["callee_user_id"] == member["id"]
+
+
+@pytest.mark.anyio
+async def test_team_call_create_rings_members(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    owner, member, org = await _create_org_with_member(client, "team-call")
+    team = await _create_team(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Call Team",
+    )
+    add_member = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/members",
+        headers=org["headers"],
+        json={"user_id": member["id"]},
+    )
+    assert add_member.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), add_member.json()
+
+    create_response = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/calls",
+        headers=org["headers"],
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    body = create_response.json()
+    assert body["scope"] == "team"
+    assert body["team_id"] == team["id"]
+    assert body["status"] == "ringing"
+    assert set(body["user_ids"]) == {owner["id"], member["id"]}
+    assert body["room_name"] == f"unity_org_{org['id']}_call_{body['call_id']}"
+
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "org_call"
+    assert payload["action"] == "incoming"
+    assert set(payload["call"]["user_ids"]) == {owner["id"], member["id"]}
 
 
 @pytest.mark.anyio

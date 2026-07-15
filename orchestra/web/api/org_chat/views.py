@@ -26,8 +26,9 @@ from orchestra.db.dao.user_presence_dao import UserPresenceDAO, presence_is_onli
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     DmThread,
-    HumanCallSession,
     Organization,
+    OrgCallParticipant,
+    OrgCallSession,
     Team,
     User,
 )
@@ -46,8 +47,10 @@ from orchestra.web.api.org_chat.schema import (
     DmMessageCreate,
     DmMessageResponse,
     DmMessagesPage,
-    HumanCallCreateResponse,
-    HumanCallSessionResponse,
+    OrgCallAddAssistantRequest,
+    OrgCallCreateResponse,
+    OrgCallParticipantResponse,
+    OrgCallSessionResponse,
     OrgChatAttachment,
     OrgChatSearchPage,
     OrgChatSearchResult,
@@ -134,31 +137,77 @@ def _team_message_payload(message: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _human_call_event(call_session: HumanCallSession) -> dict[str, Any]:
+def _org_call_event(call_session: OrgCallSession) -> dict[str, Any]:
+    participants = list(call_session.participants or [])
+    user_ids = [p.user_id for p in participants]
+    callee_user_id = None
+    if call_session.scope == "dm":
+        for participant in participants:
+            if participant.user_id != call_session.created_by_user_id:
+                callee_user_id = participant.user_id
+                break
     return {
         "call_id": call_session.id,
         "room_name": call_session.livekit_room,
         "status": call_session.status,
-        "caller_user_id": call_session.caller_user_id,
-        "callee_user_id": call_session.callee_user_id,
+        "scope": call_session.scope,
+        "created_by_user_id": call_session.created_by_user_id,
+        "caller_user_id": call_session.created_by_user_id,
+        "callee_user_id": callee_user_id,
         "organization_id": call_session.organization_id,
-        "thread_id": call_session.thread_id,
-        "user_ids": [
-            call_session.caller_user_id,
-            call_session.callee_user_id,
+        "dm_thread_id": call_session.dm_thread_id,
+        "thread_id": call_session.dm_thread_id,
+        "team_id": call_session.team_id,
+        "user_ids": user_ids,
+        "assistant_ids": list(call_session.assistant_ids or []),
+        "participants": [
+            {
+                "user_id": participant.user_id,
+                "role": participant.role,
+                "status": participant.status,
+            }
+            for participant in participants
         ],
     }
 
 
-def _human_call_response(
-    call_session: HumanCallSession,
-) -> HumanCallSessionResponse:
-    return HumanCallSessionResponse(
-        call_id=call_session.id,
-        room_name=call_session.livekit_room,
-        status=call_session.status,
-        caller_user_id=call_session.caller_user_id,
-        callee_user_id=call_session.callee_user_id,
+def _org_call_response(call_session: OrgCallSession) -> OrgCallSessionResponse:
+    event = _org_call_event(call_session)
+    return OrgCallSessionResponse(
+        call_id=event["call_id"],
+        room_name=event["room_name"],
+        status=event["status"],
+        scope=event["scope"],
+        created_by_user_id=event["created_by_user_id"],
+        caller_user_id=event["caller_user_id"],
+        callee_user_id=event.get("callee_user_id"),
+        team_id=event.get("team_id"),
+        dm_thread_id=event.get("dm_thread_id"),
+        user_ids=event["user_ids"],
+        participants=[
+            OrgCallParticipantResponse(**participant)
+            for participant in event["participants"]
+        ],
+        assistant_ids=event["assistant_ids"],
+    )
+
+
+def _participant_for_user(
+    call_session: OrgCallSession,
+    *,
+    user_id: str,
+) -> OrgCallParticipant | None:
+    for participant in call_session.participants or []:
+        if participant.user_id == user_id:
+            return participant
+    return None
+
+
+def _joined_human_count(call_session: OrgCallSession) -> int:
+    return sum(
+        1
+        for participant in call_session.participants or []
+        if participant.status == "joined"
     )
 
 
@@ -766,16 +815,16 @@ async def post_dm_message(
     return response_message
 
 
-def _require_human_call_session(
+def _require_org_call_session(
     session: Session,
     *,
     organization_id: int,
     call_id: str,
-) -> HumanCallSession:
+) -> OrgCallSession:
     call_session = session.scalar(
-        select(HumanCallSession).where(
-            HumanCallSession.id == call_id,
-            HumanCallSession.organization_id == organization_id,
+        select(OrgCallSession).where(
+            OrgCallSession.id == call_id,
+            OrgCallSession.organization_id == organization_id,
         ),
     )
     if call_session is None:
@@ -783,43 +832,61 @@ def _require_human_call_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Call session not found",
         )
+    # Ensure participants are loaded for response/event payloads.
+    _ = list(call_session.participants)
     return call_session
 
 
-def _require_human_call_participant(
-    call_session: HumanCallSession,
+def _require_org_call_participant(
+    call_session: OrgCallSession,
     *,
     user_id: str,
-) -> None:
-    if user_id not in {
-        call_session.caller_user_id,
-        call_session.callee_user_id,
-    }:
+) -> OrgCallParticipant:
+    participant = _participant_for_user(call_session, user_id=user_id)
+    if participant is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only call participants can manage this call",
         )
+    return participant
 
 
-async def _dispatch_human_call(
+async def _dispatch_org_call(
     *,
     organization_id: int,
-    action: Literal["incoming", "answered", "ended", "declined"],
-    call_session: HumanCallSession,
+    action: Literal[
+        "incoming",
+        "answered",
+        "ended",
+        "declined",
+        "participant_joined",
+        "participant_left",
+    ],
+    call_session: OrgCallSession,
 ) -> None:
     await dispatch_org_chat_best_effort(
         {
-            "kind": "dm_call",
+            "kind": "org_call",
             "action": action,
             "organization_id": organization_id,
-            "call": _human_call_event(call_session),
+            "call": _org_call_event(call_session),
         },
+    )
+
+
+def _finalize_org_call_room_name(
+    session: Session,
+    call_session: OrgCallSession,
+) -> None:
+    session.flush()
+    call_session.livekit_room = (
+        f"unity_org_{call_session.organization_id}_call_{call_session.id}"
     )
 
 
 @router.post(
     "/organizations/{organization_id}/dms/{other_user_id}/calls",
-    response_model=HumanCallCreateResponse,
+    response_model=OrgCallCreateResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_dm_call(
@@ -827,7 +894,7 @@ async def create_dm_call(
     organization_id: int,
     other_user_id: str,
     session: Session = Depends(get_db_session),
-) -> HumanCallCreateResponse:
+) -> OrgCallCreateResponse:
     """Start a human-to-human org DM voice call."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
@@ -845,141 +912,492 @@ async def create_dm_call(
         user_id_1=user_id,
         user_id_2=other_user_id,
     )
-    room_name = f"unity_org_{organization_id}_dm_{thread.id}"
-    call_session = HumanCallSession(
+    now = datetime.datetime.now(datetime.timezone.utc)
+    call_session = OrgCallSession(
         organization_id=organization_id,
-        caller_user_id=user_id,
-        callee_user_id=other_user_id,
-        livekit_room=room_name,
+        scope="dm",
+        dm_thread_id=thread.id,
+        team_id=None,
+        created_by_user_id=user_id,
+        livekit_room="pending",
         status="ringing",
-        thread_id=thread.id,
+        assistant_ids=[],
     )
     session.add(call_session)
+    _finalize_org_call_room_name(session, call_session)
+    session.add(
+        OrgCallParticipant(
+            call_id=call_session.id,
+            user_id=user_id,
+            role="host",
+            status="joined",
+            joined_at=now,
+        ),
+    )
+    session.add(
+        OrgCallParticipant(
+            call_id=call_session.id,
+            user_id=other_user_id,
+            role="member",
+            status="invited",
+        ),
+    )
     session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_session.id,
+    )
 
-    await _dispatch_human_call(
+    await _dispatch_org_call(
         organization_id=organization_id,
         action="incoming",
         call_session=call_session,
     )
-    return HumanCallCreateResponse(**_human_call_response(call_session).model_dump())
+    return OrgCallCreateResponse(**_org_call_response(call_session).model_dump())
+
+
+@router.post(
+    "/organizations/{organization_id}/teams/{team_id}/calls",
+    response_model=OrgCallCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_team_call(
+    request_fastapi: Request,
+    organization_id: int,
+    team_id: int,
+    session: Session = Depends(get_db_session),
+) -> OrgCallCreateResponse:
+    """Start a multi-party team call and ring every human team member."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    team = session.get(Team, team_id)
+    if team is None or team.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+    team_dao = TeamDAO(session)
+    if not team_dao.is_team_member(team_id, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member of this team to start a call",
+        )
+
+    member_ids = team_dao.get_team_members(team_id)
+    if user_id not in member_ids:
+        member_ids = [*member_ids, user_id]
+    if len(member_ids) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Team has no members to call",
+        )
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    call_session = OrgCallSession(
+        organization_id=organization_id,
+        scope="team",
+        dm_thread_id=None,
+        team_id=team_id,
+        created_by_user_id=user_id,
+        livekit_room="pending",
+        status="ringing",
+        assistant_ids=[],
+    )
+    session.add(call_session)
+    _finalize_org_call_room_name(session, call_session)
+    for member_id in member_ids:
+        is_host = member_id == user_id
+        session.add(
+            OrgCallParticipant(
+                call_id=call_session.id,
+                user_id=member_id,
+                role="host" if is_host else "member",
+                status="joined" if is_host else "invited",
+                joined_at=now if is_host else None,
+            ),
+        )
+    session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_session.id,
+    )
+
+    await _dispatch_org_call(
+        organization_id=organization_id,
+        action="incoming",
+        call_session=call_session,
+    )
+    return OrgCallCreateResponse(**_org_call_response(call_session).model_dump())
 
 
 @router.post(
     "/organizations/{organization_id}/calls/{call_id}/answer",
-    response_model=HumanCallSessionResponse,
+    response_model=OrgCallSessionResponse,
 )
-async def answer_dm_call(
+async def answer_org_call(
     request_fastapi: Request,
     organization_id: int,
     call_id: str,
     session: Session = Depends(get_db_session),
-) -> HumanCallSessionResponse:
-    """Mark a ringing DM call as active."""
+) -> OrgCallSessionResponse:
+    """Mark an invited participant as joined and activate the call."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
-    call_session = _require_human_call_session(
+    call_session = _require_org_call_session(
         session,
         organization_id=organization_id,
         call_id=call_id,
     )
-    if call_session.callee_user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the callee can answer this call",
-        )
-    if call_session.status == "active":
-        return _human_call_response(call_session)
-    if call_session.status != "ringing":
+    participant = _require_org_call_participant(call_session, user_id=user_id)
+    if participant.status == "joined" and call_session.status == "active":
+        return _org_call_response(call_session)
+    if call_session.status == "ended":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot answer a call with status '{call_session.status}'",
+            detail="Cannot answer a call that has ended",
         )
-    call_session.status = "active"
-    call_session.answered_at = datetime.datetime.now(datetime.timezone.utc)
+    if participant.status not in {"invited", "joined"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot answer with participant status '{participant.status}'",
+        )
+    now = datetime.datetime.now(datetime.timezone.utc)
+    participant.status = "joined"
+    participant.joined_at = participant.joined_at or now
+    participant.left_at = None
+    if call_session.status == "ringing":
+        call_session.status = "active"
+        call_session.answered_at = now
     session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
 
-    await _dispatch_human_call(
+    await _dispatch_org_call(
         organization_id=organization_id,
         action="answered",
         call_session=call_session,
     )
-    return _human_call_response(call_session)
+    return _org_call_response(call_session)
+
+
+@router.post(
+    "/organizations/{organization_id}/calls/{call_id}/join",
+    response_model=OrgCallSessionResponse,
+)
+async def join_org_call(
+    request_fastapi: Request,
+    organization_id: int,
+    call_id: str,
+    session: Session = Depends(get_db_session),
+) -> OrgCallSessionResponse:
+    """Late-join an active org call when the user is an invitee or team member."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
+    if call_session.status not in {"ringing", "active"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Call is not joinable",
+        )
+
+    participant = _participant_for_user(call_session, user_id=user_id)
+    if participant is None:
+        if call_session.scope == "team" and call_session.team_id is not None:
+            if not TeamDAO(session).is_team_member(call_session.team_id, user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only team members can join this call",
+                )
+            participant = OrgCallParticipant(
+                call_id=call_session.id,
+                user_id=user_id,
+                role="member",
+                status="invited",
+            )
+            session.add(participant)
+            session.flush()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only call invitees can join this call",
+            )
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    participant.status = "joined"
+    participant.joined_at = participant.joined_at or now
+    participant.left_at = None
+    if call_session.status == "ringing":
+        call_session.status = "active"
+        call_session.answered_at = now
+    session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
+
+    await _dispatch_org_call(
+        organization_id=organization_id,
+        action="participant_joined",
+        call_session=call_session,
+    )
+    return _org_call_response(call_session)
 
 
 @router.post(
     "/organizations/{organization_id}/calls/{call_id}/decline",
-    response_model=HumanCallSessionResponse,
+    response_model=OrgCallSessionResponse,
 )
-async def decline_dm_call(
+async def decline_org_call(
     request_fastapi: Request,
     organization_id: int,
     call_id: str,
     session: Session = Depends(get_db_session),
-) -> HumanCallSessionResponse:
-    """Decline a ringing DM call."""
+) -> OrgCallSessionResponse:
+    """Decline a ringing invite. DM declines end the call; team declines are per-user."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
-    call_session = _require_human_call_session(
+    call_session = _require_org_call_session(
         session,
         organization_id=organization_id,
         call_id=call_id,
     )
-    if call_session.callee_user_id != user_id:
+    participant = _require_org_call_participant(call_session, user_id=user_id)
+    if participant.role == "host":
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the callee can decline this call",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Host cannot decline; end the call instead",
         )
-    if call_session.status == "declined":
-        return _human_call_response(call_session)
-    if call_session.status != "ringing":
+    if participant.status == "declined" and call_session.scope == "team":
+        return _org_call_response(call_session)
+    if call_session.status == "ended":
+        return _org_call_response(call_session)
+    if participant.status not in {"invited", "declined"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot decline a call with status '{call_session.status}'",
+            detail=f"Cannot decline with participant status '{participant.status}'",
         )
-    call_session.status = "declined"
-    call_session.ended_at = datetime.datetime.now(datetime.timezone.utc)
-    session.commit()
 
-    await _dispatch_human_call(
+    now = datetime.datetime.now(datetime.timezone.utc)
+    participant.status = "declined"
+    participant.left_at = now
+
+    action: Literal["declined", "ended"] = "declined"
+    if call_session.scope == "dm":
+        call_session.status = "ended"
+        call_session.ended_at = now
+        action = "ended"
+    else:
+        # End the team call only when every non-host invitee has declined and
+        # nobody else has joined.
+        pending = [
+            p
+            for p in call_session.participants
+            if p.role != "host" and p.status == "invited"
+        ]
+        joined_others = [
+            p
+            for p in call_session.participants
+            if p.role != "host" and p.status == "joined"
+        ]
+        if not pending and not joined_others:
+            call_session.status = "ended"
+            call_session.ended_at = now
+            action = "ended"
+
+    session.commit()
+    call_session = _require_org_call_session(
+        session,
         organization_id=organization_id,
-        action="declined",
+        call_id=call_id,
+    )
+
+    await _dispatch_org_call(
+        organization_id=organization_id,
+        action=action,
         call_session=call_session,
     )
-    return _human_call_response(call_session)
+    return _org_call_response(call_session)
+
+
+@router.post(
+    "/organizations/{organization_id}/calls/{call_id}/leave",
+    response_model=OrgCallSessionResponse,
+)
+async def leave_org_call(
+    request_fastapi: Request,
+    organization_id: int,
+    call_id: str,
+    session: Session = Depends(get_db_session),
+) -> OrgCallSessionResponse:
+    """Leave an active call without ending it for remaining humans."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
+    participant = _require_org_call_participant(call_session, user_id=user_id)
+    if call_session.status == "ended":
+        return _org_call_response(call_session)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    participant.status = "left"
+    participant.left_at = now
+    session.flush()
+
+    action: Literal["participant_left", "ended"] = "participant_left"
+    if _joined_human_count(call_session) == 0:
+        call_session.status = "ended"
+        call_session.ended_at = now
+        action = "ended"
+    session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
+
+    await _dispatch_org_call(
+        organization_id=organization_id,
+        action=action,
+        call_session=call_session,
+    )
+    return _org_call_response(call_session)
 
 
 @router.post(
     "/organizations/{organization_id}/calls/{call_id}/end",
-    response_model=HumanCallSessionResponse,
+    response_model=OrgCallSessionResponse,
 )
-async def end_dm_call(
+async def end_org_call(
     request_fastapi: Request,
     organization_id: int,
     call_id: str,
     session: Session = Depends(get_db_session),
-) -> HumanCallSessionResponse:
-    """End a DM call as either participant."""
+) -> OrgCallSessionResponse:
+    """End an org call for every participant."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
-    call_session = _require_human_call_session(
+    call_session = _require_org_call_session(
         session,
         organization_id=organization_id,
         call_id=call_id,
     )
-    _require_human_call_participant(call_session, user_id=user_id)
-    if call_session.status in {"ended", "declined"}:
-        return _human_call_response(call_session)
-    call_session.status = "ended"
-    call_session.ended_at = datetime.datetime.now(datetime.timezone.utc)
-    session.commit()
+    participant = _require_org_call_participant(call_session, user_id=user_id)
+    is_host = participant.role == "host"
+    is_last_human = (
+        _joined_human_count(call_session) <= 1 and participant.status == "joined"
+    )
+    if not is_host and not is_last_human and call_session.status != "ended":
+        # Non-hosts may end only when they are the last joined human.
+        if participant.status != "joined":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the host can end this call for everyone",
+            )
+    if call_session.status == "ended":
+        return _org_call_response(call_session)
 
-    await _dispatch_human_call(
+    now = datetime.datetime.now(datetime.timezone.utc)
+    call_session.status = "ended"
+    call_session.ended_at = now
+    for part in call_session.participants:
+        if part.status == "joined":
+            part.status = "left"
+            part.left_at = now
+    session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
+
+    await _dispatch_org_call(
         organization_id=organization_id,
         action="ended",
         call_session=call_session,
     )
-    return _human_call_response(call_session)
+    return _org_call_response(call_session)
+
+
+@router.post(
+    "/organizations/{organization_id}/calls/{call_id}/assistants",
+    response_model=OrgCallSessionResponse,
+)
+async def add_assistant_to_org_call(
+    request_fastapi: Request,
+    organization_id: int,
+    call_id: str,
+    body: OrgCallAddAssistantRequest,
+    session: Session = Depends(get_db_session),
+) -> OrgCallSessionResponse:
+    """Record an assistant on an active team call (Console dispatches Meet agent)."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_id,
+    )
+    _require_org_call_participant(call_session, user_id=user_id)
+    if call_session.status not in {"ringing", "active"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot add an assistant to a finished call",
+        )
+    if call_session.scope != "team" or call_session.team_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assistants can only be added to team calls",
+        )
+    membership = TeamDAO(session).get_assistant_membership(
+        team_id=call_session.team_id,
+        assistant_id=body.assistant_id,
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Assistant must be a member of this team",
+        )
+
+    assistant_ids = list(call_session.assistant_ids or [])
+    if body.assistant_id not in assistant_ids:
+        # v1: one assistant per org call room.
+        if assistant_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only one assistant can join an org call at a time",
+            )
+        assistant_ids.append(body.assistant_id)
+        call_session.assistant_ids = assistant_ids
+        session.commit()
+        call_session = _require_org_call_session(
+            session,
+            organization_id=organization_id,
+            call_id=call_id,
+        )
+
+    await _dispatch_org_call(
+        organization_id=organization_id,
+        action="participant_joined",
+        call_session=call_session,
+    )
+    return _org_call_response(call_session)

@@ -143,16 +143,42 @@ class OrgChatSearchPage(BaseModel):
     results: List[OrgChatSearchResult]
 
 
-HumanCallStatus = Literal["ringing", "active", "ended", "declined"]
+OrgCallStatus = Literal["ringing", "active", "ended"]
+OrgCallScope = Literal["dm", "team"]
+OrgCallParticipantStatus = Literal["invited", "joined", "declined", "left"]
+OrgCallParticipantRole = Literal["host", "member"]
 
 
-class HumanCallSessionResponse(BaseModel):
+class OrgCallParticipantResponse(BaseModel):
+    user_id: str
+    role: OrgCallParticipantRole
+    status: OrgCallParticipantStatus
+
+
+class OrgCallSessionResponse(BaseModel):
     call_id: str
     room_name: str
-    status: HumanCallStatus
+    status: OrgCallStatus
+    scope: OrgCallScope
+    created_by_user_id: str
     caller_user_id: str
-    callee_user_id: str
+    callee_user_id: str | None = None
+    team_id: int | None = None
+    dm_thread_id: int | None = None
+    user_ids: List[str] = Field(default_factory=list)
+    participants: List[OrgCallParticipantResponse] = Field(default_factory=list)
+    assistant_ids: List[int] = Field(default_factory=list)
 
 
-class HumanCallCreateResponse(HumanCallSessionResponse):
+class OrgCallCreateResponse(OrgCallSessionResponse):
     pass
+
+
+class OrgCallAddAssistantRequest(BaseModel):
+    assistant_id: int
+
+
+# Backward-compatible aliases used by older clients / tests.
+HumanCallStatus = OrgCallStatus
+HumanCallSessionResponse = OrgCallSessionResponse
+HumanCallCreateResponse = OrgCallCreateResponse

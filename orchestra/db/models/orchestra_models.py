@@ -1029,10 +1029,10 @@ class DmMessage(Base):
     __table_args__ = (Index("ix_dm_message_thread_id_id", "thread_id", "id"),)
 
 
-class HumanCallSession(Base):
-    """One human-to-human voice call session inside an organization."""
+class OrgCallSession(Base):
+    """Multi-party org voice/video call (DM or team) backed by one LiveKit room."""
 
-    __tablename__ = "human_call_session"
+    __tablename__ = "org_call_session"
 
     id = Column(String, primary_key=True, default=_new_string_uuid)
     organization_id = Column(
@@ -1040,23 +1040,25 @@ class HumanCallSession(Base):
         ForeignKey("organization.id", ondelete="CASCADE"),
         nullable=False,
     )
-    caller_user_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
+    scope = Column(String, nullable=False)
+    dm_thread_id = Column(
+        Integer,
+        ForeignKey("dm_thread.id", ondelete="SET NULL"),
+        nullable=True,
     )
-    callee_user_id = Column(
+    team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_by_user_id = Column(
         String,
         ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
     livekit_room = Column(String, nullable=False)
     status = Column(String, nullable=False, server_default="ringing")
-    thread_id = Column(
-        Integer,
-        ForeignKey("dm_thread.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    assistant_ids = Column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
     created_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
@@ -1071,15 +1073,79 @@ class HumanCallSession(Base):
     answered_at = Column(TIMESTAMP(timezone=True), nullable=True)
     ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    participants = relationship(
+        "OrgCallParticipant",
+        back_populates="call_session",
+        cascade="all, delete-orphan",
+    )
+
     __table_args__ = (
         sa.CheckConstraint(
-            "status IN ('ringing', 'active', 'ended', 'declined')",
-            name="ck_human_call_session_status",
+            "scope IN ('dm', 'team')",
+            name="ck_org_call_session_scope",
+        ),
+        sa.CheckConstraint(
+            "status IN ('ringing', 'active', 'ended')",
+            name="ck_org_call_session_status",
         ),
         Index(
-            "ix_human_call_session_org_callee_status",
+            "ix_org_call_session_org_status",
             "organization_id",
-            "callee_user_id",
+            "status",
+        ),
+        Index(
+            "ix_org_call_session_team_status",
+            "team_id",
+            "status",
+        ),
+    )
+
+
+class OrgCallParticipant(Base):
+    """Human invitee/joiner on an org call."""
+
+    __tablename__ = "org_call_participant"
+
+    id = Column(String, primary_key=True, default=_new_string_uuid)
+    call_id = Column(
+        String,
+        ForeignKey("org_call_session.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role = Column(String, nullable=False, server_default="member")
+    status = Column(String, nullable=False, server_default="invited")
+    invited_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    joined_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    left_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    call_session = relationship("OrgCallSession", back_populates="participants")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "role IN ('host', 'member')",
+            name="ck_org_call_participant_role",
+        ),
+        sa.CheckConstraint(
+            "status IN ('invited', 'joined', 'declined', 'left')",
+            name="ck_org_call_participant_status",
+        ),
+        UniqueConstraint(
+            "call_id",
+            "user_id",
+            name="uq_org_call_participant_call_user",
+        ),
+        Index(
+            "ix_org_call_participant_user_status",
+            "user_id",
             "status",
         ),
     )
