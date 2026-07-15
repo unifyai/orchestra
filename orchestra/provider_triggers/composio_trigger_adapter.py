@@ -111,6 +111,31 @@ def verify_composio_signature(
     return any(hmac.compare_digest(candidate, expected) for candidate in provided)
 
 
+def sign_composio_webhook_headers(
+    *,
+    signing_secret: str,
+    raw_body: bytes,
+    webhook_id: str,
+    timestamp: str | None = None,
+) -> dict[str, str]:
+    """Build Composio V3 Standard-Webhooks-style delivery headers for one body."""
+
+    webhook_timestamp = timestamp or str(int(time.time()))
+    body_text = raw_body.decode("utf-8")
+    digest = base64.b64encode(
+        hmac.new(
+            signing_secret.encode("utf-8"),
+            f"{webhook_id}.{webhook_timestamp}.{body_text}".encode("utf-8"),
+            hashlib.sha256,
+        ).digest(),
+    ).decode("utf-8")
+    return {
+        "webhook-id": webhook_id,
+        "webhook-timestamp": webhook_timestamp,
+        "webhook-signature": f"v1,{digest}",
+    }
+
+
 def provider_account_subject_hmac(subject: str, *, pepper: str | bytes) -> str:
     """Return the durable HMAC digest for one provider-account subject."""
 
