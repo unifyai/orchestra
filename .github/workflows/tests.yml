@@ -365,21 +365,23 @@ jobs:
   # Single, stable required status check for staging->main releases.
   # The matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),
   # which branch protection cannot target by name -- so this job republishes one
-  # "pytest" check that is green iff every shard passed (aggregate
-  # `needs.pytest.result`), or was skipped on a non-test run. The Staging->Main
-  # ruleset and main branch protection both require this context with strict
-  # (latest-commit) semantics; see scripts/ensure_staging_to_main_gates.sh.
+  # "pytest" check that is green iff every shard passed. It does not run (and
+  # therefore does not publish a check) when should-run-tests skipped the
+  # matrix on a non-test push; release PRs must wait for the PR-triggered run.
+  # The Staging->Main ruleset and main branch protection both require this
+  # context with strict (latest-commit) semantics; see
+  # scripts/ensure_staging_to_main_gates.sh.
   pytest-required:
     name: pytest
     needs: [should-run-tests, pytest]
-    if: always()
+    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
     steps:
     - name: Require all pytest shards to pass
       run: |
         result="${{ needs.pytest.result }}"
         echo "pytest matrix aggregate result: $result"
-        if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+        if [[ "$result" == "success" ]]; then
           exit 0
         fi
         exit 1
