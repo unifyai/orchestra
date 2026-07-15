@@ -1,4 +1,4 @@
-"""Closed vocabularies for curated provider-event filter fields and operators."""
+"""Closed vocabularies for curated provider-event filter operators."""
 
 from __future__ import annotations
 
@@ -10,20 +10,6 @@ except ImportError:  # pragma: no cover
 
     class StrEnum(str, Enum):  # type: ignore[override]
         """Minimal back-port of enum.StrEnum."""
-
-
-class FilterField(StrEnum):
-    """Curated projection fields that authored filters may target.
-
-    TODO: These members are the github.issue_created initial set. Prefer
-    event-scoped field definitions from the registry over growing one global
-    enum forever when new events need disjoint vocabularies.
-    """
-
-    repository = "repository"
-    author = "author"
-    labels = "labels"
-    title = "title"
 
 
 class FilterOperator(StrEnum):

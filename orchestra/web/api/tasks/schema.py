@@ -93,6 +93,11 @@ class TriggerCatalogEvent(BaseModel):
     schema_version: str
     filters: list[dict[str, Any]] = Field(default_factory=list)
     backends: list[str] = Field(default_factory=list)
+    resource_kind: str
+    resource_id_format: str
+    resource_filter_field: str
+    resource_filter_operator: str
+    selection_contract: str
 
 
 class TriggerCatalogResponse(BaseModel):
