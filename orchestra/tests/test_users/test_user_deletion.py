@@ -320,7 +320,7 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
     ) as mock_enqueue_cleanup, patch(
         "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
     ) as mock_run_cleanup, patch(
-        "orchestra.services.user_account_cleanup_service.create_bucket_service",
+        "orchestra.services.bucket_service.create_bucket_service",
     ) as mock_create_bucket:
         mock_enqueue_cleanup.return_value = [SimpleNamespace(id=901)]
         mock_bucket = MagicMock()
@@ -397,7 +397,7 @@ async def test_self_service_delete_schedules_background_runtime_cleanup(
     ), patch(
         "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
     ) as mock_run_cleanup, patch(
-        "orchestra.services.user_account_cleanup_service.create_bucket_service",
+        "orchestra.services.bucket_service.create_bucket_service",
     ) as mock_create_bucket:
         mock_bucket = MagicMock()
         mock_create_bucket.return_value = mock_bucket

@@ -100,7 +100,7 @@ class TestFilterBridgeRequestValidation:
         assert req.context == "my-project/Logs"
         assert req.filter_expr is None
         assert req.from_fields is None
-        assert req.limit is None
+        assert req.limit == 1000
 
     def test_full_request(self):
         req = FilterBridgeRequest(
