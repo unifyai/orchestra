@@ -1,4 +1,4 @@
-"""API tests for presence heartbeats, the org roster, team group chat, and DMs."""
+"""API tests for presence, roster, teams, chat groups, DMs, and org calls."""
 
 from __future__ import annotations
 
@@ -588,3 +588,409 @@ async def test_team_call_accepts_multiple_assistants(
     assert owner["id"] in human_ids
     assert str(a1.agent_id) in peer_ids
     assert org_call_roster_refresh_mock.await_count >= 1
+
+
+async def _create_group(
+    client: AsyncClient,
+    headers: dict,
+    *,
+    organization_id: int,
+    name: str | None = None,
+    user_ids: list[str] | None = None,
+    assistant_ids: list[int] | None = None,
+) -> dict:
+    response = await client.post(
+        f"/v0/organizations/{organization_id}/groups",
+        headers=headers,
+        json={
+            "name": name,
+            "user_ids": user_ids or [],
+            "assistant_ids": assistant_ids or [],
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED, response.json()
+    return response.json()
+
+
+@pytest.mark.anyio
+async def test_create_and_list_group_with_humans_and_assistants(
+    client: AsyncClient,
+    dbsession,
+):
+    owner, member, org = await _create_org_with_member(client, "grp-create")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Gigi",
+        surname="Group",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    created = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Project Sync",
+        user_ids=[member["id"]],
+        assistant_ids=[assistant.agent_id],
+    )
+    assert created["name"] == "Project Sync"
+    assert created["organization_id"] == org["id"]
+    assert created["created_by_user_id"] == owner["id"]
+    assert set(created["member_user_ids"]) == {owner["id"], member["id"]}
+    assert created["assistant_member_ids"] == [assistant.agent_id]
+
+    owner_list = await client.get(
+        f"/v0/organizations/{org['id']}/groups",
+        headers=org["headers"],
+    )
+    assert owner_list.status_code == status.HTTP_200_OK, owner_list.json()
+    owner_groups = {g["group_id"]: g for g in owner_list.json()["groups"]}
+    assert created["group_id"] in owner_groups
+    assert owner_groups[created["group_id"]]["assistant_member_ids"] == [
+        assistant.agent_id,
+    ]
+
+    member_list = await client.get(
+        f"/v0/organizations/{org['id']}/groups",
+        headers=member["headers"],
+    )
+    assert member_list.status_code == status.HTTP_200_OK
+    assert created["group_id"] in {g["group_id"] for g in member_list.json()["groups"]}
+
+    # An org member who is not in the group does not see it.
+    outsider = await create_test_user(client, "grp-create-outsider@test.com")
+    add_outsider = await client.post(
+        f"/v0/organizations/{org['id']}/members",
+        json={"user_id": outsider["id"]},
+        headers=owner["headers"],
+    )
+    assert add_outsider.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), add_outsider.json()
+    outsider_list = await client.get(
+        f"/v0/organizations/{org['id']}/groups",
+        headers=outsider["headers"],
+    )
+    assert outsider_list.status_code == status.HTTP_200_OK
+    assert created["group_id"] not in {
+        g["group_id"] for g in outsider_list.json()["groups"]
+    }
+
+
+@pytest.mark.anyio
+async def test_group_membership_patch_is_idempotent(
+    client: AsyncClient,
+    dbsession,
+):
+    owner, member, org = await _create_org_with_member(client, "grp-patch")
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    a1 = Assistant(
+        user_id=owner["id"],
+        first_name="Pat",
+        surname="One",
+        organization_id=org["id"],
+    )
+    a2 = Assistant(
+        user_id=owner["id"],
+        first_name="Pat",
+        surname="Two",
+        organization_id=org["id"],
+    )
+    dbsession.add_all([a1, a2])
+    dbsession.commit()
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Patch Group",
+        user_ids=[member["id"]],
+        assistant_ids=[a1.agent_id],
+    )
+
+    payload = {
+        "user_ids": [owner["id"], member["id"]],
+        "assistant_ids": [a1.agent_id, a2.agent_id],
+    }
+    first = await client.patch(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+        json=payload,
+    )
+    assert first.status_code == status.HTTP_200_OK, first.json()
+    first_body = first.json()
+    assert set(first_body["member_user_ids"]) == {owner["id"], member["id"]}
+    assert set(first_body["assistant_member_ids"]) == {a1.agent_id, a2.agent_id}
+
+    # Re-applying the same membership is a no-op for callers.
+    second = await client.patch(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+        json=payload,
+    )
+    assert second.status_code == status.HTTP_200_OK, second.json()
+    second_body = second.json()
+    assert set(second_body["member_user_ids"]) == set(first_body["member_user_ids"])
+    assert set(second_body["assistant_member_ids"]) == set(
+        first_body["assistant_member_ids"],
+    )
+    assert second_body["name"] == first_body["name"]
+
+
+@pytest.mark.anyio
+async def test_group_messages_post_and_dispatch(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    owner, member, org = await _create_org_with_member(client, "grp-msg")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Msg",
+        surname="Bot",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Message Group",
+        user_ids=[member["id"]],
+        assistant_ids=[assistant.agent_id],
+    )
+
+    post_response = await client.post(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}/messages",
+        headers=org["headers"],
+        json={"content": "Hello group!"},
+    )
+    assert post_response.status_code == status.HTTP_201_CREATED, post_response.json()
+    message = post_response.json()
+    assert message["content"] == "Hello group!"
+    assert message["sender_kind"] == "user"
+    assert message["sender_user_id"] == owner["id"]
+    assert isinstance(message["message_id"], int)
+    assert message["group_id"] == group["group_id"]
+
+    history_response = await client.get(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}/messages",
+        headers=org["headers"],
+    )
+    assert history_response.status_code == status.HTTP_200_OK
+    messages = history_response.json()["messages"]
+    assert [entry["content"] for entry in messages] == ["Hello group!"]
+
+    org_chat_dispatch_mock.assert_awaited()
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "group"
+    assert payload["group_id"] == group["group_id"]
+    assert payload["fanout_assistant_ids"] == [assistant.agent_id]
+    assert payload["assistant_event"]["body"] == "Hello group!"
+    assert payload["assistant_event"]["sender_kind"] == "user"
+    assert payload["assistant_event"]["sender_user_id"] == owner["id"]
+    assert payload["assistant_event"]["sender_email"] == "grp-msg-owner@test.com"
+
+    # Non-member org human cannot read or post.
+    outsider = await create_test_user(client, "grp-msg-outsider@test.com")
+    add_outsider = await client.post(
+        f"/v0/organizations/{org['id']}/members",
+        json={"user_id": outsider["id"]},
+        headers=owner["headers"],
+    )
+    assert add_outsider.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), add_outsider.json()
+    non_member_read = await client.get(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}/messages",
+        headers=outsider["headers"],
+    )
+    assert non_member_read.status_code == status.HTTP_403_FORBIDDEN
+    non_member_post = await client.post(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}/messages",
+        headers=outsider["headers"],
+        json={"content": "Should fail"},
+    )
+    assert non_member_post.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_group_call_create_and_add_assistant(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+    org_call_roster_refresh_mock: AsyncMock,
+):
+    owner, member, org = await _create_org_with_member(client, "grp-call")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    a1 = Assistant(
+        user_id=owner["id"],
+        first_name="Call",
+        surname="One",
+        organization_id=org["id"],
+    )
+    a2 = Assistant(
+        user_id=owner["id"],
+        first_name="Call",
+        surname="Two",
+        organization_id=org["id"],
+    )
+    dbsession.add_all([a1, a2])
+    dbsession.commit()
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Call Group",
+        user_ids=[member["id"]],
+        assistant_ids=[a1.agent_id, a2.agent_id],
+    )
+
+    create_response = await client.post(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}/calls",
+        headers=org["headers"],
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    body = create_response.json()
+    assert body["scope"] == "group"
+    assert body["group_id"] == group["group_id"]
+    assert body["status"] == "ringing"
+    assert set(body["user_ids"]) == {owner["id"], member["id"]}
+    assert body["room_name"] == f"unity_org_{org['id']}_call_{body['call_id']}"
+
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "org_call"
+    assert payload["action"] == "incoming"
+    assert payload["call"]["scope"] == "group"
+    assert payload["call"]["group_id"] == group["group_id"]
+    assert set(payload["call"]["user_ids"]) == {owner["id"], member["id"]}
+
+    first = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{body['call_id']}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": a1.agent_id},
+    )
+    assert first.status_code == status.HTTP_200_OK, first.json()
+    assert first.json()["assistant_ids"] == [a1.agent_id]
+    assert any(m["kind"] == "human" for m in first.json()["roster"])
+
+    second = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{body['call_id']}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": a2.agent_id},
+    )
+    assert second.status_code == status.HTTP_200_OK, second.json()
+    assert set(second.json()["assistant_ids"]) == {a1.agent_id, a2.agent_id}
+    # Roster refresh fans out to peers already on the call.
+    assert org_call_roster_refresh_mock.await_count >= 1
+
+    # Non-member assistant is rejected.
+    other = Assistant(
+        user_id=owner["id"],
+        first_name="Not",
+        surname="Member",
+        organization_id=org["id"],
+    )
+    dbsession.add(other)
+    dbsession.commit()
+    rejected = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{body['call_id']}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": other.agent_id},
+    )
+    assert rejected.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_delete_group(client: AsyncClient):
+    owner, member, org = await _create_org_with_member(client, "grp-del")
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Doomed Group",
+        user_ids=[member["id"]],
+    )
+
+    delete_response = await client.delete(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+    )
+    assert delete_response.status_code == status.HTTP_204_NO_CONTENT
+
+    get_response = await client.get(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+    )
+    assert get_response.status_code == status.HTTP_404_NOT_FOUND
+
+    list_response = await client.get(
+        f"/v0/organizations/{org['id']}/groups",
+        headers=org["headers"],
+    )
+    assert list_response.status_code == status.HTTP_200_OK
+    assert group["group_id"] not in {
+        g["group_id"] for g in list_response.json()["groups"]
+    }
+
+
+@pytest.mark.anyio
+async def test_roster_includes_groups(client: AsyncClient, dbsession):
+    owner, member, org = await _create_org_with_member(client, "grp-roster")
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Roster",
+        surname="Aide",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Roster Group",
+        user_ids=[member["id"]],
+        assistant_ids=[assistant.agent_id],
+    )
+
+    roster_response = await client.get(
+        f"/v0/organizations/{org['id']}/roster",
+        headers=org["headers"],
+    )
+    assert roster_response.status_code == status.HTTP_200_OK, roster_response.json()
+    roster = roster_response.json()
+    assert "groups" in roster
+    groups_by_id = {entry["group_id"]: entry for entry in roster["groups"]}
+    assert group["group_id"] in groups_by_id
+    roster_group = groups_by_id[group["group_id"]]
+    assert roster_group["name"] == "Roster Group"
+    assert roster_group["created_by_user_id"] == owner["id"]
+    assert set(roster_group["member_user_ids"]) == {owner["id"], member["id"]}
+    assert roster_group["assistant_member_ids"] == [assistant.agent_id]

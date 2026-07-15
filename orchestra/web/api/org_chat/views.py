@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from orchestra.db.dao.dm_dao import DmDAO, normalized_pair
 from orchestra.db.dao.organization_dao import OrganizationDAO
@@ -25,6 +25,8 @@ from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.user_presence_dao import UserPresenceDAO, presence_is_online
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
+    Assistant,
+    ChatGroup,
     DmThread,
     Organization,
     OrgCallParticipant,
@@ -33,6 +35,20 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.services.bucket_service import create_bucket_service
+from orchestra.services.chat_group_service import (
+    build_group_dispatch_payload,
+    create_chat_group,
+    delete_chat_group,
+    get_active_group,
+    group_to_roster_dict,
+    is_assistant_group_member,
+    is_human_group_member,
+    list_group_messages,
+    list_groups_for_user,
+    persist_group_message,
+    replace_group_membership,
+    search_group_messages,
+)
 from orchestra.services.org_call_contacts import ensure_org_call_contacts
 from orchestra.services.org_chat_service import (
     SENDER_KIND_ASSISTANT,
@@ -44,10 +60,18 @@ from orchestra.services.org_chat_service import (
     search_team_messages,
 )
 from orchestra.web.api.org_chat.schema import (
+    AssistantGroupMessageCreate,
     AssistantTeamMessageCreate,
+    ChatGroupCreate,
+    ChatGroupResponse,
+    ChatGroupsPage,
+    ChatGroupUpdate,
     DmMessageCreate,
     DmMessageResponse,
     DmMessagesPage,
+    GroupMessageCreate,
+    GroupMessageResponse,
+    GroupMessagesPage,
     OrgCallAddAssistantRequest,
     OrgCallCreateResponse,
     OrgCallParticipantResponse,
@@ -57,6 +81,7 @@ from orchestra.web.api.org_chat.schema import (
     OrgChatSearchPage,
     OrgChatSearchResult,
     OrgRosterResponse,
+    RosterGroup,
     RosterHuman,
     RosterTeam,
     TeamMessageCreate,
@@ -166,6 +191,7 @@ def _org_call_event(call_session: OrgCallSession) -> dict[str, Any]:
         "dm_thread_id": call_session.dm_thread_id,
         "thread_id": call_session.dm_thread_id,
         "team_id": call_session.team_id,
+        "group_id": call_session.group_id,
         "user_ids": user_ids,
         "assistant_ids": list(call_session.assistant_ids or []),
         "participants": [
@@ -190,6 +216,7 @@ def _org_call_response(call_session: OrgCallSession) -> OrgCallSessionResponse:
         caller_user_id=event["caller_user_id"],
         callee_user_id=event.get("callee_user_id"),
         team_id=event.get("team_id"),
+        group_id=event.get("group_id"),
         dm_thread_id=event.get("dm_thread_id"),
         user_ids=event["user_ids"],
         participants=[
@@ -349,10 +376,19 @@ def get_org_roster(
             ),
         )
 
+    groups: list[RosterGroup] = []
+    for group in list_groups_for_user(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+    ):
+        groups.append(RosterGroup(**group_to_roster_dict(session, group)))
+
     return OrgRosterResponse(
         organization_id=organization_id,
         humans=humans,
         teams=teams,
+        groups=groups,
     )
 
 
@@ -584,6 +620,471 @@ async def post_team_message_as_owned_assistant(
     )
 
 
+def _group_message_payload(message: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(message)
+    payload["mentions"] = payload.get("mentions") or []
+    payload["attachments"] = _enrich_attachments(payload.get("attachments"))
+    return payload
+
+
+def _chat_group_response(session: Session, group) -> ChatGroupResponse:
+    roster = group_to_roster_dict(session, group)
+    return ChatGroupResponse(
+        group_id=roster["group_id"],
+        name=roster["name"],
+        organization_id=group.organization_id,
+        created_by_user_id=roster["created_by_user_id"],
+        created_at=roster["created_at"],
+        member_user_ids=roster["member_user_ids"],
+        assistant_member_ids=roster["assistant_member_ids"],
+    )
+
+
+def _require_active_group(
+    session: Session,
+    *,
+    organization_id: int,
+    group_id: int,
+):
+    group = get_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    if group is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat group with id {group_id} not found",
+        )
+    return group
+
+
+def _require_human_group_member(
+    session: Session,
+    *,
+    group_id: int,
+    user_id: str,
+) -> None:
+    if not is_human_group_member(session, group_id=group_id, user_id=user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member of this group",
+        )
+
+
+def _validate_group_member_ids(
+    session: Session,
+    *,
+    org: Organization,
+    user_ids: list[str],
+    assistant_ids: list[int],
+) -> None:
+    for member_user_id in user_ids:
+        _require_org_member(session, org=org, user_id=member_user_id)
+    for assistant_id in assistant_ids:
+        assistant = session.get(Assistant, assistant_id)
+        if assistant is None or assistant.organization_id != org.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Assistant {assistant_id} is not in this organization",
+            )
+        if assistant.is_coordinator:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Coordinators cannot be added to chat groups",
+            )
+
+
+@router.get(
+    "/organizations/{organization_id}/groups",
+    response_model=ChatGroupsPage,
+)
+def list_org_groups(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> ChatGroupsPage:
+    """List chat groups the authenticated human belongs to."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    groups = list_groups_for_user(
+        session,
+        organization_id=organization_id,
+        user_id=user_id,
+    )
+    return ChatGroupsPage(
+        groups=[_chat_group_response(session, group) for group in groups],
+    )
+
+
+@router.post(
+    "/organizations/{organization_id}/groups",
+    response_model=ChatGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_org_group(
+    request_fastapi: Request,
+    organization_id: int,
+    body: ChatGroupCreate,
+    session: Session = Depends(get_db_session),
+) -> ChatGroupResponse:
+    """Create a chat group; the creator is always included as a human member."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    _validate_group_member_ids(
+        session,
+        org=org,
+        user_ids=body.user_ids,
+        assistant_ids=body.assistant_ids,
+    )
+    group = create_chat_group(
+        session,
+        organization_id=organization_id,
+        created_by_user_id=user_id,
+        name=body.name,
+        user_ids=body.user_ids,
+        assistant_ids=body.assistant_ids,
+    )
+    session.commit()
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group.id,
+    )
+    return _chat_group_response(session, group)
+
+
+@router.get(
+    "/organizations/{organization_id}/groups/{group_id}",
+    response_model=ChatGroupResponse,
+)
+def get_org_group(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    session: Session = Depends(get_db_session),
+) -> ChatGroupResponse:
+    """Return one chat group the caller belongs to."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+    return _chat_group_response(session, group)
+
+
+@router.patch(
+    "/organizations/{organization_id}/groups/{group_id}",
+    response_model=ChatGroupResponse,
+)
+def update_org_group(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    body: ChatGroupUpdate,
+    session: Session = Depends(get_db_session),
+) -> ChatGroupResponse:
+    """Rename and/or replace membership for a chat group."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+
+    if body.name is not None:
+        trimmed = body.name.strip()
+        if not trimmed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Group name cannot be empty",
+            )
+        group.name = trimmed
+
+    if body.user_ids is not None or body.assistant_ids is not None:
+        next_user_ids = (
+            body.user_ids
+            if body.user_ids is not None
+            else [m.user_id for m in (group.members or []) if m.user_id]
+        )
+        next_assistant_ids = (
+            body.assistant_ids
+            if body.assistant_ids is not None
+            else [
+                m.assistant_id
+                for m in (group.members or [])
+                if m.assistant_id is not None
+            ]
+        )
+        _validate_group_member_ids(
+            session,
+            org=org,
+            user_ids=next_user_ids,
+            assistant_ids=next_assistant_ids,
+        )
+        group = replace_group_membership(
+            session,
+            group=group,
+            user_ids=next_user_ids,
+            assistant_ids=next_assistant_ids,
+        )
+
+    session.commit()
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    return _chat_group_response(session, group)
+
+
+@router.delete(
+    "/organizations/{organization_id}/groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_org_group(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    session: Session = Depends(get_db_session),
+) -> None:
+    """Soft-delete a chat group and purge its GroupChat contexts."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+    delete_chat_group(session, group=group)
+    session.commit()
+
+
+@router.get(
+    "/organizations/{organization_id}/groups/{group_id}/messages",
+    response_model=GroupMessagesPage,
+)
+def get_group_messages(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    limit: int = Query(100, ge=1, le=500),
+    before_message_id: int | None = Query(None, ge=0),
+    session: Session = Depends(get_db_session),
+) -> GroupMessagesPage:
+    """Chat-group history (most recent last)."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+    messages = list_group_messages(
+        session,
+        group=group,
+        limit=limit,
+        before_message_id=before_message_id,
+    )
+    return GroupMessagesPage(
+        messages=[
+            GroupMessageResponse(**_group_message_payload(message))
+            for message in messages
+        ],
+    )
+
+
+@router.post(
+    "/organizations/{organization_id}/groups/{group_id}/messages",
+    response_model=GroupMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_group_message(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    body: GroupMessageCreate,
+    session: Session = Depends(get_db_session),
+) -> GroupMessageResponse:
+    """Post a message to a chat group as the authenticated human."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+
+    sender = session.get(User, user_id)
+    if sender is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    try:
+        message = persist_group_message(
+            session,
+            group=group,
+            sender_kind=SENDER_KIND_USER,
+            sender_user_id=user_id,
+            sender_assistant_id=None,
+            sender_name=_display_name(sender),
+            content=body.content,
+            mentions=[mention.model_dump() for mention in body.mentions],
+            attachments=_attachments_for_storage(body.attachments),
+        )
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    response_message = _group_message_payload(message)
+    payload = build_group_dispatch_payload(
+        session,
+        group=group,
+        message=response_message,
+        sender_email=sender.email or "",
+    )
+    await dispatch_org_chat_best_effort(payload)
+    return GroupMessageResponse(**response_message)
+
+
+async def _post_group_message_from_assistant(
+    session: Session,
+    *,
+    group_id: int,
+    assistant_id: int,
+    content: str,
+    mentions: list,
+    attachments: list[dict[str, Any]],
+) -> GroupMessageResponse:
+    """Persist and fan out one assistant-authored chat-group message."""
+    group = session.scalar(
+        select(ChatGroup)
+        .where(ChatGroup.id == group_id, ChatGroup.status == "active")
+        .options(selectinload(ChatGroup.members)),
+    )
+    if group is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat group with id {group_id} not found",
+        )
+    if not is_assistant_group_member(
+        session,
+        group_id=group_id,
+        assistant_id=assistant_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Assistant is not a member of this group",
+        )
+    assistant = session.get(Assistant, assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found",
+        )
+    sender_name = (
+        " ".join(part for part in [assistant.first_name, assistant.surname] if part)
+        or f"Assistant {assistant.agent_id}"
+    )
+
+    try:
+        message = persist_group_message(
+            session,
+            group=group,
+            sender_kind=SENDER_KIND_ASSISTANT,
+            sender_user_id=None,
+            sender_assistant_id=assistant.agent_id,
+            sender_name=sender_name,
+            content=content,
+            mentions=[mention.model_dump() for mention in mentions],
+            attachments=attachments,
+        )
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    response_message = _group_message_payload(message)
+    payload = build_group_dispatch_payload(
+        session,
+        group=group,
+        message=response_message,
+        sender_email=assistant_email(session, assistant.agent_id),
+        exclude_assistant_id=assistant.agent_id,
+    )
+    await dispatch_org_chat_best_effort(payload)
+    return GroupMessageResponse(**response_message)
+
+
+@admin_router.post(
+    "/groups/{group_id}/messages",
+    response_model=GroupMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_group_message_as_assistant(
+    group_id: int,
+    body: AssistantGroupMessageCreate,
+    session: Session = Depends(get_db_session),
+) -> GroupMessageResponse:
+    """Assistant runtime posting a chat-group reply (admin auth)."""
+    return await _post_group_message_from_assistant(
+        session,
+        group_id=group_id,
+        assistant_id=body.assistant_id,
+        content=body.content,
+        mentions=body.mentions,
+        attachments=_attachments_for_storage(body.attachments),
+    )
+
+
+@router.post(
+    "/assistant/{agent_id}/groups/{group_id}/messages",
+    response_model=GroupMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_group_message_as_owned_assistant(
+    request_fastapi: Request,
+    agent_id: int,
+    group_id: int,
+    body: GroupMessageCreate,
+    session: Session = Depends(get_db_session),
+) -> GroupMessageResponse:
+    """Assistant runtime posting a chat-group reply (ownership-scoped auth)."""
+    require_owned_assistant(request_fastapi, agent_id, session, write=True)
+    return await _post_group_message_from_assistant(
+        session,
+        group_id=group_id,
+        assistant_id=agent_id,
+        content=body.content,
+        mentions=body.mentions,
+        attachments=_attachments_for_storage(body.attachments),
+    )
+
+
 @router.get(
     "/organizations/{organization_id}/org-chat/search",
     response_model=OrgChatSearchPage,
@@ -592,11 +1093,11 @@ def search_org_chat(
     request_fastapi: Request,
     organization_id: int,
     q: str = Query(..., min_length=1, max_length=200),
-    scope: Literal["dm", "team"] = Query(...),
+    scope: Literal["dm", "team", "group"] = Query(...),
     scope_id: str = Query(..., alias="id", min_length=1),
     session: Session = Depends(get_db_session),
 ) -> OrgChatSearchPage:
-    """Search one DM thread or one team GroupChat thread by message content."""
+    """Search one DM thread, team GroupChat, or chat-group thread by content."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
@@ -648,6 +1149,44 @@ def search_org_chat(
                     sender_name=senders.get(message.sender_user_id, "Unknown"),
                 )
                 for message in messages
+            ],
+        )
+
+    if scope == "group":
+        try:
+            group_id = int(scope_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Group search id must be an integer group id",
+            ) from exc
+        group = get_active_group(
+            session,
+            organization_id=organization_id,
+            group_id=group_id,
+        )
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Chat group with id {group_id} not found",
+            )
+        if not is_human_group_member(session, group_id=group_id, user_id=user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You must be a member of this group to search its chat",
+            )
+        matches = search_group_messages(session, group=group, q=needle)
+        return OrgChatSearchPage(
+            results=[
+                OrgChatSearchResult(
+                    id=str(match.get("message_id") or ""),
+                    scope="group",
+                    content=str(match.get("content") or ""),
+                    timestamp=match.get("timestamp") or None,
+                    sender_name=str(match.get("sender_name") or "Unknown"),
+                )
+                for match in matches
+                if match.get("message_id") is not None
             ],
         )
 
@@ -1097,6 +1636,77 @@ async def create_team_call(
 
 
 @router.post(
+    "/organizations/{organization_id}/groups/{group_id}/calls",
+    response_model=OrgCallCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_group_call(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    session: Session = Depends(get_db_session),
+) -> OrgCallCreateResponse:
+    """Start a multi-party group call and ring every human group member."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+
+    member_ids = [m.user_id for m in (group.members or []) if m.user_id]
+    if user_id not in member_ids:
+        member_ids = [*member_ids, user_id]
+    if len(member_ids) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Group has no members to call",
+        )
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    call_session = OrgCallSession(
+        organization_id=organization_id,
+        scope="group",
+        dm_thread_id=None,
+        team_id=None,
+        group_id=group_id,
+        created_by_user_id=user_id,
+        livekit_room="pending",
+        status="ringing",
+        assistant_ids=[],
+    )
+    session.add(call_session)
+    _finalize_org_call_room_name(session, call_session)
+    for member_id in member_ids:
+        is_host = member_id == user_id
+        session.add(
+            OrgCallParticipant(
+                call_id=call_session.id,
+                user_id=member_id,
+                role="host" if is_host else "member",
+                status="joined" if is_host else "invited",
+                joined_at=now if is_host else None,
+            ),
+        )
+    session.commit()
+    call_session = _require_org_call_session(
+        session,
+        organization_id=organization_id,
+        call_id=call_session.id,
+    )
+
+    await _dispatch_org_call(
+        organization_id=organization_id,
+        action="incoming",
+        call_session=call_session,
+    )
+    return OrgCallCreateResponse(**_org_call_response(call_session).model_dump())
+
+
+@router.post(
     "/organizations/{organization_id}/calls/{call_id}/answer",
     response_model=OrgCallSessionResponse,
 )
@@ -1166,7 +1776,7 @@ async def join_org_call(
     call_id: str,
     session: Session = Depends(get_db_session),
 ) -> OrgCallSessionResponse:
-    """Late-join an active org call when the user is an invitee or team member."""
+    """Late-join an active org call when the user is an invitee or team/group member."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
@@ -1188,6 +1798,24 @@ async def join_org_call(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Only team members can join this call",
+                )
+            participant = OrgCallParticipant(
+                call_id=call_session.id,
+                user_id=user_id,
+                role="member",
+                status="invited",
+            )
+            session.add(participant)
+            session.flush()
+        elif call_session.scope == "group" and call_session.group_id is not None:
+            if not is_human_group_member(
+                session,
+                group_id=call_session.group_id,
+                user_id=user_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only group members can join this call",
                 )
             participant = OrgCallParticipant(
                 call_id=call_session.id,
@@ -1423,7 +2051,7 @@ async def add_assistant_to_org_call(
     body: OrgCallAddAssistantRequest,
     session: Session = Depends(get_db_session),
 ) -> OrgCallSessionResponse:
-    """Record an assistant on an active team call (Console dispatches Meet agent)."""
+    """Record an assistant on an active team or group call (Console dispatches Meet)."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
@@ -1438,19 +2066,40 @@ async def add_assistant_to_org_call(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot add an assistant to a finished call",
         )
-    if call_session.scope != "team" or call_session.team_id is None:
+    if call_session.scope == "team":
+        if call_session.team_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assistants can only be added to team or group calls",
+            )
+        membership = TeamDAO(session).get_assistant_membership(
+            team_id=call_session.team_id,
+            assistant_id=body.assistant_id,
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Assistant must be a member of this team",
+            )
+    elif call_session.scope == "group":
+        if call_session.group_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assistants can only be added to team or group calls",
+            )
+        if not is_assistant_group_member(
+            session,
+            group_id=call_session.group_id,
+            assistant_id=body.assistant_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Assistant must be a member of this group",
+            )
+    else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Assistants can only be added to team calls",
-        )
-    membership = TeamDAO(session).get_assistant_membership(
-        team_id=call_session.team_id,
-        assistant_id=body.assistant_id,
-    )
-    if membership is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Assistant must be a member of this team",
+            detail="Assistants can only be added to team or group calls",
         )
 
     assistant_ids = list(call_session.assistant_ids or [])

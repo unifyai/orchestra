@@ -1030,7 +1030,7 @@ class DmMessage(Base):
 
 
 class OrgCallSession(Base):
-    """Multi-party org voice/video call (DM or team) backed by one LiveKit room."""
+    """Multi-party org voice/video call (DM, team, or group) backed by one LiveKit room."""
 
     __tablename__ = "org_call_session"
 
@@ -1049,6 +1049,11 @@ class OrgCallSession(Base):
     team_id = Column(
         Integer,
         ForeignKey("team.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    group_id = Column(
+        Integer,
+        ForeignKey("chat_group.id", ondelete="SET NULL"),
         nullable=True,
     )
     created_by_user_id = Column(
@@ -1081,7 +1086,7 @@ class OrgCallSession(Base):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "scope IN ('dm', 'team')",
+            "scope IN ('dm', 'team', 'group')",
             name="ck_org_call_session_scope",
         ),
         sa.CheckConstraint(
@@ -1096,6 +1101,11 @@ class OrgCallSession(Base):
         Index(
             "ix_org_call_session_team_status",
             "team_id",
+            "status",
+        ),
+        Index(
+            "ix_org_call_session_group_status",
+            "group_id",
             "status",
         ),
     )
@@ -1808,6 +1818,110 @@ class TeamMember(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_member"),)
+
+
+class ChatGroup(Base):
+    """Lightweight multi-party org chat (humans + assistants), not a Team."""
+
+    __tablename__ = "chat_group"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    created_by_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(String, nullable=False, server_default="active")
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    members = relationship(
+        "ChatGroupMember",
+        back_populates="chat_group",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('active', 'deleted')",
+            name="ck_chat_group_status",
+        ),
+        Index("ix_chat_group_org_status", "organization_id", "status"),
+    )
+
+
+class ChatGroupMember(Base):
+    """One human or assistant member of a chat group."""
+
+    __tablename__ = "chat_group_member"
+
+    id = Column(Integer, primary_key=True)
+    group_id = Column(
+        Integer,
+        ForeignKey("chat_group.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    role = Column(String, nullable=False, server_default="member")
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    chat_group = relationship("ChatGroup", back_populates="members")
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "(user_id IS NOT NULL AND assistant_id IS NULL) OR "
+            "(user_id IS NULL AND assistant_id IS NOT NULL)",
+            name="ck_chat_group_member_one_identity",
+        ),
+        sa.CheckConstraint(
+            "role IN ('member')",
+            name="ck_chat_group_member_role",
+        ),
+        Index(
+            "uq_chat_group_member_user",
+            "group_id",
+            "user_id",
+            unique=True,
+            postgresql_where=sa.text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_chat_group_member_assistant",
+            "group_id",
+            "assistant_id",
+            unique=True,
+            postgresql_where=sa.text("assistant_id IS NOT NULL"),
+        ),
+        Index("ix_chat_group_member_group_id", "group_id"),
+    )
 
 
 class ResourceAccess(Base):

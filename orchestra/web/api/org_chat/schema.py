@@ -36,12 +36,24 @@ class RosterTeam(BaseModel):
     image: Optional[str] = None
 
 
+class RosterGroup(BaseModel):
+    """One chat group the caller belongs to (humans + assistants)."""
+
+    group_id: int
+    name: str
+    created_by_user_id: str
+    created_at: Optional[datetime] = None
+    member_user_ids: List[str] = Field(default_factory=list)
+    assistant_member_ids: List[int] = Field(default_factory=list)
+
+
 class OrgRosterResponse(BaseModel):
     """Everything the Console selector needs beyond the assistant list."""
 
     organization_id: int
     humans: List[RosterHuman]
     teams: List[RosterTeam]
+    groups: List[RosterGroup] = Field(default_factory=list)
 
 
 class ChatMention(BaseModel):
@@ -109,6 +121,59 @@ class TeamMessagesPage(BaseModel):
     messages: List[TeamMessageResponse]
 
 
+class ChatGroupCreate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    user_ids: List[str] = Field(default_factory=list)
+    assistant_ids: List[int] = Field(default_factory=list)
+
+
+class ChatGroupUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    user_ids: Optional[List[str]] = None
+    assistant_ids: Optional[List[int]] = None
+
+
+class ChatGroupResponse(BaseModel):
+    group_id: int
+    name: str
+    organization_id: int
+    created_by_user_id: str
+    created_at: Optional[datetime] = None
+    member_user_ids: List[str] = Field(default_factory=list)
+    assistant_member_ids: List[int] = Field(default_factory=list)
+
+
+class ChatGroupsPage(BaseModel):
+    groups: List[ChatGroupResponse]
+
+
+class GroupMessageCreate(OrgChatMessageCreate):
+    mentions: List[ChatMention] = Field(default_factory=list)
+
+
+class AssistantGroupMessageCreate(OrgChatMessageCreate):
+    assistant_id: int
+    mentions: List[ChatMention] = Field(default_factory=list)
+
+
+class GroupMessageResponse(BaseModel):
+    message_id: int
+    group_id: int
+    organization_id: int
+    timestamp: str
+    sender_kind: Literal["user", "assistant"]
+    sender_user_id: Optional[str] = None
+    sender_assistant_id: Optional[int] = None
+    sender_name: str
+    content: str
+    mentions: List[dict[str, Any]] = Field(default_factory=list)
+    attachments: List[OrgChatAttachment] = Field(default_factory=list)
+
+
+class GroupMessagesPage(BaseModel):
+    messages: List[GroupMessageResponse]
+
+
 class DmMessageCreate(OrgChatMessageCreate):
     """Body for sending a DM to another org member."""
 
@@ -133,7 +198,7 @@ class DmMessagesPage(BaseModel):
 
 class OrgChatSearchResult(BaseModel):
     id: str
-    scope: Literal["dm", "team"]
+    scope: Literal["dm", "team", "group"]
     content: str
     timestamp: Optional[str] = None
     sender_name: str
@@ -144,7 +209,7 @@ class OrgChatSearchPage(BaseModel):
 
 
 OrgCallStatus = Literal["ringing", "active", "ended"]
-OrgCallScope = Literal["dm", "team"]
+OrgCallScope = Literal["dm", "team", "group"]
 OrgCallParticipantStatus = Literal["invited", "joined", "declined", "left"]
 OrgCallParticipantRole = Literal["host", "member"]
 
@@ -173,6 +238,7 @@ class OrgCallSessionResponse(BaseModel):
     caller_user_id: str
     callee_user_id: str | None = None
     team_id: int | None = None
+    group_id: int | None = None
     dm_thread_id: int | None = None
     user_ids: List[str] = Field(default_factory=list)
     participants: List[OrgCallParticipantResponse] = Field(default_factory=list)
