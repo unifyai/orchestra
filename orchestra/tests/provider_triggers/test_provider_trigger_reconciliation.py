@@ -100,8 +100,10 @@ class FakeTriggerAdapter(TriggerProviderAdapter):
         *,
         provider_connection_id: str,
         resource_id: str,
+        event_slug: str,
+        schema_version: str = "1",
     ) -> bool:
-        _ = provider_connection_id, resource_id
+        _ = provider_connection_id, resource_id, event_slug, schema_version
         return True
 
     def provision(self, request: TriggerProvisionRequest) -> TriggerProvisionResult:

@@ -144,6 +144,34 @@ def seed_provider_event_binding(
     return binding
 
 
+def seed_minimal_test_binding(
+    dbsession: Session,
+    *,
+    binding_id: str | None = None,
+    desired_state: str = "enabled",
+) -> EventTriggerBinding:
+    """Create a minimal binding row for CAS, fence, and blob lifecycle tests."""
+
+    resolved_binding_id = binding_id or f"binding-{uuid.uuid4().hex[:12]}"
+    scope_token = abs(hash(resolved_binding_id)) % (2**30)
+    dao = ProviderTriggerDAO(dbsession)
+    return dao.create_binding(
+        binding_id=resolved_binding_id,
+        project_id=0,
+        tasks_context_id=0,
+        source_task_log_id=scope_token,
+        task_id=scope_token,
+        assistant_id=0,
+        task_revision=1,
+        trigger=provider_event_trigger_payload(
+            connection_id="conn-test",
+            state=desired_state,
+        ),
+        execution_mode="live",
+        entrypoint=None,
+    )
+
+
 async def create_assistant(client: AsyncClient) -> int:
     response = await client.post(
         "/v0/assistant",

@@ -11,7 +11,7 @@ from orchestra.provider_triggers.provider_identity import (
     composio_v3_event_identity,
     pipedream_delivery_identity,
 )
-from orchestra.provider_triggers.provider_probe_runner import (
+from orchestra.tests.provider_triggers.provider_probe_runner import (
     probe_composio_github_issue_created,
     probe_pipedream_github_issue_created,
     provider_probes_available,

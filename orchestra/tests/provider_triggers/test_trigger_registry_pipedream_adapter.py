@@ -22,11 +22,12 @@ from orchestra.provider_triggers.pipedream_trigger_adapter import (
 from orchestra.provider_triggers.trigger_adapter_registry import (
     get_trigger_provider_adapter,
 )
-from orchestra.provider_triggers.trigger_matching import project_github_issue_created
+from orchestra.provider_triggers.trigger_projectors import project_curated_payload
 from orchestra.provider_triggers.trigger_registry import (
     GITHUB_ISSUE_CREATED,
     PIPEDREAM_BACKEND_ID,
     list_trigger_catalog_payloads,
+    require_canonical_trigger_event,
 )
 
 FIXTURE_DIR = (
@@ -95,7 +96,11 @@ def test_pipedream_signature_vector_matches_fixture_scheme() -> None:
 
 def test_pipedream_fixture_projects_through_github_issue_created_helper() -> None:
     payload = _load_pipedream_fixture()
-    projection = project_github_issue_created(payload)
+    event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
+    projection = project_curated_payload(
+        projector_key=event.projector_key,
+        payload=payload,
+    )
     assert projection == {
         "repository": "octocat/hello-world",
         "author": "octocat",
