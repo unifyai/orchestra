@@ -1,6 +1,5 @@
 """Bootstrap helpers that keep assistant chat contexts queryable."""
 
-from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from fastapi import HTTPException, status
@@ -149,7 +148,8 @@ def _find_contact_log_by_contact_id(
     context: Context,
     contact_id: int,
 ) -> LogEvent | None:
-    logs = session.scalars(
+    # Filter in SQL — never load the full Contacts context into Python.
+    return session.scalars(
         project_scoped_log_events(
             context.project_id,
             owner_key=single_owner_key(context.owner_scope, context.owner_id),
@@ -157,37 +157,11 @@ def _find_contact_log_by_contact_id(
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data.has_key("contact_id"),
+            LogEvent.data.op("->>")("contact_id") == str(contact_id),
         )
-        .order_by(LogEvent.id.asc()),
-    ).all()
-    for log in logs:
-        if _normalized_contact_id(log.data.get("contact_id")) == contact_id:
-            return log
-    return None
-
-
-def _normalized_contact_id(raw_value: Any) -> int | None:
-    """Best-effort integer normalization for legacy contact-id shapes."""
-    if isinstance(raw_value, bool):
-        return None
-    if isinstance(raw_value, int):
-        return raw_value
-    if isinstance(raw_value, float):
-        if raw_value.is_integer():
-            return int(raw_value)
-        return None
-    if isinstance(raw_value, str):
-        value = raw_value.strip()
-        if not value:
-            return None
-        try:
-            parsed = Decimal(value)
-        except InvalidOperation:
-            return None
-        if parsed == parsed.to_integral_value():
-            return int(parsed)
-        return None
-    return None
+        .order_by(LogEvent.id.asc())
+        .limit(1),
+    ).first()
 
 
 def _log_data_contains(log_data: dict[str, Any], entries: dict[str, Any]) -> bool:

@@ -6,9 +6,18 @@ from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_empty(client: AsyncClient):
-    # When no contact logs exist, the endpoint should return an empty list
+async def test_admin_list_contacts_requires_filter(client: AsyncClient):
     resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert "required" in resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_admin_list_contacts_empty_with_filter(client: AsyncClient):
+    resp = await client.get(
+        "/v0/admin/contacts?email_address=nobody@example.com",
+        headers=ADMIN_HEADERS,
+    )
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json() == []
 
@@ -58,26 +67,7 @@ async def test_admin_list_contacts_basic(client: AsyncClient):
     )
     assert create_logs_resp.status_code == status.HTTP_200_OK
 
-    # 4) Retrieve all contacts (no filters)
-    resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
-    assert resp.status_code == status.HTTP_200_OK
-    results = [
-        row
-        for row in resp.json()
-        if row["email_address"]
-        in {contact1["email_address"], contact2["email_address"]}
-    ]
-    assert len(results) == 2
-    emails = {r["email_address"] for r in results}
-    assert emails == {"john.doe@example.com", "jane.smith@example.com"}
-    for r in results:
-        assert r.get("user_id") == user["id"]
-        assert "custom_fields" in r
-        # Ensure core contact fields are present
-        for field in ("first_name", "surname", "description"):
-            assert field in r
-
-    # 5) Filter by email_address
+    # 4) Filter by email_address
     resp2 = await client.get(
         f"/v0/admin/contacts?email_address={contact1['email_address']}",
         headers=ADMIN_HEADERS,
@@ -86,6 +76,8 @@ async def test_admin_list_contacts_basic(client: AsyncClient):
     filtered = resp2.json()
     assert len(filtered) == 1
     assert filtered[0]["email_address"] == contact1["email_address"]
+    assert filtered[0].get("user_id") == user["id"]
+    assert "custom_fields" in filtered[0]
 
 
 @pytest.mark.anyio
@@ -144,16 +136,15 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient):
     )
     assert resp2.status_code == status.HTTP_200_OK
 
-    # Both entries should be returned by admin_list_contacts (case-sensitive match on 'Contacts')
-    resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
-    assert resp.status_code == status.HTTP_200_OK
-    expected_emails = {contact1["email_address"], contact2["email_address"]}
-    results = [
-        row for row in resp.json() if row.get("email_address") in expected_emails
-    ]
-    emails = {r.get("email_address") for r in results}
-    assert emails == expected_emails
-    assert len(results) == 2
+    # Lookup each by email (filter required; both Contacts* contexts prune by project)
+    for email in (contact1["email_address"], contact2["email_address"]):
+        resp = await client.get(
+            f"/v0/admin/contacts?email_address={email}",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["email_address"] == email
 
 
 @pytest.mark.anyio
@@ -220,17 +211,6 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient):
     )
     assert resp2.status_code == status.HTTP_200_OK
 
-    # Admin should retrieve both contacts regardless of owner
-    resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
-    assert resp.status_code == status.HTTP_200_OK
-    expected_emails = {contact1["email_address"], contact2["email_address"]}
-    results = [row for row in resp.json() if row["email_address"] in expected_emails]
-    emails = {r["email_address"] for r in results}
-    assert emails == expected_emails
-    user_ids = {r["user_id"] for r in results}
-    assert user_ids == {user1["id"], user2["id"]}
-    assert len(results) == 2
-
     # Filter by whatsapp_number to return only contact1
     resp_filtered = await client.get(
         f"/v0/admin/contacts?whatsapp_number={contact1['whatsapp_number']}",
@@ -241,3 +221,4 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient):
     assert isinstance(filtered, list)
     assert len(filtered) == 1
     assert filtered[0]["whatsapp_number"] == contact1["whatsapp_number"]
+    assert filtered[0]["user_id"] == user1["id"]

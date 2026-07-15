@@ -77,8 +77,6 @@ _ALLOWLIST: tuple[str, ...] = (
     "services/team_cleanup_service.py::_claim_shared_team_contexts",
     # Auth gate: bare id -> project_id, then access check.
     "web/api/log/views.py::_atomic_field_update_impl",
-    # Deliberate admin global contact search across all projects.
-    "web/api/assistant/views.py::admin_list_contacts",
 )
 
 _lock = threading.Lock()

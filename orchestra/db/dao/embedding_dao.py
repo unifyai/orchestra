@@ -20,6 +20,11 @@ class EmbeddingDAO:
     ) -> None:
         if log_event_ids is None and project_id is None:
             raise ValueError("Provide log_event_ids and/or project_id")
+        # id-only updates cannot prune LIST(project_id) partitions.
+        if log_event_ids is not None and project_id is None:
+            raise ValueError(
+                "project_id is required when log_event_ids is set " "(partition prune)",
+            )
 
     @staticmethod
     def _prune_clause(project_id: Optional[int], column: str = "project_id") -> str:
@@ -91,6 +96,7 @@ class EmbeddingDAO:
         log_event_ids: Optional[List[int]] = None,
         project_id: Optional[int] = None,
         batch_size: int = SOFT_DELETE_BATCH_SIZE,
+        commit: bool = True,
     ) -> int:
         """Soft-delete embeddings (is_deleted=true) for the given scope.
 
@@ -124,7 +130,8 @@ class EmbeddingDAO:
                     params,
                 )
                 total += result.rowcount
-                self.session.commit()
+                if commit:
+                    self.session.commit()
         else:
             # ``project_id`` is denormalized onto embedding, so soft-delete by it
             # directly: this prunes to the project's partition and uses the

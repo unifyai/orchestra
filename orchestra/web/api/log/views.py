@@ -22,7 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, exists, or_, select, text
+from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
@@ -97,8 +97,6 @@ from orchestra.web.api.log.utils import (
     _format_flat_logs,
     _format_logs,
     _get_all_filtered_log_event_ids,
-    _get_distinct_group_values,
-    _get_log_event_ids_for_group_value,
     _get_logs_query,
     _join_logs,
     _join_query_internal,
@@ -4010,34 +4008,43 @@ def get_logs(
 
             for group_field in group_by:
                 prefix, raw_key = parse_group_key(group_field)
-                # Note: params prefix is no longer used, all fields are entries now
-                distinct_values = _get_distinct_group_values(
-                    log_event_ids=event_ids_subq,
-                    group_key=raw_key,
-                    session=session,
-                    field_types={},
-                    project_id=project_id,
-                )
-                value_to_ids = {}
-                used_ids = set()
-                for val in distinct_values:
-                    subset_ids = _get_log_event_ids_for_group_value(
-                        log_event_ids=event_ids_subq,
-                        group_key=raw_key,
-                        group_value=val,
-                        session=session,
-                        field_types={},
-                        project_id=project_id,
+                # One GROUP BY + array_agg (no per-value N+1, no full-ID set
+                # difference in Python). Null bucket via SQL EXCEPT, and IDs
+                # for "null" are only fetched when that key is in the page.
+                value_col = LogEvent.data.op("->>")(raw_key)
+                agg_rows = (
+                    session.query(value_col, func.array_agg(LogEvent.id))
+                    .filter(
+                        LogEvent.id.in_(select(event_ids_subq.c.id)),
+                        project_scope(LogEvent, project_id),
+                        LogEvent.data.op("?")(raw_key),
                     )
-                    value_to_ids[val] = subset_ids
-                    used_ids.update(subset_ids)
-                all_ids = session.query(event_ids_subq).all()
-                event_ids = [r[0] for r in all_ids]
-                missing_ids = list(set(event_ids) - used_ids)
-                if missing_ids:
-                    value_to_ids["null"] = missing_ids
-
+                    .group_by(value_col)
+                    .all()
+                )
+                value_to_ids = {
+                    val: list(ids) if ids is not None else [] for val, ids in agg_rows
+                }
+                present_count = sum(len(ids) for ids in value_to_ids.values())
+                present_ids_q = (
+                    session.query(LogEvent.id)
+                    .filter(LogEvent.id.in_(select(event_ids_subq.c.id)))
+                    .filter(project_scope(LogEvent, project_id))
+                    .filter(LogEvent.data.op("?")(raw_key))
+                ).subquery()
+                missing_ids_q = select(event_ids_subq.c.id).except_(
+                    select(present_ids_q.c.id),
+                )
+                missing_count = (
+                    session.execute(
+                        select(func.count()).select_from(missing_ids_q.subquery()),
+                    ).scalar()
+                    or 0
+                )
+                has_null = missing_count > 0
                 all_keys = list(value_to_ids.keys())
+                if has_null:
+                    all_keys.append("null")
                 total_distinct = len(all_keys)
                 all_keys_sorted = sorted(all_keys, key=lambda x: (x is None, x))
                 if group_limit is not None:
@@ -4046,8 +4053,15 @@ def get_logs(
                     ]
                 else:
                     paged_keys = all_keys_sorted
-                paged_mapping = {k: value_to_ids[k] for k in paged_keys}
-                field_total = sum(len(ids) for ids in value_to_ids.values())
+                paged_mapping = {}
+                for k in paged_keys:
+                    if k == "null":
+                        paged_mapping["null"] = [
+                            r[0] for r in session.execute(missing_ids_q).fetchall()
+                        ]
+                    else:
+                        paged_mapping[k] = value_to_ids[k]
+                field_total = present_count + missing_count
                 groups[group_field] = {
                     **paged_mapping,
                     "group_count": total_distinct,
@@ -4795,58 +4809,100 @@ def get_log_groups(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
 
-    groups = dict()
-
-    # JSONB mode: returns (id, data_dict, key_order, created_at) tuples
-    rows, _ = _get_logs_query(
-        request_fastapi=request_fastapi,
-        project_name=project_name,
-        context=context,
-        filter_expr=filter_expr,
-        sorting=None,
-        from_ids=from_ids,
-        exclude_ids=exclude_ids,
-        from_fields=key,  # Filter to logs containing this key
-        exclude_fields=None,
-        limit=None,
-        offset=0,
-        project_dao=project_dao,
-        field_type_dao=field_type_dao,
-        context_dao=context_dao,
-        session=session,
+    # Distinct values only — never materialize every matching log body.
+    # Cap protects Console/version panes over large GTM contexts.
+    _GROUPS_DISTINCT_CAP = 10_000
+    project = project_dao.get_readable_by_user_and_name(
+        name=project_name,
+        user_id=request_fastapi.state.user_id,
+        organization_id=getattr(request_fastapi.state, "organization_id", None),
     )
+    if project is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_name} not found.",
+        )
+    project_id = project.id
+    context_name = context or ""
+    context_rows = context_dao.filter(name=context_name, project_id=project_id)
+    if not context_rows:
+        return {}
+    context_id = context_rows[0][0].id
 
-    # Extract values from JSONB data dict
-    for row in rows:
-        # row is (id, data_dict, key_order, created_at)
-        data_dict = row[1]
+    # Optional id filters (same semantics as /logs)
+    id_clause = ""
+    params: Dict[str, Any] = {
+        "project_id": project_id,
+        "context_id": context_id,
+        "key": key,
+        "cap": _GROUPS_DISTINCT_CAP,
+    }
+    if from_ids is not None and exclude_ids is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="from_ids and exclude_ids cannot both be set",
+        )
+    if from_ids is not None:
+        params["from_ids"] = [int(x) for x in from_ids.split("&") if x]
+        id_clause = "AND le.id = ANY(:from_ids)"
+    elif exclude_ids is not None:
+        params["exclude_ids"] = [int(x) for x in exclude_ids.split("&") if x]
+        id_clause = "AND NOT (le.id = ANY(:exclude_ids))"
 
-        # Try entries first, then top-level
-        value = None
-        if "entries" in data_dict and key in data_dict["entries"]:
-            value = data_dict["entries"][key]
-        elif key in data_dict:
-            value = data_dict[key]
+    # filter_expr still goes through the full query path when present (rare for
+    # this endpoint); otherwise use a set-based DISTINCT.
+    if filter_expr:
+        rows, _ = _get_logs_query(
+            request_fastapi=request_fastapi,
+            project_name=project_name,
+            context=context,
+            filter_expr=filter_expr,
+            sorting=None,
+            from_ids=from_ids,
+            exclude_ids=exclude_ids,
+            from_fields=key,
+            exclude_fields=None,
+            limit=_GROUPS_DISTINCT_CAP,
+            offset=0,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+        )
+        seen: Dict[str, Any] = {}
+        for row in rows:
+            data_dict = row[1] or {}
+            value = None
+            if "entries" in data_dict and key in data_dict["entries"]:
+                value = data_dict["entries"][key]
+            elif key in data_dict:
+                value = data_dict[key]
+            if value is None:
+                continue
+            marker = json.dumps(value, sort_keys=True, default=str)
+            if marker not in seen:
+                seen[marker] = value
+        return {str(i): v for i, v in enumerate(seen.values())}
 
-        if value is None:
-            continue
-
-        # Assign sequential version by unique value
-        found_match = False
-        for k, v in groups.items():
-            if value in v:
-                found_match = True
-                groups[k].add(value)
-                break
-        if not found_match:
-            version = str(len(groups))
-            groups[version] = set()
-            groups[version].add(value)
-
-    assert all(
-        len(v) == 1 for v in groups.values()
-    ), "All sets should contain a single unique value"
-    return {k: next(iter(v)) for k, v in groups.items()}
+    distinct_rows = session.execute(
+        text(
+            f"""
+            SELECT DISTINCT le.data ->> :key AS v
+            FROM log_event le
+            JOIN log_event_context lec
+              ON lec.log_event_id = le.id
+             AND lec.project_id = le.project_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
+              AND le.data ? :key
+              {id_clause}
+            LIMIT :cap
+            """,
+        ),
+        params,
+    ).fetchall()
+    # ->> yields text; preserve prior "version index -> value" shape.
+    return {str(i): row[0] for i, row in enumerate(distinct_rows) if row[0] is not None}
 
 
 @router.patch(

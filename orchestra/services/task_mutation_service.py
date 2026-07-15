@@ -6,9 +6,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.context_dao import ContextDAO, delete_orphaned_log_events
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -20,6 +21,7 @@ from orchestra.db.models.orchestra_models import (
     Context,
     LogEvent,
     LogEventContext,
+    LogUniqueConstraint,
 )
 from orchestra.db.scope import single_owner_key_for_context
 from orchestra.provider_triggers.task_trigger import (
@@ -424,7 +426,28 @@ class TaskMutationService:
             project_id=project_id,
             log_event_id=row.log_event_id,
         )
-        self.session.delete(log_event)
+        # FKs from lec/luc/embedding were dropped for partitioning — clean
+        # children explicitly (same shape as task-machine row deletes).
+        self.session.execute(
+            delete(LogUniqueConstraint).where(
+                LogUniqueConstraint.log_event_id == log_event.id,
+                LogUniqueConstraint.context_id == context_id,
+                LogUniqueConstraint.project_id == project_id,
+            ),
+        )
+        self.session.execute(
+            delete(LogEventContext).where(
+                LogEventContext.project_id == project_id,
+                LogEventContext.log_event_id == log_event.id,
+                LogEventContext.context_id == context_id,
+            ),
+        )
+        delete_orphaned_log_events(
+            session=self.session,
+            project_id=project_id,
+            skip_embedding_cleanup=True,
+            log_event_ids=[log_event.id],
+        )
         self.session.flush()
         self._project_task_activation(
             project_id=project_id,

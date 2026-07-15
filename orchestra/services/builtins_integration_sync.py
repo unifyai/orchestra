@@ -1181,22 +1181,30 @@ def _lookup_constraint_log_id(
     *,
     context_id: int,
     value_hash: str,
+    project_id: int | None = None,
 ) -> int | None:
+    clauses = [
+        "context_id = :context_id",
+        "field_name = :field_name",
+        "value_hash = :value_hash",
+    ]
+    params: dict[str, object] = {
+        "context_id": context_id,
+        "field_name": COMPOSITE_KEY_FIELD,
+        "value_hash": value_hash,
+    }
+    if project_id is not None:
+        clauses.append("project_id = :project_id")
+        params["project_id"] = project_id
     value = session.execute(
         text(
-            """
+            f"""
             SELECT log_event_id
             FROM log_unique_constraint
-            WHERE context_id = :context_id
-              AND field_name = :field_name
-              AND value_hash = :value_hash
+            WHERE {' AND '.join(clauses)}
             """,
         ),
-        {
-            "context_id": context_id,
-            "field_name": COMPOSITE_KEY_FIELD,
-            "value_hash": value_hash,
-        },
+        params,
     ).scalar_one_or_none()
     return int(value) if value is not None else None
 
@@ -1297,6 +1305,7 @@ def upsert_context_rows(
                     session,
                     context_id=context_id,
                     value_hash=key_hash,
+                    project_id=project_id,
                 )
                 if winner_id is None:
                     raise RuntimeError("Unique-key race lost but no winner was found")

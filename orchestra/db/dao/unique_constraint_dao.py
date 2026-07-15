@@ -243,12 +243,14 @@ class UniqueConstraintDAO:
                         """
                         SELECT log_event_id FROM log_unique_constraint
                         WHERE context_id = :context_id
+                          AND project_id = :project_id
                           AND field_name = :field_name
                           AND value_hash = :value_hash
                     """,
                     ),
                     {
                         "context_id": entry["context_id"],
+                        "project_id": entry["project_id"],
                         "field_name": entry["field_name"],
                         "value_hash": entry["value_hash"],
                     },
@@ -479,12 +481,14 @@ class UniqueConstraintDAO:
                         """
                         SELECT log_event_id FROM log_unique_constraint
                         WHERE context_id = :context_id
+                          AND project_id = :project_id
                           AND field_name = :field_name
                           AND value_hash = :value_hash
                     """,
                     ),
                     {
                         "context_id": entry["context_id"],
+                        "project_id": entry["project_id"],
                         "field_name": entry["field_name"],
                         "value_hash": entry["value_hash"],
                     },
@@ -666,6 +670,7 @@ class UniqueConstraintDAO:
                 """
                 DELETE FROM log_unique_constraint
                 WHERE context_id = :context_id
+                  AND project_id = :project_id
                   AND field_name = :field_name
                   AND value_hash = :value_hash
                   AND log_event_id = :log_event_id
@@ -673,6 +678,7 @@ class UniqueConstraintDAO:
             ),
             {
                 "context_id": context_id,
+                "project_id": resolved_project_id,
                 "field_name": field_name,
                 "value_hash": old_hash,
                 "log_event_id": log_event_id,
@@ -757,20 +763,24 @@ class UniqueConstraintDAO:
         rows: List[Dict[str, Any]],
         candidate_hashes: List[str],
         index_by_hash: Dict[str, int],
+        project_id: Optional[int] = None,
     ) -> Set[str]:
         """Return subset of ``candidate_hashes`` already present in the context."""
         if self._use_lookup_table():
+            resolved_project_id = self._project_id_for_context(context_id, project_id)
             result = self.session.execute(
                 text(
                     """
                     SELECT value_hash FROM log_unique_constraint
                     WHERE context_id = :context_id
+                      AND project_id = :project_id
                       AND field_name = :field_name
                       AND value_hash = ANY(:hashes)
                     """,
                 ),
                 {
                     "context_id": context_id,
+                    "project_id": resolved_project_id,
                     "field_name": COMPOSITE_KEY_FIELD,
                     "hashes": candidate_hashes,
                 },
@@ -868,32 +878,44 @@ class UniqueConstraintDAO:
             return conflicts
 
         if self._use_lookup_table():
-            for entry in entries_to_check:
-                if entry["log_event_id"] in conflicts:
+            # One batch lookup via unnest join (no N+1).
+            rows = self.session.execute(
+                text(
+                    """
+                    SELECT v.candidate_id, v.field_name, v.value_hash
+                    FROM unnest(
+                        CAST(:field_names AS text[]),
+                        CAST(:value_hashes AS text[]),
+                        CAST(:candidate_ids AS bigint[])
+                    ) AS v(field_name, value_hash, candidate_id)
+                    JOIN log_unique_constraint luc
+                      ON luc.context_id = :context_id
+                     AND luc.project_id = :project_id
+                     AND luc.field_name = v.field_name
+                     AND luc.value_hash = v.value_hash
+                    WHERE NOT (luc.log_event_id = ANY(:exclude_ids))
+                      AND luc.log_event_id <> v.candidate_id
+                    """,
+                ),
+                {
+                    "context_id": context_id,
+                    "project_id": project_id,
+                    "exclude_ids": exclude_ids or [0],
+                    "field_names": [e["field_name"] for e in entries_to_check],
+                    "value_hashes": [e["value_hash"] for e in entries_to_check],
+                    "candidate_ids": [e["log_event_id"] for e in entries_to_check],
+                },
+            ).fetchall()
+            by_candidate = {
+                (e["field_name"], e["value_hash"], e["log_event_id"]): e
+                for e in entries_to_check
+            }
+            for candidate_id, field_name, value_hash in rows:
+                if candidate_id in conflicts:
                     continue
-                existing = self.session.execute(
-                    text(
-                        """
-                        SELECT log_event_id FROM log_unique_constraint
-                        WHERE context_id = :context_id
-                          AND field_name = :field_name
-                          AND value_hash = :value_hash
-                          AND NOT (log_event_id = ANY(:exclude_ids))
-                        LIMIT 1
-                        """,
-                    ),
-                    {
-                        "context_id": entry["context_id"],
-                        "field_name": entry["field_name"],
-                        "value_hash": entry["value_hash"],
-                        "exclude_ids": exclude_ids or [0],
-                    },
-                ).fetchone()
-                if existing and existing.log_event_id != entry["log_event_id"]:
-                    conflicts[entry["log_event_id"]] = (
-                        entry["field_name"],
-                        entry["value"],
-                    )
+                entry = by_candidate.get((field_name, value_hash, candidate_id))
+                if entry is not None:
+                    conflicts[candidate_id] = (entry["field_name"], entry["value"])
         else:
             duplicate = self._check_via_jsonb_scan(
                 context_id,

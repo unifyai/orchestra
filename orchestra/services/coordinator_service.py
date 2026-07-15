@@ -2164,19 +2164,10 @@ def _has_connected_integration(
     return False
 
 
-def _coordinator_task_rows(
+def _coordinator_tasks_context_names(
     session: Session,
-    *,
     coordinator: Assistant,
-) -> list[LogEvent]:
-    """Task rows readable by the Coordinator across all its Tasks roots.
-
-    Reads across the Coordinator's roots — the personal context plus one
-    per live team membership — mirroring the Tasks panel. Returns the full
-    ``LogEvent`` rows so callers can inspect each task's ``data`` (its
-    ``schedule`` / ``trigger`` shape) rather than just existence.
-    """
-    project = _project_for_coordinator(session, coordinator)
+) -> list[str]:
     context_names = [
         _coordinator_context_name(coordinator, COORDINATOR_TASKS_CONTEXT),
     ]
@@ -2184,6 +2175,21 @@ def _coordinator_task_rows(
     context_names.extend(
         f"Teams/{team_id}/{COORDINATOR_TASKS_CONTEXT}" for team_id in team_ids
     )
+    return context_names
+
+
+def _coordinator_task_rows(
+    session: Session,
+    *,
+    coordinator: Assistant,
+) -> list[LogEvent]:
+    """Task rows readable by the Coordinator across all its Tasks roots.
+
+    Prefer the EXISTS helpers for onboarding probes; this full hydrate remains
+    for callers that need the payloads.
+    """
+    project = _project_for_coordinator(session, coordinator)
+    context_names = _coordinator_tasks_context_names(session, coordinator)
     return list(
         session.scalars(
             project_scoped_log_events(project.id, LogEvent)
@@ -2191,6 +2197,30 @@ def _coordinator_task_rows(
             .where(Context.name.in_(context_names)),
         ),
     )
+
+
+def _coordinator_has_task_with_key(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    data_key: str,
+    reset_after: datetime | None = None,
+) -> bool:
+    """True if any Coordinator Tasks row carries ``data_key`` (SQL EXISTS)."""
+    project = _project_for_coordinator(session, coordinator)
+    context_names = _coordinator_tasks_context_names(session, coordinator)
+    stmt = (
+        project_scoped_log_events(project.id, LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .where(
+            Context.name.in_(context_names),
+            LogEvent.data.has_key(data_key),
+        )
+        .limit(1)
+    )
+    if reset_after is not None:
+        stmt = stmt.where(LogEvent.created_at > reset_after)
+    return session.execute(stmt).first() is not None
 
 
 def _has_scheduled_task(
@@ -2205,12 +2235,12 @@ def _has_scheduled_task(
     by matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
     so arming a triggerable task never ticks this row.
     """
-    for row in scope.task_rows:
-        if not isinstance(row.data, dict) or not row.data.get("schedule"):
-            continue
-        if _connection_updated_after(row.created_at, reset_after):
-            return True
-    return False
+    return _coordinator_has_task_with_key(
+        scope.session,
+        coordinator=scope.coordinator,
+        data_key="schedule",
+        reset_after=reset_after,
+    )
 
 
 def _has_triggerable_task(
@@ -2224,12 +2254,12 @@ def _has_triggerable_task(
     that fires on an event. Matches only tasks carrying a ``trigger`` so a
     purely scheduled task never ticks this row.
     """
-    for row in scope.task_rows:
-        if not isinstance(row.data, dict) or not row.data.get("trigger"):
-            continue
-        if _connection_updated_after(row.created_at, reset_after):
-            return True
-    return False
+    return _coordinator_has_task_with_key(
+        scope.session,
+        coordinator=scope.coordinator,
+        data_key="trigger",
+        reset_after=reset_after,
+    )
 
 
 def _user_for_coordinator(session: Session, *, coordinator: Assistant) -> User | None:

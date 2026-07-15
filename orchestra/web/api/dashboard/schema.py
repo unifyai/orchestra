@@ -48,7 +48,12 @@ class FilterBridgeRequest(BaseModel):
     from_fields: Optional[str] = None
     exclude_fields: Optional[str] = None
     sorting: Optional[str] = None
-    limit: Optional[int] = Field(None, ge=1, le=1000)
+    limit: Optional[int] = Field(
+        1000,
+        ge=1,
+        le=1000,
+        description="Maximum rows to return (defaults to 1000).",
+    )
     offset: Optional[int] = Field(None, ge=0)
     column_context: Optional[str] = None
     group_by: Optional[list[str]] = None
