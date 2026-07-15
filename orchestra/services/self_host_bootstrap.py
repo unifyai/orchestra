@@ -76,15 +76,37 @@ def ensure_provider_integration_backends(session: Session) -> None:
 
     Composio executes live only when ``COMPOSIO_API_KEY`` is configured, so the
     backend row is enabled exactly when the key is present and disabled
-    otherwise. Provider catalog normalization stays with the admin bootstrap
-    script, and the compose stack then feeds its snapshot into Unity's Builtins
-    seeder so public app/tool discovery uses the shared Builtins project.
+    otherwise. Pipedream Connect executes live only when client credentials and
+    a project id are all configured. Provider catalog normalization stays with
+    the admin bootstrap script, and the compose stack then feeds its snapshot
+    into Unity's Builtins seeder so public app/tool discovery uses the shared
+    Builtins project.
     """
     seed_default_provider_catalog(session)
-    status = "enabled" if os.environ.get("COMPOSIO_API_KEY", "").strip() else "disabled"
-    IntegrationProviderDAO(session).patch_backend("composio", {"status": status})
+    dao = IntegrationProviderDAO(session)
+    composio_status = (
+        "enabled" if os.environ.get("COMPOSIO_API_KEY", "").strip() else "disabled"
+    )
+    dao.patch_backend("composio", {"status": composio_status})
+    pipedream_configured = all(
+        os.environ.get(name, "").strip()
+        for name in (
+            "PIPEDREAM_CLIENT_ID",
+            "PIPEDREAM_CLIENT_SECRET",
+            "PIPEDREAM_PROJECT_ID",
+        )
+    )
+    provider_triggers_enabled = os.environ.get(
+        "SELF_HOST_PROVIDER_TRIGGERS_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    pipedream_status = (
+        "enabled" if pipedream_configured or provider_triggers_enabled else "disabled"
+    )
+    dao.patch_backend("pipedream", {"status": pipedream_status})
     session.flush()
-    logger.info("Composio integration backend %s for self-host", status)
+    logger.info("Composio integration backend %s for self-host", composio_status)
+    logger.info("Pipedream integration backend %s for self-host", pipedream_status)
 
 
 def ensure_system_builtins_project(session: Session) -> Project:
