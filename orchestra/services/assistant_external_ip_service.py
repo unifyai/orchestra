@@ -313,6 +313,7 @@ async def reconcile_assistant_external_ip(
         external_ip.gcp_address_name = _optional_string(payload.get("name"))
         external_ip.address = _optional_string(payload.get("address"))
         external_ip.region = _optional_string(payload.get("region"))
+        external_ip.hostname = _optional_string(payload.get("hostname"))
         external_ip.state = "reserved"
         external_ip.active_operation = None
         record_assistant_external_ip_history(
