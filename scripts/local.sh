@@ -1036,7 +1036,11 @@ start_orchestra_server() {
     [[ -n "${COMPOSIO_API_KEY:-}" ]] && export COMPOSIO_API_KEY
     [[ -n "${COMPOSIO_WEBHOOK_SECRET:-}" ]] && export COMPOSIO_WEBHOOK_SECRET
     [[ -n "${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-}" ]] && export ORCHESTRA_TRIGGER_CALLBACK_BASE_URL
-    [[ -n "${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}" ]] && export TRIGGER_EVENT_WRAPPING_MASTER_KEY
+    if [[ -z "${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-}" ]]; then
+      export TRIGGER_EVENT_WRAPPING_MASTER_KEY="test-master-key-material"
+    else
+      export TRIGGER_EVENT_WRAPPING_MASTER_KEY
+    fi
     if [[ -n "${TRIGGER_EVENT_PRIVATE_ROOT:-}" ]]; then
       export TRIGGER_EVENT_PRIVATE_ROOT
       mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
