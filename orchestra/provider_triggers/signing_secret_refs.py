@@ -11,6 +11,7 @@ from orchestra.db.models.provider_trigger_models import (
 from orchestra.provider_triggers.local_composio_trigger_adapter import (
     get_local_composio_trigger_scenario,
 )
+from orchestra.provider_triggers.signing_secret_storage import unwrap_signing_secret_ref
 
 
 def resolve_signing_secret_ref(secret_ref: str | None) -> str | None:
@@ -36,6 +37,8 @@ def resolve_signing_secret_ref(secret_ref: str | None) -> str | None:
         return get_local_composio_trigger_scenario().generation_signing_secrets.get(
             ref,
         )
+    if ref.startswith("wrapped:"):
+        return unwrap_signing_secret_ref(ref)
     return ref
 
 
