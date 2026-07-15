@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.observability.provider_trigger_metrics import (
     set_dispatch_backlog_age_seconds,
+    set_reconcile_backlog_age_seconds,
     set_worker_heartbeat_age_seconds,
 )
 from orchestra.services.provider_event_dispatch_delivery_service import (
@@ -42,5 +43,29 @@ def refresh_provider_trigger_metrics() -> None:
                 session,
             ).backlog_oldest_age_seconds()
             set_dispatch_backlog_age_seconds(backlog_age)
+
+            reconcile_backlog = ProviderTriggerDAO(session).list_reconcile_backlog(
+                limit=1,
+            )
+            if not reconcile_backlog:
+                set_reconcile_backlog_age_seconds(0)
+            else:
+                oldest_retry = reconcile_backlog[0].reconcile_next_retry_at
+                if oldest_retry is None:
+                    set_reconcile_backlog_age_seconds(0)
+                else:
+                    if oldest_retry.tzinfo is None:
+                        oldest_retry = oldest_retry.replace(tzinfo=timezone.utc)
+                    set_reconcile_backlog_age_seconds(
+                        max(
+                            0,
+                            int(
+                                (
+                                    datetime.now(timezone.utc)
+                                    - oldest_retry.astimezone(timezone.utc)
+                                ).total_seconds(),
+                            ),
+                        ),
+                    )
     except Exception:
         logger.exception("failed to refresh provider-trigger metrics")

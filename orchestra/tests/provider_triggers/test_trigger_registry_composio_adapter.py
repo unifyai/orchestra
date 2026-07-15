@@ -336,7 +336,7 @@ def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_create
     event = payloads[0]
     assert event["schema_version"] == "1"
     assert event["canonical_app_slug"] == "github"
-    assert event["backends"] == ["composio"]
+    assert event["backends"] == ["composio", "pipedream"]
     operators_by_field: dict[str, set[str]] = {}
     for item in event["filters"]:
         operators_by_field.setdefault(item["field"], set()).add(item["operator"])
@@ -354,10 +354,8 @@ def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_create
     assert catalog.available is True
     assert len(catalog.events) == 1
     assert catalog.events[0].event_slug == GITHUB_ISSUE_CREATED
-    assert catalog.events[0].backends == ["composio"]
+    assert catalog.events[0].backends == ["composio", "pipedream"]
 
-    # Curated Pipedream mapping remains in the registry for a later ticket, but
-    # the catalog only advertises backends with a live trigger adapter.
     mapping_backends = {
         mapping.backend_id
         for mapping in require_canonical_trigger_event(
@@ -367,8 +365,7 @@ def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_create
     assert "pipedream" in mapping_backends
 
     assert get_trigger_provider_adapter("composio").backend_id == "composio"
-    with pytest.raises(LookupError, match="pipedream"):
-        get_trigger_provider_adapter("pipedream")
+    assert get_trigger_provider_adapter("pipedream").backend_id == "pipedream"
 
 
 def test_validate_authored_filters_rejects_uncurated_fields_and_operators() -> None:

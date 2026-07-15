@@ -76,15 +76,37 @@ def ensure_provider_integration_backends(session: Session) -> None:
 
     Composio executes live only when ``COMPOSIO_API_KEY`` is configured, so the
     backend row is enabled exactly when the key is present and disabled
-    otherwise. Provider catalog normalization stays with the admin bootstrap
-    script, and the compose stack then feeds its snapshot into Unity's Builtins
-    seeder so public app/tool discovery uses the shared Builtins project.
+    otherwise. Pipedream Connect executes live only when client credentials and
+    a project id are all configured. Provider catalog normalization stays with
+    the admin bootstrap script, and the compose stack then feeds its snapshot
+    into Unity's Builtins seeder so public app/tool discovery uses the shared
+    Builtins project.
     """
     seed_default_provider_catalog(session)
-    status = "enabled" if os.environ.get("COMPOSIO_API_KEY", "").strip() else "disabled"
-    IntegrationProviderDAO(session).patch_backend("composio", {"status": status})
+    dao = IntegrationProviderDAO(session)
+    composio_status = (
+        "enabled" if os.environ.get("COMPOSIO_API_KEY", "").strip() else "disabled"
+    )
+    dao.patch_backend("composio", {"status": composio_status})
+    pipedream_configured = all(
+        os.environ.get(name, "").strip()
+        for name in (
+            "PIPEDREAM_CLIENT_ID",
+            "PIPEDREAM_CLIENT_SECRET",
+            "PIPEDREAM_PROJECT_ID",
+        )
+    )
+    provider_triggers_enabled = os.environ.get(
+        "SELF_HOST_PROVIDER_TRIGGERS_ENABLED",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    pipedream_status = (
+        "enabled" if pipedream_configured or provider_triggers_enabled else "disabled"
+    )
+    dao.patch_backend("pipedream", {"status": pipedream_status})
     session.flush()
-    logger.info("Composio integration backend %s for self-host", status)
+    logger.info("Composio integration backend %s for self-host", composio_status)
+    logger.info("Pipedream integration backend %s for self-host", pipedream_status)
 
 
 def ensure_system_builtins_project(session: Session) -> Project:
@@ -121,11 +143,47 @@ def ensure_system_builtins_project(session: Session) -> Project:
     return project
 
 
+def ensure_system_assistant_jobs_project(session: Session) -> Project:
+    """Ensure the canonical AssistantJobs project exists as platform-owned data."""
+    from orchestra.web.api.utils.system_project import ASSISTANT_JOBS_PROJECT_NAME
+
+    project = (
+        session.query(Project)
+        .filter(Project.name == ASSISTANT_JOBS_PROJECT_NAME)
+        .order_by(
+            Project.is_system.desc(),
+            Project.id.asc(),
+        )
+        .first()
+    )
+    if project is None:
+        project = Project(
+            name=ASSISTANT_JOBS_PROJECT_NAME,
+            description="Platform fleet audit and Console liveview discovery",
+            is_versioned=False,
+            is_public_read=False,
+            is_system=True,
+        )
+        session.add(project)
+        session.flush()
+    else:
+        project.user_id = None
+        project.organization_id = None
+        project.is_versioned = False
+        project.is_public_read = False
+        project.is_system = True
+        if not project.description:
+            project.description = "Platform fleet audit and Console liveview discovery"
+        session.flush()
+    return project
+
+
 def bootstrap_self_host_platform(session: Session) -> SelfHostBootstrapResult:
     """Create or repair self-host platform defaults without creating users."""
     ensure_platform_billing_defaults(session)
     ensure_provider_integration_backends(session)
     ensure_system_builtins_project(session)
+    ensure_system_assistant_jobs_project(session)
     ensure_builtins_catalog_contexts(session)
     session.commit()
     return SelfHostBootstrapResult()

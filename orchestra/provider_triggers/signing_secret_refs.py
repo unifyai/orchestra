@@ -8,6 +8,10 @@ from datetime import datetime, timezone
 from orchestra.db.models.provider_trigger_models import (
     EventTriggerSubscriptionGeneration,
 )
+from orchestra.provider_triggers.local_composio_trigger_adapter import (
+    get_local_composio_trigger_scenario,
+)
+from orchestra.provider_triggers.signing_secret_storage import unwrap_signing_secret_ref
 
 
 def resolve_signing_secret_ref(secret_ref: str | None) -> str | None:
@@ -29,6 +33,12 @@ def resolve_signing_secret_ref(secret_ref: str | None) -> str | None:
             return None
         value = os.getenv(env_name)
         return value.strip() if isinstance(value, str) and value.strip() else None
+    if ref.startswith("local-gen-"):
+        return get_local_composio_trigger_scenario().generation_signing_secrets.get(
+            ref,
+        )
+    if ref.startswith("wrapped:"):
+        return unwrap_signing_secret_ref(ref)
     return ref
 
 

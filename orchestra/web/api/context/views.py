@@ -32,12 +32,11 @@ from orchestra.web.api.context.schema import (
     CopyContextRequest,
     RenameContextRequest,
 )
-from orchestra.web.api.utils.builtins_project import (
-    BUILTINS_PROJECT_NAME,
-    is_builtins_project_name,
-    require_builtins_project_owner,
-)
 from orchestra.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.system_project import (
+    is_system_project_name,
+    require_system_project_owner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +46,15 @@ router = APIRouter()
 admin_router = APIRouter()
 
 
-def _require_builtins_context_writer(
+def _require_system_context_writer(
     *,
     project,
     user_id: str,
     organization_id: Optional[int],
     action: str,
 ) -> None:
-    if is_builtins_project_name(project.name):
-        require_builtins_project_owner(
+    if is_system_project_name(project.name):
+        require_system_project_owner(
             project,
             user_id=user_id,
             action=action,
@@ -178,7 +177,7 @@ def create_context(
         if not project:
             raise IndexError
         project_id = project.id
-        _require_builtins_context_writer(
+        _require_system_context_writer(
             project=project,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -608,12 +607,15 @@ def delete_context(
         if not project:
             raise IndexError("Project not found")
         project_id = project.id
-        if is_builtins_project_name(project.name):
+        if is_system_project_name(project.name):
             raise HTTPException(
                 status_code=403,
-                detail=f"The '{BUILTINS_PROJECT_NAME}' project is protected and cannot have its contexts deleted.",
+                detail=(
+                    f"The '{project.name}' project is protected "
+                    "and cannot have its contexts deleted."
+                ),
             )
-        _require_builtins_context_writer(
+        _require_system_context_writer(
             project=project,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -738,7 +740,7 @@ def add_logs_to_context(
         if not project:
             raise IndexError("Project not found")
         project_id = project.id
-        _require_builtins_context_writer(
+        _require_system_context_writer(
             project=project,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -978,7 +980,7 @@ def rename_context(
     )
     if not project:
         raise not_found("Project")
-    _require_builtins_context_writer(
+    _require_system_context_writer(
         project=project,
         user_id=request_fastapi.state.user_id,
         organization_id=organization_id,
@@ -1033,7 +1035,7 @@ def commit_context_version(
     )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    _require_builtins_context_writer(
+    _require_system_context_writer(
         project=project,
         user_id=request_fastapi.state.user_id,
         organization_id=organization_id,
@@ -1079,7 +1081,7 @@ def rollback_context_version(
     )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    _require_builtins_context_writer(
+    _require_system_context_writer(
         project=project,
         user_id=request_fastapi.state.user_id,
         organization_id=organization_id,

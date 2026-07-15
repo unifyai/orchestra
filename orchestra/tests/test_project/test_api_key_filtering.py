@@ -24,6 +24,131 @@ from orchestra.tests.utils import create_test_user
 
 
 @pytest.mark.anyio
+async def test_assistant_jobs_system_project_admin_only(
+    client: AsyncClient,
+    dbsession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """AssistantJobs is system-owned and private: only admin may read/write."""
+    from orchestra.services.self_host_bootstrap import (
+        ensure_system_assistant_jobs_project,
+    )
+
+    ensure_system_assistant_jobs_project(dbsession)
+    dbsession.commit()
+
+    reader = await create_test_user(client, "assistant_jobs_reader@test.com")
+    admin_key = "assistant-jobs-admin-key"
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", admin_key)
+    admin_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {admin_key}",
+    }
+
+    user_create = await client.post(
+        "/v0/project",
+        json={"name": "AssistantJobs", "is_public_read": False},
+        headers=reader["headers"],
+    )
+    assert user_create.status_code == status.HTTP_403_FORBIDDEN
+
+    context_response = await client.post(
+        "/v0/project/AssistantJobs/contexts",
+        json={
+            "name": "startup_events",
+            "description": "Fleet audit events.",
+            "is_versioned": False,
+            "allow_duplicates": True,
+            "unique_keys": None,
+        },
+        headers=admin_headers,
+    )
+    assert context_response.status_code == status.HTTP_200_OK, context_response.json()
+
+    user_context = await client.post(
+        "/v0/project/AssistantJobs/contexts",
+        json={
+            "name": "startup_events_user",
+            "description": "Should fail.",
+            "is_versioned": False,
+            "allow_duplicates": True,
+            "unique_keys": None,
+        },
+        headers=reader["headers"],
+    )
+    assert user_context.status_code in (
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    )
+
+    log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "entries": {
+                "assistant_id": "42",
+                "job_name": "test-job",
+                "liveview_url": "https://example.test/live",
+            },
+        },
+        headers=admin_headers,
+    )
+    assert log_response.status_code == status.HTTP_200_OK, log_response.json()
+
+    user_log = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "entries": {"assistant_id": "99", "job_name": "blocked"},
+        },
+        headers=reader["headers"],
+    )
+    assert user_log.status_code in (
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    )
+
+    admin_get = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "filter_expr": 'assistant_id == "42"',
+            "limit": 1,
+        },
+        headers=admin_headers,
+    )
+    assert admin_get.status_code == status.HTTP_200_OK, admin_get.json()
+    assert admin_get.json()["logs"][0]["entries"]["liveview_url"] == (
+        "https://example.test/live"
+    )
+
+    user_get = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "limit": 1,
+        },
+        headers=reader["headers"],
+    )
+    assert user_get.status_code in (
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    )
+    if user_get.status_code == status.HTTP_200_OK:
+        assert user_get.json().get("logs") == []
+
+    delete_project = await client.delete(
+        "/v0/project/AssistantJobs",
+        headers=admin_headers,
+    )
+    assert delete_project.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
 async def test_builtins_system_project_allows_admin_seed_and_user_reads(
     client: AsyncClient,
     dbsession,

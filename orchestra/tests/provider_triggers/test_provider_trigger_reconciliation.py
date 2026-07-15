@@ -403,6 +403,50 @@ def test_health_failures_increment_counter_and_trip_threshold(
     assert binding.reconcile_next_retry_at is not None
 
 
+def test_claim_generations_for_operation_reclaims_expired_lease(
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
+        "orchestra_trigger_callback_base_url",
+        "https://orchestra.example",
+    )
+    connection_id = _connection_id()
+    binding_id = _binding_id()
+    _seed_connection(dbsession, connection_id=connection_id)
+    binding = _seed_enabled_binding(
+        dbsession,
+        binding_id=binding_id,
+        connection_id=connection_id,
+    )
+    dao = ProviderTriggerDAO(dbsession)
+    generation = dao.create_generation(binding=binding)
+    generation.create_operation_state = GenerationOperationState.claimed.value
+    generation.lease_owner = "stale-owner"
+    generation.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    generation.next_retry_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    dbsession.flush()
+
+    adapter = FakeTriggerAdapter()
+    service = _service(dbsession, adapter)
+    stats = service.process_generation_batch()
+    dbsession.commit()
+
+    refreshed = dbsession.execute(
+        select(EventTriggerSubscriptionGeneration).where(
+            EventTriggerSubscriptionGeneration.generation_id
+            == generation.generation_id,
+        ),
+    ).scalar_one()
+
+    assert stats["generations_claimed"] == 1
+    assert refreshed.create_operation_state == GenerationOperationState.succeeded.value
+    assert refreshed.lifecycle_state == GenerationLifecycle.active.value
+    assert refreshed.lease_owner is None
+    assert len(adapter.provision_calls) == 1
+
+
 def test_run_worker_cycle_upserts_heartbeat_metadata(
     dbsession: Session,
 ) -> None:
