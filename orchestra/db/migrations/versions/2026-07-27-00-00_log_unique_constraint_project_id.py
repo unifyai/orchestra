@@ -9,11 +9,18 @@ create/delete contended on a global hot table. Adding project_id (backfilled
 from context) lets delete/cleanup prune by project + context, matching the
 kernel write paths. Full LIST partitioning of this table can follow as a
 separate increment once the column is live everywhere.
+
+Idempotent across both starting states:
+
+* Fresh DB -- ``0001_core_initial``'s ``meta.create_all`` already built
+  ``project_id`` and the project/context indexes from the current model, so
+  the ``IF NOT EXISTS`` DDL is a no-op and the (empty) table needs no backfill.
+* Existing DB -- adds the column/indexes and backfills ``project_id`` from
+  ``context`` for every existing uniqueness row.
 """
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "log_unique_constraint_project_id"
@@ -23,9 +30,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "log_unique_constraint",
-        sa.Column("project_id", sa.Integer(), nullable=True),
+    op.execute(
+        "ALTER TABLE log_unique_constraint "
+        "ADD COLUMN IF NOT EXISTS project_id integer",
     )
     op.execute(
         """
@@ -33,36 +40,28 @@ def upgrade() -> None:
         SET project_id = c.project_id
         FROM context AS c
         WHERE c.id = luc.context_id
+          AND luc.project_id IS NULL
         """,
     )
     # Orphans (context already gone) cannot be placed; drop them rather than
     # leave NOT NULL violations — they are already unreachable uniqueness rows.
     op.execute("DELETE FROM log_unique_constraint WHERE project_id IS NULL")
-    op.alter_column(
-        "log_unique_constraint",
-        "project_id",
-        existing_type=sa.Integer(),
-        nullable=False,
+    op.execute(
+        "ALTER TABLE log_unique_constraint ALTER COLUMN project_id SET NOT NULL",
     )
-    op.create_index(
-        "idx_log_unique_constraint_context_log_event",
-        "log_unique_constraint",
-        ["context_id", "log_event_id"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_log_unique_constraint_context_log_event "
+        "ON log_unique_constraint (context_id, log_event_id)",
     )
-    op.create_index(
-        "idx_log_unique_constraint_project_log_event",
-        "log_unique_constraint",
-        ["project_id", "log_event_id"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_log_unique_constraint_project_log_event "
+        "ON log_unique_constraint (project_id, log_event_id)",
     )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "idx_log_unique_constraint_project_log_event",
-        table_name="log_unique_constraint",
+    op.execute("DROP INDEX IF EXISTS idx_log_unique_constraint_project_log_event")
+    op.execute("DROP INDEX IF EXISTS idx_log_unique_constraint_context_log_event")
+    op.execute(
+        "ALTER TABLE log_unique_constraint DROP COLUMN IF EXISTS project_id",
     )
-    op.drop_index(
-        "idx_log_unique_constraint_context_log_event",
-        table_name="log_unique_constraint",
-    )
-    op.drop_column("log_unique_constraint", "project_id")
