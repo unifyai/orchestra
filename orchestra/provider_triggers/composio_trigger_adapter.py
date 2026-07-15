@@ -19,7 +19,10 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
 
-from orchestra.provider_triggers.provider_identity import composio_v3_event_identity
+from orchestra.provider_triggers.provider_identity import (
+    composio_v3_event_identity,
+    provider_account_subject_hmac,
+)
 from orchestra.provider_triggers.trigger_adapter import (
     NormalizedProviderDelivery,
     ProviderAccountIdentity,
@@ -30,10 +33,9 @@ from orchestra.provider_triggers.trigger_adapter import (
     TriggerProvisionResult,
     TriggerResource,
 )
-from orchestra.provider_triggers.trigger_matching import (
-    matches_filters,
+from orchestra.provider_triggers.trigger_projectors import (
     normalize_repository,
-    project_github_issue_created,
+    project_curated_payload,
 )
 from orchestra.provider_triggers.trigger_registry import (
     COMPOSIO_BACKEND_ID,
@@ -134,39 +136,6 @@ def sign_composio_webhook_headers(
         "webhook-timestamp": webhook_timestamp,
         "webhook-signature": f"v1,{digest}",
     }
-
-
-def provider_account_subject_hmac(subject: str, *, pepper: str | bytes) -> str:
-    """Return the durable HMAC digest for one provider-account subject."""
-
-    key = pepper.encode("utf-8") if isinstance(pepper, str) else pepper
-    return hmac.new(key, subject.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def github_resource_from_filters(
-    filters: Sequence[Mapping[str, Any]] | None,
-) -> str | None:
-    """Derive the owner/name resource from authored repository filters.
-
-    # TODO: Purge/Replace — replace with registry/adapter resource resolution
-    so reconciliation and signed ingress do not hardcode GitHub repository
-    extraction outside the adapter. Call sites:
-    ``provider_trigger_reconciliation_service``, ``ingress_acceptance``.
-    See vault: Provider event trigger contracts#Interim remnants.
-    """
-
-    if not filters:
-        return None
-    for item in filters:
-        if str(item.get("field", "")).strip() != "repository":
-            continue
-        operator = str(item.get("operator", "")).strip()
-        value = item.get("value")
-        if operator == "is" and isinstance(value, str):
-            return normalize_repository(value)
-        if operator == "is any of" and isinstance(value, list) and len(value) == 1:
-            return normalize_repository(value[0])
-    return None
 
 
 def split_github_resource(resource_id: str) -> tuple[str, str]:
@@ -339,9 +308,17 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         *,
         provider_connection_id: str,
         resource_id: str,
+        event_slug: str = GITHUB_ISSUE_CREATED,
+        schema_version: str = "1",
     ) -> bool:
         """Return True when the connected account can access the repository."""
 
+        event = require_canonical_trigger_event(
+            event_slug,
+            schema_version=schema_version,
+        )
+        if event.projector_key != GITHUB_ISSUE_CREATED:
+            return False
         owner, repo = split_github_resource(resource_id)
         response = self._request(
             "GET",
@@ -369,8 +346,10 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             event_slug=request.event_slug,
             schema_version=request.schema_version,
         )
-        resource_id = request.resource_id or github_resource_from_filters(
-            request.filters,
+        resource_id = request.resource_id or self.resolve_resource_id(
+            event_slug=request.event_slug,
+            schema_version=request.schema_version,
+            filters=request.filters,
         )
         if not resource_id:
             raise ValueError(
@@ -379,6 +358,8 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         if not self.authorize_resource(
             provider_connection_id=request.provider_connection_id,
             resource_id=resource_id,
+            event_slug=request.event_slug,
+            schema_version=request.schema_version,
         ):
             raise PermissionError("repository_inaccessible")
         owner, repo = split_github_resource(resource_id)
@@ -510,7 +491,11 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         trigger_slug = trigger_slug.strip()
         if trigger_slug != COMPOSIO_GITHUB_ISSUE_CREATED_SLUG:
             raise ValueError(f"Unsupported Composio trigger slug {trigger_slug!r}")
-        projection = project_github_issue_created(payload)
+        event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
+        projection = project_curated_payload(
+            projector_key=event.projector_key,
+            payload=payload,
+        )
         resource_id = projection.get("repository")
         connected_account_id = metadata.get("connected_account_id")
         provider_user_id = metadata.get("user_id")
@@ -596,17 +581,4 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             status="error",
             error_code="provider_connection_not_active",
             detail={"provider_status": provider_status or "unknown"},
-        )
-
-    def delivery_matches_filters(
-        self,
-        delivery: NormalizedProviderDelivery,
-        filters: Sequence[Mapping[str, Any]] | None,
-    ) -> bool:
-        """Evaluate authored AND filters against the curated projection."""
-
-        return matches_filters(
-            projection=delivery.curated_projection,
-            filters=filters,
-            event_slug=GITHUB_ISSUE_CREATED,
         )
