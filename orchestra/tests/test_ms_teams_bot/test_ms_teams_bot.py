@@ -344,6 +344,50 @@ class TestInstallDAO:
             _make_install(dbsession, user=user, tenant_id="tenant-dupuser")
         dbsession.rollback()
 
+    def test_ensure_pending_install_recovers_from_concurrent_winner(
+        self,
+        dbsession: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A concurrent add-event that wins the active-tenant slot must not 500.
+
+        Reproduces the Teams Store race: ``conversationUpdate`` and
+        ``installationUpdate`` for the same tenant both reach
+        ``ensure_pending_install`` at once. The loser's INSERT collides on
+        ``ux_ms_teams_bot_install_active_tenant``; that collision must stay
+        contained by the savepoint (leaving the *outer* transaction alive) so
+        the loser recovers by returning the committed winner with
+        ``created=False`` — never propagating as a 500 that would strand the
+        adapter's welcome DM. Simulated by making the first
+        ``get_install_by_tenant`` lookup miss the already-present active row.
+        """
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "race")
+        org = _make_org(dbsession, user, "race")
+        winner = _make_install(dbsession, organization=org, tenant_id="tenant-race")
+
+        real_lookup = dao.get_install_by_tenant
+        calls = {"n": 0}
+
+        def _miss_first(tenant_id: str) -> Optional[MsTeamsBotInstall]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return real_lookup(tenant_id)
+
+        monkeypatch.setattr(dao, "get_install_by_tenant", _miss_first)
+
+        install, created = dao.ensure_pending_install(
+            tenant_id="tenant-race",
+            bot_app_id="app-guid-001",
+        )
+
+        assert created is False
+        assert install.id == winner.id
+        # The outer transaction survived the contained collision: a follow-up
+        # query must succeed (a poisoned transaction would raise here).
+        assert dao.list_installs()
+
     def test_get_install_by_tenant_ignores_revoked(
         self,
         dbsession: Session,
