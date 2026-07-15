@@ -296,20 +296,27 @@ steps:
         delay=$$((delay * 2))
       done
     }
+    # Use the same runtime SA as orchestra-staging. A bare `gcloud run deploy` of a
+    # new service defaults to PROJECT_NUMBER-compute@developer.gserviceaccount.com,
+    # which this Cloud Build SA cannot actAs.
     run_cloud_run_with_retry gcloud run deploy $_TRIGGER_WORKER_SERVICE_NAME \
       --platform=managed \
       --image=$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA \
       --region=$_DEPLOY_REGION \
       --quiet \
+      --service-account=default-compute@$PROJECT_ID.iam.gserviceaccount.com \
       --command=python \
       --args=-m,orchestra.workers.provider_trigger_worker \
       --min-instances=1 \
       --max-instances=2 \
       --concurrency=1 \
       --no-cpu-throttling \
+      --no-allow-unauthenticated \
+      --ingress=internal \
       --set-cloudsql-instances=$_CLOUDSQL_INSTANCE \
       --vpc-connector=orchestra-connector-usc1 \
       --vpc-egress=all-traffic \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID \
       --update-env-vars=ORCHESTRA_CLOUD_SQL_INSTANCE=$_CLOUDSQL_INSTANCE,DEPLOY_ENV=staging,UNITY_COMMS_URL=https://service.a.run.app,UNITY_ADAPTERS_URL=https://service.a.run.app,ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=$_TRIGGER_CALLBACK_BASE_URL,TRIGGER_EVENT_PRIVATE_BUCKET=$_TRIGGER_EVENT_PRIVATE_BUCKET,TRIGGER_EVENT_KMS_KEYRING=$_TRIGGER_EVENT_KMS_KEYRING,TRIGGER_EVENT_KMS_KEY=$_TRIGGER_EVENT_KMS_KEY \
       --update-secrets=COMPOSIO_API_KEY=COMPOSIO_API_KEY:latest,COMPOSIO_WEBHOOK_SECRET=COMPOSIO_WEBHOOK_SECRET:latest
   id: Deploy Trigger Worker
