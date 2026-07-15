@@ -76,6 +76,11 @@ from orchestra.services.assistant_cleanup_service import (
     process_assistant_cleanup_tasks,
     purge_assistant_owner,
 )
+from orchestra.services.assistant_external_ip_service import (
+    ensure_pending_assistant_external_ip,
+    reconcile_assistant_external_ip,
+    retain_assistant_external_ip,
+)
 from orchestra.services.assistant_team_ownership_service import (
     TeamOwnershipTransferError,
     transfer_assistant_to_team_owned,
@@ -186,6 +191,7 @@ from orchestra.web.api.assistant.schema import (
     GrantedFeaturesResponse,
     InfoResponse,
     ManagedDesktopEnable,
+    ManagedDesktopNetworkIdentityRead,
     ManagedDesktopStatusRead,
     OnboardingCatalog,
     OnboardingSessionStarted,
@@ -1055,6 +1061,7 @@ def _self_heal_coordinator_contacts(
 async def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
@@ -1369,6 +1376,7 @@ async def create_assistant(
                 user_id=user_id,
                 organization_id=organization_id,
             )
+            ensure_pending_assistant_external_ip(session, assistant=assistant)
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
@@ -1595,6 +1603,12 @@ async def create_assistant(
     # the user has already moved away from.
 
     # Phase 4: Prepare and return response
+    if assistant_in.desktop_mode in MANAGED_DESKTOP_MODES:
+        background_tasks.add_task(
+            reconcile_assistant_external_ip,
+            request.app.state.db_session_factory,
+            assistant_id=assistant.agent_id,
+        )
     return InfoResponse(
         info=_build_assistant_read(assistant, session),
     )
@@ -2307,6 +2321,7 @@ def _build_managed_desktop_status_read(
         )
     elif assistant.managed_desktop_monthly_cost is not None:
         monthly_cost = float(assistant.managed_desktop_monthly_cost)
+    external_ip = assistant.external_ip
     return ManagedDesktopStatusRead(
         desktop_mode=assistant.desktop_mode,
         managed_desktop_status=assistant.managed_desktop_status,
@@ -2314,6 +2329,18 @@ def _build_managed_desktop_status_read(
         managed_desktop_enabled_at=assistant.managed_desktop_enabled_at,
         managed_desktop_grace_period_started_at=(
             assistant.managed_desktop_grace_period_started_at
+        ),
+        network_identity=(
+            ManagedDesktopNetworkIdentityRead(
+                gcp_address_name=external_ip.gcp_address_name,
+                address=external_ip.address,
+                region=external_ip.region,
+                hostname=external_ip.hostname,
+                state=external_ip.state,
+                active_operation=external_ip.active_operation,
+            )
+            if external_ip is not None
+            else None
         ),
     )
 
@@ -2356,6 +2383,7 @@ async def enable_managed_desktop_endpoint(
     assistant_id: int,
     payload: ManagedDesktopEnable,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     user_id = request.state.user_id
@@ -2382,6 +2410,13 @@ async def enable_managed_desktop_endpoint(
     )
     if managed_desktop_entitled(assistant):
         if assistant.desktop_mode == payload.desktop_mode:
+            ensure_pending_assistant_external_ip(session, assistant=assistant)
+            session.commit()
+            background_tasks.add_task(
+                reconcile_assistant_external_ip,
+                request.app.state.db_session_factory,
+                assistant_id=assistant_id,
+            )
             return InfoResponse(info=_build_assistant_read(assistant, session))
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2397,7 +2432,13 @@ async def enable_managed_desktop_endpoint(
         user_id=user_id,
         organization_id=organization_id,
     )
+    ensure_pending_assistant_external_ip(session, assistant=assistant)
     session.commit()
+    background_tasks.add_task(
+        reconcile_assistant_external_ip,
+        request.app.state.db_session_factory,
+        assistant_id=assistant_id,
+    )
 
     from orchestra.web.api.utils.assistant_infra import reawaken_assistant
 
@@ -2454,6 +2495,7 @@ async def disable_managed_desktop_endpoint(
         return InfoResponse(info=_build_assistant_read(assistant, session))
 
     disable_managed_desktop(assistant)
+    retain_assistant_external_ip(session, assistant=assistant)
     session.commit()
 
     from orchestra.web.api.utils.assistant_infra import reawaken_assistant

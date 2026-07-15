@@ -18,6 +18,9 @@ from orchestra.db.models.orchestra_models import (
     AssistantContact,
     Project,
 )
+from orchestra.services.assistant_external_ip_service import (
+    release_assistant_external_ip,
+)
 from orchestra.services.bucket_service import create_bucket_service
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import (
@@ -94,6 +97,7 @@ class AssistantCleanupSpec:
     desktop_mode: str | None = None
     profile_photo: str | None = None
     profile_video: str | None = None
+    release_external_ip: bool = False
     contacts: list[ContactCleanupSpec] = field(default_factory=list)
 
     def to_payload(self) -> dict:
@@ -101,6 +105,7 @@ class AssistantCleanupSpec:
         return {
             "profile_photo": self.profile_photo,
             "profile_video": self.profile_video,
+            "release_external_ip": self.release_external_ip,
             "contacts": [contact.to_payload() for contact in self.contacts],
         }
 
@@ -113,6 +118,7 @@ class AssistantCleanupSpec:
             desktop_mode=task.desktop_mode,
             profile_photo=payload.get("profile_photo"),
             profile_video=payload.get("profile_video"),
+            release_external_ip=bool(payload.get("release_external_ip", False)),
             contacts=[
                 ContactCleanupSpec.from_payload(contact_payload)
                 for contact_payload in payload.get("contacts", [])
@@ -126,6 +132,7 @@ def build_cleanup_spec(
     desktop_mode: str | None = None,
     profile_photo: str | None = None,
     profile_video: str | None = None,
+    release_external_ip: bool = False,
     contacts: list[AssistantContact] | None = None,
 ) -> AssistantCleanupSpec:
     """Create an assistant cleanup spec from already-loaded ORM objects."""
@@ -134,6 +141,7 @@ def build_cleanup_spec(
         desktop_mode=desktop_mode,
         profile_photo=profile_photo,
         profile_video=profile_video,
+        release_external_ip=release_external_ip,
         contacts=[
             ContactCleanupSpec(
                 contact_type=contact.contact_type,
@@ -157,6 +165,7 @@ def build_cleanup_spec_from_assistant(
         desktop_mode=assistant.desktop_mode,
         profile_photo=assistant.profile_photo,
         profile_video=assistant.profile_video,
+        release_external_ip=assistant.external_ip is not None,
         contacts=contacts,
     )
 
@@ -525,10 +534,24 @@ async def process_assistant_cleanup_tasks(
                 [spec],
                 soft_delete_successes=False,
             )
+            external_ip_result = (
+                await release_assistant_external_ip(
+                    session,
+                    assistant_id=spec.assistant_id,
+                )
+                if spec.release_external_ip
+                else {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "no_external_ip",
+                    "errors": [],
+                }
+            )
             storage_result: dict[str, object]
             errors = [
                 *runtime_result.get("errors", []),
                 *contact_result.get("errors", []),
+                *external_ip_result.get("errors", []),
             ]
             if errors:
                 storage_result = {
@@ -548,6 +571,7 @@ async def process_assistant_cleanup_tasks(
             task.last_result = {
                 "runtime": runtime_result,
                 "contacts": contact_result,
+                "external_ip": external_ip_result,
                 "storage": storage_result,
             }
             task.cleanup_payload = spec.to_payload()

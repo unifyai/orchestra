@@ -49,12 +49,14 @@ class DmDAO:
         thread: DmThread,
         sender_user_id: str,
         content: str,
+        attachments: list[dict] | None = None,
     ) -> DmMessage:
         """Append one message to a thread."""
         message = DmMessage(
             thread_id=thread.id,
             sender_user_id=sender_user_id,
             content=content,
+            attachments=attachments or [],
         )
         self.session.add(message)
         self.session.flush()
@@ -66,12 +68,37 @@ class DmDAO:
         thread_id: int,
         limit: int = 100,
         before_id: int | None = None,
+        q: str | None = None,
     ) -> list[DmMessage]:
         """Most-recent-last page of messages for a thread."""
         query = select(DmMessage).where(DmMessage.thread_id == thread_id)
         if before_id is not None:
             query = query.where(DmMessage.id < before_id)
+        if q and q.strip():
+            query = query.where(DmMessage.content.ilike(f"%{q.strip()}%"))
         rows = self.session.scalars(
             query.order_by(DmMessage.id.desc()).limit(limit),
         ).all()
         return list(reversed(rows))
+
+    def search_messages(
+        self,
+        *,
+        thread_id: int,
+        q: str,
+        limit: int = 50,
+    ) -> list[DmMessage]:
+        """Most-recent-first content matches for a thread."""
+        needle = q.strip()
+        if not needle:
+            return []
+        query = (
+            select(DmMessage)
+            .where(
+                DmMessage.thread_id == thread_id,
+                DmMessage.content.ilike(f"%{needle}%"),
+            )
+            .order_by(DmMessage.id.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(query).all())

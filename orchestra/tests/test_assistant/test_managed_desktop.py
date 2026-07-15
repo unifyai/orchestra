@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra.db.models.orchestra_models import Assistant, AssistantContactCost, User
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    AssistantContactCost,
+    AssistantExternalIP,
+    AssistantExternalIPHistory,
+    User,
+)
 from orchestra.services.managed_desktop_service import (
     MANAGED_DESKTOP_MODES,
     managed_desktop_entitled,
@@ -190,3 +196,54 @@ async def test_enable_managed_desktop_endpoint_charges_and_sets_status(
     cost = contact_dao.get_contact_monthly_cost("managed_desktop", provider="ubuntu")
     assert cost == Decimal("50.00")
     assert "ubuntu" in MANAGED_DESKTOP_MODES
+
+    status_response = await client.get(
+        f"/v0/assistant/{agent_id}/managed-desktop",
+        headers=user["headers"],
+    )
+    assert status_response.status_code == status.HTTP_200_OK, status_response.text
+    network_identity = status_response.json()["info"]["network_identity"]
+    assert network_identity == {
+        "gcp_address_name": None,
+        "address": None,
+        "region": None,
+        "hostname": None,
+        "state": "pending",
+        "active_operation": "reserve",
+    }
+
+    disable_response = await client.delete(
+        f"/v0/assistant/{agent_id}/managed-desktop",
+        headers=user["headers"],
+    )
+    assert disable_response.status_code == status.HTTP_200_OK, disable_response.text
+    external_ip = (
+        dbsession.query(AssistantExternalIP)
+        .filter(AssistantExternalIP.assistant_id == agent_id)
+        .one()
+    )
+    assert external_ip.state == "retained"
+    assert external_ip.active_operation is None
+    assert (
+        dbsession.query(AssistantExternalIPHistory)
+        .filter(AssistantExternalIPHistory.external_ip_id == external_ip.id)
+        .count()
+        == 2
+    )
+
+    _fund_user(dbsession, user["id"], Decimal("50.00"))
+    reenable_response = await client.post(
+        f"/v0/assistant/{agent_id}/managed-desktop",
+        headers=user["headers"],
+        json={"desktop_mode": "ubuntu"},
+    )
+    assert reenable_response.status_code == status.HTTP_200_OK, reenable_response.text
+    dbsession.expire_all()
+    reused_external_ip = (
+        dbsession.query(AssistantExternalIP)
+        .filter(AssistantExternalIP.assistant_id == agent_id)
+        .one()
+    )
+    assert reused_external_ip.id == external_ip.id
+    assert reused_external_ip.state == "pending"
+    assert reused_external_ip.active_operation == "reserve"
