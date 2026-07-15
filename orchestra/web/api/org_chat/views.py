@@ -33,6 +33,7 @@ from orchestra.db.models.orchestra_models import (
     User,
 )
 from orchestra.services.bucket_service import create_bucket_service
+from orchestra.services.org_call_contacts import ensure_org_call_contacts
 from orchestra.services.org_chat_service import (
     SENDER_KIND_ASSISTANT,
     SENDER_KIND_USER,
@@ -50,6 +51,7 @@ from orchestra.web.api.org_chat.schema import (
     OrgCallAddAssistantRequest,
     OrgCallCreateResponse,
     OrgCallParticipantResponse,
+    OrgCallRosterMember,
     OrgCallSessionResponse,
     OrgChatAttachment,
     OrgChatSearchPage,
@@ -61,9 +63,15 @@ from orchestra.web.api.org_chat.schema import (
     TeamMessageResponse,
     TeamMessagesPage,
 )
-from orchestra.web.api.utils.assistant_infra import dispatch_org_chat_best_effort
+from orchestra.web.api.utils.assistant_infra import (
+    ADAPTERS_URL,
+    ADMIN_KEY,
+    LOCAL_ADAPTERS_URL,
+    dispatch_org_chat_best_effort,
+)
 from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 from orchestra.web.api.utils.gcp import parse_gcs_url
+from orchestra.web.api.utils.http_client import get_async_client
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -189,6 +197,7 @@ def _org_call_response(call_session: OrgCallSession) -> OrgCallSessionResponse:
             for participant in event["participants"]
         ],
         assistant_ids=event["assistant_ids"],
+        roster=[],
     )
 
 
@@ -874,6 +883,60 @@ async def _dispatch_org_call(
     )
 
 
+def _roster_payload(members: list[OrgCallRosterMember]) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": member.kind,
+            "user_id": member.user_id,
+            "assistant_id": member.assistant_id,
+            "display_name": member.display_name,
+            "contact_id": member.contact_id,
+            "email": member.email,
+        }
+        for member in members
+    ]
+
+
+async def _refresh_org_call_assistant_rosters(
+    session: Session,
+    *,
+    call_session: OrgCallSession,
+    assistant_ids: list[int],
+) -> None:
+    """Re-ensure Contacts and push updated participants to running assistants."""
+    adapters_url = (LOCAL_ADAPTERS_URL or ADAPTERS_URL or "").rstrip("/")
+    if not adapters_url or not ADMIN_KEY or not assistant_ids:
+        return
+    client = get_async_client()
+    for assistant_id in assistant_ids:
+        roster = ensure_org_call_contacts(
+            session,
+            call_session=call_session,
+            for_assistant_id=assistant_id,
+        )
+        session.commit()
+        try:
+            await client.post(
+                f"{adapters_url}/unify/meet",
+                headers={
+                    "Authorization": f"Bearer {ADMIN_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "assistant_id": str(assistant_id),
+                    "room_name": call_session.livekit_room,
+                    "call_session_id": call_session.id,
+                    "participants": _roster_payload(roster),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to refresh Unify Meet roster for assistant %s on call %s",
+                assistant_id,
+                call_session.id,
+            )
+
+
 def _finalize_org_call_room_name(
     session: Session,
     call_session: OrgCallSession,
@@ -1084,6 +1147,12 @@ async def answer_org_call(
         action="answered",
         call_session=call_session,
     )
+    if call_session.assistant_ids:
+        await _refresh_org_call_assistant_rosters(
+            session,
+            call_session=call_session,
+            assistant_ids=[int(a) for a in call_session.assistant_ids],
+        )
     return _org_call_response(call_session)
 
 
@@ -1153,6 +1222,12 @@ async def join_org_call(
         action="participant_joined",
         call_session=call_session,
     )
+    if call_session.assistant_ids:
+        await _refresh_org_call_assistant_rosters(
+            session,
+            call_session=call_session,
+            assistant_ids=[int(a) for a in call_session.assistant_ids],
+        )
     return _org_call_response(call_session)
 
 
@@ -1380,12 +1455,6 @@ async def add_assistant_to_org_call(
 
     assistant_ids = list(call_session.assistant_ids or [])
     if body.assistant_id not in assistant_ids:
-        # v1: one assistant per org call room.
-        if assistant_ids:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Only one assistant can join an org call at a time",
-            )
         assistant_ids.append(body.assistant_id)
         call_session.assistant_ids = assistant_ids
         session.commit()
@@ -1395,9 +1464,30 @@ async def add_assistant_to_org_call(
             call_id=call_id,
         )
 
+    roster = ensure_org_call_contacts(
+        session,
+        call_session=call_session,
+        for_assistant_id=body.assistant_id,
+    )
+    session.commit()
+
     await _dispatch_org_call(
         organization_id=organization_id,
         action="participant_joined",
         call_session=call_session,
     )
-    return _org_call_response(call_session)
+    # Push refreshed peer rosters to assistants already on the call.
+    peer_ids = [
+        int(a)
+        for a in (call_session.assistant_ids or [])
+        if int(a) != body.assistant_id
+    ]
+    if peer_ids:
+        await _refresh_org_call_assistant_rosters(
+            session,
+            call_session=call_session,
+            assistant_ids=peer_ids,
+        )
+    response = _org_call_response(call_session)
+    response.roster = roster
+    return response

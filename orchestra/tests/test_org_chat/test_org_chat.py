@@ -52,6 +52,18 @@ def org_chat_dispatch_mock(monkeypatch) -> AsyncMock:
     return mock
 
 
+@pytest.fixture(autouse=True)
+def org_call_roster_refresh_mock(monkeypatch) -> AsyncMock:
+    """Skip adapters fan-out when refreshing mid-call Meet rosters."""
+
+    mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "orchestra.web.api.org_chat.views._refresh_org_call_assistant_rosters",
+        mock,
+    )
+    return mock
+
+
 async def _create_org_with_member(client: AsyncClient, prefix: str):
     owner = await create_test_user(client, f"{prefix}-owner@test.com")
     member = await create_test_user(client, f"{prefix}-member@test.com")
@@ -448,3 +460,131 @@ async def test_dm_rejects_self_and_outsiders(client: AsyncClient):
         json={"content": "You are not in the org"},
     )
     assert outsider_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_team_call_accepts_multiple_assistants(
+    client: AsyncClient,
+    dbsession,
+    org_call_roster_refresh_mock: AsyncMock,
+):
+    owner, member, org = await _create_org_with_member(client, "n-assist")
+    await ensure_assistants_project(client, org["headers"])
+    team = await _create_team(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="N Assist Call Team",
+    )
+    add_member = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/members",
+        headers=org["headers"],
+        json={"user_id": member["id"]},
+    )
+    assert add_member.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), add_member.json()
+
+    from orchestra.db.models.orchestra_models import Assistant, TeamAssistantMembership
+    from orchestra.services.org_call_contacts import (
+        ORG_CALL_PEER_ASSISTANT_ID_KEY,
+        ORG_CALL_USER_ID_KEY,
+    )
+
+    a1 = Assistant(
+        user_id=owner["id"],
+        first_name="Ada",
+        surname="One",
+        organization_id=org["id"],
+    )
+    a2 = Assistant(
+        user_id=owner["id"],
+        first_name="Bea",
+        surname="Two",
+        organization_id=org["id"],
+    )
+    dbsession.add_all([a1, a2])
+    dbsession.flush()
+    dbsession.add_all(
+        [
+            TeamAssistantMembership(
+                team_id=team["id"],
+                assistant_id=a1.agent_id,
+                added_by=owner["id"],
+            ),
+            TeamAssistantMembership(
+                team_id=team["id"],
+                assistant_id=a2.agent_id,
+                added_by=owner["id"],
+            ),
+        ],
+    )
+    dbsession.commit()
+
+    create_response = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/calls",
+        headers=org["headers"],
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    call_id = create_response.json()["call_id"]
+
+    first = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{call_id}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": a1.agent_id},
+    )
+    assert first.status_code == status.HTTP_200_OK, first.json()
+    first_body = first.json()
+    assert first_body["assistant_ids"] == [a1.agent_id]
+    assert any(m["kind"] == "human" for m in first_body["roster"])
+    assert all(m.get("contact_id") is not None for m in first_body["roster"])
+
+    second = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{call_id}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": a2.agent_id},
+    )
+    assert second.status_code == status.HTTP_200_OK, second.json()
+    second_body = second.json()
+    assert set(second_body["assistant_ids"]) == {a1.agent_id, a2.agent_id}
+    peer_rows = [m for m in second_body["roster"] if m["kind"] == "assistant"]
+    assert len(peer_rows) == 1
+    assert peer_rows[0]["assistant_id"] == a1.agent_id
+    assert peer_rows[0]["contact_id"] is not None
+
+    # Idempotent re-add of the same assistant.
+    again = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{call_id}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": a2.agent_id},
+    )
+    assert again.status_code == status.HTTP_200_OK, again.json()
+    assert set(again.json()["assistant_ids"]) == {a1.agent_id, a2.agent_id}
+
+    # Contacts rows exist for humans + peer assistant on a2's context.
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import LogEvent
+
+    logs = dbsession.scalars(
+        select(LogEvent).where(
+            LogEvent.data.has_key(ORG_CALL_USER_ID_KEY)
+            | LogEvent.data.has_key(ORG_CALL_PEER_ASSISTANT_ID_KEY),
+        ),
+    ).all()
+    human_ids = {
+        str(log.data.get(ORG_CALL_USER_ID_KEY))
+        for log in logs
+        if log.data.get(ORG_CALL_USER_ID_KEY)
+    }
+    peer_ids = {
+        str(log.data.get(ORG_CALL_PEER_ASSISTANT_ID_KEY))
+        for log in logs
+        if log.data.get(ORG_CALL_PEER_ASSISTANT_ID_KEY)
+    }
+    assert owner["id"] in human_ids
+    assert str(a1.agent_id) in peer_ids
+    assert org_call_roster_refresh_mock.await_count >= 1

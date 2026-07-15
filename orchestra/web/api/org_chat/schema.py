@@ -155,6 +155,15 @@ class OrgCallParticipantResponse(BaseModel):
     status: OrgCallParticipantStatus
 
 
+class OrgCallRosterMember(BaseModel):
+    kind: Literal["human", "assistant"]
+    user_id: Optional[str] = None
+    assistant_id: Optional[int] = None
+    display_name: str
+    contact_id: Optional[int] = None
+    email: Optional[str] = None
+
+
 class OrgCallSessionResponse(BaseModel):
     call_id: str
     room_name: str
@@ -168,6 +177,7 @@ class OrgCallSessionResponse(BaseModel):
     user_ids: List[str] = Field(default_factory=list)
     participants: List[OrgCallParticipantResponse] = Field(default_factory=list)
     assistant_ids: List[int] = Field(default_factory=list)
+    roster: List[OrgCallRosterMember] = Field(default_factory=list)
 
 
 class OrgCallCreateResponse(OrgCallSessionResponse):
