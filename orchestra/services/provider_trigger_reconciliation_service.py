@@ -16,9 +16,7 @@ from orchestra.db.models.provider_trigger_models import (
     EventTriggerBinding,
     EventTriggerSubscriptionGeneration,
 )
-from orchestra.provider_triggers.composio_trigger_adapter import (
-    github_resource_from_filters,
-)
+from orchestra.provider_triggers.provider_identity import provider_account_subject_hmac
 from orchestra.provider_triggers.runtime_types import (
     BindingRuntimeHealth,
     DesiredTriggerState,
@@ -319,10 +317,6 @@ class ProviderTriggerReconciliationService:
 
         resolved_hmac = account.subject_hmac
         if not resolved_hmac and account.subject:
-            from orchestra.provider_triggers.composio_trigger_adapter import (
-                provider_account_subject_hmac,
-            )
-
             pepper = settings.trigger_event_wrapping_master_key or ""
             if pepper:
                 resolved_hmac = provider_account_subject_hmac(
@@ -373,11 +367,11 @@ class ProviderTriggerReconciliationService:
             )
             return False
 
-        # TODO: Purge/Replace — resolve resource via curated registry +
-        # TriggerProviderAdapter; delete github_resource_from_filters call sites
-        # outside the adapter (also used from ingress_acceptance).
-        # See vault: Provider event trigger contracts#Interim remnants.
-        resource_id = github_resource_from_filters(binding.filters_json)
+        resource_id = adapter.resolve_resource_id(
+            event_slug=binding.event_slug,
+            schema_version=binding.schema_version,
+            filters=binding.filters_json,
+        )
         if not resource_id:
             self._mark_binding_terminal(
                 binding,
@@ -395,10 +389,12 @@ class ProviderTriggerReconciliationService:
             )
             return False
 
-        authorize = getattr(adapter, "authorize_resource", None)
-        if callable(authorize) and not authorize(
+        authorize = adapter.authorize_resource
+        if not authorize(
             provider_connection_id=provider_connection_id,
             resource_id=resource_id,
+            event_slug=binding.event_slug,
+            schema_version=binding.schema_version,
         ):
             self._mark_binding_terminal(
                 binding,
@@ -476,11 +472,14 @@ class ProviderTriggerReconciliationService:
             return
 
         adapter = self._adapter_for_binding(binding)
-        # TODO: Purge/Replace — resolve resource via curated registry +
-        # TriggerProviderAdapter; delete github_resource_from_filters call sites
-        # outside the adapter (also used from ingress_acceptance).
-        # See vault: Provider event trigger contracts#Interim remnants.
-        resource_id = github_resource_from_filters(binding.filters_json) or ""
+        resource_id = (
+            adapter.resolve_resource_id(
+                event_slug=binding.event_slug,
+                schema_version=binding.schema_version,
+                filters=binding.filters_json,
+            )
+            or ""
+        )
         callback_base = settings.provider_trigger_callback_base_url or ""
         callback_url = (
             f"{callback_base}/v0/webhooks/integrations/"

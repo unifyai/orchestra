@@ -1879,6 +1879,23 @@ class ManagedDesktopNetworkIdentityRead(BaseModel):
         None,
         description="Current reconciliation operation, if any.",
     )
+    rotation: Optional["ManagedDesktopIPRotationRead"] = Field(
+        None,
+        description="Most recent egress-IP rotation operation, if any.",
+    )
+
+
+class ManagedDesktopIPRotationRead(BaseModel):
+    """Progress and rollback metadata for an egress-IP rotation."""
+
+    id: str
+    state: str
+    error: Optional[str] = None
+    old_address: Optional[str] = None
+    candidate_address: Optional[str] = None
+    rollback_expires_at: Optional[datetime] = None
+    requested_at: datetime
+    completed_at: Optional[datetime] = None
 
 
 class ManagedDesktopStatusRead(BaseModel):

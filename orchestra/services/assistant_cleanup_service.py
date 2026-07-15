@@ -462,10 +462,13 @@ def _claim_assistant_cleanup_tasks(
     claim is committed immediately so the row lock is not held across runtime
     teardown HTTP calls (Cloud SQL ``lock_timeout`` is 10s).
     """
+    # Generic drains (cron) honor next_retry_at. Explicit redrives by task id or
+    # assistant id skip backoff so operators and merge-gate tests can finish a
+    # cleanup that already reached Released after the first wait timed out.
     query = session.query(AssistantCleanupTask).filter(
         _claimable_cleanup_task_filter(
             now,
-            honor_retry_at=task_ids is None,
+            honor_retry_at=task_ids is None and assistant_id is None,
         ),
     )
     if task_ids is not None:

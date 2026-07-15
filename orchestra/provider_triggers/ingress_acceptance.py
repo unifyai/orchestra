@@ -21,15 +21,14 @@ from orchestra.db.models.provider_trigger_models import (
 from orchestra.observability.provider_trigger_metrics import (
     record_event_to_visible_run_latency,
 )
-from orchestra.provider_triggers.composio_trigger_adapter import (
-    github_resource_from_filters,
-    provider_account_subject_hmac,
-)
 from orchestra.provider_triggers.dispatch_request import (
     COMMUNICATION_DISPATCH_AUDIENCE,
     UNITY_DISPATCH_AUDIENCE,
 )
-from orchestra.provider_triggers.provider_identity import binding_event_identity_hmac
+from orchestra.provider_triggers.provider_identity import (
+    binding_event_identity_hmac,
+    provider_account_subject_hmac,
+)
 from orchestra.provider_triggers.run_key import build_provider_event_run_key
 from orchestra.provider_triggers.runtime_types import (
     DesiredTriggerState,
@@ -260,11 +259,11 @@ def _classify_delivery(
             if delivery_subject_hmac != binding.provider_account_subject_hmac:
                 return ReceiptClassificationReason.unauthorized
 
-    # TODO: Purge/Replace — resolve resource via curated registry +
-    # TriggerProviderAdapter; delete this github_resource_from_filters call
-    # site outside the adapter (also used from reconciliation).
-    # See vault: Provider event trigger contracts#Interim remnants.
-    expected_resource_id = github_resource_from_filters(binding.filters_json)
+    expected_resource_id = adapter.resolve_resource_id(
+        event_slug=binding.event_slug,
+        schema_version=binding.schema_version,
+        filters=binding.filters_json,
+    )
     auth_error = adapter.authorize_delivery(
         delivery=delivery,
         expected_connected_account_id=connection.provider_connection_id,
@@ -275,10 +274,13 @@ def _classify_delivery(
     if auth_error is not None:
         return ReceiptClassificationReason.unauthorized
 
-    matches = getattr(adapter, "delivery_matches_filters", None)
-    if callable(matches):
-        if not matches(delivery, binding.filters_json):
-            return ReceiptClassificationReason.unmatched
+    if not adapter.delivery_matches_filters(
+        delivery,
+        binding.filters_json,
+        event_slug=binding.event_slug,
+        schema_version=binding.schema_version,
+    ):
+        return ReceiptClassificationReason.unmatched
     return ReceiptClassificationReason.matched
 
 

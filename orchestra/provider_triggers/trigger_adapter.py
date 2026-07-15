@@ -6,6 +6,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from orchestra.provider_triggers.resource_resolution import (
+    resolve_resource_id_from_filters,
+)
+from orchestra.provider_triggers.trigger_matching import matches_filters
+from orchestra.provider_triggers.trigger_registry import require_canonical_trigger_event
+
 
 @dataclass(frozen=True)
 class ProviderAccountIdentity:
@@ -190,6 +196,54 @@ class TriggerProviderAdapter(ABC):
         provider_connection_id: str | None,
     ) -> TriggerHealthResult:
         """Probe provider-side health for one generation or connection."""
+
+    def resolve_resource_id(
+        self,
+        *,
+        event_slug: str,
+        schema_version: str,
+        filters: Sequence[Mapping[str, Any]] | None,
+    ) -> str | None:
+        """Resolve the pinned resource id for one curated event from filters."""
+
+        event = require_canonical_trigger_event(
+            event_slug,
+            schema_version=schema_version,
+        )
+        return resolve_resource_id_from_filters(event, filters)
+
+    def authorize_resource(
+        self,
+        *,
+        provider_connection_id: str,
+        resource_id: str,
+        event_slug: str,
+        schema_version: str = "1",
+    ) -> bool:
+        """Return True when the connected account can access the resource."""
+
+        del provider_connection_id, resource_id, event_slug, schema_version
+        return False
+
+    def delivery_matches_filters(
+        self,
+        delivery: NormalizedProviderDelivery,
+        filters: Sequence[Mapping[str, Any]] | None,
+        *,
+        event_slug: str,
+        schema_version: str = "1",
+    ) -> bool:
+        """Return True when a normalized delivery satisfies authored filters."""
+
+        event = require_canonical_trigger_event(
+            event_slug,
+            schema_version=schema_version,
+        )
+        return matches_filters(
+            projection=delivery.curated_projection,
+            filters=filters,
+            event=event,
+        )
 
     def authorize_delivery(
         self,

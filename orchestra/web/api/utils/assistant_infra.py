@@ -20,7 +20,11 @@ UNITY_GATEWAY_URL = os.environ.get("UNITY_GATEWAY_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
-RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS = 90.0
+# Pool VM release (label scrub + static-IP restore) routinely takes 60–120s on
+# staging/prod. The cleanup worker must wait long enough for that path to finish
+# before skipping AssistantSession deletion; otherwise Released CRs are left
+# behind until a later retry/prune cycle.
+RUNTIME_CLEANUP_WAIT_TIMEOUT_SECONDS = 300.0
 RUNTIME_CLEANUP_POLL_INTERVAL_SECONDS = 3.0
 
 # Bound the reawaken fan-out so an owner with many assistants (e.g. a large

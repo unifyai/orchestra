@@ -9,13 +9,12 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
 
-from orchestra.provider_triggers.composio_trigger_adapter import (
-    github_resource_from_filters,
-    provider_account_subject_hmac,
-    split_github_resource,
-)
+from orchestra.provider_triggers.composio_trigger_adapter import split_github_resource
 from orchestra.provider_triggers.pipedream_signing import verify_pipedream_signature
-from orchestra.provider_triggers.provider_identity import pipedream_delivery_identity
+from orchestra.provider_triggers.provider_identity import (
+    pipedream_delivery_identity,
+    provider_account_subject_hmac,
+)
 from orchestra.provider_triggers.signing_secret_storage import (
     wrap_signing_secret_for_generation,
 )
@@ -29,10 +28,7 @@ from orchestra.provider_triggers.trigger_adapter import (
     TriggerProvisionResult,
     TriggerResource,
 )
-from orchestra.provider_triggers.trigger_matching import (
-    matches_filters,
-    project_github_issue_created,
-)
+from orchestra.provider_triggers.trigger_projectors import project_curated_payload
 from orchestra.provider_triggers.trigger_registry import (
     GITHUB_ISSUE_CREATED,
     PIPEDREAM_BACKEND_ID,
@@ -255,7 +251,15 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         *,
         provider_connection_id: str,
         resource_id: str,
+        event_slug: str = GITHUB_ISSUE_CREATED,
+        schema_version: str = "1",
     ) -> bool:
+        event = require_canonical_trigger_event(
+            event_slug,
+            schema_version=schema_version,
+        )
+        if event.projector_key != GITHUB_ISSUE_CREATED:
+            return False
         split_github_resource(resource_id)
         try:
             response = self._request(
@@ -284,8 +288,10 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
             event_slug=request.event_slug,
             schema_version=request.schema_version,
         )
-        resource_id = request.resource_id or github_resource_from_filters(
-            request.filters,
+        resource_id = request.resource_id or self.resolve_resource_id(
+            event_slug=request.event_slug,
+            schema_version=request.schema_version,
+            filters=request.filters,
         )
         if not resource_id:
             raise ValueError(
@@ -294,6 +300,8 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         if not self.authorize_resource(
             provider_connection_id=request.provider_connection_id,
             resource_id=resource_id,
+            event_slug=request.event_slug,
+            schema_version=request.schema_version,
         ):
             raise PermissionError("repository_inaccessible")
         owner, repo = split_github_resource(resource_id)
@@ -436,7 +444,11 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         identity = self.stable_event_identity(payload)
         if not identity:
             raise ValueError("Pipedream delivery is missing retry-stable identity")
-        projection = project_github_issue_created(payload)
+        event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
+        projection = project_curated_payload(
+            projector_key=event.projector_key,
+            payload=payload,
+        )
         resource_id = projection.get("repository")
         external_trigger_id = self.delivery_external_trigger_id(
             headers=headers,
@@ -575,15 +587,4 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
                 "connected_account_id": provider_connection_id,
                 "external_trigger_id": external_trigger_id,
             },
-        )
-
-    def delivery_matches_filters(
-        self,
-        delivery: NormalizedProviderDelivery,
-        filters: Sequence[Mapping[str, Any]] | None,
-    ) -> bool:
-        return matches_filters(
-            projection=delivery.curated_projection,
-            filters=filters,
-            event_slug=GITHUB_ISSUE_CREATED,
         )

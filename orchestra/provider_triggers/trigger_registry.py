@@ -3,11 +3,6 @@
 The registry is the single Orchestra-owned catalog for canonical events,
 filter fields/operators, normalization rules, and provider backend mappings.
 Dynamic provider catalogs are not authoritative for authored trigger intent.
-
-TODO: Grow this registry beyond the initial github.issue_created slice as more
-events gain proven retry-stable identity, curated filters, and backend
-mappings. Provider catalog browse can inform candidates; enabling an event for
-authored tasks still requires a curated entry here.
 """
 
 from __future__ import annotations
@@ -15,25 +10,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from orchestra.provider_triggers.filter_operators import FilterField, FilterOperator
+from orchestra.provider_triggers.filter_operators import FilterOperator
 
 GITHUB_ISSUE_CREATED = "github.issue_created"
 GITHUB_APP_SLUG = "github"
+SYNTHETIC_ITEM_CREATED = "synthetic.item_created"
+SYNTHETIC_APP_SLUG = "synthetic"
 REGISTRY_SCHEMA_VERSION_V1 = "1"
 COMPOSIO_BACKEND_ID = "composio"
 PIPEDREAM_BACKEND_ID = "pipedream"
+LOCAL_BACKEND_ID = "local"
 COMPOSIO_GITHUB_ISSUE_CREATED_SLUG = "GITHUB_ISSUE_CREATED_TRIGGER"
 PIPEDREAM_GITHUB_ISSUE_COMPONENT = "github-new-or-updated-issue"
+CATALOG_VISIBILITY_PUBLIC = "public"
+CATALOG_VISIBILITY_CONFORMANCE_ONLY = "conformance_only"
 
 
 @dataclass(frozen=True)
 class FilterFieldDefinition:
     """One curated filterable field for a canonical event."""
 
-    field: FilterField
+    field: str
     value_type: str
     operators: tuple[FilterOperator, ...]
     description: str
+    normalization: str = "string"
 
 
 @dataclass(frozen=True)
@@ -59,12 +60,14 @@ class CanonicalTriggerEvent:
     schema_version: str
     filters: tuple[FilterFieldDefinition, ...]
     provider_mappings: tuple[ProviderEventMapping, ...]
-    projection_fields: tuple[str, ...] = (
-        "repository",
-        "author",
-        "labels",
-        "title",
-    )
+    projector_key: str
+    resource_kind: str
+    resource_id_format: str
+    resource_filter_field: str
+    resource_filter_operator: str
+    selection_contract: str
+    projection_fields: tuple[str, ...] = ()
+    catalog_visibility: str = CATALOG_VISIBILITY_PUBLIC
 
     def mapping_for(self, backend_id: str) -> ProviderEventMapping | None:
         """Return the provider mapping for one backend, if curated."""
@@ -78,7 +81,7 @@ class CanonicalTriggerEvent:
         """Return the filter definition for one curated field name."""
 
         for definition in self.filters:
-            if definition.field.value == field_name:
+            if definition.field == field_name:
                 return definition
         return None
 
@@ -98,7 +101,7 @@ class CanonicalTriggerEvent:
             for operator in definition.operators:
                 filters.append(
                     {
-                        "field": definition.field.value,
+                        "field": definition.field,
                         "operator": operator.value,
                         "value_type": definition.value_type,
                     },
@@ -114,18 +117,33 @@ class CanonicalTriggerEvent:
             "schema_version": self.schema_version,
             "filters": filters,
             "backends": backends,
+            "resource_kind": self.resource_kind,
+            "resource_id_format": self.resource_id_format,
+            "resource_filter_field": self.resource_filter_field,
+            "resource_filter_operator": self.resource_filter_operator,
+            "selection_contract": self.selection_contract,
         }
 
 
 _GITHUB_ISSUE_CREATED_V1 = CanonicalTriggerEvent(
-    # TODO: Additional CanonicalTriggerEvent entries belong beside this one —
-    # do not specialize the lookup APIs around a single event slug.
     event_slug=GITHUB_ISSUE_CREATED,
     canonical_app_slug=GITHUB_APP_SLUG,
     schema_version=REGISTRY_SCHEMA_VERSION_V1,
+    projector_key=GITHUB_ISSUE_CREATED,
+    resource_kind="github_repository",
+    resource_id_format="owner/name",
+    resource_filter_field="repository",
+    resource_filter_operator="is",
+    selection_contract=(
+        "Provide the exact repository as a repository filter using operator "
+        "'is' and value 'owner/name'. v1 does not browse the full GitHub "
+        "catalog; provisioning validates access for that repository through "
+        "the selected connection."
+    ),
+    projection_fields=("repository", "author", "labels", "title"),
     filters=(
         FilterFieldDefinition(
-            field=FilterField.repository,
+            field="repository",
             value_type="string",
             operators=(
                 FilterOperator.is_,
@@ -133,9 +151,10 @@ _GITHUB_ISSUE_CREATED_V1 = CanonicalTriggerEvent(
                 FilterOperator.is_any_of,
             ),
             description="Canonical owner/name repository path.",
+            normalization="repository",
         ),
         FilterFieldDefinition(
-            field=FilterField.author,
+            field="author",
             value_type="string",
             operators=(
                 FilterOperator.is_,
@@ -143,21 +162,24 @@ _GITHUB_ISSUE_CREATED_V1 = CanonicalTriggerEvent(
                 FilterOperator.is_any_of,
             ),
             description="Issue author login.",
+            normalization="author",
         ),
         FilterFieldDefinition(
-            field=FilterField.labels,
+            field="labels",
             value_type="string_array",
             operators=(FilterOperator.includes, FilterOperator.excludes),
             description="Exact issue label names.",
+            normalization="labels",
         ),
         FilterFieldDefinition(
-            field=FilterField.title,
+            field="title",
             value_type="string",
             operators=(
                 FilterOperator.contains,
                 FilterOperator.does_not_contain,
             ),
             description="Issue title text.",
+            normalization="title",
         ),
     ),
     provider_mappings=(
@@ -194,10 +216,56 @@ _GITHUB_ISSUE_CREATED_V1 = CanonicalTriggerEvent(
     ),
 )
 
+_SYNTHETIC_ITEM_CREATED_V1 = CanonicalTriggerEvent(
+    event_slug=SYNTHETIC_ITEM_CREATED,
+    canonical_app_slug=SYNTHETIC_APP_SLUG,
+    schema_version=REGISTRY_SCHEMA_VERSION_V1,
+    projector_key=SYNTHETIC_ITEM_CREATED,
+    resource_kind="synthetic_item",
+    resource_id_format="item_id",
+    resource_filter_field="item_id",
+    resource_filter_operator="is",
+    selection_contract=(
+        "Provide the exact item id as an item_id filter using operator 'is'."
+    ),
+    projection_fields=("item_id", "title"),
+    catalog_visibility=CATALOG_VISIBILITY_CONFORMANCE_ONLY,
+    filters=(
+        FilterFieldDefinition(
+            field="item_id",
+            value_type="string",
+            operators=(FilterOperator.is_, FilterOperator.is_not),
+            description="Synthetic item identifier.",
+            normalization="item_id",
+        ),
+        FilterFieldDefinition(
+            field="title",
+            value_type="string",
+            operators=(
+                FilterOperator.contains,
+                FilterOperator.does_not_contain,
+            ),
+            description="Synthetic item title.",
+            normalization="title",
+        ),
+    ),
+    provider_mappings=(
+        ProviderEventMapping(
+            backend_id=LOCAL_BACKEND_ID,
+            provider_trigger_slug="synthetic-item-created",
+            retry_stable_identity_field="delivery_id",
+            signature_headers=("x-synthetic-signature",),
+            signature_scheme="synthetic_hmac_sha256",
+            timestamp_tolerance_seconds=300,
+            catalog_status="conformance_only",
+            notes=("Conformance-only mapping for registry/engine validation.",),
+        ),
+    ),
+)
+
 _REGISTRY: dict[tuple[str, str], CanonicalTriggerEvent] = {
-    # TODO: Register each newly curated (event_slug, schema_version) here once
-    # identity, filters, and at least one backend mapping are proven.
     (GITHUB_ISSUE_CREATED, REGISTRY_SCHEMA_VERSION_V1): _GITHUB_ISSUE_CREATED_V1,
+    (SYNTHETIC_ITEM_CREATED, REGISTRY_SCHEMA_VERSION_V1): _SYNTHETIC_ITEM_CREATED_V1,
 }
 
 
@@ -226,13 +294,23 @@ def require_canonical_trigger_event(
     return event
 
 
-def list_canonical_trigger_events() -> list[CanonicalTriggerEvent]:
-    """Return all curated trigger events in stable catalog order."""
+def list_canonical_trigger_events(
+    *,
+    include_conformance_only: bool = False,
+) -> list[CanonicalTriggerEvent]:
+    """Return curated trigger events in stable catalog order."""
 
-    return sorted(
+    events = sorted(
         _REGISTRY.values(),
         key=lambda event: (event.event_slug, event.schema_version),
     )
+    if include_conformance_only:
+        return events
+    return [
+        event
+        for event in events
+        if event.catalog_visibility == CATALOG_VISIBILITY_PUBLIC
+    ]
 
 
 def list_trigger_catalog_payloads(
@@ -302,16 +380,16 @@ def validate_authored_filters(
         value = item.get("value")
         if value is None or value == "" or value == []:
             raise ValueError(
-                f"Filter value is required for field {definition.field.value!r}",
+                f"Filter value is required for field {definition.field!r}",
             )
         if definition.value_type == "string_array" and isinstance(value, list):
             if any(not str(entry).strip() for entry in value):
                 raise ValueError(
-                    f"Filter value is required for field {definition.field.value!r}",
+                    f"Filter value is required for field {definition.field!r}",
                 )
         validated.append(
             {
-                "field": definition.field.value,
+                "field": definition.field,
                 "operator": operator.value,
                 "value": value,
             },

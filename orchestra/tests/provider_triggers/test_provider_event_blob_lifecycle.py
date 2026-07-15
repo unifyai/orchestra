@@ -26,7 +26,6 @@ from orchestra.provider_triggers.private_event_storage import (
 )
 from orchestra.provider_triggers.provider_identity import binding_event_identity_hmac
 from orchestra.provider_triggers.provider_trigger_mutation import (
-    initialize_binding,
     promote_active_generation,
 )
 from orchestra.provider_triggers.runtime_types import BlobAuditAction, BlobCommitState
@@ -35,6 +34,9 @@ from orchestra.services.provider_event_blob_cleanup_service import (
 )
 from orchestra.services.provider_event_blob_service import ProviderEventBlobService
 from orchestra.settings import settings
+from orchestra.tests.provider_triggers.control_plane_harness import (
+    seed_minimal_test_binding,
+)
 
 
 @pytest.fixture
@@ -102,7 +104,7 @@ def test_uncommitted_write_attach_and_read_round_trip(
     blob_lifecycle_service: ProviderEventBlobService,
     storage_root: Path,
 ) -> None:
-    initialized = initialize_binding(dbsession, desired_state="enabled")
+    initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     promote_active_generation(dbsession, binding_id=initialized.binding_id)
     binding = _binding_row(dbsession, initialized.binding_id)
     generation = _active_generation(dbsession, binding)
@@ -155,7 +157,7 @@ def test_orphan_sweep_removes_uncommitted_blob(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "trigger_event_orphan_safety_seconds", 0)
-    initialized = initialize_binding(dbsession, desired_state="enabled")
+    initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     binding = _binding_row(dbsession, initialized.binding_id)
     blob = blob_lifecycle_service.write_uncommitted(
         binding_id=binding.binding_id,
@@ -184,7 +186,7 @@ def test_mark_unavailable_queues_deletion_and_blocks_read(
     blob_lifecycle_service: ProviderEventBlobService,
     storage_root: Path,
 ) -> None:
-    initialized = initialize_binding(dbsession, desired_state="enabled")
+    initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     binding = _binding_row(dbsession, initialized.binding_id)
     dao = ProviderTriggerDAO(dbsession)
     generation = dao.create_generation(binding=binding)
@@ -230,7 +232,7 @@ def test_read_denied_is_audited_on_auth_failure(
     blob_lifecycle_service: ProviderEventBlobService,
     storage_root: Path,
 ) -> None:
-    initialized = initialize_binding(dbsession, desired_state="enabled")
+    initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     binding = _binding_row(dbsession, initialized.binding_id)
     dao = ProviderTriggerDAO(dbsession)
     generation = dao.create_generation(binding=binding)
@@ -269,7 +271,7 @@ def test_ensure_binding_dedup_key_is_stable(
     dbsession: Session,
     blob_lifecycle_service: ProviderEventBlobService,
 ) -> None:
-    initialized = initialize_binding(dbsession, desired_state="enabled")
+    initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     binding = _binding_row(dbsession, initialized.binding_id)
     first = blob_lifecycle_service.ensure_binding_dedup_key(binding=binding)
     second = blob_lifecycle_service.ensure_binding_dedup_key(binding=binding)
@@ -289,7 +291,7 @@ def test_promote_generation_requires_storage_configuration(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    initialized = initialize_binding(dbsession, desired_state="enabled")
+    initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     monkeypatch.setattr(settings, "trigger_event_wrapping_master_key", None)
     promote_active_generation(dbsession, binding_id=initialized.binding_id)
     binding = _binding_row(dbsession, initialized.binding_id)

@@ -6,16 +6,25 @@ import threading
 import uuid
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestra.db.models.provider_trigger_models import (
+    EventTriggerSubscriptionGeneration,
+)
 from orchestra.provider_triggers.provider_trigger_mutation import (
     AcceptanceRejected,
     TaskRevisionConflict,
-    attempt_event_acceptance,
-    initialize_binding,
     mutate_provider_trigger_task,
     pause_provider_trigger,
     promote_active_generation,
+)
+from orchestra.provider_triggers.runtime_types import (
+    DesiredTriggerState,
+    GenerationLifecycle,
+)
+from orchestra.tests.provider_triggers.control_plane_harness import (
+    seed_minimal_test_binding,
 )
 
 
@@ -23,11 +32,58 @@ def _binding_id() -> str:
     return f"binding-{uuid.uuid4().hex[:12]}"
 
 
+def _attempt_test_event_acceptance(
+    session: Session,
+    *,
+    binding_id: str,
+    acceptance_epoch: int,
+    provider_event_identity_hmac: str = "identity-test",
+) -> str:
+    """Exercise acceptance fencing through the same DAO path production ingress uses."""
+
+    from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
+
+    dao = ProviderTriggerDAO(session)
+    binding = dao.get_binding(binding_id=binding_id, for_update=True)
+    if binding is None:
+        raise ValueError(f"Binding {binding_id} not found.")
+    if binding.tombstoned_at is not None:
+        raise AcceptanceRejected(reason="binding_tombstoned")
+    if (
+        not binding.local_acceptance_open
+        or binding.desired_trigger_state != DesiredTriggerState.enabled.value
+    ):
+        raise AcceptanceRejected(reason="inactive_trigger")
+    if binding.acceptance_epoch != acceptance_epoch:
+        raise AcceptanceRejected(reason="stale_acceptance_epoch")
+
+    generation_id = binding.active_generation_id
+    if not generation_id:
+        generation = dao.create_generation(binding=binding)
+        dao.promote_generation(binding=binding, generation=generation)
+        generation_id = generation.generation_id
+
+    generation_row = session.execute(
+        select(EventTriggerSubscriptionGeneration).where(
+            EventTriggerSubscriptionGeneration.generation_id == generation_id,
+        ),
+    ).scalar_one()
+    if generation_row.lifecycle_state != GenerationLifecycle.active.value:
+        raise AcceptanceRejected(reason="inactive_generation")
+
+    receipt = dao.adopt_receipt(
+        binding=binding,
+        generation=generation_row,
+        provider_event_identity_hmac=provider_event_identity_hmac,
+    )
+    return receipt.receipt_id
+
+
 def test_typed_provider_trigger_mutation_cas_advances_revision_and_acceptance_epoch(
     dbsession: Session,
 ) -> None:
     binding_id = _binding_id()
-    initialize_binding(dbsession, binding_id=binding_id)
+    seed_minimal_test_binding(dbsession, binding_id=binding_id)
     promoted = promote_active_generation(dbsession, binding_id=binding_id)
     assert promoted.acceptance_open is True
 
@@ -47,7 +103,7 @@ def test_unity_origin_provider_trigger_mutation_cas_advances_revision(
     dbsession: Session,
 ) -> None:
     binding_id = _binding_id()
-    initialize_binding(dbsession, binding_id=binding_id)
+    seed_minimal_test_binding(dbsession, binding_id=binding_id)
     promote_active_generation(dbsession, binding_id=binding_id)
     mutated = mutate_provider_trigger_task(
         dbsession,
@@ -64,7 +120,7 @@ def test_provider_trigger_rejects_stale_task_revision_without_advancing_acceptan
     dbsession: Session,
 ) -> None:
     binding_id = _binding_id()
-    initialize_binding(dbsession, binding_id=binding_id)
+    seed_minimal_test_binding(dbsession, binding_id=binding_id)
     mutate_provider_trigger_task(
         dbsession,
         binding_id=binding_id,
@@ -97,7 +153,7 @@ def test_acceptance_and_pause_have_one_locked_observable_ordering(
 
     setup = session_factory()
     try:
-        initialize_binding(setup, binding_id=binding_id)
+        seed_minimal_test_binding(setup, binding_id=binding_id)
         promoted = promote_active_generation(setup, binding_id=binding_id)
         setup.commit()
     finally:
@@ -111,7 +167,7 @@ def test_acceptance_and_pause_have_one_locked_observable_ordering(
         try:
             barrier.wait(timeout=5)
             try:
-                attempt_event_acceptance(
+                _attempt_test_event_acceptance(
                     session,
                     binding_id=binding_id,
                     acceptance_epoch=promoted.acceptance_epoch,

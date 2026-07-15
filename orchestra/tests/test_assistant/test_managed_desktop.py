@@ -66,12 +66,16 @@ def mock_managed_desktop_reawaken():
         "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
         new_callable=AsyncMock,
     ) as mock_reawaken, patch(
+        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+        new_callable=AsyncMock,
+    ) as mock_stop_runtime, patch(
         "orchestra.web.api.assistant.views.wake_up_assistant",
         new_callable=AsyncMock,
     ) as mock_wake_up:
         mock_reawaken.return_value = None
+        mock_stop_runtime.return_value = {"success": True, "skipped": False}
         mock_wake_up.return_value = type("Resp", (), {"status_code": 200})()
-        yield mock_reawaken
+        yield mock_reawaken, mock_stop_runtime
 
 
 def _fund_user(dbsession: Session, user_id: str, amount: Decimal) -> None:
@@ -159,6 +163,7 @@ async def test_create_assistant_with_desktop_mode_charges_and_activates(
 async def test_enable_managed_desktop_endpoint_charges_and_sets_status(
     client: AsyncClient,
     dbsession: Session,
+    mock_managed_desktop_reawaken,
 ):
     user = await create_test_user(client, "enable-desktop@example.com")
     _fund_user(dbsession, user["id"], Decimal("100.00"))
@@ -217,6 +222,8 @@ async def test_enable_managed_desktop_endpoint_charges_and_sets_status(
         headers=user["headers"],
     )
     assert disable_response.status_code == status.HTTP_200_OK, disable_response.text
+    _, mock_stop_runtime = mock_managed_desktop_reawaken
+    mock_stop_runtime.assert_awaited_once_with(str(agent_id))
     external_ip = (
         dbsession.query(AssistantExternalIP)
         .filter(AssistantExternalIP.assistant_id == agent_id)

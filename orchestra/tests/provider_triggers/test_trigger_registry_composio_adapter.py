@@ -14,17 +14,17 @@ import pytest
 
 from orchestra.provider_triggers.composio_trigger_adapter import (
     ComposioTriggerAdapter,
-    github_resource_from_filters,
     verify_composio_signature,
+)
+from orchestra.provider_triggers.resource_resolution import (
+    resolve_resource_id_from_filters,
 )
 from orchestra.provider_triggers.trigger_adapter import TriggerProvisionRequest
 from orchestra.provider_triggers.trigger_adapter_registry import (
     get_trigger_provider_adapter,
 )
-from orchestra.provider_triggers.trigger_matching import (
-    matches_filters,
-    project_github_issue_created,
-)
+from orchestra.provider_triggers.trigger_matching import matches_filters
+from orchestra.provider_triggers.trigger_projectors import project_curated_payload
 from orchestra.provider_triggers.trigger_registry import (
     GITHUB_ISSUE_CREATED,
     list_trigger_catalog_payloads,
@@ -92,7 +92,11 @@ def test_composio_retry_deliveries_normalize_to_same_identity_and_projection() -
 
 def test_github_issue_created_filters_are_deterministic_on_curated_projection() -> None:
     payload = _load_composio_fixture()
-    projection = project_github_issue_created(payload)
+    event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
+    projection = project_curated_payload(
+        projector_key=event.projector_key,
+        payload=payload,
+    )
     assert projection == {
         "repository": "octocat/hello-world",
         "author": "octocat",
@@ -109,7 +113,10 @@ def test_github_issue_created_filters_are_deterministic_on_curated_projection() 
             "repository": {"full_name": "OctoCat/Hello-World"},
         },
     }
-    nested_projection = project_github_issue_created(nested)
+    nested_projection = project_curated_payload(
+        projector_key=event.projector_key,
+        payload=nested,
+    )
     assert nested_projection["repository"] == "octocat/hello-world"
     assert nested_projection["author"] == "octocat"
     assert nested_projection["labels"] == ["bug"]
@@ -123,14 +130,17 @@ def test_github_issue_created_filters_are_deterministic_on_curated_projection() 
             {"field": "labels", "operator": "includes", "value": "bug"},
             {"field": "title", "operator": "contains", "value": "provider"},
         ],
+        event=event,
     )
     assert not matches_filters(
         projection=projection,
         filters=[{"field": "labels", "operator": "excludes", "value": "bug"}],
+        event=event,
     )
     assert not matches_filters(
         projection={"repository": None, "author": None, "labels": None, "title": None},
         filters=[{"field": "author", "operator": "is not", "value": "octocat"}],
+        event=event,
     )
 
     adapter = ComposioTriggerAdapter(api_key="test-key")
@@ -138,11 +148,13 @@ def test_github_issue_created_filters_are_deterministic_on_curated_projection() 
     assert adapter.delivery_matches_filters(
         delivery,
         [{"field": "repository", "operator": "is", "value": "octocat/Hello-World"}],
+        event_slug=GITHUB_ISSUE_CREATED,
     )
 
 
 def test_unknown_source_fields_remain_in_source_body_and_cannot_match() -> None:
     payload = _load_composio_fixture()
+    event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
     payload = {
         **payload,
         "data": {
@@ -171,10 +183,12 @@ def test_unknown_source_fields_remain_in_source_body_and_cannot_match() -> None:
                 "value": "critical",
             },
         ],
+        event=event,
     )
     assert not adapter.delivery_matches_filters(
         delivery,
         [{"field": "repository", "operator": "is", "value": "decoy/should-not-match"}],
+        event_slug=GITHUB_ISSUE_CREATED,
     )
 
 
@@ -320,7 +334,8 @@ def test_composio_provision_and_delivery_authorization_fail_closed() -> None:
         == "connected_account_mismatch"
     )
     assert (
-        github_resource_from_filters(
+        resolve_resource_id_from_filters(
+            require_canonical_trigger_event(GITHUB_ISSUE_CREATED),
             [{"field": "repository", "operator": "is", "value": "OctoCat/Hello-World"}],
         )
         == "octocat/hello-world"
@@ -335,7 +350,8 @@ def test_task_trigger_catalog_exposes_only_curated_versioned_github_issue_create
     assert [item["event_slug"] for item in payloads] == [GITHUB_ISSUE_CREATED]
     event = payloads[0]
     assert event["schema_version"] == "1"
-    assert event["canonical_app_slug"] == "github"
+    assert event["resource_kind"] == "github_repository"
+    assert event["resource_id_format"] == "owner/name"
     assert event["backends"] == ["composio", "pipedream"]
     operators_by_field: dict[str, set[str]] = {}
     for item in event["filters"]:

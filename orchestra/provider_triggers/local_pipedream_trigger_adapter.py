@@ -8,14 +8,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from orchestra.provider_triggers.composio_trigger_adapter import (
-    github_resource_from_filters,
-    provider_account_subject_hmac,
-    split_github_resource,
-)
+from orchestra.provider_triggers.composio_trigger_adapter import split_github_resource
 from orchestra.provider_triggers.pipedream_trigger_adapter import (
     PipedreamTriggerAdapter,
 )
+from orchestra.provider_triggers.provider_identity import provider_account_subject_hmac
 from orchestra.provider_triggers.signing_secret_storage import (
     wrap_signing_secret_for_generation,
 )
@@ -176,7 +173,10 @@ class LocalPipedreamTriggerAdapter(TriggerProviderAdapter):
         *,
         provider_connection_id: str,
         resource_id: str,
+        event_slug: str,
+        schema_version: str = "1",
     ) -> bool:
+        require_canonical_trigger_event(event_slug, schema_version=schema_version)
         _ = provider_connection_id
         if self._scenario.connection_status not in {"connected", "active"}:
             return False
@@ -200,8 +200,10 @@ class LocalPipedreamTriggerAdapter(TriggerProviderAdapter):
             event_slug=request.event_slug,
             schema_version=request.schema_version,
         )
-        resource_id = request.resource_id or github_resource_from_filters(
-            request.filters,
+        resource_id = request.resource_id or self.resolve_resource_id(
+            event_slug=request.event_slug,
+            schema_version=request.schema_version,
+            filters=request.filters,
         )
         if not resource_id:
             raise ValueError(
@@ -210,6 +212,8 @@ class LocalPipedreamTriggerAdapter(TriggerProviderAdapter):
         if not self.authorize_resource(
             provider_connection_id=request.provider_connection_id,
             resource_id=resource_id,
+            event_slug=request.event_slug,
+            schema_version=request.schema_version,
         ):
             raise PermissionError("repository_inaccessible")
         split_github_resource(resource_id)
@@ -348,10 +352,3 @@ class LocalPipedreamTriggerAdapter(TriggerProviderAdapter):
             or "provider_health_check_failed",
             detail={"provider_status": self._scenario.connection_status},
         )
-
-    def delivery_matches_filters(
-        self,
-        delivery: NormalizedProviderDelivery,
-        filters: Sequence[Mapping[str, Any]] | None,
-    ) -> bool:
-        return self._delivery_adapter.delivery_matches_filters(delivery, filters)

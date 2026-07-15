@@ -32,17 +32,20 @@ logger = logging.getLogger(__name__)
 
 # Top-level prefix for shared-team contexts (mirrors unity's ContextRegistry).
 TEAM_CONTEXT_PREFIX = "Teams"
+# Lightweight multi-party chats (humans + assistants); not team shared-memory.
+CHAT_GROUP_CONTEXT_PREFIX = "Groups"
 
 
 class OwnerScope(StrEnum):
     ASSISTANT = "assistant"
     TEAM = "team"
+    GROUP = "group"
     SYSTEM = "system"
 
 
 class Owner(NamedTuple):
     scope: OwnerScope
-    # agent_id for ASSISTANT, team_id for TEAM; None otherwise.
+    # agent_id for ASSISTANT, team_id for TEAM, group_id for GROUP; None otherwise.
     owner_id: int | None
 
 
@@ -56,23 +59,26 @@ def owner_from_context_name(name: str) -> Owner:
     Convention (see unity ``ContextRegistry`` / ``session_details``):
 
     * ``Teams/{team_id}/...``      -> team-owned
+    * ``Groups/{group_id}/...``   -> chat-group-owned
     * ``{user_id}/{agent_id}/...`` -> assistant-owned
     * anything else                -> system
 
     Test contexts are prefixed with a ``tests/.../`` root; the trailing
-    ``{user}/{agent}/...`` (or ``Teams/...``) shape is matched after skipping
-    any leading ``tests`` segment so seeded test data classifies the same way.
+    ``{user}/{agent}/...`` (or ``Teams/...`` / ``Groups/...``) shape is matched
+    after skipping any leading ``tests`` segment so seeded test data classifies
+    the same way.
     """
     parts = [p for p in name.split("/") if p != ""]
     if not parts:
         return Owner(OwnerScope.SYSTEM, None)
 
-    # Shared team: Teams/{team_id}/...  (checked first so the team_id int is not
-    # mistaken for an agent_id by the assistant scan below). Tolerates a leading
-    # test root of arbitrary depth (tests/<...>/Teams/{team_id}/...).
+    # Shared team / chat group prefixes first so their int ids are not mistaken
+    # for an agent_id by the assistant scan below.
     for i in range(len(parts) - 1):
         if parts[i] == TEAM_CONTEXT_PREFIX and _is_int(parts[i + 1]):
             return Owner(OwnerScope.TEAM, int(parts[i + 1]))
+        if parts[i] == CHAT_GROUP_CONTEXT_PREFIX and _is_int(parts[i + 1]):
+            return Owner(OwnerScope.GROUP, int(parts[i + 1]))
 
     # Per-assistant: ``{user_id}/{agent_id}/...`` -- the agent_id is the first
     # integer component that follows a non-integer (the user_id), which also
@@ -106,15 +112,17 @@ def resolve_owner(
 def owner_key(scope: OwnerScope, owner_id: int | None) -> str:
     """Single-column partition key encoding an owner.
 
-    ``a{agent_id}`` / ``t{team_id}`` for assistant/team owners; ``sys`` for
-    everything without a per-owner deletion identity (system/builtins data).
-    This is the LIST sub-partition key the shared Assistants project is divided
-    by.
+    ``a{agent_id}`` / ``t{team_id}`` / ``g{group_id}`` for assistant/team/group
+    owners; ``sys`` for everything without a per-owner deletion identity
+    (system/builtins data). This is the LIST sub-partition key the shared
+    Assistants project is divided by.
     """
     if scope == OwnerScope.ASSISTANT and owner_id is not None:
         return f"a{owner_id}"
     if scope == OwnerScope.TEAM and owner_id is not None:
         return f"t{owner_id}"
+    if scope == OwnerScope.GROUP and owner_id is not None:
+        return f"g{owner_id}"
     return "sys"
 
 
@@ -122,9 +130,9 @@ def single_owner_key(owner_scope, owner_id: int | None) -> str | None:
     """The owner sub-partition key to prune by for a *single-owner* context, or
     ``None`` when the context is not safely owner-homogeneous.
 
-    Only assistant/team contexts with a real ``owner_id`` are single-owner: all
-    their logs share one ``owner_key`` (enforced by ``ContextDAO.add_logs``), so a
-    query filtered to one such context can prune to its owner sub-partition.
+    Only assistant/team/group contexts with a real ``owner_id`` are single-owner:
+    all their logs share one ``owner_key`` (enforced by ``ContextDAO.add_logs``),
+    so a query filtered to one such context can prune to its owner sub-partition.
     System contexts return ``None`` (``sys`` is a shared bucket, not a single
     owner), so no single ``owner_key`` predicate is valid for them.
 

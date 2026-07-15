@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from typing import Literal
 
@@ -41,16 +40,6 @@ class MutationResult:
     acceptance_open: bool
 
 
-@dataclass(frozen=True)
-class AcceptanceResult:
-    """Outcome of one transactional acceptance attempt."""
-
-    binding_id: str
-    accepted: bool
-    receipt_id: str | None
-    acceptance_epoch: int
-
-
 def _dao(session: Session) -> ProviderTriggerDAO:
     return ProviderTriggerDAO(session)
 
@@ -70,44 +59,6 @@ def _mutation_result(binding: EventTriggerBinding) -> MutationResult:
         desired_state=binding.desired_trigger_state,
         acceptance_open=binding.local_acceptance_open,
     )
-
-
-def initialize_binding(
-    session: Session,
-    *,
-    binding_id: str | None = None,
-    desired_state: str = "enabled",
-) -> MutationResult:
-    """Create a synthetic binding for lifecycle and concurrency tests.
-
-    # TODO: Purge/Delete — remove once production-path tests cover binding
-    fence/CAS cases via typed Tasks mutations (no synthetic project/task ids).
-    See vault: Provider event trigger contracts#Interim remnants.
-    """
-
-    resolved_binding_id = binding_id or f"binding-{uuid.uuid4().hex[:12]}"
-    scope_token = abs(hash(resolved_binding_id)) % (2**30)
-    trigger = ProviderEventTrigger(
-        state=desired_state,  # type: ignore[arg-type]
-        connection_id="conn-test",
-        backend_id="composio",
-        canonical_app_slug="github",
-        event_slug="github.issue_created",
-        schema_version="1",
-    )
-    binding = _dao(session).create_binding(
-        binding_id=resolved_binding_id,
-        project_id=0,
-        tasks_context_id=0,
-        source_task_log_id=scope_token,
-        task_id=scope_token,
-        assistant_id=0,
-        task_revision=1,
-        trigger=trigger,
-        execution_mode="live",
-        entrypoint=None,
-    )
-    return _mutation_result(binding)
 
 
 def mutate_provider_trigger_task(
@@ -216,66 +167,3 @@ def sync_fence_after_task_row_mutation(
         binding.local_acceptance_open = True
         session.flush()
     return _mutation_result(binding)
-
-
-def attempt_event_acceptance(
-    session: Session,
-    *,
-    binding_id: str,
-    acceptance_epoch: int,
-    provider_event_identity_hmac: str = "identity-test",
-) -> AcceptanceResult:
-    """Synthetic acceptance helper retained only for fence-ordering tests.
-
-    # TODO: Purge/Delete — remove once signed-ingress production-path tests
-    cover pause/edit/delete vs acceptance ordering through
-    ``POST /v0/webhooks/integrations/...`` (real receipt/run/dispatch).
-    See vault: Provider event trigger contracts#Interim remnants.
-    """
-
-    from sqlalchemy import select
-
-    from orchestra.db.models.provider_trigger_models import (
-        EventTriggerSubscriptionGeneration,
-    )
-    from orchestra.provider_triggers.runtime_types import GenerationLifecycle
-
-    dao = _dao(session)
-    binding = _require_binding(session, binding_id=binding_id)
-    if binding.tombstoned_at is not None:
-        raise AcceptanceRejected(reason="binding_tombstoned")
-    if (
-        not binding.local_acceptance_open
-        or binding.desired_trigger_state != DesiredTriggerState.enabled.value
-    ):
-        raise AcceptanceRejected(reason="inactive_trigger")
-    if binding.acceptance_epoch != acceptance_epoch:
-        raise AcceptanceRejected(reason="stale_acceptance_epoch")
-
-    generation_id = binding.active_generation_id
-    if not generation_id:
-        generation = dao.create_generation(binding=binding)
-        dao.promote_generation(binding=binding, generation=generation)
-        generation_id = generation.generation_id
-
-    generation_row = session.execute(
-        select(EventTriggerSubscriptionGeneration).where(
-            EventTriggerSubscriptionGeneration.generation_id == generation_id,
-        ),
-    ).scalar_one()
-    if generation_row.lifecycle_state != GenerationLifecycle.active.value:
-        raise AcceptanceRejected(reason="inactive_generation")
-
-    receipt = dao.adopt_receipt(
-        binding=binding,
-        generation=generation_row,
-        provider_event_identity_hmac=provider_event_identity_hmac,
-    )
-    # Synthetic fence tests only need receipt uniqueness under the binding lock.
-    # Production ingress creates the run and dispatch operation instead.
-    return AcceptanceResult(
-        binding_id=binding.binding_id,
-        accepted=True,
-        receipt_id=receipt.receipt_id,
-        acceptance_epoch=binding.acceptance_epoch,
-    )
