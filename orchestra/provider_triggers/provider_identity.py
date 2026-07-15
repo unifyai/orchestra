@@ -7,6 +7,13 @@ import hmac
 from typing import Any, Mapping
 
 
+def provider_account_subject_hmac(subject: str, *, pepper: str | bytes) -> str:
+    """Return the durable HMAC digest for one provider-account subject."""
+
+    key = pepper.encode("utf-8") if isinstance(pepper, str) else pepper
+    return hmac.new(key, subject.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def composio_v3_event_identity(payload: Mapping[str, Any]) -> str | None:
     """Return Composio V3 top-level event id when present."""
 
