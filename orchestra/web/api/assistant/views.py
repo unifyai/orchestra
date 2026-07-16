@@ -2439,9 +2439,15 @@ def get_managed_desktop_status(
             detail="Assistant not found.",
         )
     external_ip = assistant.external_ip
-    if external_ip is not None and external_ip.state != "retained" and (
-        not external_ip.desired_pool_location
-        or external_ip.pool_location != external_ip.desired_pool_location
+    if managed_desktop_entitled(assistant) and (
+        external_ip is None
+        or (
+            external_ip.state != "retained"
+            and (
+                not external_ip.desired_pool_location
+                or external_ip.pool_location != external_ip.desired_pool_location
+            )
+        )
     ):
         background_tasks.add_task(
             reconcile_assistant_external_ip,

@@ -22,6 +22,7 @@ from orchestra.db.models.orchestra_models import (
     AssistantExternalIPRegionalMigration,
     AssistantExternalIPRotation,
 )
+from orchestra.services.managed_desktop_service import managed_desktop_entitled
 from orchestra.web.api.utils import assistant_infra
 from orchestra.web.api.utils.http_client import get_async_client
 
@@ -469,9 +470,17 @@ async def reconcile_assistant_external_ip(
 
     with session_factory() as session:
         external_ip = _get_external_ip(session, assistant_id)
+        assistant = session.get(Assistant, assistant_id)
+        if external_ip is None and assistant is not None and managed_desktop_entitled(
+            assistant,
+        ):
+            external_ip = ensure_pending_assistant_external_ip(
+                session,
+                assistant=assistant,
+            )
+            session.commit()
         if external_ip is None or external_ip.state == "retained":
             return
-        assistant = session.get(Assistant, assistant_id)
         assistant_timezone = assistant.timezone if assistant is not None else None
         # An observed placement can be stale after a regional migration.  For
         # legacy rows without a persisted target, let deploy resolve the
