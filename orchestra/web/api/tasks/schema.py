@@ -19,6 +19,8 @@ class TypedTaskResponse(BaseModel):
     status: str | None = None
     enabled: bool | None = None
     offline: bool | None = None
+    requires_filesystem: bool | None = None
+    requires_computer: bool | None = None
     trigger: TaskTrigger | dict[str, Any] | None = None
     schedule: dict[str, Any] | None = None
     priority: str | None = None
@@ -42,6 +44,8 @@ class TypedTaskCreateRequest(BaseModel):
     status: str | None = None
     enabled: bool = True
     offline: bool = False
+    requires_filesystem: bool = False
+    requires_computer: bool = False
     priority: str = "normal"
     entrypoint: int | None = None
 
@@ -53,6 +57,8 @@ class TypedTaskPatchRequest(BaseModel):
     schedule: dict[str, Any] | None = None
     enabled: bool | None = None
     offline: bool | None = None
+    requires_filesystem: bool | None = None
+    requires_computer: bool | None = None
     priority: str | None = None
     entrypoint: int | None = None
     status: str | None = None

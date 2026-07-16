@@ -18,6 +18,8 @@ from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     TASKS_CONTEXT_NAME,
     _coerce_bool,
+    _requires_computer_from_row,
+    _requires_filesystem_from_row,
     get_task_activation,
     is_task_surface_context_name,
 )
@@ -45,6 +47,8 @@ class TaskTriggerTarget:
     activation_revision: str | None = None
     entrypoint: int | None = None
     max_runtime_seconds: int | None = None
+    requires_filesystem: bool = False
+    requires_computer: bool = False
 
 
 def resolve_task_trigger_target(
@@ -89,6 +93,8 @@ def resolve_task_trigger_target(
         activation_revision = None
         entrypoint = None
         max_runtime_seconds = None
+        requires_filesystem = _requires_filesystem_from_row(data)
+        requires_computer = _requires_computer_from_row(data)
         if offline:
             activation_snapshot = _offline_activation_for_task(
                 session=session,
@@ -101,6 +107,8 @@ def resolve_task_trigger_target(
                 activation_revision = activation_snapshot.revision
                 entrypoint = activation_snapshot.entrypoint
                 max_runtime_seconds = activation_snapshot.max_runtime_seconds
+                requires_filesystem = activation_snapshot.requires_filesystem
+                requires_computer = activation_snapshot.requires_computer
         targets.append(
             TaskTriggerTarget(
                 assistant_id=resolved_assistant_id,
@@ -116,6 +124,8 @@ def resolve_task_trigger_target(
                 activation_revision=activation_revision,
                 entrypoint=entrypoint,
                 max_runtime_seconds=max_runtime_seconds,
+                requires_filesystem=requires_filesystem,
+                requires_computer=requires_computer,
             ),
         )
 
@@ -129,6 +139,8 @@ class _OfflineActivationSnapshot:
     revision: str
     entrypoint: int | None
     max_runtime_seconds: int | None
+    requires_filesystem: bool = False
+    requires_computer: bool = False
 
 
 def _offline_activation_for_task(
@@ -159,6 +171,8 @@ def _offline_activation_for_task(
         max_runtime_seconds=_coerce_int(
             activation.data.get("max_runtime_seconds"),
         ),
+        requires_filesystem=_requires_filesystem_from_row(activation.data),
+        requires_computer=_requires_computer_from_row(activation.data),
     )
 
 

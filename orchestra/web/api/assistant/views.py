@@ -82,8 +82,8 @@ from orchestra.services.assistant_external_ip_service import (
     record_assistant_external_ip_attachment,
     record_timezone_pool_location_intent,
     reconcile_assistant_external_ip,
+    release_managed_desktop_external_ip,
     request_assistant_external_ip_rotation,
-    retain_assistant_external_ip,
     run_assistant_external_ip_rotation,
 )
 from orchestra.services.assistant_team_ownership_service import (
@@ -2454,6 +2454,18 @@ def get_managed_desktop_status(
             request.app.state.db_session_factory,
             assistant_id=assistant_id,
         )
+    elif (
+        external_ip is not None
+        and external_ip.state not in {"released", "retained"}
+        and external_ip.gcp_address_name
+    ):
+        # A VM may still be detaching the address when disable is requested.
+        # Recheck on subsequent status reads until deploy confirms deletion.
+        background_tasks.add_task(
+            release_managed_desktop_external_ip,
+            request.app.state.db_session_factory,
+            assistant_id=assistant_id,
+        )
     return InfoResponse(info=_build_managed_desktop_status_read(session, assistant))
 
 
@@ -2678,6 +2690,7 @@ async def enable_managed_desktop_endpoint(
 async def disable_managed_desktop_endpoint(
     assistant_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     user_id = request.state.user_id
@@ -2706,7 +2719,6 @@ async def disable_managed_desktop_endpoint(
         return InfoResponse(info=_build_assistant_read(assistant, session))
 
     disable_managed_desktop(assistant)
-    retain_assistant_external_ip(session, assistant=assistant)
     session.commit()
 
     from orchestra.web.api.utils.assistant_infra import stop_assistant_session_runtime
@@ -2725,6 +2737,11 @@ async def disable_managed_desktop_endpoint(
             assistant_id,
             exc,
         )
+    background_tasks.add_task(
+        release_managed_desktop_external_ip,
+        request.app.state.db_session_factory,
+        assistant_id=assistant_id,
+    )
 
     assistant = assistant_dao.get_assistant_by_id(
         user_id=user_id,

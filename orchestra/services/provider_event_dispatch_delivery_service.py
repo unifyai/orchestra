@@ -199,6 +199,7 @@ class ProviderEventDispatchDeliveryService:
             self._dao.mark_dispatch_failed(
                 dispatch=dispatch,
                 error_code=DispatchErrorCode.dispatch_inbox_mismatch.value,
+                adoption_status=DownstreamAdoptionStatus.terminal.value,
             )
             return "dispatches_failed"
 
@@ -273,10 +274,35 @@ class ProviderEventDispatchDeliveryService:
         *,
         client: httpx.Client,
     ) -> str:
-        if dispatch.dispatch_mode == "offline":
-            offline_outcome = self._converge_offline_status(dispatch, client=client)
-            if offline_outcome is not None:
-                return offline_outcome
+        # Adoption/start/terminal are owned by Orchestra claim/report APIs.
+        # Convergence observes the pre-created run and already-recorded adoption.
+        if (
+            dispatch.downstream_adoption_status
+            == DownstreamAdoptionStatus.started.value
+        ):
+            if dispatch.processing_state != DispatchProcessingState.started.value:
+                self._dao.mark_dispatch_started(
+                    dispatch=dispatch,
+                    adoption_status=DownstreamAdoptionStatus.started.value,
+                    adoption_ref=dispatch.downstream_adoption_ref,
+                )
+                return "dispatches_converged"
+        if (
+            dispatch.downstream_adoption_status
+            == DownstreamAdoptionStatus.terminal.value
+        ):
+            if dispatch.processing_state not in {
+                DispatchProcessingState.succeeded.value,
+                DispatchProcessingState.failed.value,
+            }:
+                self._dao.mark_dispatch_failed(
+                    dispatch=dispatch,
+                    error_code=dispatch.terminal_error_code
+                    or DispatchErrorCode.dispatch_downstream_rejected.value,
+                    adoption_status=DownstreamAdoptionStatus.terminal.value,
+                    adoption_ref=dispatch.downstream_adoption_ref,
+                )
+                return "dispatches_terminal_failed"
 
         run_outcome = self._converge_run_state(dispatch)
         if run_outcome is not None:
@@ -284,57 +310,6 @@ class ProviderEventDispatchDeliveryService:
 
         self._schedule_next_poll(dispatch)
         return "dispatches_still_in_flight"
-
-    def _converge_offline_status(
-        self,
-        dispatch: ProviderEventDispatch,
-        *,
-        client: httpx.Client,
-    ) -> str | None:
-        comms_url, admin_key = self._rail_credentials()
-        if not comms_url or not admin_key:
-            self._schedule_next_poll(dispatch)
-            return "dispatches_still_in_flight"
-
-        url = (
-            f"{comms_url}{COMM_PROVIDER_EVENT_DISPATCH_PATH}/"
-            f"{dispatch.operation_id}"
-        )
-        response = client.get(url, headers=self._auth_headers(admin_key))
-
-        if response.status_code == 404:
-            self._schedule_next_poll(dispatch)
-            return "dispatches_still_in_flight"
-
-        if response.status_code >= 400:
-            self._schedule_next_poll(dispatch)
-            return "dispatches_still_in_flight"
-
-        payload = response.json()
-        status = str(payload.get("status") or "")
-        if status == DownstreamAdoptionStatus.terminal.value:
-            terminal_reason = str(payload.get("terminal_reason") or "")
-            self._dao.mark_dispatch_failed(
-                dispatch=dispatch,
-                error_code=terminal_reason
-                or DispatchErrorCode.dispatch_downstream_rejected.value,
-                adoption_status=DownstreamAdoptionStatus.terminal.value,
-                adoption_ref=terminal_reason or None,
-            )
-            return "dispatches_terminal_failed"
-
-        if status:
-            outcome = self._apply_public_status(
-                dispatch=dispatch,
-                status=status,
-                adoption_ref=payload.get("job_name"),
-                adopted_only=True,
-            )
-            if outcome == "dispatches_started":
-                return "dispatches_converged"
-            if outcome == "dispatches_delivered":
-                return "dispatches_still_in_flight"
-        return None
 
     def _converge_run_state(self, dispatch: ProviderEventDispatch) -> str | None:
         binding = self._dao.get_binding(binding_id=dispatch.binding_id)
