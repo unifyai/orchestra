@@ -120,7 +120,7 @@ def record_assistant_external_ip_attachment(
         and not pool_location.startswith("europe")
     ):
         raise ValueError(
-            "Refusing a default-region IP observation for a Europe-targeted assistant"
+            "Refusing a default-region IP observation for a Europe-targeted assistant",
         )
     external_ip.gcp_address_name = gcp_address_name
     external_ip.address = address
@@ -319,7 +319,7 @@ def record_timezone_pool_location_intent(
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         raise ValueError(f"Unable to preflight assistant pool location: {exc}") from exc
     if not isinstance(payload, dict) or not _optional_string(
-        payload.get("pool_location")
+        payload.get("pool_location"),
     ):
         raise ValueError("Deploy placement preflight omitted pool_location")
     return record_assistant_external_ip_regional_migration_intent(
@@ -569,6 +569,7 @@ async def release_assistant_external_ip(
     session: Session | None,
     *,
     assistant_id: int,
+    region: str | None = None,
 ) -> dict[str, Any]:
     """Best-effort idempotent release through deploy, with lifecycle recording.
 
@@ -598,15 +599,15 @@ async def release_assistant_external_ip(
             operation="releasing",
         )
 
+    release_region = external_ip_region_slug(region)
+    if release_region is None and external_ip is not None:
+        release_region = external_ip_region_slug(external_ip.region)
+
     try:
         response = await get_async_client().delete(
             f"{comms_url}{ASSISTANT_STATIC_IP_RELEASE_PATH.format(assistant_id=assistant_id)}",
             headers={"Authorization": f"Bearer {admin_key}"},
-            params=(
-                {"region": external_ip.region.rstrip("/").rsplit("/", 1)[-1]}
-                if external_ip is not None and external_ip.region
-                else None
-            ),
+            params={"region": release_region} if release_region else None,
             timeout=20.0,
         )
         response.raise_for_status()
@@ -741,3 +742,11 @@ def _get_external_ip(
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def external_ip_region_slug(region: str | None) -> str | None:
+    """Normalize a stored region or GCP self-link into a deploy region slug."""
+
+    if not region:
+        return None
+    return region.rstrip("/").rsplit("/", 1)[-1]
