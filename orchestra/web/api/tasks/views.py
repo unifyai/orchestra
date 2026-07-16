@@ -9,7 +9,11 @@ from starlette.requests import Request
 
 from orchestra.db.dependencies import get_db_session, transient_request_db_session
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
-from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
+from orchestra.services.task_machine_state_service import (
+    TASK_MACHINE_PROJECT_NAME,
+    _requires_computer_from_row,
+    _requires_filesystem_from_row,
+)
 from orchestra.services.task_mutation_contract import (
     TaskRevisionConflict,
     format_task_etag,
@@ -175,6 +179,8 @@ async def _dispatch_offline_task_to_comms(
         "source_medium": "api",
         "task_name": target.task_name,
         "task_description": target.task_description,
+        "requires_filesystem": target.requires_filesystem,
+        "requires_computer": target.requires_computer,
     }
     if target.destination:
         payload["destination"] = target.destination
@@ -310,6 +316,8 @@ def _typed_task_response(
         status=data.get("status"),
         enabled=data.get("enabled"),
         offline=data.get("offline"),
+        requires_filesystem=_requires_filesystem_from_row(data),
+        requires_computer=_requires_computer_from_row(data),
         trigger=parsed_trigger,
         schedule=data.get("schedule"),
         priority=data.get("priority"),

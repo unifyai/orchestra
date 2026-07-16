@@ -37,6 +37,8 @@ from orchestra.services.task_machine_state_service import (
     _coerce_bool,
     _coerce_int,
     _replace_log_payload,
+    _requires_computer_from_row,
+    _requires_filesystem_from_row,
     sync_task_activations_for_task_ids,
 )
 from orchestra.services.task_mutation_contract import (
@@ -230,6 +232,8 @@ class TaskMutationService:
                 execution_mode=execution_mode,
                 entrypoint=_coerce_int(data.get("entrypoint")),
                 task_enabled=_coerce_bool(data.get("enabled", True)),
+                requires_filesystem=_requires_filesystem_from_row(data),
+                requires_computer=_requires_computer_from_row(data),
             )
 
         self._project_task_activation(
@@ -635,6 +639,8 @@ class TaskMutationService:
             entrypoint=_coerce_int(data.get("entrypoint")),
             bump_acceptance_epoch=bump_acceptance_epoch,
             task_enabled=_coerce_bool(data.get("enabled", True)),
+            requires_filesystem=_requires_filesystem_from_row(data),
+            requires_computer=_requires_computer_from_row(data),
         )
 
     def _project_task_activation(

@@ -27,6 +27,8 @@ def provider_event_activation_revision_payload(
     execution_mode: str,
     entrypoint: int | None,
     provider_account_subject_hmac: str | None = None,
+    requires_filesystem: bool = False,
+    requires_computer: bool = False,
 ) -> dict[str, Any]:
     """Build the config-only payload hashed into provider activation revisions."""
 
@@ -47,6 +49,8 @@ def provider_event_activation_revision_payload(
         "trigger_config": normalize_trigger_config(trigger_payload.trigger_config),
         "execution_mode": execution_mode,
         "entrypoint": entrypoint,
+        "requires_filesystem": bool(requires_filesystem),
+        "requires_computer": bool(requires_computer),
     }
     if provider_account_subject_hmac:
         payload["provider_account_subject_hmac"] = provider_account_subject_hmac
@@ -60,6 +64,8 @@ def compute_provider_event_activation_revision(
     execution_mode: str,
     entrypoint: int | None,
     provider_account_subject_hmac: str | None = None,
+    requires_filesystem: bool = False,
+    requires_computer: bool = False,
 ) -> str:
     """Return the SHA-256 digest for one provider-event activation revision."""
 
@@ -69,6 +75,8 @@ def compute_provider_event_activation_revision(
         execution_mode=execution_mode,
         entrypoint=entrypoint,
         provider_account_subject_hmac=provider_account_subject_hmac,
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
     )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

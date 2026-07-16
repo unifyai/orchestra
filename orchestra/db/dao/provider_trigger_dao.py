@@ -93,6 +93,8 @@ class ProviderTriggerDAO:
         execution_mode: str,
         entrypoint: int | None,
         task_enabled: bool = True,
+        requires_filesystem: bool = False,
+        requires_computer: bool = False,
     ) -> EventTriggerBinding:
         """Insert one derived binding for a new provider-event task."""
 
@@ -102,6 +104,8 @@ class ProviderTriggerDAO:
             binding_id=binding_id,
             execution_mode=execution_mode,
             entrypoint=entrypoint,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
         )
         runtime_health = BindingRuntimeHealth.absent
         reconcile_next_retry_at = None
@@ -144,6 +148,8 @@ class ProviderTriggerDAO:
         entrypoint: int | None,
         bump_acceptance_epoch: bool,
         task_enabled: bool = True,
+        requires_filesystem: bool = False,
+        requires_computer: bool = False,
     ) -> EventTriggerBinding:
         """Mirror authored task intent onto the binding."""
 
@@ -157,6 +163,8 @@ class ProviderTriggerDAO:
                 execution_mode=execution_mode,
                 entrypoint=entrypoint,
                 provider_account_subject_hmac=binding.provider_account_subject_hmac,
+                requires_filesystem=requires_filesystem,
+                requires_computer=requires_computer,
             )
         )
         binding.connection_id = trigger.connection_id

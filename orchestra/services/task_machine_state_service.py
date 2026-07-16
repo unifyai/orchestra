@@ -520,6 +520,24 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Execution lane for the task: live or offline.",
     },
+    "requires_filesystem": {
+        "field_type": "bool",
+        "mutable": True,
+        "description": "Whether the task needs a mounted assistant filesystem.",
+    },
+    "requires_computer": {
+        "field_type": "bool",
+        "mutable": True,
+        "description": "Whether the task needs the assistant desktop computer.",
+    },
+    "browser_target": {
+        "field_type": "str",
+        "mutable": True,
+        "description": (
+            "Optional browser execution target; assistant_desktop implies "
+            "requires_computer for legacy rows."
+        ),
+    },
     "status": {
         "field_type": "str",
         "mutable": True,
@@ -1705,6 +1723,11 @@ def _project_activation_payload(
     )
     execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
+    requires_filesystem = _requires_filesystem_from_row(row.data)
+    requires_computer = _requires_computer_from_row(row.data)
+    browser_target = _coerce_optional_str(row.data.get("browser_target"))
+    if requires_computer and not browser_target:
+        browser_target = "assistant_desktop"
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
@@ -1718,7 +1741,9 @@ def _project_activation_payload(
         "instance_id": _coerce_int(row.data.get("instance_id")),
         "activation_kind": activation_kind,
         "execution_mode": execution_mode,
-        "browser_target": _coerce_optional_str(row.data.get("browser_target")),
+        "requires_filesystem": requires_filesystem,
+        "requires_computer": requires_computer,
+        "browser_target": browser_target,
         "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
@@ -1776,12 +1801,16 @@ def _project_provider_event_activation_payload(
     )
     execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
+    requires_filesystem = _requires_filesystem_from_row(row.data)
+    requires_computer = _requires_computer_from_row(row.data)
     normalized_trigger_config = normalize_trigger_config(trigger.trigger_config)
     activation_revision = compute_provider_event_activation_revision(
         trigger=trigger,
         binding_id=binding_id,
         execution_mode=execution_mode,
         entrypoint=entrypoint,
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
     )
     payload = {
         "assistant_id": assistant_id,
@@ -1796,6 +1825,8 @@ def _project_provider_event_activation_payload(
         "instance_id": _coerce_int(row.data.get("instance_id")),
         "activation_kind": "provider_event",
         "execution_mode": execution_mode,
+        "requires_filesystem": requires_filesystem,
+        "requires_computer": requires_computer,
         "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
@@ -1902,6 +1933,8 @@ def _scheduled_activation_snapshot(
         "scheduled_for": scheduled_for,
         "execution_mode": _coerce_optional_str(activation.get("execution_mode"))
         or "live",
+        "requires_filesystem": _requires_filesystem_from_row(activation),
+        "requires_computer": _requires_computer_from_row(activation),
         "browser_target": _coerce_optional_str(activation.get("browser_target")),
     }
 
@@ -2654,6 +2687,18 @@ def _coerce_bool(value: Any) -> bool:
         if normalized in {"false", "0", "no", "off", ""}:
             return False
     return bool(value)
+
+
+def _requires_filesystem_from_row(data: Mapping[str, Any] | None) -> bool:
+    return _coerce_bool((data or {}).get("requires_filesystem"))
+
+
+def _requires_computer_from_row(data: Mapping[str, Any] | None) -> bool:
+    if _coerce_bool((data or {}).get("requires_computer")):
+        return True
+    return (
+        _coerce_optional_str((data or {}).get("browser_target")) == "assistant_desktop"
+    )
 
 
 def _coerce_optional_str(value: Any) -> str | None:
