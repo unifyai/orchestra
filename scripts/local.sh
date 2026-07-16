@@ -36,6 +36,7 @@
 #   ORCHESTRA_TEST_EMAIL    Test user email (default: "test@debug.local")
 #   ORCHESTRA_SKIP_TEST_USER  Set to 1 to skip local test-user seeding
 #   UNIFY_KEY               API key for test user (default: "local-test-api-key")
+#   ORCHESTRA_ADMIN_KEY     Admin bearer (default: "local-admin-key"; must differ from UNIFY_KEY)
 #
 # On success, exports:
 #   UNIFY_BASE_URL=http://127.0.0.1:8000/v0
@@ -1014,6 +1015,19 @@ start_orchestra_server() {
   export ORCHESTRA_RELOAD=false
   export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="$ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS"
 
+  # Admin key must stay distinct from the seeded user UNIFY_KEY. When they match,
+  # auth_api_key treats the bearer as __system__ and personal projects (UnityTests)
+  # become invisible to local Unity tests.
+  local test_api_key="${UNIFY_KEY:-local-test-api-key}"
+  if [[ -z "${ORCHESTRA_ADMIN_KEY:-}" ]]; then
+    export ORCHESTRA_ADMIN_KEY="local-admin-key"
+  fi
+  if [[ "${ORCHESTRA_ADMIN_KEY}" == "$test_api_key" ]]; then
+    log_error "ORCHESTRA_ADMIN_KEY must differ from UNIFY_KEY (both are '${ORCHESTRA_ADMIN_KEY}'). Set ORCHESTRA_ADMIN_KEY=local-admin-key and restart Orchestra."
+    return 1
+  fi
+  export ORCHESTRA_ADMIN_KEY
+
   # API keys for embedding and LLM operations
   # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first,
   # then falls back to standard provider names.
@@ -1469,6 +1483,7 @@ main() {
       echo "  ORCHESTRA_TEST_EMAIL    Test user email (default: 'test@debug.local')"
       echo "  ORCHESTRA_SKIP_TEST_USER Set to 1 to skip local test-user seeding"
       echo "  UNIFY_KEY               API key for test user (default: 'local-test-api-key')"
+      echo "  ORCHESTRA_ADMIN_KEY     Admin bearer (default: 'local-admin-key'; must differ from UNIFY_KEY)"
       echo ""
       echo "Examples:"
       echo "  $0 start                              # Start orchestra"
