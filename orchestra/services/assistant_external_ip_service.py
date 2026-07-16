@@ -310,7 +310,9 @@ def record_timezone_pool_location_intent(
             payload = json.loads(response.read())
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         raise ValueError(f"Unable to preflight assistant pool location: {exc}") from exc
-    if not isinstance(payload, dict) or not _optional_string(payload.get("pool_location")):
+    if not isinstance(payload, dict) or not _optional_string(
+        payload.get("pool_location")
+    ):
         raise ValueError("Deploy placement preflight omitted pool_location")
     return record_assistant_external_ip_regional_migration_intent(
         session,
@@ -473,8 +475,12 @@ async def reconcile_assistant_external_ip(
     with session_factory() as session:
         external_ip = _get_external_ip(session, assistant_id)
         assistant = session.get(Assistant, assistant_id)
-        if external_ip is None and assistant is not None and managed_desktop_entitled(
-            assistant,
+        if (
+            external_ip is None
+            and assistant is not None
+            and managed_desktop_entitled(
+                assistant,
+            )
         ):
             external_ip = ensure_pending_assistant_external_ip(
                 session,
@@ -530,8 +536,7 @@ async def reconcile_assistant_external_ip(
         external_ip.gcp_address_name = _optional_string(payload.get("name"))
         external_ip.address = _optional_string(payload.get("address"))
         external_ip.pool_location = (
-            _optional_string(payload.get("pool_location"))
-            or external_ip.pool_location
+            _optional_string(payload.get("pool_location")) or external_ip.pool_location
         )
         if not external_ip.desired_pool_location:
             external_ip.desired_pool_location = external_ip.pool_location
