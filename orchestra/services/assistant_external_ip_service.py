@@ -114,6 +114,14 @@ def record_assistant_external_ip_attachment(
         session.flush()
     if external_ip.state == "retained":
         raise ValueError("Assistant external-IP allocation is retained")
+    if (
+        external_ip.desired_pool_location
+        and external_ip.desired_pool_location.startswith("europe")
+        and not pool_location.startswith("europe")
+    ):
+        raise ValueError(
+            "Refusing a default-region IP observation for a Europe-targeted assistant"
+        )
     external_ip.gcp_address_name = gcp_address_name
     external_ip.address = address
     external_ip.region = region
