@@ -118,6 +118,8 @@ def record_assistant_external_ip_attachment(
     external_ip.address = address
     external_ip.region = region
     external_ip.pool_location = pool_location
+    if not external_ip.desired_pool_location:
+        external_ip.desired_pool_location = pool_location
     external_ip.hostname = hostname
     external_ip.state = "reserved"
     external_ip.active_operation = None
@@ -495,7 +497,10 @@ async def reconcile_assistant_external_ip(
                 "assistant_id": str(assistant_id),
                 "assistant_timezone": assistant_timezone,
                 "pool_location": requested_pool_location,
-                "region": external_ip.region,
+                # A legacy observed region is often a GCP self-link, not a
+                # deploy pool-location ID.  Only pin a region when an
+                # explicit desired pool location is present.
+                "region": external_ip.region if requested_pool_location else None,
             },
             timeout=20.0,
         )
