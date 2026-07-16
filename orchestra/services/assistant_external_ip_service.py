@@ -466,11 +466,10 @@ async def reconcile_assistant_external_ip(
             return
         assistant = session.get(Assistant, assistant_id)
         assistant_timezone = assistant.timezone if assistant is not None else None
-        # The observed placement may be stale after a regional migration.  The
-        # desired location is the only safe placement input for reconciliation.
-        requested_pool_location = (
-            external_ip.desired_pool_location or external_ip.pool_location
-        )
+        # An observed placement can be stale after a regional migration.  For
+        # legacy rows without a persisted target, let deploy resolve the
+        # assistant's current timezone instead of pinning to the old location.
+        requested_pool_location = external_ip.desired_pool_location
 
     try:
         response = await get_async_client().post(
@@ -513,6 +512,8 @@ async def reconcile_assistant_external_ip(
             _optional_string(payload.get("pool_location"))
             or external_ip.pool_location
         )
+        if not external_ip.desired_pool_location:
+            external_ip.desired_pool_location = external_ip.pool_location
         external_ip.region = _optional_string(payload.get("region"))
         external_ip.hostname = _optional_string(payload.get("hostname"))
         external_ip.state = "reserved"
