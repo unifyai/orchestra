@@ -19,6 +19,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
 )
 from orchestra.services.assistant_external_ip_service import (
+    external_ip_region_slug,
     release_assistant_external_ip,
 )
 from orchestra.services.bucket_service import create_bucket_service
@@ -98,6 +99,7 @@ class AssistantCleanupSpec:
     profile_photo: str | None = None
     profile_video: str | None = None
     release_external_ip: bool = False
+    external_ip_region: str | None = None
     contacts: list[ContactCleanupSpec] = field(default_factory=list)
 
     def to_payload(self) -> dict:
@@ -106,6 +108,7 @@ class AssistantCleanupSpec:
             "profile_photo": self.profile_photo,
             "profile_video": self.profile_video,
             "release_external_ip": self.release_external_ip,
+            "external_ip_region": self.external_ip_region,
             "contacts": [contact.to_payload() for contact in self.contacts],
         }
 
@@ -119,6 +122,7 @@ class AssistantCleanupSpec:
             profile_photo=payload.get("profile_photo"),
             profile_video=payload.get("profile_video"),
             release_external_ip=bool(payload.get("release_external_ip", False)),
+            external_ip_region=payload.get("external_ip_region"),
             contacts=[
                 ContactCleanupSpec.from_payload(contact_payload)
                 for contact_payload in payload.get("contacts", [])
@@ -133,6 +137,7 @@ def build_cleanup_spec(
     profile_photo: str | None = None,
     profile_video: str | None = None,
     release_external_ip: bool = False,
+    external_ip_region: str | None = None,
     contacts: list[AssistantContact] | None = None,
 ) -> AssistantCleanupSpec:
     """Create an assistant cleanup spec from already-loaded ORM objects."""
@@ -142,6 +147,7 @@ def build_cleanup_spec(
         profile_photo=profile_photo,
         profile_video=profile_video,
         release_external_ip=release_external_ip,
+        external_ip_region=external_ip_region,
         contacts=[
             ContactCleanupSpec(
                 contact_type=contact.contact_type,
@@ -160,12 +166,18 @@ def build_cleanup_spec_from_assistant(
     contacts: list[AssistantContact] | None = None,
 ) -> AssistantCleanupSpec:
     """Create an external-teardown cleanup spec directly from an assistant row."""
+    external_ip = assistant.external_ip
     return build_cleanup_spec(
         assistant_id=int(assistant.agent_id),
         desktop_mode=assistant.desktop_mode,
         profile_photo=assistant.profile_photo,
         profile_video=assistant.profile_video,
-        release_external_ip=assistant.external_ip is not None,
+        release_external_ip=external_ip is not None,
+        external_ip_region=(
+            external_ip_region_slug(external_ip.region)
+            if external_ip is not None
+            else None
+        ),
         contacts=contacts,
     )
 
@@ -541,6 +553,7 @@ async def process_assistant_cleanup_tasks(
                 await release_assistant_external_ip(
                     session,
                     assistant_id=spec.assistant_id,
+                    region=spec.external_ip_region,
                 )
                 if spec.release_external_ip
                 else {
