@@ -4,19 +4,24 @@ This is the shared policy for Orchestra ``run_tool`` (and any caller that wants
 the same rules). Agents and task scripts must not reimplement provider flakiness
 handling — one-shot ``execute`` is enough once this layer absorbs retries.
 
+Applies to **every** provider adapter (Composio, Pipedream, …) that returns
+``ProviderExecutionResult``.
+
 Transient classes (retry):
-- HTTP 408 / 429 / 500 / 502 / 503 / 504
+- HTTP 408 / 429 / 500 / 502 / 503 / 504 (via ``provider_status_code`` or message)
 - Transport / timeout / connection / empty-body style messages
-- Explicit rate-limit wording
+- Explicit rate-limit / throttle wording
 - GraphQL platform errors (``Something went wrong while executing your query``)
+- Pipedream action-level failures embedded in an HTTP-ok body when attribution
+  looks like network / upstream 5xx-or-429 (reads only)
 
 Permanent / human-gated (do not retry):
 - Auth (401), missing scope (403), connect / confirmation / policy envelopes
-- Validation / not-found style failures
+- Validation / not-found / component_code style failures
 
 Write safety:
-- ``read`` action class: retry both transport errors and GraphQL-in-result
-  platform failures.
+- ``read`` action class: retry transport errors and embedded-in-ok platform
+  failures (GraphQL or Pipedream action errors).
 - Other action classes: retry only clear pre-success transport/provider HTTP
   failures (never retry an ``ok`` payload that might have had side effects).
 """
@@ -38,11 +43,13 @@ _TRANSIENT_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 _TRANSIENT_MESSAGE_RE = re.compile(
     r"("
-    r"rate\s*limit|too many requests|retry[- ]?after|"
+    r"rate\s*limit|too many requests|throttl(?:e|ed|ing)|retry[- ]?after|"
     r"timed?\s*out|timeout|temporar(?:y|ily)|unavailable|"
     r"connection\s*(?:reset|refused|aborted|error)|"
     r"broken\s*pipe|network|dns|name\s*resolution|"
     r"bad\s*gateway|gateway\s*timeout|service\s*unavailable|"
+    r"internal\s*server(?:\s*error)?|server\s*error|"
+    r"status\s*code\s*(?:408|429|500|502|503|504)|"
     r"expecting\s*value|empty\s*response|connection\s*broken|"
     r"something went wrong while executing your query|"
     r"this may be the result of a timeout|"
@@ -50,6 +57,8 @@ _TRANSIENT_MESSAGE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+_PIPEDREAM_PERMANENT_ORIGINS = frozenset({"component_code", "response_parsing"})
 
 _GRAPHQL_PLATFORM_RE = re.compile(
     r"something went wrong while executing your query",
@@ -141,6 +150,69 @@ def graphql_platform_errors(result: Any) -> list[Any]:
     return out
 
 
+def extract_pipedream_action_error(result: Any) -> dict[str, Any] | None:
+    """Return Pipedream's embedded ``error`` object from an HTTP-ok action body."""
+
+    if not isinstance(result, dict):
+        return None
+    err = result.get("error")
+    if isinstance(err, dict) and err:
+        return err
+    # Some Connect responses nest the action envelope under ``data``.
+    data = result.get("data")
+    if isinstance(data, dict):
+        nested = data.get("error")
+        if isinstance(nested, dict) and nested:
+            return nested
+    return None
+
+
+def is_transient_pipedream_action_error(error: dict[str, Any] | None) -> bool:
+    """True when an embedded Pipedream action error looks retryable."""
+
+    if not error or not isinstance(error, dict):
+        return False
+    attribution = error.get("attribution")
+    if not isinstance(attribution, dict):
+        attribution = {}
+    origin = str(attribution.get("origin") or "").strip().lower()
+    if origin in _PIPEDREAM_PERMANENT_ORIGINS:
+        return False
+    if origin == "network_io":
+        return True
+    if origin == "upstream_api":
+        last_call = attribution.get("last_call")
+        if isinstance(last_call, dict) and is_transient_http_status(
+            last_call.get("status"),
+        ):
+            return True
+    return is_transient_message(error.get("message"))
+
+
+def pipedream_transient_action_errors(result: Any) -> list[dict[str, Any]]:
+    err = extract_pipedream_action_error(result)
+    if err is None or not is_transient_pipedream_action_error(err):
+        return []
+    return [err]
+
+
+def embedded_transient_ok_failures(
+    result: Any,
+) -> tuple[str | None, list[Any]]:
+    """Classify retryable failures embedded in an ``ok`` provider result.
+
+    Returns ``(reason, details)`` or ``(None, [])``.
+    """
+
+    platform = graphql_platform_errors(result)
+    if platform:
+        return "transient_graphql_platform", platform
+    pipedream = pipedream_transient_action_errors(result)
+    if pipedream:
+        return "transient_pipedream_action", pipedream
+    return None, []
+
+
 def is_transient_provider_error(error: dict[str, Any] | None) -> bool:
     """True when an adapter ``error`` dict should be retried."""
 
@@ -151,16 +223,22 @@ def is_transient_provider_error(error: dict[str, Any] | None) -> bool:
         return False
     if is_transient_http_status(error.get("provider_status_code")):
         return True
+    # Pipedream historically returned only ``message`` (e.g. ``500 Server Error``).
+    # Also accept bare status digits when adapters omit provider_status_code.
     blob = _message_blob(
         error.get("message"),
         error.get("provider_response_body"),
         code,
     )
-    return is_transient_message(blob)
+    if is_transient_message(blob):
+        return True
+    if re.search(r"\b(408|429|500|502|503|504)\b", blob):
+        return True
+    return False
 
 
 def is_safe_to_retry_ok_result(*, action_class: str | None) -> bool:
-    """Only auto-retry ``ok`` payloads that embed transient GraphQL errors for reads."""
+    """Only auto-retry ``ok`` payloads that embed transient failures for reads."""
 
     return (action_class or "read").lower() == "read"
 
@@ -181,9 +259,9 @@ def should_retry_adapter_result(
 
     if not is_safe_to_retry_ok_result(action_class=action_class):
         return False, None
-    platform = graphql_platform_errors(result)
-    if platform:
-        return True, "transient_graphql_platform"
+    reason, _details = embedded_transient_ok_failures(result)
+    if reason:
+        return True, reason
     return False, None
 
 
@@ -214,6 +292,13 @@ def parse_retry_after_seconds(error: dict[str, Any] | None) -> float | None:
         parsed = _as_int(value)
         if parsed is not None and parsed >= 0:
             return float(parsed)
+    headers = error.get("provider_response_headers")
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            if str(key).lower() == "retry-after":
+                parsed = _as_int(value)
+                if parsed is not None and parsed >= 0:
+                    return float(parsed)
     body = str(error.get("provider_response_body") or "")
     match = re.search(r"retry[- ]after[:\s]+(\d+)", body, re.IGNORECASE)
     if match:

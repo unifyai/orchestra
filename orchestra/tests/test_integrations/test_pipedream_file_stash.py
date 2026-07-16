@@ -122,3 +122,51 @@ def test_stage_file_is_not_supported_for_pipedream() -> None:
     )
     assert result["status"] == "error"
     assert result["error"]["code"] == "provider_file_staging_not_supported"
+
+
+def test_execute_preserves_http_status_and_retry_after(monkeypatch) -> None:
+    adapter = PipedreamProviderAdapter(
+        access_token="token",
+        project_id="proj_test",
+        environment="development",
+    )
+    monkeypatch.setattr(adapter, "_access_token", lambda: ("token", None))
+
+    class _Resp:
+        status_code = 429
+        text = '{"error":"throttled"}'
+        headers = {"Retry-After": "9"}
+
+        def raise_for_status(self) -> None:
+            import requests
+
+            err = requests.HTTPError("429 Client Error: Too Many Requests")
+            err.response = self
+            raise err
+
+    def fake_post(url, **kwargs):  # noqa: ANN001
+        return _Resp()
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    result = adapter.execute(
+        ProviderExecutionRequest(
+            backend_id="pipedream",
+            tool_id="slack_list_channels",
+            canonical_app_slug="slack",
+            provider_tool_id="slack-list-channels",
+            connection_id="ic_1",
+            provider_connection_id="apn_1",
+            action_class="read",
+            user_id="user-1",
+            arguments={},
+        ),
+    )
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error["code"] == "provider_request_failed"
+    assert result.error["provider_status_code"] == 429
+    assert result.error["retry_after"] == 9
+    assert "throttled" in result.error["provider_response_body"]

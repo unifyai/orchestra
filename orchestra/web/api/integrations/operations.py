@@ -75,7 +75,7 @@ from orchestra.integrations.providers.utils.normalization import slugify as _slu
 from orchestra.integrations.transient import (
     DEFAULT_MAX_ATTEMPTS,
     call_with_transient_retries,
-    graphql_platform_errors,
+    embedded_transient_ok_failures,
     is_safe_to_retry_ok_result,
     parse_retry_after_seconds,
     should_retry_adapter_result,
@@ -2674,22 +2674,23 @@ def run_tool(
             )
             if adapter_result.status == "ok":
                 result = adapter_result.result
-                # After exhausting retries, surface persistent GraphQL platform
-                # failures as provider_error rather than a misleading ok envelope.
-                if is_safe_to_retry_ok_result(
-                    action_class=tool.action_class,
-                ) and graphql_platform_errors(result):
-                    status = "provider_error"
-                    platform = graphql_platform_errors(result)
-                    error = {
-                        "code": "provider_error",
-                        "message": (
-                            "Provider GraphQL platform error persisted after "
-                            f"{provider_attempts} attempt(s): {platform}"
-                        ),
-                        "graphql_errors": platform,
-                    }
-                    result = {}
+                # After exhausting retries, surface persistent embedded platform
+                # failures (GraphQL / Pipedream action errors) as provider_error
+                # rather than a misleading ok envelope.
+                if is_safe_to_retry_ok_result(action_class=tool.action_class):
+                    reason, details = embedded_transient_ok_failures(result)
+                    if reason:
+                        status = "provider_error"
+                        error = {
+                            "code": "provider_error",
+                            "message": (
+                                f"Provider {reason} persisted after "
+                                f"{provider_attempts} attempt(s): {details}"
+                            ),
+                            "embedded_failure_reason": reason,
+                            "embedded_failure_details": details,
+                        }
+                        result = {}
             else:
                 status, activation_override, error = _provider_error_outcome(
                     adapter_result.error,
