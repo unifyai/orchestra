@@ -1,4 +1,4 @@
-"""Pipedream inbound trigger adapter for curated provider-event subscriptions."""
+"""Pipedream inbound trigger adapter for provider-native subscriptions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
 
-from orchestra.provider_triggers.composio_trigger_adapter import split_github_resource
+from orchestra.provider_triggers.backend_ids import (
+    DEFAULT_SIGNATURE_TOLERANCE_SECONDS,
+    PIPEDREAM_BACKEND_ID,
+)
 from orchestra.provider_triggers.pipedream_signing import verify_pipedream_signature
 from orchestra.provider_triggers.provider_identity import (
     pipedream_delivery_identity,
@@ -26,22 +29,12 @@ from orchestra.provider_triggers.trigger_adapter import (
     TriggerProviderAdapter,
     TriggerProvisionRequest,
     TriggerProvisionResult,
-    TriggerResource,
-)
-from orchestra.provider_triggers.trigger_projectors import project_curated_payload
-from orchestra.provider_triggers.trigger_registry import (
-    GITHUB_ISSUE_CREATED,
-    PIPEDREAM_BACKEND_ID,
-    PIPEDREAM_GITHUB_ISSUE_COMPONENT,
-    require_canonical_trigger_event,
-    resolve_provider_mapping,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PIPEDREAM_CONNECT_BASE_URL = "https://api.pipedream.com/v1/connect"
 DEFAULT_PIPEDREAM_OAUTH_TOKEN_URL = "https://api.pipedream.com/v1/oauth/token"
-GITHUB_ISSUE_OPENED_ACTION = "opened"
 
 
 class _HttpResponse(Protocol):
@@ -104,8 +97,23 @@ def _extract_webhook_signing_key(body: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _configured_props(request: TriggerProvisionRequest) -> dict[str, Any]:
+    """Merge authored trigger_config with the connection auth binding."""
+
+    props = dict(request.trigger_config)
+    app_key = request.canonical_app_slug
+    app_binding = props.get(app_key)
+    if isinstance(app_binding, dict):
+        merged = dict(app_binding)
+        merged.setdefault("authProvisionId", request.provider_connection_id)
+        props[app_key] = merged
+    else:
+        props[app_key] = {"authProvisionId": request.provider_connection_id}
+    return props
+
+
 class PipedreamTriggerAdapter(TriggerProviderAdapter):
-    """Pipedream adapter for the curated github.issue_created trigger."""
+    """Pipedream transport for provider-native trigger subscriptions."""
 
     backend_id = PIPEDREAM_BACKEND_ID
 
@@ -215,7 +223,7 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         subject = subject.strip()
         app = account.get("app")
         app_name = app.get("name") if isinstance(app, Mapping) else None
-        display = str(account.get("name") or app_name or "github").strip() or subject
+        display = str(account.get("name") or app_name or "").strip() or subject
         label = f"{display}:{subject}"
         subject_hmac = None
         if self.account_subject_pepper:
@@ -232,87 +240,15 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
             raw=account,
         )
 
-    def list_resources(
-        self,
-        *,
-        provider_connection_id: str,
-        provider_user_id: str | None = None,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> list[TriggerResource]:
-        require_canonical_trigger_event(event_slug, schema_version=schema_version)
-        if event_slug != GITHUB_ISSUE_CREATED:
-            return []
-        _ = provider_connection_id, provider_user_id
-        return []
-
-    def authorize_resource(
-        self,
-        *,
-        provider_connection_id: str,
-        resource_id: str,
-        event_slug: str = GITHUB_ISSUE_CREATED,
-        schema_version: str = "1",
-    ) -> bool:
-        event = require_canonical_trigger_event(
-            event_slug,
-            schema_version=schema_version,
-        )
-        if event.projector_key != GITHUB_ISSUE_CREATED:
-            return False
-        split_github_resource(resource_id)
-        try:
-            response = self._request(
-                "GET",
-                f"{self.base_url}/{self.project_id}/accounts/{provider_connection_id}",
-                headers=self._api_headers(),
-            )
-            response.raise_for_status()
-            data = response.json()
-        except Exception:
-            return False
-        account = data.get("data") if isinstance(data, dict) else None
-        if not isinstance(account, dict):
-            account = data if isinstance(data, dict) else {}
-        if account.get("dead") is True:
-            return False
-        return True
-
     def provision(self, request: TriggerProvisionRequest) -> TriggerProvisionResult:
         if not self.project_id:
             raise ValueError("PIPEDREAM_PROJECT_ID is required")
         if not request.callback_url:
             raise ValueError("callback_url is required for Pipedream trigger deploy")
-        mapping = resolve_provider_mapping(
-            backend_id=self.backend_id,
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-        )
-        resource_id = request.resource_id or self.resolve_resource_id(
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-            filters=request.filters,
-        )
-        if not resource_id:
-            raise ValueError(
-                "A repository resource is required to provision github.issue_created",
-            )
-        if not self.authorize_resource(
-            provider_connection_id=request.provider_connection_id,
-            resource_id=resource_id,
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-        ):
-            raise PermissionError("repository_inaccessible")
-        owner, repo = split_github_resource(resource_id)
         payload = {
             "external_user_id": request.provider_user_id,
-            "id": mapping.provider_trigger_slug,
-            "configured_props": {
-                "github": {"authProvisionId": request.provider_connection_id},
-                "org": owner,
-                "repo": repo,
-            },
+            "id": request.provider_trigger_slug,
+            "configured_props": _configured_props(request),
             "webhook_url": request.callback_url,
             "emit_on_deploy": False,
         }
@@ -386,12 +322,8 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         secrets = [secret for secret in signing_secrets if secret]
         if not secrets:
             return False
-        mapping = resolve_provider_mapping(
-            backend_id=self.backend_id,
-            event_slug=GITHUB_ISSUE_CREATED,
-        )
         tolerance = (
-            mapping.timestamp_tolerance_seconds
+            DEFAULT_SIGNATURE_TOLERANCE_SECONDS
             if tolerance_seconds is None
             else tolerance_seconds
         )
@@ -435,21 +367,9 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         raw_body: bytes | Mapping[str, Any],
     ) -> NormalizedProviderDelivery:
         payload = _parse_delivery_payload(raw_body)
-        action = payload.get("action")
-        if action != GITHUB_ISSUE_OPENED_ACTION:
-            raise ValueError(
-                f"Unsupported Pipedream action {action!r}; "
-                f"expected {GITHUB_ISSUE_OPENED_ACTION!r}",
-            )
-        identity = self.stable_event_identity(payload)
+        identity = pipedream_delivery_identity(headers, payload)
         if not identity:
             raise ValueError("Pipedream delivery is missing retry-stable identity")
-        event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
-        projection = project_curated_payload(
-            projector_key=event.projector_key,
-            payload=payload,
-        )
-        resource_id = projection.get("repository")
         external_trigger_id = self.delivery_external_trigger_id(
             headers=headers,
             raw_body=(
@@ -460,22 +380,18 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         )
         envelope = {
             "backend_id": self.backend_id,
-            "event_slug": GITHUB_ISSUE_CREATED,
-            "provider_trigger_slug": PIPEDREAM_GITHUB_ISSUE_COMPONENT,
+            "provider_trigger_slug": payload.get("component_key")
+            or payload.get("component_id"),
             "provider_event_identity": identity,
             "external_trigger_id": external_trigger_id,
-            "resource_id": resource_id,
-            "action": action,
         }
         return NormalizedProviderDelivery(
             provider_event_identity=identity,
-            provider_trigger_slug=PIPEDREAM_GITHUB_ISSUE_COMPONENT,
+            provider_trigger_slug=str(envelope.get("provider_trigger_slug") or ""),
             external_trigger_id=external_trigger_id,
             connected_account_id=None,
             provider_user_id=None,
-            resource_id=str(resource_id) if resource_id else None,
             envelope=envelope,
-            curated_projection=projection,
             occurred_at=None,
             source_body=payload,
         )
@@ -487,27 +403,6 @@ class PipedreamTriggerAdapter(TriggerProviderAdapter):
         if isinstance(delivery, NormalizedProviderDelivery):
             return delivery.provider_event_identity
         return pipedream_delivery_identity({}, delivery)
-
-    def authorize_delivery(
-        self,
-        *,
-        delivery: NormalizedProviderDelivery,
-        expected_connected_account_id: str,
-        expected_external_trigger_id: str | None,
-        expected_provider_user_id: str | None,
-        expected_resource_id: str | None,
-    ) -> str | None:
-        _ = (
-            expected_connected_account_id,
-            expected_external_trigger_id,
-            expected_provider_user_id,
-        )
-        if expected_resource_id:
-            if not delivery.resource_id:
-                return "resource_mismatch"
-            if delivery.resource_id.casefold() != expected_resource_id.casefold():
-                return "resource_mismatch"
-        return None
 
     def health(
         self,

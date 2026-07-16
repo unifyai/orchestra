@@ -309,7 +309,7 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
     def list_components(
         self,
         *,
-        app: str,
+        app: str | None = None,
         limit: int | None = None,
         component_type: str | None = "action",
         registry: str = "public",
@@ -333,9 +333,10 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         def fetch_page(cursor: str | None, page_size: int) -> CursorPage:
             params: dict[str, Any] = {
                 "limit": page_size,
-                "app": app,
                 "registry": registry,
             }
+            if app:
+                params["app"] = app
             if cursor:
                 params["after"] = cursor
             if component_type:

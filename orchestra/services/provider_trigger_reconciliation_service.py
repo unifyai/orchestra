@@ -367,39 +367,12 @@ class ProviderTriggerReconciliationService:
             )
             return False
 
-        resource_id = adapter.resolve_resource_id(
-            event_slug=binding.event_slug,
-            schema_version=binding.schema_version,
-            filters=binding.filters_json,
-        )
-        if not resource_id:
-            self._mark_binding_terminal(
-                binding,
-                health=BindingRuntimeHealth.needs_attention,
-                error_code=ReconcileErrorCode.resource_inaccessible,
-            )
-            return False
-
         provider_connection_id = connection.provider_connection_id
         if not provider_connection_id:
             self._mark_binding_terminal(
                 binding,
                 health=BindingRuntimeHealth.needs_attention,
                 error_code=ReconcileErrorCode.provider_connection_missing,
-            )
-            return False
-
-        authorize = adapter.authorize_resource
-        if not authorize(
-            provider_connection_id=provider_connection_id,
-            resource_id=resource_id,
-            event_slug=binding.event_slug,
-            schema_version=binding.schema_version,
-        ):
-            self._mark_binding_terminal(
-                binding,
-                health=BindingRuntimeHealth.needs_attention,
-                error_code=ReconcileErrorCode.resource_inaccessible,
             )
             return False
         return True
@@ -472,14 +445,6 @@ class ProviderTriggerReconciliationService:
             return
 
         adapter = self._adapter_for_binding(binding)
-        resource_id = (
-            adapter.resolve_resource_id(
-                event_slug=binding.event_slug,
-                schema_version=binding.schema_version,
-                filters=binding.filters_json,
-            )
-            or ""
-        )
         callback_base = settings.provider_trigger_callback_base_url or ""
         callback_url = (
             f"{callback_base}/v0/webhooks/integrations/"
@@ -489,14 +454,12 @@ class ProviderTriggerReconciliationService:
             connection_id=binding.connection_id,
             provider_connection_id=connection.provider_connection_id,
             provider_user_id=connection.provider_user_id or "",
-            event_slug=binding.event_slug,
-            schema_version=binding.schema_version,
             canonical_app_slug=binding.canonical_app_slug,
+            provider_trigger_slug=binding.provider_trigger_slug,
+            trigger_config=binding.trigger_config_json or {},
             callback_url=callback_url,
             idempotency_key=generation.provider_create_idempotency_key,
             ingress_key=generation.ingress_key,
-            resource_id=resource_id,
-            filters=binding.filters_json,
             generation_id=generation.generation_id,
         )
         try:

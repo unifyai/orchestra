@@ -6,16 +6,17 @@ behavior for local stacks and integration tests without calling Composio APIs.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from orchestra.provider_triggers.backend_ids import COMPOSIO_BACKEND_ID
 from orchestra.provider_triggers.composio_trigger_adapter import (
     COMPOSIO_WEBHOOK_SECRET_REF,
     ComposioTriggerAdapter,
-    split_github_resource,
 )
 from orchestra.provider_triggers.provider_identity import provider_account_subject_hmac
 from orchestra.provider_triggers.trigger_adapter import (
@@ -26,13 +27,6 @@ from orchestra.provider_triggers.trigger_adapter import (
     TriggerProviderAdapter,
     TriggerProvisionRequest,
     TriggerProvisionResult,
-    TriggerResource,
-)
-from orchestra.provider_triggers.trigger_registry import (
-    COMPOSIO_BACKEND_ID,
-    GITHUB_ISSUE_CREATED,
-    require_canonical_trigger_event,
-    resolve_provider_mapping,
 )
 
 
@@ -96,6 +90,21 @@ def reset_local_composio_trigger_state() -> None:
     _SCENARIO.reset()
 
 
+def _stable_local_trigger_id(request: TriggerProvisionRequest) -> str:
+    """Return a deterministic external id for one passthrough trigger config."""
+
+    stable_payload = json.dumps(
+        {
+            "provider_trigger_slug": request.provider_trigger_slug,
+            "trigger_config": dict(request.trigger_config),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return f"ti_local_{uuid.uuid5(uuid.NAMESPACE_OID, stable_payload).hex[:12]}"
+
+
 class LocalComposioTriggerAdapter(TriggerProviderAdapter):
     """Deterministic Composio trigger adapter for credential-free local stacks."""
 
@@ -155,46 +164,6 @@ class LocalComposioTriggerAdapter(TriggerProviderAdapter):
             raw={"status": self._scenario.connection_status},
         )
 
-    def list_resources(
-        self,
-        *,
-        provider_connection_id: str,
-        provider_user_id: str | None = None,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> list[TriggerResource]:
-        require_canonical_trigger_event(event_slug, schema_version=schema_version)
-        if event_slug != GITHUB_ISSUE_CREATED:
-            return []
-        _ = provider_connection_id, provider_user_id
-        return [
-            TriggerResource(
-                resource_id="octocat/Hello-World",
-                display_label="octocat/Hello-World",
-            ),
-            TriggerResource(
-                resource_id="unifyai/demo",
-                display_label="unifyai/demo",
-            ),
-        ]
-
-    def authorize_resource(
-        self,
-        *,
-        provider_connection_id: str,
-        resource_id: str,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> bool:
-        require_canonical_trigger_event(event_slug, schema_version=schema_version)
-        _ = provider_connection_id
-        if self._scenario.connection_status not in {"connected", "active"}:
-            return False
-        normalized = resource_id.casefold()
-        return normalized not in {
-            item.casefold() for item in self._scenario.revoked_resources
-        }
-
     def provision(self, request: TriggerProvisionRequest) -> TriggerProvisionResult:
         if self._scenario.provision_error is not None:
             raise self._scenario.provision_error
@@ -204,31 +173,7 @@ class LocalComposioTriggerAdapter(TriggerProviderAdapter):
         )
         if existing is not None:
             return existing.result
-
-        resolve_provider_mapping(
-            backend_id=self.backend_id,
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-        )
-        resource_id = request.resource_id or self.resolve_resource_id(
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-            filters=request.filters,
-        )
-        if not resource_id:
-            raise ValueError(
-                "A repository resource is required to provision github.issue_created",
-            )
-        if not self.authorize_resource(
-            provider_connection_id=request.provider_connection_id,
-            resource_id=resource_id,
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-        ):
-            raise PermissionError("repository_inaccessible")
-        split_github_resource(resource_id)
-
-        external_trigger_id = f"ti_local_{uuid.uuid5(uuid.NAMESPACE_OID, request.idempotency_key).hex[:12]}"
+        external_trigger_id = _stable_local_trigger_id(request)
         signing_secret_ref = COMPOSIO_WEBHOOK_SECRET_REF
         signing_secret_version = "project"
         if request.generation_id and self._scenario.use_per_generation_signing_secrets:
@@ -243,7 +188,12 @@ class LocalComposioTriggerAdapter(TriggerProviderAdapter):
             external_trigger_id=external_trigger_id,
             signing_secret_ref=signing_secret_ref,
             signing_secret_version=signing_secret_version,
-            raw={"id": external_trigger_id, "status": "active"},
+            raw={
+                "id": external_trigger_id,
+                "status": "active",
+                "provider_trigger_slug": request.provider_trigger_slug,
+                "trigger_config": dict(request.trigger_config),
+            },
         )
         record = _ProvisionRecord(request=request, result=result)
         self._scenario.provisions_by_idempotency_key[request.idempotency_key] = record

@@ -6,11 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from orchestra.provider_triggers.resource_resolution import (
-    resolve_resource_id_from_filters,
-)
-from orchestra.provider_triggers.trigger_matching import matches_filters
-from orchestra.provider_triggers.trigger_registry import require_canonical_trigger_event
+from orchestra.provider_triggers.backend_ids import DEFAULT_SIGNATURE_TOLERANCE_SECONDS
 
 
 @dataclass(frozen=True)
@@ -26,29 +22,18 @@ class ProviderAccountIdentity:
 
 
 @dataclass(frozen=True)
-class TriggerResource:
-    """One resource a user may bind a curated trigger against."""
-
-    resource_id: str
-    display_label: str
-    metadata: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class TriggerProvisionRequest:
     """Inputs required to create one provider subscription generation."""
 
     connection_id: str
     provider_connection_id: str
     provider_user_id: str
-    event_slug: str
-    schema_version: str
     canonical_app_slug: str
+    provider_trigger_slug: str
+    trigger_config: Mapping[str, Any]
     callback_url: str
     idempotency_key: str
     ingress_key: str
-    resource_id: str
-    filters: Sequence[Mapping[str, Any]] = ()
     generation_id: str | None = None
 
 
@@ -81,11 +66,9 @@ class NormalizedProviderDelivery:
     external_trigger_id: str | None
     connected_account_id: str | None
     provider_user_id: str | None
-    resource_id: str | None
     envelope: dict[str, Any]
-    curated_projection: dict[str, Any]
-    occurred_at: str | None
     source_body: dict[str, Any]
+    occurred_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,12 +81,7 @@ class TriggerHealthResult:
 
 
 class TriggerProviderAdapter(ABC):
-    """Inheritance contract for inbound trigger-provider backends.
-
-    Outbound tool/action adapters remain on ``BaseIntegrationProviderAdapter``.
-    Trigger adapters own account pinning, subscription lifecycle, delivery
-    verification, and curated projection for one ``backend_id``.
-    """
+    """Inbound trigger adapter for one provider backend."""
 
     backend_id: str = "custom"
 
@@ -114,17 +92,6 @@ class TriggerProviderAdapter(ABC):
         provider_connection_id: str,
     ) -> ProviderAccountIdentity:
         """Resolve the immutable provider-account subject for one connection."""
-
-    @abstractmethod
-    def list_resources(
-        self,
-        *,
-        provider_connection_id: str,
-        provider_user_id: str | None = None,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> list[TriggerResource]:
-        """List resources visible through the connection for one event."""
 
     @abstractmethod
     def provision(self, request: TriggerProvisionRequest) -> TriggerProvisionResult:
@@ -157,6 +124,7 @@ class TriggerProviderAdapter(ABC):
             headers=headers,
             raw_body=raw_body,
             signing_secrets=(),
+            tolerance_seconds=DEFAULT_SIGNATURE_TOLERANCE_SECONDS,
         )
 
     @abstractmethod
@@ -166,7 +134,7 @@ class TriggerProviderAdapter(ABC):
         headers: Mapping[str, str],
         raw_body: bytes | Mapping[str, Any],
     ) -> NormalizedProviderDelivery:
-        """Normalize a verified delivery into the curated projection contract."""
+        """Normalize a verified delivery for ingress acceptance."""
 
     def delivery_external_trigger_id(
         self,
@@ -197,54 +165,6 @@ class TriggerProviderAdapter(ABC):
     ) -> TriggerHealthResult:
         """Probe provider-side health for one generation or connection."""
 
-    def resolve_resource_id(
-        self,
-        *,
-        event_slug: str,
-        schema_version: str,
-        filters: Sequence[Mapping[str, Any]] | None,
-    ) -> str | None:
-        """Resolve the pinned resource id for one curated event from filters."""
-
-        event = require_canonical_trigger_event(
-            event_slug,
-            schema_version=schema_version,
-        )
-        return resolve_resource_id_from_filters(event, filters)
-
-    def authorize_resource(
-        self,
-        *,
-        provider_connection_id: str,
-        resource_id: str,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> bool:
-        """Return True when the connected account can access the resource."""
-
-        del provider_connection_id, resource_id, event_slug, schema_version
-        return False
-
-    def delivery_matches_filters(
-        self,
-        delivery: NormalizedProviderDelivery,
-        filters: Sequence[Mapping[str, Any]] | None,
-        *,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> bool:
-        """Return True when a normalized delivery satisfies authored filters."""
-
-        event = require_canonical_trigger_event(
-            event_slug,
-            schema_version=schema_version,
-        )
-        return matches_filters(
-            projection=delivery.curated_projection,
-            filters=filters,
-            event=event,
-        )
-
     def authorize_delivery(
         self,
         *,
@@ -252,16 +172,11 @@ class TriggerProviderAdapter(ABC):
         expected_connected_account_id: str,
         expected_external_trigger_id: str | None,
         expected_provider_user_id: str | None,
-        expected_resource_id: str | None,
     ) -> str | None:
-        """Return a stable error code when delivery authorization fails.
-
-        When the binding pins an expected value, the delivery must present a
-        matching value. Missing delivery fields fail closed.
-        """
+        """Return a stable error code when delivery authorization fails."""
 
         if not delivery.connected_account_id:
-            return "connected_account_mismatch"
+            return None
         if delivery.connected_account_id != expected_connected_account_id:
             return "connected_account_mismatch"
         if expected_external_trigger_id:
@@ -274,9 +189,4 @@ class TriggerProviderAdapter(ABC):
                 return "provider_user_mismatch"
             if delivery.provider_user_id != expected_provider_user_id:
                 return "provider_user_mismatch"
-        if expected_resource_id:
-            if not delivery.resource_id:
-                return "resource_mismatch"
-            if delivery.resource_id.casefold() != expected_resource_id.casefold():
-                return "resource_mismatch"
         return None

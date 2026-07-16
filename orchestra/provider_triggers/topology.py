@@ -9,6 +9,10 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from orchestra.provider_triggers.backend_ids import (
+    COMPOSIO_BACKEND_ID,
+    PIPEDREAM_BACKEND_ID,
+)
 from orchestra.provider_triggers.composio_trigger_adapter import (
     COMPOSIO_WEBHOOK_SECRET_REF,
 )
@@ -20,10 +24,6 @@ from orchestra.provider_triggers.runtime_types import ReconcileErrorCode
 from orchestra.provider_triggers.signing_secret_refs import resolve_signing_secret_ref
 from orchestra.provider_triggers.trigger_adapter_registry import (
     TRIGGER_PROVIDER_ADAPTERS,
-)
-from orchestra.provider_triggers.trigger_registry import (
-    COMPOSIO_BACKEND_ID,
-    PIPEDREAM_BACKEND_ID,
 )
 from orchestra.settings import settings
 from orchestra.workers.provider_trigger_worker import WORKER_KEY

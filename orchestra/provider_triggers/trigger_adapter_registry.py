@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 from typing import Type
 
+from orchestra.provider_triggers.backend_ids import (
+    COMPOSIO_BACKEND_ID,
+    PIPEDREAM_BACKEND_ID,
+)
 from orchestra.provider_triggers.composio_trigger_adapter import ComposioTriggerAdapter
 from orchestra.provider_triggers.local_composio_trigger_adapter import (
     LocalComposioTriggerAdapter,
@@ -16,10 +20,6 @@ from orchestra.provider_triggers.pipedream_trigger_adapter import (
     PipedreamTriggerAdapter,
 )
 from orchestra.provider_triggers.trigger_adapter import TriggerProviderAdapter
-from orchestra.provider_triggers.trigger_registry import (
-    COMPOSIO_BACKEND_ID,
-    PIPEDREAM_BACKEND_ID,
-)
 
 TRIGGER_PROVIDER_ADAPTERS: dict[str, Type[TriggerProviderAdapter]] = {
     COMPOSIO_BACKEND_ID: ComposioTriggerAdapter,
@@ -43,10 +43,7 @@ def get_trigger_provider_adapter(
     *,
     timeout_seconds: int = 30,
 ) -> TriggerProviderAdapter:
-    """Return the inbound trigger adapter for one backend id.
-
-    Only curated backends with a concrete adapter implementation are returned.
-    """
+    """Return the inbound trigger adapter for one backend id."""
 
     adapter_cls = TRIGGER_PROVIDER_ADAPTERS.get(backend_id)
     if adapter_cls is ComposioTriggerAdapter:

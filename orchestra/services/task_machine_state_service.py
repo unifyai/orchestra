@@ -40,7 +40,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.db.scope import single_owner_key_for_context
 from orchestra.provider_triggers.activation_revision import (
     compute_provider_event_activation_revision,
-    normalize_provider_event_filters,
+    normalize_trigger_config,
 )
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
 from orchestra.settings import settings
@@ -623,20 +623,15 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Canonical app slug for provider-event triggers.",
     },
-    "event_slug": {
+    "provider_trigger_slug": {
         "field_type": "str",
         "mutable": True,
-        "description": "Canonical event slug for provider-event triggers.",
+        "description": "Provider-declared trigger slug for provider-event triggers.",
     },
-    "schema_version": {
-        "field_type": "str",
+    "provider_event_trigger_config": {
+        "field_type": "dict",
         "mutable": True,
-        "description": "Registry schema version for provider-event triggers.",
-    },
-    "provider_event_filters": {
-        "field_type": "list",
-        "mutable": True,
-        "description": "Normalized AND filters for provider-event matching.",
+        "description": "Passthrough trigger config for provider-event triggers.",
     },
     "provider_account_subject_hmac": {
         "field_type": "str",
@@ -802,10 +797,10 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Provider-reported event occurrence time when available.",
     },
-    "provider_event_matched_filters": {
-        "field_type": "list",
+    "provider_event_trigger_config": {
+        "field_type": "dict",
         "mutable": True,
-        "description": "Filter snapshot that matched when the provider event was accepted.",
+        "description": "Passthrough trigger config for the accepted provider event.",
     },
     "provider_event_identity_hmac": {
         "field_type": "str",
@@ -1781,9 +1776,7 @@ def _project_provider_event_activation_payload(
     )
     execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
-    normalized_filters = normalize_provider_event_filters(
-        [item.model_dump() for item in trigger.filters],
-    )
+    normalized_trigger_config = normalize_trigger_config(trigger.trigger_config)
     activation_revision = compute_provider_event_activation_revision(
         trigger=trigger,
         binding_id=binding_id,
@@ -1815,9 +1808,8 @@ def _project_provider_event_activation_payload(
         "connection_id": trigger.connection_id,
         "backend_id": trigger.backend_id,
         "canonical_app_slug": trigger.canonical_app_slug,
-        "event_slug": trigger.event_slug,
-        "schema_version": trigger.schema_version,
-        "provider_event_filters": normalized_filters,
+        "provider_trigger_slug": trigger.provider_trigger_slug,
+        "provider_event_trigger_config": normalized_trigger_config,
         "activation_revision": activation_revision,
     }
     payload["last_materialized_at"] = _coerce_datetime_string(
