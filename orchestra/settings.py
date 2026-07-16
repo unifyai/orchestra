@@ -404,6 +404,9 @@ class Settings(BaseSettings):
     provider_trigger_dispatch_lease_seconds: int = int(
         os.environ.get("PROVIDER_TRIGGER_DISPATCH_LEASE_SECONDS", "300"),
     )
+    provider_trigger_adoption_lease_seconds: int = int(
+        os.environ.get("PROVIDER_TRIGGER_ADOPTION_LEASE_SECONDS", "300"),
+    )
     provider_trigger_dispatch_max_attempts: int = int(
         os.environ.get("PROVIDER_TRIGGER_DISPATCH_MAX_ATTEMPTS", "8"),
     )

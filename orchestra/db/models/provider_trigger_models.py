@@ -46,7 +46,9 @@ class EventTriggerBinding(Base):
     canonical_app_slug = Column(String, nullable=False)
     provider_trigger_slug = Column(String, nullable=False)
     trigger_config_json = Column(
-        JSONB, nullable=False, server_default=JSON_EMPTY_OBJECT
+        JSONB,
+        nullable=False,
+        server_default=JSON_EMPTY_OBJECT,
     )
     execution_mode = Column(String(16), nullable=False, server_default="live")
     entrypoint = Column(Integer, nullable=True)
@@ -307,6 +309,16 @@ class ProviderEventDispatch(Base):
     downstream_adoption_status = Column(String, nullable=True)
     downstream_adoption_ref = Column(String, nullable=True)
     downstream_status_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    downstream_adoption_lease_owner = Column(String, nullable=True)
+    downstream_adoption_lease_expires_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )
+    downstream_adoption_fencing_token = Column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
     terminal_error_code = Column(String, nullable=True)
 
     delivered_at = Column(TIMESTAMP(timezone=True), nullable=True)
@@ -326,6 +338,11 @@ class ProviderEventDispatch(Base):
             "next_retry_at",
             "lease_expires_at",
             "processing_state",
+        ),
+        Index(
+            "ix_provider_event_dispatch_adoption_lease",
+            "downstream_adoption_lease_expires_at",
+            "downstream_adoption_status",
         ),
     )
 
