@@ -1830,6 +1830,19 @@ DERIVATION_ONLY_STEP_IDS: tuple[str, ...] = (
     "your-computer-filesys",
 )
 
+# Durable contact-detail setup steps: the user's saved WhatsApp/phone number (and
+# Discord ID) live on the User row and back these steps' derivation. Resetting a
+# *dependent* quiz step (message/call) must leave the saved detail intact so the
+# user does not have to re-enter their number to redo the channel's tasks; only an
+# explicit reset of the contact-detail step itself clears it.
+STICKY_CONTACT_DETAIL_STEP_IDS: frozenset[str] = frozenset(
+    {
+        "whatsapp-number",
+        "phone-number",
+        "discord-id",
+    },
+)
+
 # Steps whose completion Orchestra derives from durable domain state.
 DERIVABLE_STEP_IDS: tuple[str, ...] = tuple(
     step.id for step in ONBOARDING_GRAPH if step.derivable
@@ -2667,6 +2680,14 @@ def completion_coupled_steps(step_id: str) -> tuple[str, ...]:
     coupled = {step_id, *completion_required_ancestors(step_id)}
     for coupled_id in tuple(coupled):
         coupled.update(dependency_descendants(coupled_id))
+    # A saved contact detail (WhatsApp/phone number, Discord ID) is durable: keep
+    # it done when resetting one of its dependent quiz steps, so redoing the
+    # channel's tasks never forces the user to re-enter the detail. It is still
+    # traversed above so its sibling tasks reset; we only drop the detail step
+    # itself from the result. An explicit reset of the detail step keeps the full
+    # cascade.
+    if step_id not in STICKY_CONTACT_DETAIL_STEP_IDS:
+        coupled -= STICKY_CONTACT_DETAIL_STEP_IDS
     return tuple(step.id for step in ONBOARDING_GRAPH if step.id in coupled)
 
 
