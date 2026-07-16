@@ -17,18 +17,31 @@ from orchestra.db.models.provider_trigger_models import (
     EventTriggerBinding,
     EventTriggerSubscriptionGeneration,
 )
+from orchestra.provider_triggers.backend_ids import (
+    COMPOSIO_BACKEND_ID,
+    PIPEDREAM_BACKEND_ID,
+)
 from orchestra.provider_triggers.runtime_types import DesiredTriggerState
 from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
 from orchestra.services.provider_trigger_reconciliation_service import (
     ProviderTriggerReconciliationService,
 )
 from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
+from orchestra.services.trigger_catalog_import_service import (
+    TriggerCatalogImportService,
+)
 from orchestra.settings import settings
 from orchestra.tests.utils import HEADERS
 from orchestra.workers.provider_trigger_worker import run_worker_cycle
 
 PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 WEBHOOK_SECRET = "test-composio-webhook-secret"
+
+
+def _default_provider_trigger_slug(backend_id: str) -> str:
+    if backend_id == PIPEDREAM_BACKEND_ID:
+        return "github-new-or-updated-issue"
+    return "GITHUB_ISSUE_CREATED_TRIGGER"
 
 
 def _task_machine_project(dbsession: Session) -> Project:
@@ -54,7 +67,7 @@ def seed_integration_connection(
     *,
     assistant_id: int,
     connection_id: str | None = None,
-    backend_id: str = "composio",
+    backend_id: str = COMPOSIO_BACKEND_ID,
     provider_connection_id: str | None = None,
     provider_user_id: str = "assistant:provider-trigger-probe",
     status: str = "connected",
@@ -63,7 +76,7 @@ def seed_integration_connection(
 
     resolved_connection_id = connection_id or f"conn-{uuid.uuid4().hex[:10]}"
     resolved_provider_connection_id = provider_connection_id or (
-        "ca_local_stub" if backend_id == "composio" else "apn_local_stub"
+        "ca_local_stub" if backend_id == COMPOSIO_BACKEND_ID else "apn_local_stub"
     )
     connection = IntegrationConnection(
         connection_id=resolved_connection_id,
@@ -82,10 +95,47 @@ def seed_integration_connection(
     return connection
 
 
+def seed_selfhost_composio_catalog(dbsession: Session) -> None:
+    """Import the fixture-backed Composio catalog for local provider-event tests."""
+
+    TriggerCatalogImportService(dbsession).import_catalog(
+        backend_id=COMPOSIO_BACKEND_ID,
+        environment="selfhost",
+    )
+    dbsession.flush()
+
+
+def seed_provider_event_fixture_prerequisites(
+    dbsession: Session,
+    *,
+    assistant_id: int,
+    connection_id: str = "conn-fixture-1",
+) -> IntegrationConnection:
+    """Seed catalog + one GitHub connection for typed provider-event task creates."""
+
+    seed_selfhost_composio_catalog(dbsession)
+    return seed_integration_connection(
+        dbsession,
+        assistant_id=assistant_id,
+        connection_id=connection_id,
+    )
+
+
+def _trigger_config(
+    *,
+    backend_id: str,
+    repository: str,
+) -> dict[str, str]:
+    if backend_id == PIPEDREAM_BACKEND_ID:
+        return {"repoFullname": repository}
+    owner, _, repo = repository.partition("/")
+    return {"owner": owner, "repo": repo}
+
+
 def provider_event_trigger_payload(
     *,
     connection_id: str,
-    backend_id: str = "composio",
+    backend_id: str = COMPOSIO_BACKEND_ID,
     state: str = "enabled",
     repository: str = "octocat/Hello-World",
 ) -> ProviderEventTrigger:
@@ -94,15 +144,8 @@ def provider_event_trigger_payload(
         connection_id=connection_id,
         backend_id=backend_id,
         canonical_app_slug="github",
-        event_slug="github.issue_created",
-        schema_version="1",
-        filters=[
-            {
-                "field": "repository",
-                "operator": "is",
-                "value": repository,
-            },
-        ],
+        provider_trigger_slug=_default_provider_trigger_slug(backend_id),
+        trigger_config=_trigger_config(backend_id=backend_id, repository=repository),
     )
 
 
@@ -111,7 +154,7 @@ def seed_provider_event_binding(
     *,
     assistant_id: int,
     connection_id: str,
-    backend_id: str = "composio",
+    backend_id: str = COMPOSIO_BACKEND_ID,
     state: str = "enabled",
     repository: str = "octocat/Hello-World",
 ) -> EventTriggerBinding:

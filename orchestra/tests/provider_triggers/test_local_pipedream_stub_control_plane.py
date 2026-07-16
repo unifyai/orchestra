@@ -184,7 +184,7 @@ async def test_pipedream_stub_signed_delivery_match_creates_one_run(
 
 
 @pytest.mark.anyio
-async def test_pipedream_stub_unmatched_delivery_records_ignored_receipt_only(
+async def test_pipedream_stub_paused_binding_records_ignored_receipt_only(
     dbsession: Session,
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -201,16 +201,16 @@ async def test_pipedream_stub_unmatched_delivery_records_ignored_receipt_only(
         assistant_id=assistant_id,
         connection_id=connection.connection_id,
         backend_id="pipedream",
-        repository="unifyai/demo",
     )
     generation = reconcile_binding_to_active_generation(
         dbsession,
         binding_id=binding.binding_id,
     )
+    pause_binding(dbsession, binding)
     signing_secret = resolve_signing_secret_ref(generation.signing_secret_ref)
     assert signing_secret
 
-    payload = load_pipedream_github_issue_fixture(repository="octocat/Hello-World")
+    payload = load_pipedream_github_issue_fixture()
     response = await deliver_signed_pipedream_webhook(
         client,
         ingress_key=generation.ingress_key,

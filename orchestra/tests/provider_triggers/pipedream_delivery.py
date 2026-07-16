@@ -25,7 +25,7 @@ def load_pipedream_github_issue_fixture(
     action: str = "opened",
     trace_id: str | None = None,
 ) -> dict[str, Any]:
-    """Load the curated Pipedream GitHub issue fixture with overrides."""
+    """Load the Pipedream GitHub issue fixture with overrides."""
 
     payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     payload["action"] = action

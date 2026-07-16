@@ -42,14 +42,22 @@ def _provider_event_task_payload(*, name: str = "GitHub issue triage") -> dict:
 
 
 @pytest.fixture
-async def assistant_id(client: AsyncClient) -> int:
+async def assistant_id(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> int:
+    monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
     response = await client.post(
         "/v0/assistant",
         json={"first_name": "Typed", "surname": "Tasks", "create_infra": False},
         headers=HEADERS,
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
-    return int(response.json()["info"]["agent_id"])
+    agent_id = int(response.json()["info"]["agent_id"])
+    seed_provider_event_fixture_prerequisites(dbsession, assistant_id=agent_id)
+    dbsession.commit()
+    return agent_id
 
 
 async def _create_provider_event_task(
@@ -195,7 +203,7 @@ async def test_log_seam_rejects_authored_provider_event_update_via_typed_tasks_a
     user_id = _auth_user_id()
     context_name = f"{user_id}/{assistant_id}/Tasks"
     trigger = dict(created["trigger"])
-    trigger["filters"] = []
+    trigger["trigger_config"] = {"repository": "octocat/other"}
 
     response = await client.put(
         "/v0/logs",

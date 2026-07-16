@@ -21,6 +21,9 @@ from orchestra.services.task_mutation_contract import format_task_etag
 from orchestra.tests.provider_triggers.conftest import (
     stub_healthy_provider_trigger_topology,
 )
+from orchestra.tests.provider_triggers.control_plane_harness import (
+    seed_provider_event_fixture_prerequisites,
+)
 from orchestra.tests.test_tasks.test_trigger_task import _auth_user_id
 from orchestra.tests.utils import HEADERS
 
@@ -52,14 +55,22 @@ def _provider_event_task_payload(*, state: str = "enabled") -> dict:
 
 
 @pytest.fixture
-async def assistant_id(client: AsyncClient) -> int:
+async def assistant_id(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> int:
+    monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
     response = await client.post(
         "/v0/assistant",
         json={"first_name": "Provider", "surname": "Runtime", "create_infra": False},
         headers=HEADERS,
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
-    return int(response.json()["info"]["agent_id"])
+    agent_id = int(response.json()["info"]["agent_id"])
+    seed_provider_event_fixture_prerequisites(dbsession, assistant_id=agent_id)
+    dbsession.commit()
+    return agent_id
 
 
 async def _create_provider_event_task(
@@ -95,7 +106,10 @@ async def test_create_persists_binding_and_projects_provider_event_activation(
     assert binding.local_acceptance_open is False
     assert binding.runtime_health == "provisioning"
     assert binding.connection_id == created["trigger"]["connection_id"]
-    assert binding.event_slug == "github.issue_created"
+    assert binding.provider_trigger_slug == created["trigger"]["provider_trigger_slug"]
+    assert (
+        dict(binding.trigger_config_json or {}) == created["trigger"]["trigger_config"]
+    )
 
     user_id = _auth_user_id()
     activations_context = build_task_activation_context_name(

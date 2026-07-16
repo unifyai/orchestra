@@ -29,7 +29,7 @@ def load_composio_github_issue_fixture(
     title: str | None = None,
     event_id: str | None = None,
 ) -> dict[str, Any]:
-    """Load the curated Composio GitHub issue-created fixture with overrides."""
+    """Load the Composio GitHub issue-created fixture with overrides."""
 
     payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     metadata = dict(payload.get("metadata") or {})

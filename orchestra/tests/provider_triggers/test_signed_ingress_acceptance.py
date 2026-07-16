@@ -26,10 +26,7 @@ from orchestra.provider_triggers.ingress_rate_limit import (
 )
 from orchestra.provider_triggers.run_key import build_provider_event_run_key
 from orchestra.provider_triggers.runtime_types import DesiredTriggerState
-from orchestra.provider_triggers.task_trigger import (
-    ProviderEventTrigger,
-    ProviderEventTriggerFilter,
-)
+from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
 from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 from orchestra.settings import settings
 from orchestra.tests.provider_triggers.composio_delivery import (
@@ -47,7 +44,6 @@ PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 def _seed_active_ingress_binding(
     dbsession: Session,
     *,
-    extra_filters: list[ProviderEventTriggerFilter] | None = None,
     execution_mode: str = "live",
 ) -> tuple[str, str, int, int]:
     """Return ingress_key, binding_id, assistant_id, task_id for one live binding."""
@@ -84,22 +80,13 @@ def _seed_active_ingress_binding(
     task_id = int(uuid.uuid4().int % 1_000_000) + 1
     binding_id = f"binding-{uuid.uuid4().hex[:12]}"
     dao = ProviderTriggerDAO(dbsession)
-    filters = [
-        ProviderEventTriggerFilter(
-            field="repository",
-            operator="is",
-            value="octocat/Hello-World",
-        ),
-        *(extra_filters or ()),
-    ]
     trigger = ProviderEventTrigger(
         state="enabled",
         connection_id=connection_id,
         backend_id="composio",
         canonical_app_slug="github",
-        event_slug="github.issue_created",
-        schema_version="1",
-        filters=filters,
+        provider_trigger_slug="GITHUB_ISSUE_CREATED_TRIGGER",
+        trigger_config={"owner": "octocat", "repo": "Hello-World"},
     )
     binding = dao.create_binding(
         binding_id=binding_id,
@@ -176,7 +163,7 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
     assert receipt.processing_state == "dispatch_pending"
     assert receipt.event_context_ref
     assert receipt.stable_envelope_json
-    assert receipt.curated_projection_json
+    assert receipt.curated_projection_json is None
 
     dispatches = (
         dbsession.execute(
@@ -221,11 +208,14 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
     assert run["provider_event_binding_id"] == binding_id
     assert run["provider_event_backend_id"] == "composio"
     assert run["provider_event_app_slug"] == "github"
-    assert run["provider_event_slug"] == "github.issue_created"
-    assert run["provider_event_schema_version"] == "1"
+    assert run["provider_event_slug"] == "GITHUB_ISSUE_CREATED_TRIGGER"
+    assert run["provider_event_schema_version"] == "0"
     assert run["provider_event_acceptance_epoch"] == receipt.acceptance_epoch
     assert run["provider_event_occurred_at"] == payload["timestamp"]
-    assert run["provider_event_matched_filters"]
+    assert run["provider_event_trigger_config"] == {
+        "owner": "octocat",
+        "repo": "Hello-World",
+    }
     assert run["provider_event_identity_hmac"] == receipt.provider_event_identity_hmac
     assert run["source_ref"] == payload["id"]
     assert receipt.event_context_expires_at is not None
@@ -235,20 +225,20 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
 
 
 @pytest.mark.anyio
-async def test_signed_composio_webhook_with_unmatched_filters_records_ignored_receipt_only(
+async def test_signed_composio_webhook_ignores_delivery_for_inactive_binding(
     dbsession: Session,
     client: AsyncClient,
 ) -> None:
-    ingress_key, binding_id, _, _ = _seed_active_ingress_binding(
-        dbsession,
-        extra_filters=[
-            ProviderEventTriggerFilter(
-                field="title",
-                operator="contains",
-                value="definitely-not-in-fixture-title",
-            ),
-        ],
-    )
+    ingress_key, binding_id, _, _ = _seed_active_ingress_binding(dbsession)
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    binding.desired_trigger_state = DesiredTriggerState.paused.value
+    binding.local_acceptance_open = False
+    binding.acceptance_epoch += 1
+    dbsession.flush()
     payload = load_composio_github_issue_fixture()
     response = await deliver_signed_composio_webhook(
         client,
@@ -261,7 +251,7 @@ async def test_signed_composio_webhook_with_unmatched_filters_records_ignored_re
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "ignored"
-    assert body["classification_reason"] == "unmatched"
+    assert body["classification_reason"] == "inactive"
 
     receipts = (
         dbsession.execute(
@@ -274,7 +264,7 @@ async def test_signed_composio_webhook_with_unmatched_filters_records_ignored_re
     )
     assert len(receipts) == 1
     assert receipts[0].processing_state == "ignored"
-    assert receipts[0].classification_reason == "unmatched"
+    assert receipts[0].classification_reason == "inactive"
     assert receipts[0].stable_envelope_json is None
     assert receipts[0].curated_projection_json is None
     assert receipts[0].event_context_ref is None

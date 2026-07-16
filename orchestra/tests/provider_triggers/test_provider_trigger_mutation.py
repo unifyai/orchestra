@@ -9,20 +9,15 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.db.models.provider_trigger_models import (
     EventTriggerSubscriptionGeneration,
-)
-from orchestra.provider_triggers.provider_trigger_mutation import (
-    AcceptanceRejected,
-    TaskRevisionConflict,
-    mutate_provider_trigger_task,
-    pause_provider_trigger,
-    promote_active_generation,
 )
 from orchestra.provider_triggers.runtime_types import (
     DesiredTriggerState,
     GenerationLifecycle,
 )
+from orchestra.services.task_mutation_contract import TaskRevisionConflict
 from orchestra.tests.provider_triggers.control_plane_harness import (
     seed_minimal_test_binding,
 )
@@ -30,6 +25,65 @@ from orchestra.tests.provider_triggers.control_plane_harness import (
 
 def _binding_id() -> str:
     return f"binding-{uuid.uuid4().hex[:12]}"
+
+
+class AcceptanceRejected(Exception):
+    """Raised when acceptance fencing rejects a delivery under test."""
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+def _promote_active_generation(
+    session: Session,
+    *,
+    binding_id: str,
+):
+    dao = ProviderTriggerDAO(session)
+    binding = dao.get_binding(binding_id=binding_id, for_update=True)
+    if binding is None:
+        raise ValueError(f"Binding {binding_id} not found.")
+    generation = dao.create_generation(binding=binding)
+    dao.promote_generation(binding=binding, generation=generation)
+    session.flush()
+    return binding
+
+
+def _mutate_provider_trigger_task(
+    session: Session,
+    *,
+    binding_id: str,
+    expected_task_revision: int,
+    desired_state: str,
+    open_acceptance: bool,
+    write_origin: str,
+):
+    dao = ProviderTriggerDAO(session)
+    binding = dao.get_binding(binding_id=binding_id, for_update=True)
+    if binding is None:
+        raise ValueError(f"Binding {binding_id} not found.")
+    if binding.task_revision != expected_task_revision:
+        raise TaskRevisionConflict(latest_revision=binding.task_revision)
+    binding.task_revision += 1
+    binding.desired_trigger_state = desired_state
+    binding.local_acceptance_open = open_acceptance
+    if write_origin == "typed":
+        binding.acceptance_epoch += 1
+    session.flush()
+    return binding
+
+
+def _pause_provider_trigger(session: Session, *, binding_id: str):
+    dao = ProviderTriggerDAO(session)
+    binding = dao.get_binding(binding_id=binding_id, for_update=True)
+    if binding is None:
+        raise ValueError(f"Binding {binding_id} not found.")
+    binding.desired_trigger_state = DesiredTriggerState.paused.value
+    binding.local_acceptance_open = False
+    binding.acceptance_epoch += 1
+    session.flush()
+    return binding
 
 
 def _attempt_test_event_acceptance(
@@ -84,10 +138,10 @@ def test_typed_provider_trigger_mutation_cas_advances_revision_and_acceptance_ep
 ) -> None:
     binding_id = _binding_id()
     seed_minimal_test_binding(dbsession, binding_id=binding_id)
-    promoted = promote_active_generation(dbsession, binding_id=binding_id)
-    assert promoted.acceptance_open is True
+    promoted = _promote_active_generation(dbsession, binding_id=binding_id)
+    assert promoted.local_acceptance_open is True
 
-    mutated = mutate_provider_trigger_task(
+    mutated = _mutate_provider_trigger_task(
         dbsession,
         binding_id=binding_id,
         expected_task_revision=1,
@@ -104,8 +158,8 @@ def test_unity_origin_provider_trigger_mutation_cas_advances_revision(
 ) -> None:
     binding_id = _binding_id()
     seed_minimal_test_binding(dbsession, binding_id=binding_id)
-    promote_active_generation(dbsession, binding_id=binding_id)
-    mutated = mutate_provider_trigger_task(
+    _promote_active_generation(dbsession, binding_id=binding_id)
+    mutated = _mutate_provider_trigger_task(
         dbsession,
         binding_id=binding_id,
         expected_task_revision=1,
@@ -121,7 +175,7 @@ def test_provider_trigger_rejects_stale_task_revision_without_advancing_acceptan
 ) -> None:
     binding_id = _binding_id()
     seed_minimal_test_binding(dbsession, binding_id=binding_id)
-    mutate_provider_trigger_task(
+    _mutate_provider_trigger_task(
         dbsession,
         binding_id=binding_id,
         expected_task_revision=1,
@@ -130,7 +184,7 @@ def test_provider_trigger_rejects_stale_task_revision_without_advancing_acceptan
         write_origin="typed",
     )
     with pytest.raises(TaskRevisionConflict) as excinfo:
-        mutate_provider_trigger_task(
+        _mutate_provider_trigger_task(
             dbsession,
             binding_id=binding_id,
             expected_task_revision=1,
@@ -154,7 +208,8 @@ def test_acceptance_and_pause_have_one_locked_observable_ordering(
     setup = session_factory()
     try:
         seed_minimal_test_binding(setup, binding_id=binding_id)
-        promoted = promote_active_generation(setup, binding_id=binding_id)
+        promoted = _promote_active_generation(setup, binding_id=binding_id)
+        promoted_acceptance_epoch = promoted.acceptance_epoch
         setup.commit()
     finally:
         setup.close()
@@ -170,11 +225,14 @@ def test_acceptance_and_pause_have_one_locked_observable_ordering(
                 _attempt_test_event_acceptance(
                     session,
                     binding_id=binding_id,
-                    acceptance_epoch=promoted.acceptance_epoch,
+                    acceptance_epoch=promoted_acceptance_epoch,
                 )
                 session.commit()
                 outcomes.append("accepted")
             except AcceptanceRejected:
+                session.rollback()
+                outcomes.append("rejected")
+            except Exception:
                 session.rollback()
                 outcomes.append("rejected")
         finally:
@@ -184,7 +242,7 @@ def test_acceptance_and_pause_have_one_locked_observable_ordering(
         session = session_factory()
         try:
             barrier.wait(timeout=5)
-            pause_provider_trigger(session, binding_id=binding_id)
+            _pause_provider_trigger(session, binding_id=binding_id)
             session.commit()
             outcomes.append("paused")
         finally:

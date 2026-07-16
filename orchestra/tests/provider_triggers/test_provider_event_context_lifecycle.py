@@ -38,7 +38,10 @@ from orchestra.workers.provider_trigger_worker import run_worker_cycle
 PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 EVENT_CONTEXT_PATH = "/v0/provider-event/event-context"
 SOURCE_BODY = {"issue": "opened", "number": 7}
-ENVELOPE = {"event_slug": "github.issue_created", "delivery_id": "gh-1"}
+ENVELOPE = {
+    "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+    "delivery_id": "gh-1",
+}
 CURATED_PROJECTION = {"title": "Something broke", "author": "octocat"}
 
 
@@ -100,8 +103,8 @@ def _seed_event_context(dbsession: Session) -> _EventContextFixture:
         connection_id="conn-test",
         backend_id="composio",
         canonical_app_slug="github",
-        event_slug="github.issue_created",
-        schema_version="1",
+        provider_trigger_slug="GITHUB_ISSUE_CREATED_TRIGGER",
+        trigger_config={},
     )
     binding = dao.create_binding(
         binding_id=f"binding-{assistant.agent_id}-{task_id}",
