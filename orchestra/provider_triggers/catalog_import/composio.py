@@ -43,8 +43,7 @@ def _entry_from_trigger_type(
         provider_trigger_slug=slug,
         provider_version=(
             str(
-                trigger_dump.get("version")
-                or trigger_dump.get("toolkit_version"),
+                trigger_dump.get("version") or trigger_dump.get("toolkit_version"),
             )
             if trigger_dump.get("version") or trigger_dump.get("toolkit_version")
             else None

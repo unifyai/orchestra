@@ -41,7 +41,6 @@ class _FakeResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
-
 @pytest.mark.parametrize(
     ("backend_id", "credential_envs"),
     [
