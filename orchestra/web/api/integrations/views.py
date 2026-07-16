@@ -39,6 +39,7 @@ from orchestra.web.api.integrations.operations import (
     deny_tool_execution,
     disconnect_connection,
     download_provider_file,
+    get_app_preference,
     get_connection_tool_policy,
     list_connections,
     list_custom_auth_configs,
@@ -51,11 +52,14 @@ from orchestra.web.api.integrations.operations import (
     stage_provider_file,
     start_connection,
     test_connection,
+    update_app_preference,
     update_connection,
 )
 from orchestra.web.api.integrations.schema import (
     BuiltinsIntegrationSyncRequest,
     BuiltinsIntegrationSyncResponse,
+    IntegrationAppPreferencePatchRequest,
+    IntegrationAppPreferenceResponse,
     IntegrationBackendCreate,
     IntegrationBackendPatchRequest,
     IntegrationBackendResponse,
@@ -567,6 +571,49 @@ def get_integration_connections(
         _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id),
         include_disconnected=include_disconnected,
     )
+
+
+@router.get("/apps/{canonical_app_slug}/preferences")
+def get_integration_app_preferences(
+    canonical_app_slug: str,
+    owner_scope: str = Query("assistant"),
+    org_id: int | None = None,
+    team_id: int | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+    session: Session = Depends(get_db_session),
+) -> IntegrationAppPreferenceResponse:
+    return get_app_preference(
+        session,
+        _owner_from_query(owner_scope, org_id, team_id, user_id, assistant_id),
+        canonical_app_slug=canonical_app_slug,
+    )
+
+
+@router.patch("/apps/{canonical_app_slug}/preferences")
+def patch_integration_app_preferences(
+    canonical_app_slug: str,
+    body: IntegrationAppPreferencePatchRequest,
+    session: Session = Depends(get_db_session),
+) -> IntegrationAppPreferenceResponse:
+    try:
+        return update_app_preference(
+            session,
+            OwnerContext(
+                owner_scope=body.owner_scope,
+                org_id=body.org_id,
+                team_id=body.team_id,
+                user_id=body.user_id,
+                assistant_id=body.assistant_id,
+            ),
+            canonical_app_slug=canonical_app_slug,
+            usage_mode=body.usage_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/connect/start")

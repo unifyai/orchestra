@@ -81,6 +81,7 @@ from orchestra.integrations.transient import (
     should_retry_adapter_result,
 )
 from orchestra.web.api.integrations.schema import (
+    IntegrationAppPreferenceResponse,
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
     IntegrationConnectionResponse,
@@ -1523,6 +1524,58 @@ def list_connections(
     return [_connection_to_response(conn) for conn in connections]
 
 
+def get_app_preference(
+    session: Session,
+    owner: OwnerContext,
+    *,
+    canonical_app_slug: str,
+) -> IntegrationAppPreferenceResponse:
+    seed_default_provider_catalog(session)
+    preference = IntegrationProviderDAO(session).get_or_create_app_preference(
+        owner=owner,
+        canonical_app_slug=canonical_app_slug,
+    )
+    session.flush()
+    return IntegrationAppPreferenceResponse(
+        canonical_app_slug=preference.canonical_app_slug,
+        owner_scope=preference.owner_scope,  # type: ignore[arg-type]
+        org_id=preference.org_id,
+        team_id=preference.team_id,
+        user_id=preference.user_id,
+        assistant_id=preference.assistant_id,
+        usage_mode=preference.usage_mode,  # type: ignore[arg-type]
+        pool_cursor=preference.pool_cursor,
+        updated_at=preference.updated_at,
+    )
+
+
+def update_app_preference(
+    session: Session,
+    owner: OwnerContext,
+    *,
+    canonical_app_slug: str,
+    usage_mode: str,
+) -> IntegrationAppPreferenceResponse:
+    seed_default_provider_catalog(session)
+    preference = IntegrationProviderDAO(session).upsert_app_preference(
+        owner=owner,
+        canonical_app_slug=canonical_app_slug,
+        usage_mode=usage_mode,
+    )
+    session.flush()
+    return IntegrationAppPreferenceResponse(
+        canonical_app_slug=preference.canonical_app_slug,
+        owner_scope=preference.owner_scope,  # type: ignore[arg-type]
+        org_id=preference.org_id,
+        team_id=preference.team_id,
+        user_id=preference.user_id,
+        assistant_id=preference.assistant_id,
+        usage_mode=preference.usage_mode,  # type: ignore[arg-type]
+        pool_cursor=preference.pool_cursor,
+        updated_at=preference.updated_at,
+    )
+
+
 def _best_connection(
     session: Session,
     *,
@@ -2567,6 +2620,10 @@ def run_tool(
         backend_id=tool.backend_id,
         connection_id=body.connection_id,
     )
+    preference = dao.get_or_create_app_preference(
+        owner=owner,
+        canonical_app_slug=tool.canonical_app_slug,
+    )
     activation_state = _activation_state(tool, conn)
     policy_error = _policy_error(
         backend=backend,
@@ -2582,7 +2639,16 @@ def run_tool(
     confirmation: ProviderToolConfirmationPayload | None = None
     audit: ProviderActionAudit | None = None
     provider_attempts = 1
-    if policy_error:
+    if preference.usage_mode == "explicit" and not body.connection_id and conn is None:
+        status = "connection_id_required"
+        error = {
+            "code": "connection_id_required",
+            "message": (
+                f"{tool.canonical_app_slug} is configured for explicit account "
+                "selection. Pass connection_id from list_connected."
+            ),
+        }
+    elif policy_error:
         status = "blocked_by_policy"
         error = policy_error
     elif activation_state == "not_connected":

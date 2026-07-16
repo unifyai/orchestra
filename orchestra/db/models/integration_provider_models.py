@@ -210,6 +210,54 @@ class IntegrationConnection(Base):
     )
 
 
+class IntegrationAppPreference(Base):
+    """Per-owner app-level connection selection policy.
+
+    ``usage_mode``:
+    - ``primary`` — use the most recently updated live connection (default)
+    - ``explicit`` — callers must pass ``connection_id`` on every execute
+    - ``pool`` — round-robin across live connections (rate-limit sharing)
+    """
+
+    __tablename__ = "integration_app_preferences"
+
+    id = Column(Integer, primary_key=True)
+    owner_scope = Column(String, nullable=False, index=True)
+    org_id = Column(Integer, nullable=True, index=True)
+    team_id = Column(Integer, nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    assistant_id = Column(Integer, nullable=True, index=True)
+    canonical_app_slug = Column(String, nullable=False, index=True)
+    usage_mode = Column(String, nullable=False, server_default="primary")
+    pool_cursor = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_scope",
+            "org_id",
+            "team_id",
+            "user_id",
+            "assistant_id",
+            "canonical_app_slug",
+            name="uq_integration_app_preference_owner_app",
+        ),
+        Index(
+            "ix_integration_app_preferences_effective_owner",
+            "owner_scope",
+            "org_id",
+            "team_id",
+            "user_id",
+            "assistant_id",
+        ),
+    )
+
+
 class ProviderActionAudit(Base):
     """Redacted audit log for every provider-backed runtime invocation."""
 

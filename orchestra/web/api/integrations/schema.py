@@ -244,6 +244,30 @@ class IntegrationConnectionPatchRequest(BaseModel):
     account_label: Optional[str] = None
 
 
+UsageMode = Literal["primary", "explicit", "pool"]
+
+
+class IntegrationAppPreferenceResponse(BaseModel):
+    canonical_app_slug: str
+    owner_scope: OwnerScope
+    org_id: Optional[int] = None
+    team_id: Optional[int] = None
+    user_id: Optional[str] = None
+    assistant_id: Optional[int] = None
+    usage_mode: UsageMode = "primary"
+    pool_cursor: int = 0
+    updated_at: Optional[datetime] = None
+
+
+class IntegrationAppPreferencePatchRequest(BaseModel):
+    owner_scope: OwnerScope = "assistant"
+    org_id: Optional[int] = None
+    team_id: Optional[int] = None
+    user_id: Optional[str] = None
+    assistant_id: Optional[int] = None
+    usage_mode: UsageMode
+
+
 class IntegrationConnectStartRequest(BaseModel):
     owner_scope: OwnerScope = "assistant"
     org_id: Optional[int] = None
