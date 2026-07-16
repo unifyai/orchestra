@@ -63,6 +63,13 @@ def _serialize_dispatch(dispatch) -> dict:
         "downstream_adoption_status": dispatch.downstream_adoption_status,
         "downstream_adoption_ref": dispatch.downstream_adoption_ref,
         "downstream_status_at": dispatch.downstream_status_at,
+        "downstream_adoption_lease_owner": dispatch.downstream_adoption_lease_owner,
+        "downstream_adoption_lease_expires_at": (
+            dispatch.downstream_adoption_lease_expires_at
+        ),
+        "downstream_adoption_fencing_token": (
+            dispatch.downstream_adoption_fencing_token
+        ),
         "terminal_error_code": dispatch.terminal_error_code,
         "delivered_at": dispatch.delivered_at,
         "started_at": dispatch.started_at,

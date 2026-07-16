@@ -51,6 +51,12 @@ from orchestra.web.api.phone import admin_router as phone_admin_router
 from orchestra.web.api.plot.views import admin_router as plot_admin_router
 from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
+from orchestra.web.api.provider_event_dispatch_adoption import (
+    admin_router as provider_event_dispatch_adoption_admin_router,
+)
+from orchestra.web.api.provider_event_dispatch_adoption import (
+    user_router as provider_event_dispatch_adoption_user_router,
+)
 from orchestra.web.api.slack import admin_router as slack_admin_router
 from orchestra.web.api.table_view.views import admin_router as table_view_admin_router
 from orchestra.web.api.table_view.views import router as table_view_router
@@ -145,6 +151,13 @@ api_router.include_router(
 )
 api_router.include_router(
     provider_event_dispatch_admin.router,
+    prefix="/admin",
+    tags=["Provider Event Dispatch"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    provider_event_dispatch_adoption_admin_router,
     prefix="/admin",
     tags=["Provider Event Dispatch"],
     include_in_schema=False,
@@ -285,6 +298,12 @@ api_router.include_router(
 api_router.include_router(
     log.router,
     tags=["Logs"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    provider_event_dispatch_adoption_user_router,
+    tags=["Provider Event Dispatch"],
+    include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
