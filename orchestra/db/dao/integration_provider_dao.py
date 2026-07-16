@@ -17,6 +17,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Query, Session
 
 from orchestra.db.models.integration_provider_models import (
+    IntegrationAppPreference,
     IntegrationBackend,
     IntegrationBootstrapState,
     IntegrationConnection,
@@ -25,6 +26,8 @@ from orchestra.db.models.integration_provider_models import (
 )
 
 HIDDEN_CONNECTION_STATUSES = {"disconnected"}
+LIVE_CONNECTION_STATUSES = {"connected", "configured"}
+VALID_USAGE_MODES = {"primary", "explicit", "pool"}
 PENDING_CONNECTION_TIMEOUT_SECONDS = int(
     os.getenv("INTEGRATION_PENDING_TIMEOUT_SECONDS", "1800"),
 )
@@ -267,18 +270,118 @@ class IntegrationProviderDAO:
             if conn:
                 self.expire_stale_pending_connection(conn)
             return conn
-        query = self.owner_filter(query, owner).filter_by(
+
+        preference = self.get_or_create_app_preference(
+            owner=owner,
             canonical_app_slug=canonical_app_slug,
         )
+        usage_mode = (
+            preference.usage_mode
+            if preference.usage_mode in VALID_USAGE_MODES
+            else "primary"
+        )
+        if usage_mode == "explicit":
+            return None
+
+        candidates_query = self.owner_filter(
+            self.session.query(IntegrationConnection),
+            owner,
+        ).filter_by(canonical_app_slug=canonical_app_slug)
         if backend_id:
-            query = query.filter_by(backend_id=backend_id)
-        query = query.filter(
+            candidates_query = candidates_query.filter_by(backend_id=backend_id)
+        candidates_query = candidates_query.filter(
             IntegrationConnection.status.notin_(HIDDEN_CONNECTION_STATUSES),
         )
-        conn = query.order_by(IntegrationConnection.updated_at.desc()).first()
-        if conn:
+        candidates = candidates_query.order_by(
+            IntegrationConnection.connection_id.asc(),
+        ).all()
+        for conn in candidates:
             self.expire_stale_pending_connection(conn)
-        return conn
+        live = [
+            conn for conn in candidates if conn.status in LIVE_CONNECTION_STATUSES
+        ] or [
+            conn for conn in candidates if conn.status not in HIDDEN_CONNECTION_STATUSES
+        ]
+        if not live:
+            return None
+
+        if usage_mode == "pool":
+            index = preference.pool_cursor % len(live)
+            preference.pool_cursor = (preference.pool_cursor + 1) % max(len(live), 1)
+            self.session.flush()
+            return live[index]
+
+        # primary: most recently updated among live candidates
+        return sorted(
+            live,
+            key=lambda conn: conn.updated_at or conn.created_at or datetime.min,
+            reverse=True,
+        )[0]
+
+    def preference_owner_filter(self, query: Query, owner: Any) -> Query:
+        query = query.filter(IntegrationAppPreference.owner_scope == owner.owner_scope)
+        if owner.org_id is not None:
+            query = query.filter(IntegrationAppPreference.org_id == owner.org_id)
+        if owner.team_id is not None:
+            query = query.filter(IntegrationAppPreference.team_id == owner.team_id)
+        if owner.user_id:
+            query = query.filter(IntegrationAppPreference.user_id == owner.user_id)
+        if owner.assistant_id is not None:
+            query = query.filter(
+                IntegrationAppPreference.assistant_id == owner.assistant_id,
+            )
+        return query
+
+    def get_or_create_app_preference(
+        self,
+        *,
+        owner: Any,
+        canonical_app_slug: str,
+    ) -> IntegrationAppPreference:
+        existing = (
+            self.preference_owner_filter(
+                self.session.query(IntegrationAppPreference),
+                owner,
+            )
+            .filter_by(canonical_app_slug=canonical_app_slug)
+            .one_or_none()
+        )
+        if existing:
+            return existing
+        preference = IntegrationAppPreference(
+            owner_scope=owner.owner_scope,
+            org_id=owner.org_id,
+            team_id=owner.team_id,
+            user_id=owner.user_id,
+            assistant_id=owner.assistant_id,
+            canonical_app_slug=canonical_app_slug,
+            usage_mode="primary",
+            pool_cursor=0,
+        )
+        self.session.add(preference)
+        self.session.flush()
+        return preference
+
+    def upsert_app_preference(
+        self,
+        *,
+        owner: Any,
+        canonical_app_slug: str,
+        usage_mode: str,
+    ) -> IntegrationAppPreference:
+        if usage_mode not in VALID_USAGE_MODES:
+            raise ValueError(
+                f"usage_mode must be one of {sorted(VALID_USAGE_MODES)}",
+            )
+        preference = self.get_or_create_app_preference(
+            owner=owner,
+            canonical_app_slug=canonical_app_slug,
+        )
+        preference.usage_mode = usage_mode
+        if usage_mode != "pool":
+            preference.pool_cursor = 0
+        self.session.flush()
+        return preference
 
     def best_connections_by_app(
         self,
