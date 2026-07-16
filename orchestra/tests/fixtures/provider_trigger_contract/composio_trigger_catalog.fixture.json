@@ -1,0 +1,30 @@
+{
+  "catalog_version": "fixture-v1",
+  "entries": [
+    {
+      "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+      "provider_version": "1",
+      "canonical_app_hint": "github",
+      "retry_stable_identity_field": "id",
+      "signature_headers": ["webhook-id", "webhook-timestamp", "webhook-signature"],
+      "signature_scheme": "composio_v3_hmac_sha256",
+      "timestamp_tolerance_seconds": 300,
+      "provisioning_idempotency_supported": true,
+      "required_scopes": [],
+      "raw_metadata": {
+        "source": "fixture",
+        "canonical_event_slug": "github.issue_created"
+      }
+    },
+    {
+      "provider_trigger_slug": "UNSTABLE_DELIVERY_ID_TRIGGER",
+      "provider_version": "1",
+      "canonical_app_hint": "github",
+      "retry_stable_identity_field": "delivery_uuid",
+      "raw_metadata": {
+        "source": "fixture",
+        "notes": "Missing signing and conformance evidence on purpose."
+      }
+    }
+  ]
+}
