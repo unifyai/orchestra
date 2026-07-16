@@ -89,6 +89,45 @@ def retain_assistant_external_ip(
     return external_ip
 
 
+def record_assistant_external_ip_attachment(
+    session: Session,
+    *,
+    assistant_id: int,
+    gcp_address_name: str,
+    address: str,
+    region: str,
+    pool_location: str,
+    hostname: str,
+) -> AssistantExternalIP:
+    """Persist the address actually attached by the deployment control plane."""
+
+    external_ip = _get_external_ip(session, assistant_id)
+    if external_ip is None:
+        raise ValueError("Assistant has no external-IP allocation record")
+    if external_ip.state == "retained":
+        raise ValueError("Assistant external-IP allocation is retained")
+    external_ip.gcp_address_name = gcp_address_name
+    external_ip.address = address
+    external_ip.region = region
+    external_ip.pool_location = pool_location
+    external_ip.hostname = hostname
+    external_ip.state = "reserved"
+    external_ip.active_operation = None
+    record_assistant_external_ip_history(
+        session,
+        external_ip,
+        operation="attached",
+        details={
+            "gcp_address_name": gcp_address_name,
+            "address": address,
+            "region": region,
+            "pool_location": pool_location,
+            "hostname": hostname,
+        },
+    )
+    return external_ip
+
+
 def request_assistant_external_ip_rotation(
     session: Session,
     *,
@@ -427,7 +466,11 @@ async def reconcile_assistant_external_ip(
             return
         assistant = session.get(Assistant, assistant_id)
         assistant_timezone = assistant.timezone if assistant is not None else None
-        requested_pool_location = external_ip.pool_location
+        # The observed placement may be stale after a regional migration.  The
+        # desired location is the only safe placement input for reconciliation.
+        requested_pool_location = (
+            external_ip.desired_pool_location or external_ip.pool_location
+        )
 
     try:
         response = await get_async_client().post(

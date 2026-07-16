@@ -1889,6 +1889,16 @@ class ManagedDesktopNetworkIdentityRead(BaseModel):
     )
 
 
+class ManagedDesktopNetworkIdentityReport(BaseModel):
+    """Deployment's authoritative report of an attached assistant IP."""
+
+    gcp_address_name: str
+    address: str
+    region: str
+    pool_location: str
+    hostname: str
+
+
 class ManagedDesktopIPRotationRead(BaseModel):
     """Progress and rollback metadata for an egress-IP rotation."""
 
