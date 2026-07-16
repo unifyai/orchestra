@@ -10,14 +10,20 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from orchestra.provider_triggers.composio_trigger_adapter import (
     ComposioTriggerAdapter,
+    list_composio_trigger_types,
     verify_composio_signature,
 )
 from orchestra.provider_triggers.local_composio_trigger_adapter import (
     LocalComposioTriggerAdapter,
 )
-from orchestra.provider_triggers.trigger_adapter import TriggerProvisionRequest
+from orchestra.provider_triggers.trigger_adapter import (
+    TriggerDeleteRequest,
+    TriggerProvisionRequest,
+)
 
 FIXTURE_DIR = (
     Path(__file__).resolve().parents[1] / "fixtures" / "provider_trigger_contract"
@@ -89,34 +95,17 @@ def test_composio_retry_deliveries_normalize_to_same_identity() -> None:
     assert adapter.stable_event_identity(payload) == first.provider_event_identity
 
 
-class _FakeTriggerUpsertResponse:
-    trigger_id = "ti_created_1"
-    deprecated = False
+def test_composio_provision_posts_upsert_with_passthrough_payload() -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
 
-
-class _FakeComposioTriggers:
-    def __init__(self) -> None:
-        self.create_calls: list[dict[str, Any]] = []
-
-    def create(self, **kwargs: Any) -> _FakeTriggerUpsertResponse:
-        self.create_calls.append(kwargs)
-        return _FakeTriggerUpsertResponse()
-
-
-class _FakeComposioClient:
-    def __init__(self) -> None:
-        self.triggers = _FakeComposioTriggers()
-
-
-def test_composio_provision_uses_sdk_create_with_passthrough_payload() -> None:
-    fake_client = _FakeComposioClient()
-
-    def composio_factory(_api_key: str) -> _FakeComposioClient:
-        return fake_client
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        calls.append((method, url, kwargs))
+        return _FakeResponse(payload={"trigger_id": "ti_created_1"})
 
     adapter = ComposioTriggerAdapter(
         api_key="test-key",
-        composio_factory=composio_factory,
+        base_url="https://backend.composio.dev/api/v3.1",
+        request_fn=request_fn,
     )
     request = _provision_request(
         trigger_config={"repository": "octocat/hello-world", "labels": ["bug"]},
@@ -127,13 +116,114 @@ def test_composio_provision_uses_sdk_create_with_passthrough_payload() -> None:
 
     assert result.external_trigger_id == "ti_created_1"
     assert result.signing_secret_ref == "env:COMPOSIO_WEBHOOK_SECRET"
-    assert len(fake_client.triggers.create_calls) == 1
-    assert fake_client.triggers.create_calls[0] == {
-        "slug": "GITHUB_ISSUE_CREATED_TRIGGER",
-        "user_id": "assistant:1",
+    assert len(calls) == 1
+    method, url, kwargs = calls[0]
+    assert method == "POST"
+    assert url.endswith(
+        "/trigger_instances/GITHUB_ISSUE_CREATED_TRIGGER/upsert",
+    )
+    assert kwargs["headers"]["x-api-key"] == "test-key"
+    assert kwargs["json"] == {
         "connected_account_id": "ca_active",
+        "user_id": "assistant:1",
         "trigger_config": {"repository": "octocat/hello-world", "labels": ["bug"]},
     }
+
+
+@pytest.mark.parametrize("status_code", [200, 404, 410])
+def test_composio_delete_treats_missing_trigger_as_success(status_code: int) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        del kwargs
+        calls.append((method, url))
+        return _FakeResponse(status_code=status_code)
+
+    adapter = ComposioTriggerAdapter(
+        api_key="test-key",
+        base_url="https://backend.composio.dev/api/v3.1",
+        request_fn=request_fn,
+    )
+    adapter.delete(
+        TriggerDeleteRequest(
+            external_trigger_id="ti_to_delete",
+            idempotency_key="idem-delete-1",
+        ),
+    )
+
+    assert calls == [
+        (
+            "DELETE",
+            "https://backend.composio.dev/api/v3.1/trigger_instances/manage/ti_to_delete",
+        ),
+    ]
+
+
+def test_composio_delete_raises_on_server_error() -> None:
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        del method, url, kwargs
+        return _FakeResponse(status_code=500, text="boom")
+
+    adapter = ComposioTriggerAdapter(api_key="test-key", request_fn=request_fn)
+    with pytest.raises(RuntimeError, match="Composio trigger delete failed"):
+        adapter.delete(
+            TriggerDeleteRequest(
+                external_trigger_id="ti_to_delete",
+                idempotency_key="idem-delete-2",
+            ),
+        )
+
+
+def test_list_composio_trigger_types_paginates_with_cursor() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        assert method == "GET"
+        assert url.endswith("/triggers_types")
+        calls.append(kwargs)
+        params = kwargs.get("params") or {}
+        if params.get("cursor") == "page-2":
+            return _FakeResponse(
+                payload={
+                    "items": [
+                        {
+                            "slug": "GMAIL_NEW_GMAIL_MESSAGE",
+                            "version": "2",
+                            "toolkit": {"slug": "gmail"},
+                            "config": {"type": "object"},
+                        },
+                    ],
+                    "next_cursor": None,
+                },
+            )
+        return _FakeResponse(
+            payload={
+                "items": [
+                    {
+                        "slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+                        "version": "1",
+                        "toolkit": {"slug": "github"},
+                        "config": {"type": "object"},
+                    },
+                ],
+                "next_cursor": "page-2",
+            },
+        )
+
+    entries = list_composio_trigger_types(
+        api_key="test-key",
+        base_url="https://backend.composio.dev/api/v3.1",
+        request_fn=request_fn,
+        page_limit=250,
+    )
+
+    assert [entry["slug"] for entry in entries] == [
+        "GITHUB_ISSUE_CREATED_TRIGGER",
+        "GMAIL_NEW_GMAIL_MESSAGE",
+    ]
+    assert calls[0]["headers"]["x-api-key"] == "test-key"
+    assert calls[0]["params"] == {"limit": 250}
+    assert calls[1]["params"] == {"limit": 250, "cursor": "page-2"}
 
 
 def test_local_composio_stub_provision_is_deterministic_for_slug_and_config() -> None:

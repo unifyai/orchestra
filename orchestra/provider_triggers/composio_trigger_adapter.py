@@ -10,10 +10,9 @@ import logging
 import os
 import time
 from typing import Any, Callable, Mapping, Protocol, Sequence
+from urllib.parse import quote
 
 import requests
-
-ComposioClientFactory = Callable[[str], Any]
 
 from orchestra.provider_triggers.backend_ids import (
     COMPOSIO_BACKEND_ID,
@@ -190,7 +189,6 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         account_subject_pepper: str | None = None,
         timeout_seconds: int = 30,
         request_fn: HttpRequestFn | None = None,
-        composio_factory: ComposioClientFactory | None = None,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.getenv("COMPOSIO_API_KEY")
         self.base_url = (
@@ -210,16 +208,6 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         )
         self.timeout_seconds = timeout_seconds
         self._request = request_fn or self._default_request
-        self._composio_factory = composio_factory
-
-    def _composio_client(self) -> Any:
-        if not self.api_key:
-            raise ValueError("COMPOSIO_API_KEY is required for Composio trigger calls.")
-        if self._composio_factory is not None:
-            return self._composio_factory(self.api_key)
-        from composio import Composio
-
-        return Composio(api_key=self.api_key)
 
     def _api_headers(self) -> dict[str, str]:
         if not self.api_key:
@@ -276,51 +264,60 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             request.canonical_app_slug,
             request.idempotency_key,
         )
-        composio = self._composio_client()
+        slug = quote(str(request.provider_trigger_slug).strip(), safe="")
+        if not slug:
+            raise ValueError("provider_trigger_slug is required")
         try:
-            response = composio.triggers.create(
-                slug=request.provider_trigger_slug,
-                user_id=request.provider_user_id,
-                connected_account_id=request.provider_connection_id,
-                trigger_config=dict(request.trigger_config),
+            response = self._request(
+                "POST",
+                f"{self.base_url}/trigger_instances/{slug}/upsert",
+                headers=self._api_headers(),
+                json={
+                    "connected_account_id": request.provider_connection_id,
+                    "user_id": request.provider_user_id,
+                    "trigger_config": dict(request.trigger_config),
+                },
             )
+            response.raise_for_status()
         except Exception as exc:
             raise RuntimeError(
                 f"Composio trigger provision failed: {exc}",
             ) from exc
-        trigger_id = getattr(response, "trigger_id", None)
-        if not isinstance(trigger_id, str) or not trigger_id.strip():
-            body = (
-                response.model_dump()
-                if hasattr(response, "model_dump")
-                else dict(response) if isinstance(response, Mapping) else {}
-            )
-            trigger_id = _extract_trigger_id(body)
+        body = response.json()
+        if not isinstance(body, Mapping):
+            raise RuntimeError("Composio trigger provision response was not an object")
+        trigger_id = _extract_trigger_id(body)
         if not trigger_id:
             raise RuntimeError("Composio trigger provision response missing trigger id")
-        raw = (
-            response.model_dump()
-            if hasattr(response, "model_dump")
-            else {"trigger_id": trigger_id}
-        )
         return TriggerProvisionResult(
             external_trigger_id=trigger_id,
             signing_secret_ref=COMPOSIO_WEBHOOK_SECRET_REF,
             signing_secret_version="project",
-            raw=raw,
+            raw=dict(body),
         )
 
     def delete(self, request: TriggerDeleteRequest) -> None:
         if not request.external_trigger_id:
             return
         _ = request.idempotency_key
-        composio = self._composio_client()
+        trigger_id = quote(str(request.external_trigger_id).strip(), safe="")
+        if not trigger_id:
+            return
         try:
-            composio.triggers.delete(request.external_trigger_id)
+            response = self._request(
+                "DELETE",
+                f"{self.base_url}/trigger_instances/manage/{trigger_id}",
+                headers=self._api_headers(),
+            )
         except Exception as exc:
-            message = str(exc).lower()
-            if "404" in message or "not found" in message or "410" in message:
-                return
+            raise RuntimeError(
+                f"Composio trigger delete failed: {exc}",
+            ) from exc
+        if response.status_code in {404, 410}:
+            return
+        try:
+            response.raise_for_status()
+        except Exception as exc:
             raise RuntimeError(
                 f"Composio trigger delete failed: {exc}",
             ) from exc
@@ -470,3 +467,56 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             error_code="provider_connection_not_active",
             detail={"provider_status": provider_status or "unknown"},
         )
+
+
+def list_composio_trigger_types(
+    *,
+    api_key: str,
+    base_url: str | None = None,
+    request_fn: HttpRequestFn | None = None,
+    timeout_seconds: int = 30,
+    page_limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """Fetch all Composio trigger types via the public REST catalog API."""
+
+    if not api_key.strip():
+        raise ValueError("COMPOSIO_API_KEY is required for Composio catalog import")
+    resolved_base = (
+        base_url or os.getenv("COMPOSIO_BASE_URL") or DEFAULT_COMPOSIO_BASE_URL
+    ).rstrip("/")
+    http = request_fn or (
+        lambda method, url, **kwargs: requests.request(
+            method,
+            url,
+            timeout=timeout_seconds,
+            **kwargs,
+        )
+    )
+    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    entries: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": page_limit}
+        if cursor:
+            params["cursor"] = cursor
+        response = http(
+            "GET",
+            f"{resolved_base}/triggers_types",
+            headers=headers,
+            params=params,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("Composio trigger catalog response was not an object")
+        items = payload.get("items") or []
+        if not isinstance(items, list):
+            raise RuntimeError("Composio trigger catalog items were not a list")
+        for item in items:
+            if isinstance(item, Mapping):
+                entries.append(dict(item))
+        next_cursor = payload.get("next_cursor")
+        if not isinstance(next_cursor, str) or not next_cursor.strip():
+            break
+        cursor = next_cursor.strip()
+    return entries
