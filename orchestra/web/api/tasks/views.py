@@ -29,10 +29,10 @@ from orchestra.web.api.log.task_machine_user import (
 )
 from orchestra.web.api.tasks.schema import (
     RetryTriggerResponse,
+    StagedProviderTrigger,
     TaskRevisionConflictResponse,
     TaskTriggerRequest,
     TaskTriggerStatus,
-    TriggerCatalogEvent,
     TriggerCatalogResponse,
     TriggerHealthResponse,
     TypedTaskCreateRequest,
@@ -828,37 +828,53 @@ def delete_assistant_task_run_event_context(
 
 
 @router.get(
+    "/assistants/{assistant_id}/provider-triggers",
+    response_model=InfoResponse[TriggerCatalogResponse],
+    tags=["Tasks"],
+    summary="List provider triggers available for one assistant's connections",
+)
+def get_assistant_provider_triggers(
+    assistant_id: int,
+    backend_id: str | None = None,
+    session=Depends(get_db_session),
+) -> InfoResponse[TriggerCatalogResponse]:
+    from orchestra.services.staged_trigger_catalog_service import (
+        list_staged_triggers_for_assistant,
+    )
+
+    payload = list_staged_triggers_for_assistant(
+        session,
+        assistant_id=assistant_id,
+        backend_id=backend_id,
+    )
+    return InfoResponse(
+        info=TriggerCatalogResponse(
+            available=payload["available"],
+            unavailable_reason=payload["unavailable_reason"],
+            triggers=[
+                StagedProviderTrigger.model_validate(item)
+                for item in payload["triggers"]
+            ],
+        ),
+    )
+
+
+@router.get(
     "/task-trigger-catalog",
     response_model=InfoResponse[TriggerCatalogResponse],
     tags=["Tasks"],
-    summary="List supported provider-event trigger catalog entries",
+    summary="List provider triggers (requires assistant_id query param)",
+    deprecated=True,
 )
 def get_task_trigger_catalog(
+    assistant_id: int,
+    backend_id: str | None = None,
     session=Depends(get_db_session),
 ) -> InfoResponse[TriggerCatalogResponse]:
-    from orchestra.provider_triggers.topology import evaluate_provider_trigger_topology
-    from orchestra.provider_triggers.trigger_registry import (
-        list_trigger_catalog_payloads,
-    )
-
-    topology = evaluate_provider_trigger_topology(session)
-    payloads = list_trigger_catalog_payloads()
-    if not topology.available:
-        payloads = [
-            {
-                **payload,
-                "backends": [],
-            }
-            for payload in payloads
-        ]
-    return InfoResponse(
-        info=TriggerCatalogResponse(
-            available=topology.available,
-            unavailable_reason=topology.unavailable_reason,
-            events=[
-                TriggerCatalogEvent.model_validate(payload) for payload in payloads
-            ],
-        ),
+    return get_assistant_provider_triggers(
+        assistant_id=assistant_id,
+        backend_id=backend_id,
+        session=session,
     )
 
 

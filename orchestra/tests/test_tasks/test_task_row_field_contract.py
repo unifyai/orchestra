@@ -56,9 +56,8 @@ def test_classify_provider_event_update_fields_uses_enum_partitions() -> None:
             "connection_id": "conn-1",
             "backend_id": "composio",
             "canonical_app_slug": "github",
-            "event_slug": "github.issue_created",
-            "schema_version": "1",
-            "filters": [],
+            "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+            "trigger_config": {},
         },
     }
     assert (

@@ -1,10 +1,4 @@
-"""Composio inbound trigger adapter for curated provider-event subscriptions.
-
-TODO: Keep event-specific provision config, resource parsing, and projection
-behind registry mappings / projector lookup. This adapter should stay the
-Composio transport + verification layer, not a github.issue_created-only
-implementation forever.
-"""
+"""Composio inbound trigger adapter for provider-native subscriptions."""
 
 from __future__ import annotations
 
@@ -19,6 +13,12 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
 
+ComposioClientFactory = Callable[[str], Any]
+
+from orchestra.provider_triggers.backend_ids import (
+    COMPOSIO_BACKEND_ID,
+    DEFAULT_SIGNATURE_TOLERANCE_SECONDS,
+)
 from orchestra.provider_triggers.provider_identity import (
     composio_v3_event_identity,
     provider_account_subject_hmac,
@@ -31,18 +31,6 @@ from orchestra.provider_triggers.trigger_adapter import (
     TriggerProviderAdapter,
     TriggerProvisionRequest,
     TriggerProvisionResult,
-    TriggerResource,
-)
-from orchestra.provider_triggers.trigger_projectors import (
-    normalize_repository,
-    project_curated_payload,
-)
-from orchestra.provider_triggers.trigger_registry import (
-    COMPOSIO_BACKEND_ID,
-    COMPOSIO_GITHUB_ISSUE_CREATED_SLUG,
-    GITHUB_ISSUE_CREATED,
-    require_canonical_trigger_event,
-    resolve_provider_mapping,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +58,7 @@ def verify_composio_signature(
     webhook_id: str,
     webhook_timestamp: str,
     signature_header: str,
-    tolerance_seconds: int = 300,
+    tolerance_seconds: int = DEFAULT_SIGNATURE_TOLERANCE_SECONDS,
     now_seconds: int | None = None,
     signed_payload: str | None = None,
 ) -> bool:
@@ -120,7 +108,7 @@ def sign_composio_webhook_headers(
     webhook_id: str,
     timestamp: str | None = None,
 ) -> dict[str, str]:
-    """Build Composio V3 Standard-Webhooks-style delivery headers for one body."""
+    """Build Composio V3 delivery headers for one body."""
 
     webhook_timestamp = timestamp or str(int(time.time()))
     body_text = raw_body.decode("utf-8")
@@ -136,18 +124,6 @@ def sign_composio_webhook_headers(
         "webhook-timestamp": webhook_timestamp,
         "webhook-signature": f"v1,{digest}",
     }
-
-
-def split_github_resource(resource_id: str) -> tuple[str, str]:
-    """Split owner/name into Composio trigger_config fields."""
-
-    normalized = normalize_repository(resource_id)
-    if not normalized or "/" not in normalized:
-        raise ValueError(f"Invalid GitHub repository resource {resource_id!r}")
-    owner, _, repo = normalized.partition("/")
-    if not owner or not repo or "/" in repo:
-        raise ValueError(f"Invalid GitHub repository resource {resource_id!r}")
-    return owner, repo
 
 
 def _header_value(headers: Mapping[str, str], name: str) -> str:
@@ -201,7 +177,7 @@ def _delivery_trigger_id(payload: Mapping[str, Any]) -> str | None:
 
 
 class ComposioTriggerAdapter(TriggerProviderAdapter):
-    """Composio adapter for the curated github.issue_created trigger."""
+    """Composio transport for provider-native trigger subscriptions."""
 
     backend_id = COMPOSIO_BACKEND_ID
 
@@ -214,6 +190,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         account_subject_pepper: str | None = None,
         timeout_seconds: int = 30,
         request_fn: HttpRequestFn | None = None,
+        composio_factory: ComposioClientFactory | None = None,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.getenv("COMPOSIO_API_KEY")
         self.base_url = (
@@ -233,6 +210,16 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         )
         self.timeout_seconds = timeout_seconds
         self._request = request_fn or self._default_request
+        self._composio_factory = composio_factory
+
+    def _composio_client(self) -> Any:
+        if not self.api_key:
+            raise ValueError("COMPOSIO_API_KEY is required for Composio trigger calls.")
+        if self._composio_factory is not None:
+            return self._composio_factory(self.api_key)
+        from composio import Composio
+
+        return Composio(api_key=self.api_key)
 
     def _api_headers(self) -> dict[str, str]:
         if not self.api_key:
@@ -264,7 +251,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         subject = provider_user_id.strip()
         display = (
             str(data.get("status") or "").strip()
-            or str(data.get("toolkit_slug") or data.get("appName") or "github").strip()
+            or str(data.get("toolkit_slug") or data.get("appName") or "").strip()
         )
         label = f"{display}:{subject}" if display else subject
         subject_hmac = None
@@ -282,139 +269,61 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             raw=data,
         )
 
-    def list_resources(
-        self,
-        *,
-        provider_connection_id: str,
-        provider_user_id: str | None = None,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> list[TriggerResource]:
-        """Return resources discoverable for the curated event.
-
-        GitHub issue-created resources are repository owner/name pairs. v1 does
-        not scrape the full GitHub catalog through Composio tools; callers supply
-        an exact repository filter and ``authorize_resource`` validates access.
-        """
-
-        require_canonical_trigger_event(event_slug, schema_version=schema_version)
-        if event_slug != GITHUB_ISSUE_CREATED:
-            return []
-        _ = provider_connection_id, provider_user_id
-        return []
-
-    def authorize_resource(
-        self,
-        *,
-        provider_connection_id: str,
-        resource_id: str,
-        event_slug: str = GITHUB_ISSUE_CREATED,
-        schema_version: str = "1",
-    ) -> bool:
-        """Return True when the connected account can access the repository."""
-
-        event = require_canonical_trigger_event(
-            event_slug,
-            schema_version=schema_version,
-        )
-        if event.projector_key != GITHUB_ISSUE_CREATED:
-            return False
-        owner, repo = split_github_resource(resource_id)
-        response = self._request(
-            "GET",
-            f"{self.base_url}/connected_accounts/{provider_connection_id}",
-            headers=self._api_headers(),
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            return False
-        status = str(data.get("status") or "").upper()
-        if status not in {"ACTIVE", "CONNECTED"}:
-            return False
-        # Connection liveness is the v1 fail-closed gate. Repository ownership
-        # is revalidated on delivery via resource_id matching; deeper GitHub ACL
-        # probes are deferred until a later resource-listing ticket.
-        _ = owner, repo
-        return True
-
     def provision(self, request: TriggerProvisionRequest) -> TriggerProvisionResult:
-        # TODO: Build trigger_config from the registry mapping for request.event_slug
-        # instead of assuming GitHub owner/repo resources.
-        mapping = resolve_provider_mapping(
-            backend_id=self.backend_id,
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
+        _ = (
+            request.callback_url,
+            request.ingress_key,
+            request.canonical_app_slug,
+            request.idempotency_key,
         )
-        resource_id = request.resource_id or self.resolve_resource_id(
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-            filters=request.filters,
-        )
-        if not resource_id:
-            raise ValueError(
-                "A repository resource is required to provision github.issue_created",
+        composio = self._composio_client()
+        try:
+            response = composio.triggers.create(
+                slug=request.provider_trigger_slug,
+                user_id=request.provider_user_id,
+                connected_account_id=request.provider_connection_id,
+                trigger_config=dict(request.trigger_config),
             )
-        if not self.authorize_resource(
-            provider_connection_id=request.provider_connection_id,
-            resource_id=resource_id,
-            event_slug=request.event_slug,
-            schema_version=request.schema_version,
-        ):
-            raise PermissionError("repository_inaccessible")
-        owner, repo = split_github_resource(resource_id)
-        payload = {
-            "slug": mapping.provider_trigger_slug,
-            "user_id": request.provider_user_id,
-            "connected_account_id": request.provider_connection_id,
-            "trigger_config": {"owner": owner, "repo": repo},
-            "idempotency_key": request.idempotency_key,
-        }
-        # callback_url and ingress_key are owned by Orchestra ingress topology;
-        # Composio deliveries use the project webhook registration.
-        _ = request.callback_url, request.ingress_key
-        response = self._request(
-            "POST",
-            f"{self.base_url}/trigger_instances",
-            headers=self._api_headers(),
-            json=payload,
-        )
-        if response.status_code >= 400:
+        except Exception as exc:
             raise RuntimeError(
-                f"Composio trigger provision failed: {response.status_code} {response.text[:300]}",
+                f"Composio trigger provision failed: {exc}",
+            ) from exc
+        trigger_id = getattr(response, "trigger_id", None)
+        if not isinstance(trigger_id, str) or not trigger_id.strip():
+            body = (
+                response.model_dump()
+                if hasattr(response, "model_dump")
+                else dict(response) if isinstance(response, Mapping) else {}
             )
-        body = response.json()
-        if not isinstance(body, dict):
-            raise RuntimeError("Composio trigger provision returned a non-object body")
-        trigger_id = _extract_trigger_id(body)
+            trigger_id = _extract_trigger_id(body)
         if not trigger_id:
             raise RuntimeError("Composio trigger provision response missing trigger id")
+        raw = (
+            response.model_dump()
+            if hasattr(response, "model_dump")
+            else {"trigger_id": trigger_id}
+        )
         return TriggerProvisionResult(
             external_trigger_id=trigger_id,
             signing_secret_ref=COMPOSIO_WEBHOOK_SECRET_REF,
             signing_secret_version="project",
-            raw=body,
+            raw=raw,
         )
 
     def delete(self, request: TriggerDeleteRequest) -> None:
         if not request.external_trigger_id:
             return
-        response = self._request(
-            "DELETE",
-            f"{self.base_url}/trigger_instances/{request.external_trigger_id}",
-            headers=self._api_headers(),
-            params=(
-                {"idempotency_key": request.idempotency_key}
-                if request.idempotency_key
-                else None
-            ),
-        )
-        if response.status_code in {404, 410}:
-            return
-        if response.status_code >= 400:
+        _ = request.idempotency_key
+        composio = self._composio_client()
+        try:
+            composio.triggers.delete(request.external_trigger_id)
+        except Exception as exc:
+            message = str(exc).lower()
+            if "404" in message or "not found" in message or "410" in message:
+                return
             raise RuntimeError(
-                f"Composio trigger delete failed: {response.status_code} {response.text[:300]}",
-            )
+                f"Composio trigger delete failed: {exc}",
+            ) from exc
 
     def verify_delivery(
         self,
@@ -434,17 +343,12 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
             secrets = [self.webhook_secret]
         if not secrets:
             return False
-        mapping = resolve_provider_mapping(
-            backend_id=self.backend_id,
-            event_slug=GITHUB_ISSUE_CREATED,
-        )
         tolerance = (
-            mapping.timestamp_tolerance_seconds
+            DEFAULT_SIGNATURE_TOLERANCE_SECONDS
             if tolerance_seconds is None
             else tolerance_seconds
         )
-        body = raw_body.decode("utf-8")
-        signed_payload = f"{webhook_id}.{webhook_timestamp}.{body}"
+        signed_payload = f"{webhook_id}.{webhook_timestamp}.{raw_body.decode('utf-8')}"
         return any(
             verify_composio_signature(
                 signing_secret=secret,
@@ -464,8 +368,6 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         headers: Mapping[str, str],
         raw_body: bytes,
     ) -> str | None:
-        """Extract the Composio trigger-instance id without projecting the event."""
-
         _ = headers
         return _delivery_trigger_id(_parse_delivery_payload(raw_body))
 
@@ -475,9 +377,6 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         headers: Mapping[str, str],
         raw_body: bytes | Mapping[str, Any],
     ) -> NormalizedProviderDelivery:
-        # TODO: Dispatch projection by registry mapping for the delivery's
-        # provider trigger slug instead of hard-requiring the GitHub issue
-        # created Composio slug.
         payload = _parse_delivery_payload(raw_body)
         identity = self.stable_event_identity(payload)
         if not identity:
@@ -489,27 +388,17 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         if not isinstance(trigger_slug, str) or not trigger_slug.strip():
             raise ValueError("Composio delivery is missing trigger_slug")
         trigger_slug = trigger_slug.strip()
-        if trigger_slug != COMPOSIO_GITHUB_ISSUE_CREATED_SLUG:
-            raise ValueError(f"Unsupported Composio trigger slug {trigger_slug!r}")
-        event = require_canonical_trigger_event(GITHUB_ISSUE_CREATED)
-        projection = project_curated_payload(
-            projector_key=event.projector_key,
-            payload=payload,
-        )
-        resource_id = projection.get("repository")
         connected_account_id = metadata.get("connected_account_id")
         provider_user_id = metadata.get("user_id")
         external_trigger_id = _delivery_trigger_id(payload)
         occurred_at = payload.get("timestamp")
         envelope = {
             "backend_id": self.backend_id,
-            "event_slug": GITHUB_ISSUE_CREATED,
             "provider_trigger_slug": trigger_slug,
             "provider_event_identity": identity,
             "external_trigger_id": external_trigger_id,
             "connected_account_id": connected_account_id,
             "provider_user_id": provider_user_id,
-            "resource_id": resource_id,
             "occurred_at": occurred_at,
             "webhook_id": _header_value(headers, "webhook-id") or None,
         }
@@ -521,9 +410,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
                 str(connected_account_id) if connected_account_id else None
             ),
             provider_user_id=str(provider_user_id) if provider_user_id else None,
-            resource_id=str(resource_id) if resource_id else None,
             envelope=envelope,
-            curated_projection=projection,
             occurred_at=str(occurred_at) if occurred_at else None,
             source_body=payload,
         )
@@ -542,6 +429,7 @@ class ComposioTriggerAdapter(TriggerProviderAdapter):
         external_trigger_id: str | None,
         provider_connection_id: str | None,
     ) -> TriggerHealthResult:
+        _ = external_trigger_id
         if not provider_connection_id:
             return TriggerHealthResult(
                 status="error",

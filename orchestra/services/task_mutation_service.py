@@ -28,6 +28,9 @@ from orchestra.provider_triggers.task_trigger import (
     ProviderEventTrigger,
     parse_task_trigger,
 )
+from orchestra.services.staged_trigger_catalog_service import (
+    validate_provider_event_trigger_for_assistant,
+)
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     _build_assistant_tasks_context_name,
@@ -172,6 +175,12 @@ class TaskMutationService:
         trigger = parse_task_trigger(payload.get("trigger"))
         binding_id: str | None = None
         if trigger is not None and trigger.kind == "provider_event":
+            if isinstance(trigger, ProviderEventTrigger):
+                validate_provider_event_trigger_for_assistant(
+                    self.session,
+                    assistant_id=int(assistant.agent_id),
+                    trigger=trigger,
+                )
             binding_id = f"binding-{uuid.uuid4().hex[:12]}"
             payload[TaskRowKey.provider_event_binding_id.value] = binding_id
 
@@ -289,6 +298,14 @@ class TaskMutationService:
 
         merged = dict(row.data)
         merged.update(updates)
+        if "trigger" in updates:
+            updated_trigger = parse_task_trigger(merged.get("trigger"))
+            if isinstance(updated_trigger, ProviderEventTrigger):
+                validate_provider_event_trigger_for_assistant(
+                    self.session,
+                    assistant_id=int(assistant.agent_id),
+                    trigger=updated_trigger,
+                )
         merged[TaskRowKey.task_revision.value] = row.task_revision + 1
         log_event = self._lock_task_row(
             project_id=project_id,

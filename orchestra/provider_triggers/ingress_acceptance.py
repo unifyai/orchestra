@@ -198,7 +198,6 @@ def process_provider_webhook_delivery(
             classification=classification,
             detail={
                 "external_trigger_id": delivery.external_trigger_id,
-                "resource_id": delivery.resource_id,
             },
             delivery=delivery,
             adapter=trigger_adapter,
@@ -259,28 +258,15 @@ def _classify_delivery(
             if delivery_subject_hmac != binding.provider_account_subject_hmac:
                 return ReceiptClassificationReason.unauthorized
 
-    expected_resource_id = adapter.resolve_resource_id(
-        event_slug=binding.event_slug,
-        schema_version=binding.schema_version,
-        filters=binding.filters_json,
-    )
     auth_error = adapter.authorize_delivery(
         delivery=delivery,
         expected_connected_account_id=connection.provider_connection_id,
         expected_external_trigger_id=generation.external_trigger_id,
         expected_provider_user_id=connection.provider_user_id,
-        expected_resource_id=expected_resource_id,
     )
     if auth_error is not None:
         return ReceiptClassificationReason.unauthorized
 
-    if not adapter.delivery_matches_filters(
-        delivery,
-        binding.filters_json,
-        event_slug=binding.event_slug,
-        schema_version=binding.schema_version,
-    ):
-        return ReceiptClassificationReason.unmatched
     return ReceiptClassificationReason.matched
 
 
@@ -456,8 +442,6 @@ def _accept_matched_delivery(
         "acceptance_epoch": locked_generation.acceptance_epoch,
         "generation_id": locked_generation.generation_id,
         "provider_event_identity": delivery.provider_event_identity,
-        "matched_filters": list(locked_binding.filters_json or []),
-        "resource_id": delivery.resource_id,
         "external_trigger_id": delivery.external_trigger_id,
     }
     receipt = dao.adopt_receipt(
@@ -469,7 +453,7 @@ def _accept_matched_delivery(
         processing_state=ReceiptProcessingState.accepted.value,
         classification_reason=ReceiptClassificationReason.matched.value,
         stable_envelope_json=dict(delivery.envelope),
-        curated_projection_json=dict(delivery.curated_projection),
+        curated_projection_json=None,
     )
     if receipt.receipt_id != candidate_receipt_id:
         return _result_from_existing_receipt(
@@ -507,12 +491,12 @@ def _accept_matched_delivery(
         "provider_event_receipt_id": receipt.receipt_id,
         "provider_event_backend_id": locked_binding.backend_id,
         "provider_event_app_slug": locked_binding.canonical_app_slug,
-        "provider_event_slug": locked_binding.event_slug,
-        "provider_event_schema_version": locked_binding.schema_version,
+        "provider_event_slug": locked_binding.provider_trigger_slug,
+        "provider_event_schema_version": "0",
         "provider_event_acceptance_epoch": receipt.acceptance_epoch,
         "provider_event_received_at": received_at,
         "provider_event_occurred_at": delivery.occurred_at,
-        "provider_event_matched_filters": list(locked_binding.filters_json or []),
+        "provider_event_trigger_config": dict(locked_binding.trigger_config_json or {}),
         "provider_event_identity_hmac": identity_hmac,
         "source_ref": delivery.provider_event_identity,
     }

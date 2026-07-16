@@ -32,4 +32,5 @@ def test_parse_task_trigger_coerces_legacy_medium_only_row() -> None:
 def test_parse_task_trigger_accepts_provider_event_kind() -> None:
     trigger = parse_task_trigger(_load_fixture("task_trigger.provider_event.v1.json"))
     assert isinstance(trigger, ProviderEventTrigger)
-    assert trigger.event_slug == "github.issue_created"
+    assert trigger.provider_trigger_slug == "GITHUB_ISSUE_CREATED_TRIGGER"
+    assert trigger.trigger_config == {"owner": "unifyai", "repo": "demo"}

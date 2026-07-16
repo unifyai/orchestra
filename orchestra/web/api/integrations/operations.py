@@ -72,6 +72,14 @@ from orchestra.integrations.providers.utils.normalization import (
     action_class_from_behavior_hints as _action_class_from_behavior_hints,
 )
 from orchestra.integrations.providers.utils.normalization import slugify as _slugify
+from orchestra.integrations.transient import (
+    DEFAULT_MAX_ATTEMPTS,
+    call_with_transient_retries,
+    embedded_transient_ok_failures,
+    is_safe_to_retry_ok_result,
+    parse_retry_after_seconds,
+    should_retry_adapter_result,
+)
 from orchestra.web.api.integrations.schema import (
     IntegrationCatalogSyncRequest,
     IntegrationCatalogSyncResponse,
@@ -2524,6 +2532,15 @@ def _provider_error_outcome(
     return ("provider_error", None, error)
 
 
+def _provider_retry_max_attempts() -> int:
+    """Max provider adapter attempts per ``run_tool`` (opt out with ``1``)."""
+
+    raw = os.environ.get("ORCHESTRA_INTEGRATION_RETRY_MAX_ATTEMPTS")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_MAX_ATTEMPTS
+    return max(1, int(raw))
+
+
 def run_tool(
     session: Session,
     *,
@@ -2564,6 +2581,7 @@ def run_tool(
     result: dict[str, Any] = {}
     confirmation: ProviderToolConfirmationPayload | None = None
     audit: ProviderActionAudit | None = None
+    provider_attempts = 1
     if policy_error:
         status = "blocked_by_policy"
         error = policy_error
@@ -2615,23 +2633,64 @@ def run_tool(
                 owner,
                 conn.connection_id if conn else None,
             )
-            adapter_result = adapter.execute(
-                ProviderExecutionRequest(
-                    backend_id=tool.backend_id,
-                    tool_id=tool.tool_id,
-                    canonical_app_slug=tool.canonical_app_slug,
-                    provider_tool_id=tool.provider_tool_id,
-                    connection_id=conn.connection_id if conn else None,
-                    provider_connection_id=(
-                        conn.provider_connection_id if conn else None
-                    ),
+            execution_request = ProviderExecutionRequest(
+                backend_id=tool.backend_id,
+                tool_id=tool.tool_id,
+                canonical_app_slug=tool.canonical_app_slug,
+                provider_tool_id=tool.provider_tool_id,
+                connection_id=conn.connection_id if conn else None,
+                provider_connection_id=(conn.provider_connection_id if conn else None),
+                action_class=tool.action_class,
+                user_id=provider_user_id,
+                arguments=body.arguments,
+            )
+            max_attempts = _provider_retry_max_attempts()
+
+            def _should_retry(adapter_result: Any) -> tuple[bool, str | None]:
+                return should_retry_adapter_result(
                     action_class=tool.action_class,
-                    user_id=provider_user_id,
-                    arguments=body.arguments,
-                ),
+                    status=adapter_result.status,
+                    error=adapter_result.error,
+                    result=adapter_result.result,
+                )
+
+            def _on_retry(attempt: int, reason: str | None, delay: float) -> None:
+                logger.info(
+                    "Retrying provider tool %s (attempt %s/%s, reason=%s, "
+                    "sleep=%.2fs)",
+                    tool.tool_id,
+                    attempt,
+                    max_attempts,
+                    reason,
+                    delay,
+                )
+
+            adapter_result, provider_attempts = call_with_transient_retries(
+                lambda: adapter.execute(execution_request),
+                should_retry=_should_retry,
+                max_attempts=max_attempts,
+                on_retry=_on_retry,
+                retry_after_from_value=lambda ar: parse_retry_after_seconds(ar.error),
             )
             if adapter_result.status == "ok":
                 result = adapter_result.result
+                # After exhausting retries, surface persistent embedded platform
+                # failures (GraphQL / Pipedream action errors) as provider_error
+                # rather than a misleading ok envelope.
+                if is_safe_to_retry_ok_result(action_class=tool.action_class):
+                    reason, details = embedded_transient_ok_failures(result)
+                    if reason:
+                        status = "provider_error"
+                        error = {
+                            "code": "provider_error",
+                            "message": (
+                                f"Provider {reason} persisted after "
+                                f"{provider_attempts} attempt(s): {details}"
+                            ),
+                            "embedded_failure_reason": reason,
+                            "embedded_failure_details": details,
+                        }
+                        result = {}
             else:
                 status, activation_override, error = _provider_error_outcome(
                     adapter_result.error,
@@ -2665,6 +2724,7 @@ def run_tool(
         error=error,
         audit_id=audit.id,
         confirmation=confirmation,
+        provider_attempts=provider_attempts,
     )
 
 

@@ -309,7 +309,7 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
     def list_components(
         self,
         *,
-        app: str,
+        app: str | None = None,
         limit: int | None = None,
         component_type: str | None = "action",
         registry: str = "public",
@@ -333,9 +333,10 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         def fetch_page(cursor: str | None, page_size: int) -> CursorPage:
             params: dict[str, Any] = {
                 "limit": page_size,
-                "app": app,
                 "registry": registry,
             }
+            if app:
+                params["app"] = app
             if cursor:
                 params["after"] = cursor
             if component_type:
@@ -367,7 +368,7 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         )
         return items[:limit] if limit is not None else items
 
-    def _access_token(self) -> tuple[str | None, dict[str, str] | None]:
+    def _access_token(self) -> tuple[str | None, dict[str, Any] | None]:
         """Resolve a server-side OAuth token for Pipedream API requests."""
 
         if self.client_id and self.client_secret:
@@ -390,10 +391,11 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
                 response.raise_for_status()
                 data = response.json()
             except Exception as exc:
-                return None, {
-                    "code": "provider_auth_failed",
-                    "message": f"Failed to mint Pipedream access token: {exc}",
-                }
+                return None, self._http_exception_error(
+                    exc,
+                    code="provider_auth_failed",
+                    message_prefix="Failed to mint Pipedream access token",
+                )
             if isinstance(data, dict) and data.get("access_token"):
                 return str(data["access_token"]), None
             return None, {
@@ -412,6 +414,53 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
                 "supported as a short-lived fallback."
             ),
         }
+
+    @staticmethod
+    def _http_exception_error(
+        exc: BaseException,
+        *,
+        code: str = "provider_request_failed",
+        message_prefix: str | None = None,
+        provider_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a Composio-parity error dict from a requests-style exception."""
+
+        response = getattr(exc, "response", None)
+        provider_status_code = getattr(response, "status_code", None)
+        provider_response_body = ""
+        provider_response_headers: dict[str, str] = {}
+        if response is not None:
+            provider_response_body = str(getattr(response, "text", "") or "")[:1000]
+            raw_headers = getattr(response, "headers", None)
+            if raw_headers is not None:
+                # Preserve Retry-After (and siblings) for transient backoff.
+                for key in ("Retry-After", "retry-after", "Retry-After-Ms"):
+                    if key in raw_headers:
+                        provider_response_headers[key] = str(raw_headers.get(key))
+        message = str(exc)
+        if message_prefix:
+            message = f"{message_prefix}: {exc}"
+        error: dict[str, Any] = {
+            "code": code,
+            "message": message,
+            "provider_status_code": provider_status_code,
+            "provider_response_body": provider_response_body,
+        }
+        if provider_response_headers:
+            error["provider_response_headers"] = provider_response_headers
+            retry_after = None
+            for key, value in provider_response_headers.items():
+                if key.lower() == "retry-after":
+                    try:
+                        retry_after = int(value)
+                    except (TypeError, ValueError):
+                        retry_after = None
+                    break
+            if retry_after is not None and retry_after >= 0:
+                error["retry_after"] = retry_after
+        if provider_request is not None:
+            error["provider_request"] = provider_request
+        return error
 
     def execute(self, request: ProviderExecutionRequest) -> ProviderExecutionResult:
         if not self.project_id:
@@ -461,10 +510,20 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
         except Exception as exc:
             return ProviderExecutionResult(
                 status="error",
-                error={
-                    "code": "provider_request_failed",
-                    "message": str(exc),
-                },
+                error=self._http_exception_error(
+                    exc,
+                    provider_request={
+                        "provider_tool_id": request.provider_tool_id,
+                        "payload_keys": sorted(payload.keys()),
+                        "argument_keys": sorted((request.arguments or {}).keys()),
+                        "external_user_id_present": bool(
+                            payload.get("external_user_id"),
+                        ),
+                        "auth_provision_present": bool(
+                            request.provider_connection_id,
+                        ),
+                    },
+                ),
             )
         if not isinstance(data, dict):
             data = {"data": data}

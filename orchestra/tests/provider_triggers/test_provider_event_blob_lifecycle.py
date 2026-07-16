@@ -25,9 +25,6 @@ from orchestra.provider_triggers.private_event_storage import (
     provider_event_storage_configured,
 )
 from orchestra.provider_triggers.provider_identity import binding_event_identity_hmac
-from orchestra.provider_triggers.provider_trigger_mutation import (
-    promote_active_generation,
-)
 from orchestra.provider_triggers.runtime_types import BlobAuditAction, BlobCommitState
 from orchestra.services.provider_event_blob_cleanup_service import (
     ProviderEventBlobCleanupService,
@@ -95,6 +92,19 @@ def _active_generation(
     ).scalar_one()
 
 
+def _promote_active_generation(
+    dbsession: Session, *, binding_id: str
+) -> EventTriggerBinding:
+    dao = ProviderTriggerDAO(dbsession)
+    binding = dao.get_binding(binding_id=binding_id, for_update=True)
+    if binding is None:
+        raise ValueError(f"Binding {binding_id} not found.")
+    generation = dao.create_generation(binding=binding)
+    dao.promote_generation(binding=binding, generation=generation)
+    dbsession.flush()
+    return binding
+
+
 def test_storage_prerequisites_gate_is_exposed() -> None:
     assert provider_event_storage_configured() is True
 
@@ -105,7 +115,7 @@ def test_uncommitted_write_attach_and_read_round_trip(
     storage_root: Path,
 ) -> None:
     initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
-    promote_active_generation(dbsession, binding_id=initialized.binding_id)
+    _promote_active_generation(dbsession, binding_id=initialized.binding_id)
     binding = _binding_row(dbsession, initialized.binding_id)
     generation = _active_generation(dbsession, binding)
     receipt = blob_lifecycle_service._dao.adopt_receipt(
@@ -293,7 +303,7 @@ def test_promote_generation_requires_storage_configuration(
 ) -> None:
     initialized = seed_minimal_test_binding(dbsession, desired_state="enabled")
     monkeypatch.setattr(settings, "trigger_event_wrapping_master_key", None)
-    promote_active_generation(dbsession, binding_id=initialized.binding_id)
+    _promote_active_generation(dbsession, binding_id=initialized.binding_id)
     binding = _binding_row(dbsession, initialized.binding_id)
     assert binding.local_acceptance_open is False
     assert binding.runtime_health == "needs_attention"

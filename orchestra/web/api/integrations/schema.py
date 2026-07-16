@@ -501,6 +501,7 @@ class ProviderToolRunResponse(BaseModel):
     error: Optional[dict[str, Any]] = None
     audit_id: Optional[int] = None
     confirmation: Optional[ProviderToolConfirmationPayload] = None
+    provider_attempts: int = 1
 
 
 class IntegrationToolExecutionApprovalRequest(BaseModel):

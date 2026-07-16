@@ -79,6 +79,8 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.assistant_external_ip_service import (
     ensure_pending_assistant_external_ip,
+    record_assistant_external_ip_attachment,
+    record_timezone_pool_location_intent,
     reconcile_assistant_external_ip,
     request_assistant_external_ip_rotation,
     retain_assistant_external_ip,
@@ -196,6 +198,7 @@ from orchestra.web.api.assistant.schema import (
     ManagedDesktopEnable,
     ManagedDesktopIPRotationRead,
     ManagedDesktopNetworkIdentityRead,
+    ManagedDesktopNetworkIdentityReport,
     ManagedDesktopStatusRead,
     OnboardingCatalog,
     OnboardingSessionStarted,
@@ -2347,6 +2350,7 @@ def _build_managed_desktop_status_read(
                 gcp_address_name=external_ip.gcp_address_name,
                 address=external_ip.address,
                 region=external_ip.region,
+                pool_location=external_ip.pool_location,
                 hostname=external_ip.hostname,
                 state=external_ip.state,
                 active_operation=external_ip.active_operation,
@@ -2371,6 +2375,42 @@ def _build_managed_desktop_status_read(
     )
 
 
+@admin_router.post("/assistant/{assistant_id}/managed-desktop/network-identity")
+def report_managed_desktop_network_identity(
+    assistant_id: int,
+    payload: ManagedDesktopNetworkIdentityReport,
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Record the assistant IP actually attached by the deployment control plane."""
+
+    assistant = session.get(Assistant, assistant_id)
+    if assistant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+    try:
+        external_ip = record_assistant_external_ip_attachment(
+            session,
+            assistant_id=assistant_id,
+            **payload.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    session.commit()
+    return {
+        "assistant_id": assistant_id,
+        "gcp_address_name": external_ip.gcp_address_name,
+        "address": external_ip.address,
+        "region": external_ip.region,
+        "pool_location": external_ip.pool_location,
+        "hostname": external_ip.hostname,
+    }
+
+
 @router.get(
     "/assistant/{assistant_id}/managed-desktop",
     response_model=InfoResponse[ManagedDesktopStatusRead],
@@ -2379,6 +2419,7 @@ def _build_managed_desktop_status_read(
 def get_managed_desktop_status(
     assistant_id: int,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[ManagedDesktopStatusRead]:
     user_id = request.state.user_id
@@ -2396,6 +2437,22 @@ def get_managed_desktop_status(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
+        )
+    external_ip = assistant.external_ip
+    if managed_desktop_entitled(assistant) and (
+        external_ip is None
+        or (
+            external_ip.state != "retained"
+            and (
+                not external_ip.desired_pool_location
+                or external_ip.pool_location != external_ip.desired_pool_location
+            )
+        )
+    ):
+        background_tasks.add_task(
+            reconcile_assistant_external_ip,
+            request.app.state.db_session_factory,
+            assistant_id=assistant_id,
         )
     return InfoResponse(info=_build_managed_desktop_status_read(session, assistant))
 
@@ -7653,6 +7710,13 @@ def _apply_assistant_runtime_update(
     if request_body.timezone is not None:
         assistant.timezone = request_body.timezone
         updated_fields.append("timezone")
+        try:
+            record_timezone_pool_location_intent(session, assistant=assistant)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
 
     if request_body.about is not None:
         assistant.about = request_body.about

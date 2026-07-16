@@ -1867,6 +1867,10 @@ class ManagedDesktopNetworkIdentityRead(BaseModel):
         None,
         description="GCP region containing the reserved address.",
     )
+    pool_location: Optional[str] = Field(
+        None,
+        description="Persisted VM/IP pool location selected for this assistant.",
+    )
     hostname: Optional[str] = Field(
         None,
         description="Stable hostname associated with the address.",
@@ -1883,6 +1887,16 @@ class ManagedDesktopNetworkIdentityRead(BaseModel):
         None,
         description="Most recent egress-IP rotation operation, if any.",
     )
+
+
+class ManagedDesktopNetworkIdentityReport(BaseModel):
+    """Deployment's authoritative report of an attached assistant IP."""
+
+    gcp_address_name: str
+    address: str
+    region: str
+    pool_location: str
+    hostname: str
 
 
 class ManagedDesktopIPRotationRead(BaseModel):

@@ -1,0 +1,28 @@
+{
+  "catalog_version": "fixture-v1",
+  "entries": [
+    {
+      "provider_trigger_slug": "github-new-or-updated-issue",
+      "provider_version": "0.0.1",
+      "canonical_app_hint": "github",
+      "retry_stable_identity_field": "trace_id",
+      "signature_headers": ["x-pd-signature"],
+      "signature_scheme": "pipedream_hmac_sha256_timestamp_dot_body",
+      "timestamp_tolerance_seconds": 300,
+      "provisioning_idempotency_supported": true,
+      "required_scopes": [],
+      "raw_metadata": {
+        "source": "fixture",
+        "canonical_event_slug": "github.issue_created"
+      }
+    },
+    {
+      "provider_trigger_slug": "github-missing-identity-trigger",
+      "provider_version": "0.0.1",
+      "canonical_app_hint": "github",
+      "raw_metadata": {
+        "source": "fixture"
+      }
+    }
+  ]
+}

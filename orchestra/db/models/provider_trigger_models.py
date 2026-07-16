@@ -44,9 +44,10 @@ class EventTriggerBinding(Base):
     connection_id = Column(String, nullable=False)
     backend_id = Column(String, nullable=False, index=True)
     canonical_app_slug = Column(String, nullable=False)
-    event_slug = Column(String, nullable=False)
-    schema_version = Column(String, nullable=False)
-    filters_json = Column(JSONB, nullable=False, server_default=JSON_EMPTY_ARRAY)
+    provider_trigger_slug = Column(String, nullable=False)
+    trigger_config_json = Column(
+        JSONB, nullable=False, server_default=JSON_EMPTY_OBJECT
+    )
     execution_mode = Column(String(16), nullable=False, server_default="live")
     entrypoint = Column(Integer, nullable=True)
 

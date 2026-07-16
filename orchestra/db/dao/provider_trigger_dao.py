@@ -22,6 +22,7 @@ from orchestra.db.models.provider_trigger_models import (
 )
 from orchestra.provider_triggers.activation_revision import (
     compute_provider_event_activation_revision,
+    normalize_trigger_config,
 )
 from orchestra.provider_triggers.private_event_storage import EncryptedEventObject
 from orchestra.provider_triggers.runtime_types import (
@@ -37,7 +38,6 @@ from orchestra.provider_triggers.runtime_types import (
     ReceiptProcessingState,
 )
 from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
-from orchestra.provider_triggers.trigger_registry import curated_provider_event_filters
 from orchestra.settings import settings
 
 STALE_RECONCILE_PROCESSING = timedelta(minutes=5)
@@ -122,13 +122,8 @@ class ProviderTriggerDAO:
             connection_id=trigger.connection_id,
             backend_id=trigger.backend_id,
             canonical_app_slug=trigger.canonical_app_slug,
-            event_slug=trigger.event_slug,
-            schema_version=trigger.schema_version,
-            filters_json=curated_provider_event_filters(
-                trigger.event_slug,
-                trigger.schema_version,
-                [item.model_dump() for item in trigger.filters],
-            ),
+            provider_trigger_slug=trigger.provider_trigger_slug,
+            trigger_config_json=normalize_trigger_config(trigger.trigger_config),
             execution_mode=execution_mode,
             entrypoint=entrypoint,
             runtime_health=runtime_health.value,
@@ -167,13 +162,8 @@ class ProviderTriggerDAO:
         binding.connection_id = trigger.connection_id
         binding.backend_id = trigger.backend_id
         binding.canonical_app_slug = trigger.canonical_app_slug
-        binding.event_slug = trigger.event_slug
-        binding.schema_version = trigger.schema_version
-        binding.filters_json = curated_provider_event_filters(
-            trigger.event_slug,
-            trigger.schema_version,
-            [item.model_dump() for item in trigger.filters],
-        )
+        binding.provider_trigger_slug = trigger.provider_trigger_slug
+        binding.trigger_config_json = normalize_trigger_config(trigger.trigger_config)
         binding.execution_mode = execution_mode
         binding.entrypoint = entrypoint
         if bump_acceptance_epoch:
@@ -398,7 +388,7 @@ class ProviderTriggerDAO:
             provider_event_identity_hmac=provider_event_identity_hmac,
             accepted_activation_revision=generation.desired_activation_revision,
             acceptance_epoch=generation.acceptance_epoch,
-            schema_version=binding.schema_version,
+            schema_version="0",
             processing_state=processing_state,
             acceptance_authorization_json=acceptance_authorization_json or {},
             classification_reason=classification_reason,

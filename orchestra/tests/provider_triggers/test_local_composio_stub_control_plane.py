@@ -185,7 +185,7 @@ async def test_stub_signed_delivery_match_creates_one_run(
 
 
 @pytest.mark.anyio
-async def test_stub_unmatched_delivery_records_ignored_receipt_only(
+async def test_stub_unauthorized_connected_account_records_ignored_receipt_only(
     dbsession: Session,
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -200,7 +200,6 @@ async def test_stub_unmatched_delivery_records_ignored_receipt_only(
         dbsession,
         assistant_id=assistant_id,
         connection_id=connection.connection_id,
-        repository="unifyai/demo",
     )
     generation = reconcile_binding_to_active_generation(
         dbsession,
@@ -209,9 +208,8 @@ async def test_stub_unmatched_delivery_records_ignored_receipt_only(
 
     payload = load_composio_github_issue_fixture(
         external_trigger_id=generation.external_trigger_id,
-        connected_account_id=connection.provider_connection_id,
+        connected_account_id="ca_wrong_account",
         provider_user_id=connection.provider_user_id,
-        repository="octocat/Hello-World",
     )
     response = await deliver_signed_composio_webhook(
         client,
@@ -427,15 +425,11 @@ async def test_typed_task_enable_reconciles_through_local_stub(
                 "connection_id": connection.connection_id,
                 "backend_id": "composio",
                 "canonical_app_slug": "github",
-                "event_slug": "github.issue_created",
-                "schema_version": "1",
-                "filters": [
-                    {
-                        "field": "repository",
-                        "operator": "is",
-                        "value": "octocat/Hello-World",
-                    },
-                ],
+                "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+                "trigger_config": {
+                    "owner": "octocat",
+                    "repo": "Hello-World",
+                },
             },
             "enabled": True,
             "offline": False,

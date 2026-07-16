@@ -2388,7 +2388,12 @@ class AssistantExternalIP(Base):
     gcp_address_name = Column(String, nullable=True, unique=True)
     gcp_address_id = Column(String, nullable=True, unique=True)
     address = Column(String, nullable=True)
+    # Current VM/IP pool location.  ``region`` remains the observed GCP
+    # address region returned by deploy.  Desired placement is persisted
+    # separately so a timezone change never rewrites a live allocation.
+    pool_location = Column(String, nullable=True)
     region = Column(String, nullable=True)
+    desired_pool_location = Column(String, nullable=True)
     hostname = Column(String, nullable=True)
     state = Column(String, nullable=False, default="pending", server_default="pending")
     active_operation = Column(String, nullable=True)
@@ -2419,6 +2424,13 @@ class AssistantExternalIP(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="AssistantExternalIPRotation.requested_at.desc()",
+    )
+    regional_migrations = relationship(
+        "AssistantExternalIPRegionalMigration",
+        back_populates="external_ip",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AssistantExternalIPRegionalMigration.requested_at.desc()",
     )
 
 
@@ -2473,6 +2485,9 @@ class AssistantExternalIPRotation(Base):
     state = Column(String, nullable=False, server_default="requested")
     vm_name = Column(String, nullable=True)
     binding_id = Column(String, nullable=True)
+    pool_location = Column(String, nullable=True)
+    region = Column(String, nullable=True)
+    binding_zone = Column(String, nullable=True)
     old_address_name = Column(String, nullable=True)
     old_address = Column(String, nullable=True)
     candidate_address_name = Column(String, nullable=True)
@@ -2493,6 +2508,52 @@ class AssistantExternalIPRotation(Base):
     )
 
     external_ip = relationship("AssistantExternalIP", back_populates="rotations")
+
+
+class AssistantExternalIPRegionalMigration(Base):
+    """Durable desired-placement change; a worker may execute it later.
+
+    Recording this operation must not change the active VM or IP allocation.
+    """
+
+    __tablename__ = "assistant_external_ip_regional_migrations"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    external_ip_id = Column(
+        BigInteger,
+        ForeignKey("assistant_external_ips.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    state = Column(String, nullable=False, server_default="requested")
+    source_pool_location = Column(String, nullable=True)
+    source_region = Column(String, nullable=True)
+    desired_pool_location = Column(String, nullable=True)
+    requested_timezone = Column(String, nullable=True)
+    error = Column(String, nullable=True)
+    requested_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    external_ip = relationship(
+        "AssistantExternalIP",
+        back_populates="regional_migrations",
+    )
 
 
 class AssistantConsoleConfig(Base):

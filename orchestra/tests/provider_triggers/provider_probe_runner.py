@@ -1,9 +1,4 @@
-"""Live provider catalog and signing probes for GitHub issue-created triggers.
-
-# TODO: Relocate — keep committed fixtures under tests/fixtures/task_trigger_contract/
-and redacted probe evidence; do not call this module from runtime ingress or
-reconciliation once the curated registry owns the supported mappings.
-"""
+"""Live provider catalog and signing probes for GitHub issue-created triggers."""
 
 from __future__ import annotations
 
@@ -21,7 +16,6 @@ class ProviderProbeResult:
     """Pinned observations from one provider mapping probe."""
 
     backend_id: str
-    canonical_event_slug: str
     provider_trigger_slug: str
     provider_trigger_version: str | None
     retry_stable_identity_field: str
@@ -36,7 +30,6 @@ class ProviderProbeResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "backend_id": self.backend_id,
-            "canonical_event_slug": self.canonical_event_slug,
             "provider_trigger_slug": self.provider_trigger_slug,
             "provider_trigger_version": self.provider_trigger_version,
             "retry_stable_identity_field": self.retry_stable_identity_field,
@@ -91,7 +84,6 @@ def probe_composio_github_issue_created() -> ProviderProbeResult:
     }
     return ProviderProbeResult(
         backend_id="composio",
-        canonical_event_slug="github.issue_created",
         provider_trigger_slug="GITHUB_ISSUE_CREATED_TRIGGER",
         provider_trigger_version=str(
             trigger_dump.get("version") or trigger_dump.get("toolkit_version"),
@@ -103,7 +95,7 @@ def probe_composio_github_issue_created() -> ProviderProbeResult:
         provisioning_idempotency_supported=True,
         catalog_status="included",
         notes=[
-            "Composio catalog slug is GITHUB_ISSUE_CREATED_TRIGGER; Orchestra registry maps it to github.issue_created.",
+            "Composio catalog slug is GITHUB_ISSUE_CREATED_TRIGGER.",
             "V3 deliveries expose a top-level id used as the retry-stable provider event identity.",
             "Create/delete and lost-response recovery require a disposable connected GitHub account.",
         ],
@@ -158,7 +150,6 @@ def probe_pipedream_github_issue_created() -> ProviderProbeResult:
     }
     return ProviderProbeResult(
         backend_id="pipedream",
-        canonical_event_slug="github.issue_created",
         provider_trigger_slug=component_key,
         provider_trigger_version=str(component.get("version")),
         retry_stable_identity_field="trace_id",
@@ -169,7 +160,6 @@ def probe_pipedream_github_issue_created() -> ProviderProbeResult:
         catalog_status="included_with_opened_filter",
         notes=[
             "Pipedream exposes github-new-or-updated-issue rather than issue-created-only.",
-            "Canonical github.issue_created projection must treat action=opened as create events.",
             "Per-generation webhook_signing_key is returned only at deploy/update time.",
         ],
         fixture_payload=redact_mapping(fixture),

@@ -33,7 +33,6 @@ from orchestra.provider_triggers.trigger_adapter import (
     TriggerProviderAdapter,
     TriggerProvisionRequest,
     TriggerProvisionResult,
-    TriggerResource,
 )
 from orchestra.services.provider_trigger_reconciliation_service import (
     ProviderTriggerReconciliationService,
@@ -83,28 +82,6 @@ class FakeTriggerAdapter(TriggerProviderAdapter):
             connected_account_id=provider_connection_id,
             provider_user_id=self.subject,
         )
-
-    def list_resources(
-        self,
-        *,
-        provider_connection_id: str,
-        provider_user_id: str | None = None,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> list[TriggerResource]:
-        _ = provider_connection_id, provider_user_id, event_slug, schema_version
-        return []
-
-    def authorize_resource(
-        self,
-        *,
-        provider_connection_id: str,
-        resource_id: str,
-        event_slug: str,
-        schema_version: str = "1",
-    ) -> bool:
-        _ = provider_connection_id, resource_id, event_slug, schema_version
-        return True
 
     def provision(self, request: TriggerProvisionRequest) -> TriggerProvisionResult:
         self.provision_calls.append(_RecordedProvision(request=request))
@@ -207,15 +184,8 @@ def _seed_enabled_binding(
         connection_id=connection_id,
         backend_id="composio",
         canonical_app_slug="github",
-        event_slug="github.issue_created",
-        schema_version="1",
-        filters=[
-            {
-                "field": "repository",
-                "operator": "is",
-                "value": "unifyai/demo",
-            },
-        ],
+        provider_trigger_slug="GITHUB_ISSUE_CREATED_TRIGGER",
+        trigger_config={"owner": "unifyai", "repo": "demo"},
     )
     binding = dao.create_binding(
         binding_id=binding_id,
