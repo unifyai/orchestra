@@ -87,23 +87,20 @@ class TriggerHealthResponse(BaseModel):
     event_storage_configured: bool = False
 
 
-class TriggerCatalogEvent(BaseModel):
-    event_slug: str
+class StagedProviderTrigger(BaseModel):
+    backend_id: str
     canonical_app_slug: str
-    schema_version: str
-    filters: list[dict[str, Any]] = Field(default_factory=list)
-    backends: list[str] = Field(default_factory=list)
-    resource_kind: str
-    resource_id_format: str
-    resource_filter_field: str
-    resource_filter_operator: str
-    selection_contract: str
+    provider_trigger_slug: str
+    provider_version: str | None = None
+    display_name: str | None = None
+    description: str | None = None
+    config_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class TriggerCatalogResponse(BaseModel):
     available: bool = True
     unavailable_reason: str | None = None
-    events: list[TriggerCatalogEvent]
+    triggers: list[StagedProviderTrigger] = Field(default_factory=list)
 
 
 class RetryTriggerResponse(BaseModel):

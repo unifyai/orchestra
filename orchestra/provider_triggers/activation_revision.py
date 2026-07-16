@@ -1,4 +1,4 @@
-"""Canonical provider-event activation revision hashing."""
+"""Provider-event activation revision hashing."""
 
 from __future__ import annotations
 
@@ -12,32 +12,12 @@ from orchestra.provider_triggers.task_trigger import (
 )
 
 
-def normalize_provider_event_filters(
-    filters: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    """Return a deterministic filter list for hashing and persistence."""
+def normalize_trigger_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return a deterministic trigger_config dict for hashing."""
 
-    if not filters:
-        return []
-    normalized: list[dict[str, Any]] = []
-    for item in filters:
-        if not isinstance(item, dict):
-            continue
-        normalized.append(
-            {
-                "field": str(item.get("field", "")),
-                "operator": str(item.get("operator", "")),
-                "value": item.get("value"),
-            },
-        )
-    return sorted(
-        normalized,
-        key=lambda row: (
-            row["field"],
-            row["operator"],
-            json.dumps(row["value"], sort_keys=True),
-        ),
-    )
+    if not config:
+        return {}
+    return json.loads(json.dumps(dict(config), sort_keys=True))
 
 
 def provider_event_activation_revision_payload(
@@ -63,11 +43,8 @@ def provider_event_activation_revision_payload(
         "connection_id": trigger_payload.connection_id,
         "backend_id": trigger_payload.backend_id,
         "canonical_app_slug": trigger_payload.canonical_app_slug,
-        "event_slug": trigger_payload.event_slug,
-        "schema_version": trigger_payload.schema_version,
-        "filters": normalize_provider_event_filters(
-            [item.model_dump() for item in trigger_payload.filters],
-        ),
+        "provider_trigger_slug": trigger_payload.provider_trigger_slug,
+        "trigger_config": normalize_trigger_config(trigger_payload.trigger_config),
         "execution_mode": execution_mode,
         "entrypoint": entrypoint,
     }
