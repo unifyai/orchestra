@@ -603,7 +603,7 @@ async def release_assistant_external_ip(
             f"{comms_url}{ASSISTANT_STATIC_IP_RELEASE_PATH.format(assistant_id=assistant_id)}",
             headers={"Authorization": f"Bearer {admin_key}"},
             params=(
-                {"region": external_ip.region}
+                {"region": external_ip.region.rstrip("/").rsplit("/", 1)[-1]}
                 if external_ip is not None and external_ip.region
                 else None
             ),
@@ -635,6 +635,31 @@ async def release_assistant_external_ip(
             details={"released": bool(payload.get("released", False))},
         )
     return {"success": True, "response": payload, "errors": []}
+
+
+async def release_managed_desktop_external_ip(
+    session_factory: Callable[[], Session],
+    *,
+    assistant_id: int,
+) -> None:
+    """Release a disabled desktop's address after its VM release completes.
+
+    A failed deletion remains recorded as ``error`` and can be retried by the
+    existing cleanup/retry path; it is never silently retained after disable.
+    """
+
+    with session_factory() as session:
+        result = await release_assistant_external_ip(
+            session,
+            assistant_id=assistant_id,
+        )
+        session.commit()
+    if not result["success"]:
+        logger.warning(
+            "Assistant external-IP release failed for disabled desktop %s: %s",
+            assistant_id,
+            result["errors"],
+        )
 
 
 def record_assistant_external_ip_history(
