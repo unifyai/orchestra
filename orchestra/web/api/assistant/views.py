@@ -79,6 +79,7 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.assistant_external_ip_service import (
     ensure_pending_assistant_external_ip,
+    record_timezone_pool_location_intent,
     reconcile_assistant_external_ip,
     request_assistant_external_ip_rotation,
     retain_assistant_external_ip,
@@ -2347,6 +2348,7 @@ def _build_managed_desktop_status_read(
                 gcp_address_name=external_ip.gcp_address_name,
                 address=external_ip.address,
                 region=external_ip.region,
+                pool_location=external_ip.pool_location,
                 hostname=external_ip.hostname,
                 state=external_ip.state,
                 active_operation=external_ip.active_operation,
@@ -7653,6 +7655,13 @@ def _apply_assistant_runtime_update(
     if request_body.timezone is not None:
         assistant.timezone = request_body.timezone
         updated_fields.append("timezone")
+        try:
+            record_timezone_pool_location_intent(session, assistant=assistant)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
 
     if request_body.about is not None:
         assistant.about = request_body.about

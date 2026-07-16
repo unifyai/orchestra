@@ -7,8 +7,11 @@ only persist the desired allocation lifecycle for deployment to consume.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
 
@@ -16,6 +19,7 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantExternalIP,
     AssistantExternalIPHistory,
+    AssistantExternalIPRegionalMigration,
     AssistantExternalIPRotation,
 )
 from orchestra.web.api.utils import assistant_infra
@@ -26,9 +30,8 @@ logger = logging.getLogger(__name__)
 ASSISTANT_STATIC_IP_RECONCILE_PATH = "/infra/vm/assistant-static-ip/reconcile"
 ASSISTANT_STATIC_IP_RELEASE_PATH = "/infra/vm/assistant-static-ip/{assistant_id}"
 ASSISTANT_STATIC_IP_ROTATE_PATH = "/infra/vm/assistant-static-ip/rotate"
-ASSISTANT_STATIC_IP_FINALIZE_ROTATION_PATH = (
-    "/infra/vm/assistant-static-ip/rotation/{operation_id}/finalize"
-)
+ASSISTANT_STATIC_IP_FINALIZE_ROTATION_PATH = "/infra/vm/assistant-static-ip/finalize"
+ASSISTANT_PLACEMENT_RESOLVE_PATH = "/infra/vm/assistant-placement/resolve"
 IP_ROTATION_ROLLBACK_SECONDS = 60 * 60
 
 
@@ -122,6 +125,8 @@ def request_assistant_external_ip_rotation(
         state="requested",
         old_address_name=external_ip.gcp_address_name,
         old_address=external_ip.address,
+        pool_location=external_ip.pool_location,
+        region=external_ip.region,
     )
     session.add(rotation)
     session.flush()
@@ -134,6 +139,136 @@ def request_assistant_external_ip_rotation(
         details={"operation_id": rotation.id, "old_address": external_ip.address},
     )
     return rotation
+
+
+def record_assistant_external_ip_regional_migration_intent(
+    session: Session,
+    *,
+    assistant: Assistant,
+    desired_pool_location: str | None,
+    requested_timezone: str | None = None,
+) -> AssistantExternalIPRegionalMigration | None:
+    """Persist a placement change without touching the active VM or IP.
+
+    Placement resolution belongs to the caller because Orchestra has no
+    authoritative timezone-to-region map.  A future worker can consume the
+    returned durable operation; this helper deliberately makes no cloud call
+    and does not set ``active_operation``.
+    """
+
+    desired_pool_location = _optional_string(desired_pool_location)
+    if not desired_pool_location:
+        raise ValueError("A desired pool location is required")
+
+    external_ip = _get_external_ip(session, assistant.agent_id)
+    if external_ip is None:
+        raise ValueError(
+            "An external-IP resource is required before recording a migration",
+        )
+
+    external_ip.desired_pool_location = desired_pool_location
+    requested_timezone = requested_timezone or assistant.timezone
+
+    if external_ip.pool_location == desired_pool_location:
+        record_assistant_external_ip_history(
+            session,
+            external_ip,
+            operation="placement_confirmed",
+            details={
+                "desired_pool_location": desired_pool_location,
+                "requested_timezone": requested_timezone,
+            },
+        )
+        return None
+
+    active_migration = (
+        session.query(AssistantExternalIPRegionalMigration)
+        .filter(
+            AssistantExternalIPRegionalMigration.external_ip_id == external_ip.id,
+            AssistantExternalIPRegionalMigration.state == "requested",
+            AssistantExternalIPRegionalMigration.desired_pool_location
+            == desired_pool_location,
+        )
+        .order_by(AssistantExternalIPRegionalMigration.requested_at.desc())
+        .first()
+    )
+    if active_migration is not None:
+        return active_migration
+
+    migration = AssistantExternalIPRegionalMigration(
+        external_ip_id=external_ip.id,
+        assistant_id=assistant.agent_id,
+        state="requested",
+        source_pool_location=external_ip.pool_location,
+        source_region=external_ip.region,
+        desired_pool_location=desired_pool_location,
+        requested_timezone=requested_timezone,
+    )
+    session.add(migration)
+    session.flush()
+    record_assistant_external_ip_history(
+        session,
+        external_ip,
+        operation="regional_migration_requested",
+        details={
+            "operation_id": migration.id,
+            "source_pool_location": migration.source_pool_location,
+            "source_region": migration.source_region,
+            "desired_pool_location": desired_pool_location,
+            "requested_timezone": requested_timezone,
+        },
+    )
+    return migration
+
+
+def record_timezone_pool_location_intent(
+    session: Session,
+    *,
+    assistant: Assistant,
+) -> AssistantExternalIPRegionalMigration | None:
+    """Preflight the timezone's target pool and persist it without recycling.
+
+    The active VM and its regional resources remain authoritative until the
+    deployment control plane performs a later recycle-triggered migration.
+    """
+
+    if _get_external_ip(session, assistant.agent_id) is None:
+        return None
+    comms_url = assistant_infra._comms_url()
+    admin_key = assistant_infra.ADMIN_KEY
+    if not comms_url or not admin_key:
+        logger.info(
+            "Skipping timezone placement preflight for %s: comms is not configured",
+            assistant.agent_id,
+        )
+        return None
+    request = Request(
+        f"{comms_url}{ASSISTANT_PLACEMENT_RESOLVE_PATH}",
+        data=json.dumps(
+            {
+                "assistant_timezone": assistant.timezone,
+                "desktop_mode": assistant.desktop_mode,
+            },
+        ).encode(),
+        headers={
+            "Authorization": f"Bearer {admin_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20.0) as response:
+            payload = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        raise ValueError(f"Unable to preflight assistant pool location: {exc}") from exc
+    if not isinstance(payload, dict) or not _optional_string(payload.get("pool_location")):
+        raise ValueError("Deploy placement preflight omitted pool_location")
+    return record_assistant_external_ip_regional_migration_intent(
+        session,
+        assistant=assistant,
+        desired_pool_location=_optional_string(payload.get("pool_location")),
+        requested_timezone=assistant.timezone,
+    )
 
 
 async def run_assistant_external_ip_rotation(
@@ -195,6 +330,9 @@ async def run_assistant_external_ip_rotation(
             return
         rotation.vm_name = vm_name
         rotation.binding_id = binding_id
+        rotation.binding_zone = _optional_string(vm_ref.get("zone"))
+        rotation.pool_location = rotation.pool_location or external_ip.pool_location
+        rotation.region = rotation.region or external_ip.region
         old_address = rotation.old_address or external_ip.address
         session.commit()
 
@@ -208,6 +346,9 @@ async def run_assistant_external_ip_rotation(
                 "vm_name": vm_name,
                 "binding_id": binding_id,
                 "expected_old_ip": old_address,
+                "pool_location": rotation.pool_location,
+                "region": rotation.region,
+                "zone": rotation.binding_zone,
             },
             timeout=60.0,
         )
@@ -280,11 +421,24 @@ async def reconcile_assistant_external_ip(
         )
         return
 
+    with session_factory() as session:
+        external_ip = _get_external_ip(session, assistant_id)
+        if external_ip is None or external_ip.state == "retained":
+            return
+        assistant = session.get(Assistant, assistant_id)
+        assistant_timezone = assistant.timezone if assistant is not None else None
+        requested_pool_location = external_ip.pool_location
+
     try:
         response = await get_async_client().post(
             f"{comms_url}{ASSISTANT_STATIC_IP_RECONCILE_PATH}",
             headers={"Authorization": f"Bearer {admin_key}"},
-            json={"assistant_id": str(assistant_id)},
+            json={
+                "assistant_id": str(assistant_id),
+                "assistant_timezone": assistant_timezone,
+                "pool_location": requested_pool_location,
+                "region": external_ip.region,
+            },
             timeout=20.0,
         )
         response.raise_for_status()
@@ -312,6 +466,10 @@ async def reconcile_assistant_external_ip(
             return
         external_ip.gcp_address_name = _optional_string(payload.get("name"))
         external_ip.address = _optional_string(payload.get("address"))
+        external_ip.pool_location = (
+            _optional_string(payload.get("pool_location"))
+            or external_ip.pool_location
+        )
         external_ip.region = _optional_string(payload.get("region"))
         external_ip.hostname = _optional_string(payload.get("hostname"))
         external_ip.state = "reserved"
@@ -323,6 +481,7 @@ async def reconcile_assistant_external_ip(
             details={
                 "created": bool(payload.get("created", False)),
                 "deploy_status": _optional_string(payload.get("status")),
+                "pool_location": external_ip.pool_location,
             },
         )
         session.commit()
@@ -365,6 +524,11 @@ async def release_assistant_external_ip(
         response = await get_async_client().delete(
             f"{comms_url}{ASSISTANT_STATIC_IP_RELEASE_PATH.format(assistant_id=assistant_id)}",
             headers={"Authorization": f"Bearer {admin_key}"},
+            params=(
+                {"region": external_ip.region}
+                if external_ip is not None and external_ip.region
+                else None
+            ),
             timeout=20.0,
         )
         response.raise_for_status()
