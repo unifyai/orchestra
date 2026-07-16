@@ -103,7 +103,14 @@ def record_assistant_external_ip_attachment(
 
     external_ip = _get_external_ip(session, assistant_id)
     if external_ip is None:
-        raise ValueError("Assistant has no external-IP allocation record")
+        # Older active desktops predate the allocation-intent row.  A trusted
+        # deployment attachment report is sufficient evidence to backfill it.
+        external_ip = AssistantExternalIP(
+            assistant_id=assistant_id,
+            state="reserved",
+        )
+        session.add(external_ip)
+        session.flush()
     if external_ip.state == "retained":
         raise ValueError("Assistant external-IP allocation is retained")
     external_ip.gcp_address_name = gcp_address_name
