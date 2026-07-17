@@ -57,6 +57,7 @@ from orchestra.services.org_wide_sharing_service import (
     disable_org_wide_sharing,
     enable_org_wide_sharing,
     enroll_member_in_org_wide_team,
+    sync_managed_org_team_name,
 )
 from orchestra.services.personal_workspace_service import (
     disable_personal_workspace_for_org_member,
@@ -473,6 +474,10 @@ async def update_organization(
             name=organization.name,
             timezone=organization.timezone,
         )
+        # Keep the managed org-wide team label aligned with the org name.
+        updated_org = org_dao.get(organization_id)
+        if updated_org is not None:
+            sync_managed_org_team_name(session, updated_org)
         session.commit()
 
         # Refresh to get updated data

@@ -26,10 +26,31 @@ from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
 )
 
-ORG_WIDE_SHARING_TEAM_NAME = "Org"
+# Legacy default used before managed teams were named after the organization.
+LEGACY_ORG_WIDE_SHARING_TEAM_NAME = "Org"
 ORG_WIDE_SHARING_TEAM_DESCRIPTION = (
     "Organization-wide shared pool for knowledge, skills, and general know-how."
 )
+
+
+def managed_org_team_name(org: Organization) -> str:
+    """Display/storage name for the managed org-wide team — the organization name."""
+
+    name = (org.name or "").strip()
+    return name or LEGACY_ORG_WIDE_SHARING_TEAM_NAME
+
+
+def sync_managed_org_team_name(session: Session, org: Organization) -> Team | None:
+    """Keep the managed team name aligned with the organization name."""
+
+    team = _managed_team(session, org)
+    if team is None:
+        return None
+    desired = managed_org_team_name(org)
+    if team.name != desired:
+        team.name = desired
+        session.flush()
+    return team
 
 
 class OrgWideSharingConflictError(Exception):
@@ -197,7 +218,11 @@ async def enable_org_wide_sharing(
     team_dao = TeamDAO(session)
     team = _managed_team(session, org)
     if team is None:
-        existing = team_dao.get_by_name(ORG_WIDE_SHARING_TEAM_NAME, org.id)
+        desired_name = managed_org_team_name(org)
+        existing = team_dao.get_by_name(desired_name, org.id)
+        if existing is None and desired_name != LEGACY_ORG_WIDE_SHARING_TEAM_NAME:
+            # Pre-rename managed teams were stored as "Org".
+            existing = team_dao.get_by_name(LEGACY_ORG_WIDE_SHARING_TEAM_NAME, org.id)
         if existing is not None and not existing.is_org_wide_sharing:
             existing.is_org_wide_sharing = True
             if not existing.description:
@@ -205,7 +230,7 @@ async def enable_org_wide_sharing(
             team = existing
         else:
             team = existing or team_dao.create(
-                name=ORG_WIDE_SHARING_TEAM_NAME,
+                name=desired_name,
                 organization_id=org.id,
                 description=ORG_WIDE_SHARING_TEAM_DESCRIPTION,
                 is_org_wide_sharing=True,
@@ -253,7 +278,7 @@ async def sync_org_wide_sharing(
 ) -> SharingEnrollmentResult:
     """Reconcile the managed org team with current members and assistants."""
 
-    team = _managed_team(session, org)
+    team = sync_managed_org_team_name(session, org)
     if team is None:
         return SharingEnrollmentResult()
 
