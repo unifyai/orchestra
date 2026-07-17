@@ -377,7 +377,11 @@ async def test_org_wide_sharing_toggle_and_auto_enrollment(
     dbsession.expire_all()
     team = (
         dbsession.query(Team)
-        .filter_by(organization_id=org_id, name="Org", is_org_wide_sharing=True)
+        .filter_by(
+            organization_id=org_id,
+            name="Org Wide Sharing Toggle Org",
+            is_org_wide_sharing=True,
+        )
         .one()
     )
     team_members = {

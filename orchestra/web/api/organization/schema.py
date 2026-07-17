@@ -15,9 +15,10 @@ DataSharingMode = Literal["private", "shared"]
 class OrganizationCreate(BaseModel):
     """Schema for creating an organization.
 
-    New organizations default to org-wide sharing: the managed "Org" team is
-    created up front and every current and future member is enrolled. Pass
-    ``data_sharing_mode="private"`` to opt out.
+    New organizations default to org-wide sharing: the managed organization
+    team (named after the organization) is created up front and every current
+    and future member is enrolled. Pass ``data_sharing_mode="private"`` to
+    opt out.
     """
 
     name: SafeLabel
