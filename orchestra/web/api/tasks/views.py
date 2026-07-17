@@ -9,6 +9,10 @@ from starlette.requests import Request
 
 from orchestra.db.dependencies import get_db_session, transient_request_db_session
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
+from orchestra.services.task_cancel_service import (
+    apply_task_cancel,
+    resolve_task_cancel_target,
+)
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     _requires_computer_from_row,
@@ -34,6 +38,8 @@ from orchestra.web.api.log.task_machine_user import (
 from orchestra.web.api.tasks.schema import (
     RetryTriggerResponse,
     StagedProviderTrigger,
+    TaskCancelRequest,
+    TaskCancelStatus,
     TaskRevisionConflictResponse,
     TaskTriggerRequest,
     TaskTriggerStatus,
@@ -934,3 +940,166 @@ async def trigger_task(
             assistant_id=target.assistant_id,
         ),
     )
+
+
+@router.post(
+    "/tasks/{task_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=InfoResponse[TaskCancelStatus],
+    tags=["Tasks"],
+    summary="Cancel an assistant task",
+    description=(
+        "Gracefully cancel a task by logical task id for a specific assistant. "
+        "Marks the selected Tasks instance (preferring status=active) as "
+        "cancelled, marks any inflight Tasks/Runs row cancelled, and stops the "
+        "associated offline Kubernetes job when one is recorded. The request "
+        "body must include assistant_id."
+    ),
+)
+async def cancel_task(
+    request: Request,
+    body: TaskCancelRequest,
+    task_id: int = Path(
+        ...,
+        description="The logical task id to cancel.",
+        example=123,
+    ),
+) -> InfoResponse[TaskCancelStatus]:
+    with transient_request_db_session(request) as session:
+        target = resolve_task_cancel_target(
+            session,
+            user_id=request.state.user_id,
+            organization_id=getattr(request.state, "organization_id", None),
+            task_id=task_id,
+            assistant_id=body.assistant_id,
+        )
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found.",
+            )
+        try:
+            result = apply_task_cancel(
+                session,
+                user_id=request.state.user_id,
+                organization_id=getattr(request.state, "organization_id", None),
+                target=target,
+                reason=body.reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        if result.already_terminal:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Task {task_id} instance {target.instance_id} is already "
+                    f"{result.task_status_before}."
+                ),
+            )
+        job_name = result.job_name
+        cancel_target = result.target
+        run_key = result.run_key
+
+    job_stop_requested = False
+    if job_name and not cancel_target.is_local:
+        job_stop_requested = await _stop_comms_job(job_name=job_name)
+
+    if not cancel_target.offline and not cancel_target.is_local:
+        await _emit_task_cancel_system_event(
+            assistant_id=cancel_target.assistant_id,
+            task_id=cancel_target.task_id,
+            source_task_log_id=cancel_target.source_task_log_id,
+            instance_id=cancel_target.instance_id,
+            destination=cancel_target.destination,
+            reason=body.reason,
+        )
+
+    return InfoResponse(
+        info=TaskCancelStatus(
+            task_id=cancel_target.task_id,
+            assistant_id=cancel_target.assistant_id,
+            instance_id=cancel_target.instance_id,
+            status="cancelled",
+            run_key=run_key,
+            job_name=job_name,
+            job_stop_requested=job_stop_requested,
+        ),
+    )
+
+
+async def _stop_comms_job(*, job_name: str) -> bool:
+    """Ask Communication to suspend one Kubernetes job by name."""
+
+    comms_url = (COMMS_URL or "").rstrip("/")
+    if not comms_url or not ADMIN_KEY:
+        logger.warning(
+            "Skipping job stop for %s; UNITY_COMMS_URL / ORCHESTRA_ADMIN_KEY unset",
+            job_name,
+        )
+        return False
+    client = get_async_client()
+    response = await client.post(
+        f"{comms_url}/infra/job/stop",
+        data={"job_name": job_name},
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        logger.error(
+            "Task-cancel Comms job stop failed for %s: %s %s",
+            job_name,
+            response.status_code,
+            response.text,
+        )
+        return False
+    return True
+
+
+async def _emit_task_cancel_system_event(
+    *,
+    assistant_id: int,
+    task_id: int,
+    source_task_log_id: int,
+    instance_id: int,
+    destination: str | None,
+    reason: str | None,
+) -> None:
+    """Notify a live assistant runtime that a task instance was cancelled."""
+
+    adapters_url = ADAPTERS_URL
+    if not adapters_url:
+        logger.warning("UNITY_ADAPTERS_URL not set, skipping task-cancel dispatch")
+        return
+    extra_event_fields: dict = {
+        "type": "task_cancel",
+        "task_id": task_id,
+        "source_task_log_id": source_task_log_id,
+        "instance_id": instance_id,
+        "reason": reason or "Cancelled via REST API.",
+    }
+    if destination:
+        extra_event_fields["destination"] = destination
+    client = get_async_client()
+    response = await client.post(
+        f"{adapters_url}/unity/system-event",
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "assistant_id": assistant_id,
+            "event_type": "task_cancel",
+            "message": f"Task {task_id} cancelled via REST API.",
+            "extra_event_fields": extra_event_fields,
+        },
+        timeout=30,
+    )
+    if response.status_code != 200:
+        logger.error(
+            "Task-cancel adapter dispatch failed: %s %s",
+            response.status_code,
+            response.text,
+        )

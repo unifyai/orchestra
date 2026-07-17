@@ -128,3 +128,36 @@ class TaskTriggerStatus(BaseModel):
         default="accepted",
         description="Immediate dispatch status for the asynchronous task trigger.",
     )
+
+
+class TaskCancelRequest(BaseModel):
+    assistant_id: int = Field(
+        description="The assistant that owns the task to cancel.",
+        examples=[1406],
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Optional human-readable cancel reason stored on the task/run.",
+    )
+
+
+class TaskCancelStatus(BaseModel):
+    task_id: int = Field(description="The logical task id requested by the caller.")
+    assistant_id: int = Field(description="The assistant that owns the cancelled task.")
+    instance_id: int = Field(description="The Tasks instance_id that was cancelled.")
+    status: str = Field(
+        default="cancelled",
+        description="Tasks row status after cancel.",
+    )
+    run_key: str | None = Field(
+        default=None,
+        description="Inflight Tasks/Runs run_key that was cancelled, if any.",
+    )
+    job_name: str | None = Field(
+        default=None,
+        description="Kubernetes job name stopped for offline runs, if any.",
+    )
+    job_stop_requested: bool = Field(
+        default=False,
+        description="True when Communication was asked to stop the job.",
+    )
