@@ -131,11 +131,54 @@ def _make_target(**overrides) -> TaskTriggerTarget:
         instance_id=0,
         is_local=False,
         offline=False,
+        enabled=True,
         activation_revision=None,
         entrypoint=None,
     )
     base.update(overrides)
     return TaskTriggerTarget(**base)
+
+
+def test_select_current_target_prefers_enabled_team_with_revision():
+    from orchestra.services.task_trigger_service import _select_current_target
+
+    personal = _make_target(
+        source_task_log_id=1,
+        destination=None,
+        enabled=False,
+        instance_id=0,
+        activation_revision=None,
+        offline=True,
+    )
+    team = _make_target(
+        source_task_log_id=2,
+        destination="team:11",
+        enabled=True,
+        instance_id=12,
+        activation_revision="rev-team",
+        offline=True,
+    )
+    assert _select_current_target([personal, team]) is team
+
+
+def test_select_current_target_prefers_newer_instance_when_tied():
+    from orchestra.services.task_trigger_service import _select_current_target
+
+    older = _make_target(
+        source_task_log_id=10,
+        destination="team:11",
+        instance_id=9,
+        activation_revision="rev-a",
+        offline=True,
+    )
+    newer = _make_target(
+        source_task_log_id=20,
+        destination="team:11",
+        instance_id=12,
+        activation_revision="rev-b",
+        offline=True,
+    )
+    assert _select_current_target([older, newer]) is newer
 
 
 @pytest.mark.anyio
@@ -440,3 +483,45 @@ async def test_trigger_closes_session_before_dispatch(
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     assert order.index("commit") < order.index("close") < order.index("dispatch")
+
+
+def test_derive_tasks_context_name_uses_owner_team_for_team_owned(monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestra.services import task_machine_state_service as tms
+
+    assistant = SimpleNamespace(owner_team_id=11, user_id="user-1")
+    monkeypatch.setattr(
+        tms,
+        "_get_assistant_for_task_machine_lookup",
+        lambda **kwargs: assistant,
+    )
+    assert (
+        tms._derive_tasks_context_name_from_assistant(
+            session=SimpleNamespace(),
+            project_id=1,
+            assistant_id="1406",
+        )
+        == "Teams/11/Tasks"
+    )
+
+
+def test_derive_tasks_context_name_uses_personal_when_not_team_owned(monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestra.services import task_machine_state_service as tms
+
+    assistant = SimpleNamespace(owner_team_id=None, user_id="user-1")
+    monkeypatch.setattr(
+        tms,
+        "_get_assistant_for_task_machine_lookup",
+        lambda **kwargs: assistant,
+    )
+    assert (
+        tms._derive_tasks_context_name_from_assistant(
+            session=SimpleNamespace(),
+            project_id=1,
+            assistant_id="1406",
+        )
+        == "user-1/1406/Tasks"
+    )

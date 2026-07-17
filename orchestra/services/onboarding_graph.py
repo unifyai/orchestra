@@ -1365,7 +1365,7 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
     # Completion derives from that inbound message, not a Twin outbound.
     OnboardingStep(
         id="ms-teams-reference",
-        title="Send your first message to Twin on Teams",
+        title="Send your first message to T-W1N on Teams",
         phase=PHASE_COMMUNICATION,
         kind="setup",
         depends_on={"ms-teams-connect": COMPLETED},
@@ -1373,14 +1373,14 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         derivable=True,
         channel="ms_teams",
         nudge_chat=(
-            "Have them click the 'Send your first message to Twin on Teams' "
+            "Have them click the 'Send your first message to T-W1N on Teams' "
             "row in the Onboarding checklist; it opens the Teams chat with the "
             "Unify bot (adding it for them first if needed) so they can say a "
             "quick hello. That first message is what opens the channel so I can "
             "reply — the Teams bot can't message first."
         ),
         nudge_voice=(
-            "clicking the 'Send your first message to Twin on Teams' row in the "
+            "clicking the 'Send your first message to T-W1N on Teams' row in the "
             "Onboarding checklist and saying hello"
         ),
     ),
@@ -2205,7 +2205,7 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "themselves the cleanest path is to have a tenant admin do the connect."
     ),
     "ms-teams-reference": (
-        "Clicking the 'Send your first message to Twin on Teams' row opens the "
+        "Clicking the 'Send your first message to T-W1N on Teams' row opens the "
         "Teams chat with the Unify bot (adding it for the user first if "
         "needed). The Unify Teams bot is reply-only — it can't send the first "
         "message — so the user has to say hello there before I can do anything. "

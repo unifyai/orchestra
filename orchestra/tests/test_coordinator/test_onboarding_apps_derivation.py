@@ -88,6 +88,20 @@ async def test_derive_onboarding_progress_uses_integration_connections_for_apps(
     assert "apps" in completed
 
 
+def test_coordinator_transcripts_context_names_includes_team_roots() -> None:
+    coordinator = SimpleNamespace(agent_id=7, user_id="user-1")
+    session = MagicMock()
+    with patch.object(svc, "TeamDAO") as team_dao_cls:
+        team_dao_cls.return_value.team_ids_for_assistant.return_value = [5, 9]
+        names = svc._coordinator_transcripts_context_names(session, coordinator)
+    assert names == [
+        "user-1/7/Transcripts",
+        "Teams/5/Transcripts",
+        "Teams/9/Transcripts",
+    ]
+    team_dao_cls.return_value.team_ids_for_assistant.assert_called_once_with(7)
+
+
 def test_reset_apps_couples_integration_demo_steps() -> None:
     coupled = graph.completion_coupled_steps("apps")
     assert "apps" in coupled
@@ -115,6 +129,7 @@ def test_integration_connections_probe_queries_by_assistant_id_only() -> None:
         organization_id=None,
     )
     session = MagicMock()
+    session.scalars.return_value = []
     connected = SimpleNamespace(
         status="connected",
         updated_at=datetime(2026, 7, 7, 13, 0, tzinfo=timezone.utc),
@@ -127,7 +142,11 @@ def test_integration_connections_probe_queries_by_assistant_id_only() -> None:
             "_project_for_coordinator",
             return_value=SimpleNamespace(id=1),
         ),
-        patch.object(svc, "_get_context", return_value=None),
+        patch.object(
+            svc,
+            "_coordinator_transcripts_context_names",
+            return_value=[],
+        ),
         patch(
             "orchestra.db.dao.integration_provider_dao.IntegrationProviderDAO",
         ) as dao_cls,
@@ -157,6 +176,7 @@ def test_derive_onboarding_progress_includes_apps_for_null_user_id_connection() 
         user_id=None,
     )
     session = MagicMock()
+    session.scalars.return_value = []
     apps_only = (
         graph.OnboardingStep(
             id="apps",
@@ -176,7 +196,11 @@ def test_derive_onboarding_progress_includes_apps_for_null_user_id_connection() 
             "_project_for_coordinator",
             return_value=SimpleNamespace(id=1),
         ),
-        patch.object(svc, "_get_context", return_value=None),
+        patch.object(
+            svc,
+            "_coordinator_transcripts_context_names",
+            return_value=[],
+        ),
         patch(
             "orchestra.db.dao.integration_provider_dao.IntegrationProviderDAO",
         ) as dao_cls,

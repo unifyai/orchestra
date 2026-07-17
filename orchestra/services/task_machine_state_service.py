@@ -369,7 +369,12 @@ def _derive_tasks_context_name_from_assistant(
     project_id: int,
     assistant_id: str | None,
 ) -> str | None:
-    """Return the canonical `.../Tasks` context for one assistant when resolvable."""
+    """Return the canonical `.../Tasks` context for one assistant when resolvable.
+
+    Team-owned assistants have no personal root: machine state (Activations /
+    Runs / OutboundOperations) lives under ``Teams/{owner_team_id}/Tasks``,
+    matching the shared authored Tasks surface.
+    """
 
     normalized_assistant_id = _coerce_optional_str(assistant_id)
     if not normalized_assistant_id:
@@ -379,6 +384,8 @@ def _derive_tasks_context_name_from_assistant(
         session=session,
         assistant_id=normalized_assistant_id,
     )
+    if assistant is not None and assistant.owner_team_id is not None:
+        return f"Teams/{int(assistant.owner_team_id)}/{TASKS_CONTEXT_NAME}"
     if assistant is not None and assistant.user_id:
         return _build_assistant_tasks_context_name(
             user_id=str(assistant.user_id),

@@ -725,6 +725,30 @@ def _coordinator_context_name(coordinator: Assistant, suffix: str) -> str:
     return f"{coordinator.user_id}/{coordinator.agent_id}/{suffix}"
 
 
+def _coordinator_transcripts_context_names(
+    session: Session,
+    coordinator: Assistant,
+) -> list[str]:
+    """Every Transcripts context the Coordinator can write to.
+
+    ``Transcripts`` is a shared-scoped table, so a team-owned (org/team)
+    Coordinator persists its messages to the owning team's root
+    (``Teams/{team_id}/Transcripts``), not the personal
+    ``{user_id}/{agent_id}/Transcripts`` path. Onboarding transcript probes
+    must therefore read across the personal path AND every team root, exactly
+    like :func:`_coordinator_tasks_context_names` already does for Tasks —
+    otherwise message-derived steps never tick for team/org Coordinators.
+    """
+    context_names = [
+        _coordinator_context_name(coordinator, COORDINATOR_TRANSCRIPTS_CONTEXT),
+    ]
+    team_ids = TeamDAO(session).team_ids_for_assistant(coordinator.agent_id)
+    context_names.extend(
+        f"Teams/{team_id}/{COORDINATOR_TRANSCRIPTS_CONTEXT}" for team_id in team_ids
+    )
+    return context_names
+
+
 def _lock_coordinator_context(
     session: Session,
     *,
@@ -1959,12 +1983,16 @@ class _OnboardingProbeScope:
         self.session = session
         self.coordinator = coordinator
         self.project = _project_for_coordinator(session, coordinator)
-        self.transcripts_context = _get_context(
+        transcript_context_names = _coordinator_transcripts_context_names(
             session,
-            project_id=self.project.id,
-            context_name=_coordinator_context_name(
-                coordinator,
-                COORDINATOR_TRANSCRIPTS_CONTEXT,
+            coordinator,
+        )
+        self.transcripts_context_ids: list[int] = list(
+            session.scalars(
+                select(Context.id).where(
+                    Context.project_id == self.project.id,
+                    Context.name.in_(transcript_context_names),
+                ),
             ),
         )
         self._user: User | None = None
@@ -2349,17 +2377,15 @@ def _has_user_transcript_message(
     after: datetime | None = None,
     reset_after: datetime | None = None,
 ) -> bool:
-    context = scope.transcripts_context
-    if context is None:
+    if not scope.transcripts_context_ids:
         return False
     query = (
         project_scoped_log_events(
             scope.project.id,
             LogEvent.id,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
         )
         .where(
-            LogEventContext.context_id == context.id,
+            LogEventContext.context_id.in_(scope.transcripts_context_ids),
             LogEvent.data["medium"].astext.in_(tuple(mediums)),
             LogEvent.data["sender_id"].astext == str(PERSONAL_BOSS_CONTACT_ID),
             LogEvent.data["receiver_ids"].contains([PERSONAL_SELF_CONTACT_ID]),
@@ -2382,17 +2408,15 @@ def _assistant_transcript_created_at(
     onboarding_trigger_step_id: str | None = None,
     reset_after: datetime | None = None,
 ) -> datetime | None:
-    context = scope.transcripts_context
-    if context is None:
+    if not scope.transcripts_context_ids:
         return None
     query = (
         project_scoped_log_events(
             scope.project.id,
             LogEvent.created_at,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
         )
         .where(
-            LogEventContext.context_id == context.id,
+            LogEventContext.context_id.in_(scope.transcripts_context_ids),
             LogEvent.data["medium"].astext.in_(tuple(mediums)),
             LogEvent.data["sender_id"].astext == str(PERSONAL_SELF_CONTACT_ID),
             LogEvent.data["receiver_ids"].contains([PERSONAL_BOSS_CONTACT_ID]),
