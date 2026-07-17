@@ -34,7 +34,6 @@ from orchestra.db.models.orchestra_models import (
     Team,
     User,
 )
-from orchestra.services.bucket_service import create_bucket_service
 from orchestra.services.chat_group_service import (
     build_group_dispatch_payload,
     create_chat_group,
@@ -48,6 +47,7 @@ from orchestra.services.chat_group_service import (
     persist_group_message,
     replace_group_membership,
     search_group_messages,
+    toggle_group_message_reaction,
 )
 from orchestra.services.org_call_contacts import ensure_org_call_contacts
 from orchestra.services.org_chat_service import (
@@ -58,6 +58,7 @@ from orchestra.services.org_chat_service import (
     list_team_messages,
     persist_team_message,
     search_team_messages,
+    toggle_team_message_reaction,
 )
 from orchestra.web.api.org_chat.schema import (
     AssistantGroupMessageCreate,
@@ -77,7 +78,7 @@ from orchestra.web.api.org_chat.schema import (
     OrgCallParticipantResponse,
     OrgCallRosterMember,
     OrgCallSessionResponse,
-    OrgChatAttachment,
+    OrgChatReactionUpdate,
     OrgChatSearchPage,
     OrgChatSearchResult,
     OrgRosterResponse,
@@ -95,79 +96,11 @@ from orchestra.web.api.utils.assistant_infra import (
     dispatch_org_chat_best_effort,
 )
 from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
-from orchestra.web.api.utils.gcp import parse_gcs_url
 from orchestra.web.api.utils.http_client import get_async_client
 
 router = APIRouter()
 admin_router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-def _generate_signed_url(gs_url: str) -> str | None:
-    """Best-effort signed URL generation for a gs:// URI."""
-    try:
-        bucket_name, object_path = parse_gcs_url(gs_url)
-        if not bucket_name or not object_path:
-            return None
-        svc = create_bucket_service()
-        bucket = svc.storage_client.bucket(bucket_name)
-        blob = bucket.blob(object_path)
-        if not blob.exists():
-            return None
-        return blob.generate_signed_url(
-            version="v4",
-            expiration=datetime.timedelta(hours=1),
-            method="GET",
-        )
-    except Exception:
-        logger.debug("Failed to generate signed URL for %s", gs_url, exc_info=True)
-        return None
-
-
-def _enrich_attachments(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Add fresh signed URLs to stored attachment dicts."""
-    if not raw:
-        return []
-    enriched = []
-    for attachment in raw:
-        item = dict(attachment)
-        gs_url = item.get("gs_url")
-        if gs_url:
-            signed = _generate_signed_url(gs_url)
-            if signed:
-                item["signed_url"] = signed
-        enriched.append(item)
-    return enriched
-
-
-def _attachments_for_storage(
-    attachments: list[OrgChatAttachment],
-) -> list[dict[str, Any]]:
-    return [
-        attachment.model_dump(
-            exclude_none=True,
-            exclude={"signed_url"},
-        )
-        for attachment in attachments
-    ]
-
-
-def _dm_message_response(message) -> DmMessageResponse:
-    return DmMessageResponse(
-        id=message.id,
-        thread_id=message.thread_id,
-        sender_user_id=message.sender_user_id,
-        content=message.content,
-        created_at=message.created_at,
-        attachments=_enrich_attachments(message.attachments),
-    )
-
-
-def _team_message_payload(message: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(message)
-    payload["mentions"] = payload.get("mentions") or []
-    payload["attachments"] = _enrich_attachments(payload.get("attachments"))
-    return payload
 
 
 def _org_call_event(call_session: OrgCallSession) -> dict[str, Any]:
@@ -392,11 +325,7 @@ def get_org_roster(
     )
 
 
-@router.get(
-    "/organizations/{organization_id}/teams/{team_id}/messages",
-    response_model=TeamMessagesPage,
-)
-def get_team_messages(
+def _UNUSED_get_team_messages(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -492,6 +421,57 @@ async def post_team_message(
         sender_email=sender.email or "",
     )
     await dispatch_org_chat_best_effort(payload)
+    return TeamMessageResponse(**response_message)
+
+
+@router.post(
+    "/organizations/{organization_id}/teams/{team_id}/messages/{message_id}/reactions",
+    response_model=TeamMessageResponse,
+)
+async def post_team_message_reaction(
+    request_fastapi: Request,
+    organization_id: int,
+    team_id: int,
+    message_id: int,
+    body: OrgChatReactionUpdate,
+    session: Session = Depends(get_db_session),
+) -> TeamMessageResponse:
+    """Toggle the caller's emoji reaction on a team group-chat message."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    team = _require_team(session, organization_id=organization_id, team_id=team_id)
+    if not TeamDAO(session).is_team_member(team_id, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member of this team to react in its chat",
+        )
+
+    try:
+        message = toggle_team_message_reaction(
+            session,
+            team=team,
+            message_id=message_id,
+            user_id=user_id,
+            emoji=body.emoji,
+        )
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+    response_message = _team_message_payload(message)
+    await dispatch_org_chat_best_effort(
+        {
+            "kind": "team_reaction",
+            "organization_id": team.organization_id,
+            "team_id": team.id,
+            "message": response_message,
+        },
+    )
     return TeamMessageResponse(**response_message)
 
 
@@ -621,10 +601,7 @@ async def post_team_message_as_owned_assistant(
 
 
 def _group_message_payload(message: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(message)
-    payload["mentions"] = payload.get("mentions") or []
-    payload["attachments"] = _enrich_attachments(payload.get("attachments"))
-    return payload
+    return _team_message_payload(message)
 
 
 def _chat_group_response(session: Session, group) -> ChatGroupResponse:
@@ -965,6 +942,57 @@ async def post_group_message(
         sender_email=sender.email or "",
     )
     await dispatch_org_chat_best_effort(payload)
+    return GroupMessageResponse(**response_message)
+
+
+@router.post(
+    "/organizations/{organization_id}/groups/{group_id}/messages/{message_id}/reactions",
+    response_model=GroupMessageResponse,
+)
+async def post_group_message_reaction(
+    request_fastapi: Request,
+    organization_id: int,
+    group_id: int,
+    message_id: int,
+    body: OrgChatReactionUpdate,
+    session: Session = Depends(get_db_session),
+) -> GroupMessageResponse:
+    """Toggle the caller's emoji reaction on a group chat message."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    group = _require_active_group(
+        session,
+        organization_id=organization_id,
+        group_id=group_id,
+    )
+    _require_human_group_member(session, group_id=group_id, user_id=user_id)
+
+    try:
+        message = toggle_group_message_reaction(
+            session,
+            group=group,
+            message_id=message_id,
+            user_id=user_id,
+            emoji=body.emoji,
+        )
+        session.commit()
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+    response_message = _group_message_payload(message)
+    await dispatch_org_chat_best_effort(
+        {
+            "kind": "group_reaction",
+            "organization_id": group.organization_id,
+            "group_id": group.id,
+            "message": response_message,
+        },
+    )
     return GroupMessageResponse(**response_message)
 
 
@@ -1360,6 +1388,75 @@ async def post_dm_message(
         },
     )
 
+    return response_message
+
+
+@router.post(
+    "/organizations/{organization_id}/dms/{other_user_id}/messages/{message_id}/reactions",
+    response_model=DmMessageResponse,
+)
+async def post_dm_message_reaction(
+    request_fastapi: Request,
+    organization_id: int,
+    other_user_id: str,
+    message_id: int,
+    body: OrgChatReactionUpdate,
+    session: Session = Depends(get_db_session),
+) -> DmMessageResponse:
+    """Toggle the caller's emoji reaction on a DM message."""
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    _require_dm_counterpart(
+        session,
+        org=org,
+        user_id=user_id,
+        other_user_id=other_user_id,
+    )
+
+    dm_dao = DmDAO(session)
+    thread = dm_dao.get_or_create_thread(
+        organization_id=organization_id,
+        user_id_1=user_id,
+        user_id_2=other_user_id,
+    )
+    message = dm_dao.get_message(message_id=message_id)
+    if message is None or message.thread_id != thread.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Message not found",
+        )
+
+    dm_dao.toggle_message_reaction(
+        message=message,
+        user_id=user_id,
+        emoji=body.emoji,
+    )
+    session.commit()
+
+    response_message = _dm_message_response(message)
+    sender = (
+        session.get(User, message.sender_user_id) if message.sender_user_id else None
+    )
+    dispatch_message = {
+        "id": message.id,
+        "thread_id": thread.id,
+        "organization_id": organization_id,
+        "user_ids": list(normalized_pair(user_id, other_user_id)),
+        "sender_user_id": message.sender_user_id,
+        "sender_name": _display_name(sender) if sender else "",
+        "content": message.content,
+        "attachments": response_message.model_dump()["attachments"],
+        "reactions": response_message.model_dump()["reactions"],
+        "timestamp": message.created_at.isoformat(),
+    }
+    await dispatch_org_chat_best_effort(
+        {
+            "kind": "dm_reaction",
+            "organization_id": organization_id,
+            "message": dispatch_message,
+        },
+    )
     return response_message
 
 

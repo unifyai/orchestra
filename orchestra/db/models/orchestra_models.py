@@ -1020,6 +1020,11 @@ class DmMessage(Base):
         nullable=False,
         server_default=sa.text("'[]'::jsonb"),
     )
+    reactions = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    )
     created_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,

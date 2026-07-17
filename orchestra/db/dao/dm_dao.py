@@ -62,6 +62,30 @@ class DmDAO:
         self.session.flush()
         return message
 
+    def get_message(self, *, message_id: int) -> DmMessage | None:
+        return self.session.get(DmMessage, message_id)
+
+    def toggle_message_reaction(
+        self,
+        *,
+        message: DmMessage,
+        user_id: str,
+        emoji: str | None,
+    ) -> DmMessage:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from orchestra.services.org_chat_service import apply_user_reaction
+
+        existing = message.reactions if isinstance(message.reactions, list) else []
+        message.reactions = apply_user_reaction(
+            existing,
+            user_id=user_id,
+            emoji=emoji,
+        )
+        flag_modified(message, "reactions")
+        self.session.flush()
+        return message
+
     def list_messages(
         self,
         *,

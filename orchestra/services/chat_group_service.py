@@ -38,6 +38,7 @@ from orchestra.services.org_chat_service import (
     SENDER_KIND_USER,
     _build_project_dao,
     _resolve_org_assistants_project,
+    apply_user_reaction,
 )
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.log.utils.logging_utils import create_logs_internal
@@ -435,10 +436,67 @@ def list_group_messages(
             continue
         data.setdefault("mentions", [])
         data.setdefault("attachments", [])
+        data.setdefault("reactions", [])
         data["group_id"] = group.id
         data["organization_id"] = group.organization_id
         messages.append(data)
     return messages
+
+
+def toggle_group_message_reaction(
+    session: Session,
+    *,
+    group: ChatGroup,
+    message_id: int,
+    user_id: str,
+    emoji: str | None,
+) -> dict[str, Any]:
+    """Toggle one user's reaction on a group chat message."""
+    project = _resolve_org_assistants_project(
+        session,
+        organization_id=group.organization_id,
+    )
+    context = session.scalar(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == chat_group_context_name(group.id),
+        ),
+    )
+    if context is None:
+        raise ValueError("Message not found")
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    query = (
+        project_scoped_log_events(
+            context.project_id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data["message_id"].astext == str(message_id),
+        )
+        .limit(1)
+    )
+    row = session.scalars(query).first()
+    if row is None:
+        raise ValueError("Message not found")
+
+    data = dict(row.data)
+    data["reactions"] = apply_user_reaction(
+        data.get("reactions") if isinstance(data.get("reactions"), list) else [],
+        user_id=user_id,
+        emoji=emoji,
+    )
+    row.data = data
+    flag_modified(row, "data")
+    session.flush()
+
+    data.setdefault("mentions", [])
+    data.setdefault("attachments", [])
+    data["group_id"] = group.id
+    data["organization_id"] = group.organization_id
+    return data
 
 
 def search_group_messages(

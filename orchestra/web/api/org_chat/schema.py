@@ -101,6 +101,20 @@ class AssistantTeamMessageCreate(OrgChatMessageCreate):
     mentions: List[ChatMention] = Field(default_factory=list)
 
 
+class OrgChatReaction(BaseModel):
+    """One emoji reaction on an org-chat message."""
+
+    user_id: str
+    emoji: str
+    updated_at: Optional[str] = None
+
+
+class OrgChatReactionUpdate(BaseModel):
+    """Toggle body: set an emoji, or null/empty to clear the caller's reaction."""
+
+    emoji: Optional[str] = Field(default=None, max_length=32)
+
+
 class TeamMessageResponse(BaseModel):
     """One stored team group-chat message."""
 
@@ -115,6 +129,7 @@ class TeamMessageResponse(BaseModel):
     content: str
     mentions: List[dict[str, Any]] = Field(default_factory=list)
     attachments: List[OrgChatAttachment] = Field(default_factory=list)
+    reactions: List[OrgChatReaction] = Field(default_factory=list)
 
 
 class TeamMessagesPage(BaseModel):
@@ -168,6 +183,7 @@ class GroupMessageResponse(BaseModel):
     content: str
     mentions: List[dict[str, Any]] = Field(default_factory=list)
     attachments: List[OrgChatAttachment] = Field(default_factory=list)
+    reactions: List[OrgChatReaction] = Field(default_factory=list)
 
 
 class GroupMessagesPage(BaseModel):
@@ -187,6 +203,7 @@ class DmMessageResponse(BaseModel):
     content: str
     created_at: datetime
     attachments: List[OrgChatAttachment] = Field(default_factory=list)
+    reactions: List[OrgChatReaction] = Field(default_factory=list)
 
 
 class DmMessagesPage(BaseModel):

@@ -63,6 +63,51 @@ SENDER_KIND_USER = "user"
 SENDER_KIND_ASSISTANT = "assistant"
 
 
+def _normalize_reaction_emoji(emoji: str | None) -> str | None:
+    if emoji is None:
+        return None
+    cleaned = emoji.strip()
+    return cleaned or None
+
+
+def apply_user_reaction(
+    existing: list[dict[str, Any]] | None,
+    *,
+    user_id: str,
+    emoji: str | None,
+) -> list[dict[str, Any]]:
+    """Add, change, or remove one user's emoji reaction on a message."""
+    reactions = [
+        dict(item)
+        for item in (existing or [])
+        if isinstance(item, dict) and item.get("user_id")
+    ]
+    index = next(
+        (i for i, item in enumerate(reactions) if str(item.get("user_id")) == user_id),
+        -1,
+    )
+    normalized = _normalize_reaction_emoji(emoji)
+    if normalized is None:
+        if index == -1:
+            return reactions
+        reactions.pop(index)
+        return reactions
+
+    next_reaction = {
+        "user_id": user_id,
+        "emoji": normalized,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if index == -1:
+        reactions.append(next_reaction)
+        return reactions
+    if reactions[index].get("emoji") == normalized:
+        reactions.pop(index)
+        return reactions
+    reactions[index] = next_reaction
+    return reactions
+
+
 def group_chat_context_name(team_id: int) -> str:
     return f"Teams/{team_id}/{GROUP_CHAT_CONTEXT_SUFFIX}"
 
@@ -240,10 +285,67 @@ def list_team_messages(
             continue
         data.setdefault("mentions", [])
         data.setdefault("attachments", [])
+        data.setdefault("reactions", [])
         data["team_id"] = team.id
         data["organization_id"] = team.organization_id
         messages.append(data)
     return messages
+
+
+def toggle_team_message_reaction(
+    session: Session,
+    *,
+    team: Team,
+    message_id: int,
+    user_id: str,
+    emoji: str | None,
+) -> dict[str, Any]:
+    """Toggle one user's reaction on a team GroupChat message."""
+    project = _resolve_org_assistants_project(
+        session,
+        organization_id=team.organization_id,
+    )
+    context = session.scalar(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == group_chat_context_name(team.id),
+        ),
+    )
+    if context is None:
+        raise ValueError("Message not found")
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    query = (
+        project_scoped_log_events(
+            context.project_id,
+            owner_key=single_owner_key(context.owner_scope, context.owner_id),
+        )
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data["message_id"].astext == str(message_id),
+        )
+        .limit(1)
+    )
+    row = session.scalars(query).first()
+    if row is None:
+        raise ValueError("Message not found")
+
+    data = dict(row.data)
+    data["reactions"] = apply_user_reaction(
+        data.get("reactions") if isinstance(data.get("reactions"), list) else [],
+        user_id=user_id,
+        emoji=emoji,
+    )
+    row.data = data
+    flag_modified(row, "data")
+    session.flush()
+
+    data.setdefault("mentions", [])
+    data.setdefault("attachments", [])
+    data["team_id"] = team.id
+    data["organization_id"] = team.organization_id
+    return data
 
 
 def search_team_messages(
@@ -288,6 +390,7 @@ def search_team_messages(
         data = dict(row.data)
         data.setdefault("mentions", [])
         data.setdefault("attachments", [])
+        data.setdefault("reactions", [])
         data["team_id"] = team.id
         data["organization_id"] = team.organization_id
         matches.append(data)
