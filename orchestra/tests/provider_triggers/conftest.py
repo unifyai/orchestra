@@ -61,8 +61,18 @@ def stub_healthy_provider_trigger_topology(
         signing_configured=True,
         worker_healthy=True,
     )
+
+    def _healthy(*args, **kwargs):
+        return healthy
+
+    # Patch both the definition and the module-level import used by catalog
+    # validation (``from …topology import evaluate_provider_trigger_topology``).
     monkeypatch.setattr(
         "orchestra.provider_triggers.topology.evaluate_provider_trigger_topology",
-        lambda *args, **kwargs: healthy,
+        _healthy,
+    )
+    monkeypatch.setattr(
+        "orchestra.services.staged_trigger_catalog_service.evaluate_provider_trigger_topology",
+        _healthy,
     )
     return healthy
