@@ -7,6 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    Assistant,
     Context,
     LogEvent,
     LogEventContext,
@@ -238,6 +239,111 @@ async def test_trigger_task_forks_new_instance_by_default(
     original = dbsession.query(LogEvent).filter(LogEvent.id == task_row.id).one()
     assert original.data["instance_id"] == 0
     assert original.data["schedule"]["start_at"] == "2026-07-20T09:00:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_trigger_task_fork_instance_ids_do_not_collide_with_counter(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    """Forks must advance context_counter so a later clone cannot reuse the id.
+
+    Regression: forks used max(instance_id)+1 without bumping the counter, so a
+    concurrent TaskScheduler clone (auto_counting) could insert the same
+    (task_id, instance_id) and break lifecycle updates.
+    """
+    from orchestra.db.dao.log_event_dao import LogEventDAO
+    from orchestra.services.task_trigger_service import _allocate_next_instance_id
+
+    task_row = _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=27,
+        with_schedule=True,
+    )
+    project = dbsession.query(Project).filter(Project.id == task_row.project_id).one()
+    context = (
+        dbsession.query(Context)
+        .filter(
+            Context.project_id == project.id,
+            Context.name == f"{_auth_user_id()}/{assistant_id}/Tasks",
+        )
+        .one()
+    )
+    context.auto_counting = {"task_id": None, "instance_id": "task_id"}
+    context.unique_key_names = ["task_id", "instance_id"]
+    context.unique_key_types = ["int", "int"]
+    dbsession.commit()
+
+    response = await client.post(
+        "/v0/tasks/27/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    fork_iid = int(response.json()["info"]["instance_id"])
+    assert fork_iid == 1
+
+    # Next counter reservation (what _clone_task_instance / create_logs would
+    # get) must not reuse the forked instance_id.
+    next_ids = LogEventDAO(dbsession).get_next_composite_ids(
+        project_id=project.id,
+        context_id=context.id,
+        unique_keys={"task_id": "int", "instance_id": "int"},
+        provided_values=[{"task_id": 27}],
+    )
+    assert int(next_ids[0]["instance_id"]) == fork_iid + 1
+
+    assistant = dbsession.query(Assistant).filter_by(agent_id=assistant_id).one()
+    bound = [(task_row, context.name, assistant, dict(task_row.data))]
+    context = dbsession.query(Context).filter(Context.id == context.id).one()
+    allocated = [
+        _allocate_next_instance_id(
+            dbsession,
+            project_id=project.id,
+            context=context,
+            task_id=27,
+            bound_rows=bound,
+        )
+        for _ in range(3)
+    ]
+    assert allocated == [fork_iid + 2, fork_iid + 3, fork_iid + 4]
+
+
+@pytest.mark.anyio
+async def test_trigger_task_second_fork_gets_distinct_instance_id(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=28,
+        with_schedule=True,
+    )
+    first = await client.post(
+        "/v0/tasks/28/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+    second = await client.post(
+        "/v0/tasks/28/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+    assert first.status_code == status.HTTP_202_ACCEPTED, first.json()
+    assert second.status_code == status.HTTP_202_ACCEPTED, second.json()
+    assert first.json()["info"]["instance_id"] != second.json()["info"]["instance_id"]
+    assert {
+        first.json()["info"]["instance_id"],
+        second.json()["info"]["instance_id"],
+    } == {1, 2}
 
 
 @pytest.mark.anyio
