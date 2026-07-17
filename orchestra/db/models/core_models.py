@@ -433,6 +433,7 @@ class FieldType(Base):
         server_default="entry",
     )
     mutable = Column(Boolean(), nullable=False, server_default="t")
+    ui_editable = Column(Boolean(), nullable=False, server_default="t")
     unique = Column(Boolean(), nullable=False, server_default="f")
     enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")

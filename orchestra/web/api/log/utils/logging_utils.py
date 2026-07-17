@@ -349,6 +349,11 @@ def enforce_types(
         mutable = (
             field_spec.get("mutable", True) if isinstance(field_spec, dict) else True
         )
+        ui_editable = (
+            field_spec.get("ui_editable", True)
+            if isinstance(field_spec, dict)
+            else True
+        )
         unique = (
             field_spec.get("unique", False) if isinstance(field_spec, dict) else False
         )
@@ -399,6 +404,7 @@ def enforce_types(
             field_name,
             value,
             mutable=mutable,
+            ui_editable=ui_editable,
             unique=unique,
             field_category="param" if is_param else "entry",
             context_id=context_id,
@@ -1876,6 +1882,11 @@ def _create_logs_internal(
                         if entries_explicit_types
                         else True
                     )
+                    ui_editable = (
+                        entries_explicit_types.get(k, {}).get("ui_editable", True)
+                        if entries_explicit_types
+                        else True
+                    )
                     unique = (
                         entries_explicit_types.get(k, {}).get("unique", False)
                         if entries_explicit_types
@@ -1927,6 +1938,7 @@ def _create_logs_internal(
                             "field_name": k,
                             "value": v,
                             "mutable": mutable,
+                            "ui_editable": ui_editable,
                             "unique": unique,
                             "field_category": "entry",
                             "context_id": context_id,
@@ -4238,6 +4250,7 @@ def _create_logs_from_joined_rows(
                             "field_name": col,
                             "value": val,
                             "mutable": original_field_type.mutable,
+                            "ui_editable": original_field_type.ui_editable,
                             "unique": original_field_type.unique,
                             "field_category": original_field_type.field_category,
                             "enum_values": original_field_type.enum_values,

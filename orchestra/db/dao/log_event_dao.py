@@ -224,6 +224,11 @@ class LogEventDAO:
             if explicit_types_dict
             else True
         )
+        ui_editable = (
+            explicit_types_dict.get(field_key, {}).get("ui_editable", True)
+            if explicit_types_dict
+            else True
+        )
         unique = (
             explicit_types_dict.get(field_key, {}).get("unique", False)
             if explicit_types_dict
@@ -245,6 +250,7 @@ class LogEventDAO:
         return {
             "exists": False,
             "mutable": mutable,
+            "ui_editable": ui_editable,
             "unique": unique,
             "field_type": field_type,
             "enum_values": enum_values,

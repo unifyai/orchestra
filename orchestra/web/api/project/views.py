@@ -2293,6 +2293,7 @@ def admin_duplicate_project(
                     "field_name": ft.field_name,
                     "field_type": ft.field_type,
                     "mutable": ft.mutable,
+                    "ui_editable": ft.ui_editable,
                     "field_category": ft.field_category,
                 },
             )
