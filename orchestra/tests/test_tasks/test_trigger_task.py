@@ -65,6 +65,8 @@ def _seed_task(
     name: str = "Review report",
     legacy_context_owner: bool = False,
     offline: bool = False,
+    instance_id: int = 0,
+    with_schedule: bool = False,
 ) -> LogEvent:
     project = (
         dbsession.query(Project)
@@ -88,18 +90,22 @@ def _seed_task(
         context = Context(**context_kwargs)
         dbsession.add(context)
         dbsession.flush()
+    data = {
+        "assistant_id": str(assistant_id),
+        "task_id": task_id,
+        "instance_id": instance_id,
+        "status": status_value,
+        "name": name,
+        "description": "Review the weekly report.",
+        "offline": offline,
+    }
+    if with_schedule:
+        data["schedule"] = {"start_at": "2026-07-20T09:00:00+00:00"}
+        data["repeat"] = {"kind": "weekly", "weekday": "monday"}
     log = LogEvent(
         project_id=project.id,
         owner_key=f"a{assistant_id}",
-        data={
-            "assistant_id": str(assistant_id),
-            "task_id": task_id,
-            "instance_id": 0,
-            "status": status_value,
-            "name": name,
-            "description": "Review the weekly report.",
-            "offline": offline,
-        },
+        data=data,
     )
     dbsession.add(log)
     dbsession.flush()
@@ -182,7 +188,7 @@ def test_select_current_target_prefers_newer_instance_when_tied():
 
 
 @pytest.mark.anyio
-async def test_trigger_task_dispatches_to_adapters(
+async def test_trigger_task_forks_new_instance_by_default(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
@@ -193,6 +199,7 @@ async def test_trigger_task_dispatches_to_adapters(
         assistant_id=assistant_id,
         user_id=_auth_user_id(),
         task_id=17,
+        with_schedule=True,
     )
 
     response = await client.post(
@@ -202,18 +209,123 @@ async def test_trigger_task_dispatches_to_adapters(
     )
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
-    assert response.json()["info"] == {
-        "task_id": 17,
-        "assistant_id": assistant_id,
-        "status": "accepted",
-    }
+    info = response.json()["info"]
+    assert info["task_id"] == 17
+    assert info["assistant_id"] == assistant_id
+    assert info["status"] == "accepted"
+    assert info["forked"] is True
+    assert info["instance_id"] == 1
+    assert info["source_task_log_id"] != task_row.id
     mock_task_trigger_dispatch.assert_awaited_once()
     target = mock_task_trigger_dispatch.await_args.args[0]
     assert target.assistant_id == assistant_id
     assert target.task_id == 17
-    assert target.source_task_log_id == task_row.id
+    assert target.source_task_log_id == info["source_task_log_id"]
+    assert target.instance_id == 1
+    assert target.forked is True
     assert target.task_name == "Review report"
     assert target.offline is False
+
+    fork_row = (
+        dbsession.query(LogEvent)
+        .filter(LogEvent.id == info["source_task_log_id"])
+        .one()
+    )
+    assert fork_row.data["instance_id"] == 1
+    assert fork_row.data["status"] == "scheduled"
+    assert "schedule" not in fork_row.data
+    assert "repeat" not in fork_row.data
+    original = dbsession.query(LogEvent).filter(LogEvent.id == task_row.id).one()
+    assert original.data["instance_id"] == 0
+    assert original.data["schedule"]["start_at"] == "2026-07-20T09:00:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_trigger_task_with_explicit_instance_id_uses_existing_row(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    task_row = _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=18,
+        with_schedule=True,
+    )
+
+    response = await client.post(
+        "/v0/tasks/18/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id, "instance_id": 0},
+    )
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    info = response.json()["info"]
+    assert info == {
+        "task_id": 18,
+        "assistant_id": assistant_id,
+        "instance_id": 0,
+        "source_task_log_id": task_row.id,
+        "forked": False,
+        "status": "accepted",
+    }
+    mock_task_trigger_dispatch.assert_awaited_once()
+    target = mock_task_trigger_dispatch.await_args.args[0]
+    assert target.source_task_log_id == task_row.id
+    assert target.instance_id == 0
+    assert target.forked is False
+
+
+@pytest.mark.anyio
+async def test_trigger_task_explicit_instance_404_when_missing(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=20,
+    )
+
+    response = await client.post(
+        "/v0/tasks/20/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id, "instance_id": 99},
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    mock_task_trigger_dispatch.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_trigger_task_explicit_terminal_instance_returns_409(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=21,
+        status_value="completed",
+    )
+
+    response = await client.post(
+        "/v0/tasks/21/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id, "instance_id": 0},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "not runnable" in response.json()["detail"]
+    mock_task_trigger_dispatch.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -260,9 +372,10 @@ async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metad
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     mock_task_trigger_dispatch.assert_awaited_once()
-    assert (
-        mock_task_trigger_dispatch.await_args.args[0].source_task_log_id == task_row.id
-    )
+    target = mock_task_trigger_dispatch.await_args.args[0]
+    assert target.forked is True
+    assert target.instance_id == 1
+    assert target.source_task_log_id != task_row.id
 
 
 @pytest.mark.anyio
@@ -305,7 +418,9 @@ async def test_trigger_task_selects_requested_assistant_when_task_id_shared(
     mock_task_trigger_dispatch.assert_awaited_once()
     target = mock_task_trigger_dispatch.await_args.args[0]
     assert target.assistant_id == assistant_id
-    assert target.source_task_log_id == first_row.id
+    assert target.forked is True
+    assert target.instance_id == 1
+    assert target.source_task_log_id != first_row.id
     assert target.task_name == "First task"
 
 

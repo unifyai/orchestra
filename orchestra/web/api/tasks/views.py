@@ -25,6 +25,7 @@ from orchestra.services.task_mutation_contract import (
 )
 from orchestra.services.task_mutation_service import TaskMutationService
 from orchestra.services.task_trigger_service import (
+    TaskTriggerInstanceNotRunnable,
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
@@ -920,17 +921,31 @@ async def trigger_task(
     # request-scoped Depends session across that round-trip previously caused
     # field_type lock timeouts.
     with transient_request_db_session(request) as session:
-        target = resolve_task_trigger_target(
-            session,
-            user_id=request.state.user_id,
-            organization_id=getattr(request.state, "organization_id", None),
-            task_id=task_id,
-            assistant_id=body.assistant_id,
-        )
+        try:
+            target = resolve_task_trigger_target(
+                session,
+                user_id=request.state.user_id,
+                organization_id=getattr(request.state, "organization_id", None),
+                task_id=task_id,
+                assistant_id=body.assistant_id,
+                instance_id=body.instance_id,
+            )
+        except TaskTriggerInstanceNotRunnable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
         if target is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Task not found.",
+                detail=(
+                    "Task not found."
+                    if body.instance_id is None
+                    else (
+                        f"Task {task_id} instance {body.instance_id} not found "
+                        "for this assistant."
+                    )
+                ),
             )
 
     await _dispatch_task_trigger(target)
@@ -938,6 +953,9 @@ async def trigger_task(
         info=TaskTriggerStatus(
             task_id=target.task_id,
             assistant_id=target.assistant_id,
+            instance_id=target.instance_id,
+            source_task_log_id=target.source_task_log_id,
+            forked=target.forked,
         ),
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -14,10 +15,12 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Project,
 )
+from orchestra.db.scope import owner_key_for_context
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     TASKS_CONTEXT_NAME,
     _coerce_bool,
+    _extract_key_order,
     _requires_computer_from_row,
     _requires_filesystem_from_row,
     get_task_activation,
@@ -30,6 +33,36 @@ _TERMINAL_OR_UNRUNNABLE_STATUSES = {
     "completed",
     "failed",
 }
+
+# Fields that must not be copied onto an explicit-trigger fork. Schedule/repeat
+# are stripped so execute() does not re-arm the recurring weekly (or other)
+# series from this one-off instance.
+_FORK_EXCLUDED_FIELDS = frozenset(
+    {
+        "instance_id",
+        "schedule",
+        "repeat",
+        "trigger",
+        "activated_by",
+        "status",
+        "info",
+        "provider_event_binding_id",
+        "provider_event_launch_identity",
+    },
+)
+
+
+class TaskTriggerInstanceNotRunnable(ValueError):
+    """Raised when a caller-requested instance_id cannot be executed."""
+
+    def __init__(self, *, task_id: int, instance_id: int, status: str) -> None:
+        self.task_id = task_id
+        self.instance_id = instance_id
+        self.status = status
+        super().__init__(
+            f"Task {task_id} instance {instance_id} is not runnable "
+            f"(status={status!r}).",
+        )
 
 
 @dataclass(frozen=True)
@@ -50,6 +83,7 @@ class TaskTriggerTarget:
     max_runtime_seconds: int | None = None
     requires_filesystem: bool = False
     requires_computer: bool = False
+    forked: bool = False
 
 
 def resolve_task_trigger_target(
@@ -59,8 +93,14 @@ def resolve_task_trigger_target(
     organization_id: int | None,
     task_id: int,
     assistant_id: int,
+    instance_id: int | None = None,
 ) -> TaskTriggerTarget | None:
-    """Return the accessible task target for one assistant + logical task id."""
+    """Return the accessible task target for one assistant + logical task id.
+
+    By default (``instance_id is None``) forks a brand-new Tasks instance that is
+    decoupled from recurrence (no ``schedule`` / ``repeat``), then targets that
+    row. When ``instance_id`` is set, dispatches that existing instance early.
+    """
 
     project = _task_project_for_owner(
         session=session,
@@ -76,7 +116,7 @@ def resolve_task_trigger_target(
         project_id=project.id,
         task_id=task_id,
     )
-    targets: list[TaskTriggerTarget] = []
+    bound_rows: list[tuple[LogEvent, str, Assistant, dict[str, Any]]] = []
     for row, context_name, assistant in rows:
         data = row.data if isinstance(row.data, dict) else {}
         resolved_assistant_id = _resolve_assistant_id(
@@ -89,52 +129,219 @@ def resolve_task_trigger_target(
             continue
         if resolved_assistant_id != requested_assistant_id:
             continue
-        destination = _destination_from_context_name(context_name)
-        offline = _coerce_bool(data.get("offline"))
-        enabled = True if "enabled" not in data else _coerce_bool(data.get("enabled"))
-        activation_revision = None
-        entrypoint = None
-        max_runtime_seconds = None
-        requires_filesystem = _requires_filesystem_from_row(data)
-        requires_computer = _requires_computer_from_row(data)
-        if offline:
-            activation_snapshot = _offline_activation_for_task(
-                session=session,
-                project_id=project.id,
-                assistant_id=resolved_assistant_id,
-                task_id=task_id,
-                destination=destination,
-            )
-            if activation_snapshot is not None:
-                activation_revision = activation_snapshot.revision
-                entrypoint = activation_snapshot.entrypoint
-                max_runtime_seconds = activation_snapshot.max_runtime_seconds
-                requires_filesystem = activation_snapshot.requires_filesystem
-                requires_computer = activation_snapshot.requires_computer
-        targets.append(
-            TaskTriggerTarget(
-                assistant_id=resolved_assistant_id,
-                task_id=task_id,
-                source_task_log_id=int(row.id),
-                destination=destination,
-                task_name=str(data.get("name") or f"task {task_id}"),
-                task_description=str(data.get("description") or ""),
-                status=str(data.get("status") or ""),
-                instance_id=_coerce_int(data.get("instance_id")) or 0,
-                is_local=bool(assistant.is_local),
-                offline=offline,
-                enabled=enabled,
-                activation_revision=activation_revision,
-                entrypoint=entrypoint,
-                max_runtime_seconds=max_runtime_seconds,
-                requires_filesystem=requires_filesystem,
-                requires_computer=requires_computer,
-            ),
+        bound_rows.append((row, context_name, assistant, data))
+
+    if not bound_rows:
+        return None
+
+    if instance_id is not None:
+        return _target_for_existing_instance(
+            session=session,
+            project_id=project.id,
+            task_id=task_id,
+            instance_id=int(instance_id),
+            bound_rows=bound_rows,
         )
 
-    if not targets:
+    return _fork_and_target_new_instance(
+        session=session,
+        project_id=project.id,
+        task_id=task_id,
+        bound_rows=bound_rows,
+    )
+
+
+def _target_for_existing_instance(
+    *,
+    session: Session,
+    project_id: int,
+    task_id: int,
+    instance_id: int,
+    bound_rows: list[tuple[LogEvent, str, Assistant, dict[str, Any]]],
+) -> TaskTriggerTarget | None:
+    """Resolve a caller-selected instance, refusing terminal/active rows."""
+
+    matches = [
+        item
+        for item in bound_rows
+        if (_coerce_int(item[3].get("instance_id")) or 0) == instance_id
+    ]
+    if not matches:
         return None
-    return _select_current_target(targets)
+    targets = [
+        _build_target_from_row(
+            session=session,
+            project_id=project_id,
+            task_id=task_id,
+            row=row,
+            context_name=context_name,
+            assistant=assistant,
+            data=data,
+            forked=False,
+        )
+        for row, context_name, assistant, data in matches
+    ]
+    runnable = [
+        target
+        for target in targets
+        if target.status not in _TERMINAL_OR_UNRUNNABLE_STATUSES
+    ]
+    if not runnable:
+        status = targets[0].status if targets else ""
+        raise TaskTriggerInstanceNotRunnable(
+            task_id=task_id,
+            instance_id=instance_id,
+            status=status,
+        )
+    return _select_current_target(runnable)
+
+
+def _fork_and_target_new_instance(
+    *,
+    session: Session,
+    project_id: int,
+    task_id: int,
+    bound_rows: list[tuple[LogEvent, str, Assistant, dict[str, Any]]],
+) -> TaskTriggerTarget:
+    """Insert a recurrence-decoupled Tasks instance and target it."""
+
+    template_targets = [
+        _build_target_from_row(
+            session=session,
+            project_id=project_id,
+            task_id=task_id,
+            row=row,
+            context_name=context_name,
+            assistant=assistant,
+            data=data,
+            forked=False,
+        )
+        for row, context_name, assistant, data in bound_rows
+    ]
+    template_target = _select_current_target(template_targets)
+    template_row, context_name, assistant, template_data = next(
+        item
+        for item in bound_rows
+        if int(item[0].id) == template_target.source_task_log_id
+    )
+
+    context = (
+        session.query(Context)
+        .filter(
+            Context.project_id == project_id,
+            Context.name == context_name,
+        )
+        .one()
+    )
+    next_instance_id = (
+        max((_coerce_int(data.get("instance_id")) or 0) for _, _, _, data in bound_rows)
+        + 1
+    )
+    fork_data = {
+        key: value
+        for key, value in template_data.items()
+        if key not in _FORK_EXCLUDED_FIELDS
+    }
+    fork_data["task_id"] = task_id
+    fork_data["instance_id"] = next_instance_id
+    fork_data["status"] = "scheduled"
+    fork_data["info"] = (
+        "Forked for explicit REST trigger; decoupled from recurrence "
+        "(no schedule/repeat)."
+    )
+    if "assistant_id" not in fork_data and "_assistant_id" not in fork_data:
+        fork_data["assistant_id"] = str(assistant.agent_id)
+
+    now = datetime.now(timezone.utc)
+    owner_key = owner_key_for_context(session, context.id)
+    fork_row = LogEvent(
+        project_id=project_id,
+        data=fork_data,
+        key_order=_extract_key_order(fork_data),
+        created_at=now,
+        updated_at=now,
+        owner_key=owner_key,
+    )
+    session.add(fork_row)
+    session.flush()
+    session.add(
+        LogEventContext(
+            project_id=project_id,
+            log_event_id=fork_row.id,
+            context_id=context.id,
+            owner_key=owner_key,
+        ),
+    )
+    session.flush()
+
+    return _build_target_from_row(
+        session=session,
+        project_id=project_id,
+        task_id=task_id,
+        row=fork_row,
+        context_name=context_name,
+        assistant=assistant,
+        data=fork_data,
+        forked=True,
+    )
+
+
+def _build_target_from_row(
+    *,
+    session: Session,
+    project_id: int,
+    task_id: int,
+    row: LogEvent,
+    context_name: str,
+    assistant: Assistant,
+    data: dict[str, Any],
+    forked: bool,
+) -> TaskTriggerTarget:
+    destination = _destination_from_context_name(context_name)
+    offline = _coerce_bool(data.get("offline"))
+    enabled = True if "enabled" not in data else _coerce_bool(data.get("enabled"))
+    activation_revision = None
+    entrypoint = _coerce_int(data.get("entrypoint"))
+    max_runtime_seconds = _coerce_int(data.get("max_runtime_seconds"))
+    requires_filesystem = _requires_filesystem_from_row(data)
+    requires_computer = _requires_computer_from_row(data)
+    if offline:
+        activation_snapshot = _offline_activation_for_task(
+            session=session,
+            project_id=project_id,
+            assistant_id=int(assistant.agent_id),
+            task_id=task_id,
+            destination=destination,
+        )
+        if activation_snapshot is not None:
+            activation_revision = activation_snapshot.revision
+            # Prefer the armed activation entrypoint when present so forks of
+            # offline tasks stay aligned with the live symbolic contract.
+            if activation_snapshot.entrypoint is not None:
+                entrypoint = activation_snapshot.entrypoint
+            if activation_snapshot.max_runtime_seconds is not None:
+                max_runtime_seconds = activation_snapshot.max_runtime_seconds
+            requires_filesystem = activation_snapshot.requires_filesystem
+            requires_computer = activation_snapshot.requires_computer
+    return TaskTriggerTarget(
+        assistant_id=int(assistant.agent_id),
+        task_id=task_id,
+        source_task_log_id=int(row.id),
+        destination=destination,
+        task_name=str(data.get("name") or f"task {task_id}"),
+        task_description=str(data.get("description") or ""),
+        status=str(data.get("status") or ""),
+        instance_id=_coerce_int(data.get("instance_id")) or 0,
+        is_local=bool(assistant.is_local),
+        offline=offline,
+        enabled=enabled,
+        activation_revision=activation_revision,
+        entrypoint=entrypoint,
+        max_runtime_seconds=max_runtime_seconds,
+        requires_filesystem=requires_filesystem,
+        requires_computer=requires_computer,
+        forked=forked,
+    )
 
 
 @dataclass(frozen=True)
