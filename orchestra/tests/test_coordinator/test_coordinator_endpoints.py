@@ -31,6 +31,8 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     Organization,
     Project,
+    Team,
+    TeamAssistantMembership,
     User,
 )
 from orchestra.services import coordinator_service as svc
@@ -355,6 +357,100 @@ async def test_onboarding_reply_requires_stamped_outbound_before_user_reply(
     derived = progress()
     assert trigger_step_id in derived
     assert reply_step_id in derived
+
+
+@pytest.mark.anyio
+async def test_onboarding_derives_teams_steps_from_team_root_transcripts(
+    client: AsyncClient,
+    dbsession: Session,
+) -> None:
+    """Team-owned Coordinators persist shared Transcripts to the team root.
+
+    ``Transcripts`` is a shared-scoped table, so a Coordinator that belongs to a
+    team writes its Teams messages to ``Teams/{team_id}/Transcripts`` rather than
+    the personal ``{user_id}/{agent_id}/Transcripts`` path. The onboarding
+    derivation must probe those team roots too, otherwise the message/reference
+    steps never tick for org/team Coordinators even though the messages exist.
+    """
+    owner = await _create_user(client, "teams-team-root")
+    coordinator = dbsession.scalars(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    ).one()
+
+    org = Organization(name="Team Root Org", owner_id=owner["id"])
+    dbsession.add(org)
+    dbsession.flush()
+    team = Team(name="Team Root", organization_id=org.id)
+    dbsession.add(team)
+    dbsession.flush()
+    dbsession.add(
+        TeamAssistantMembership(
+            assistant_id=coordinator.agent_id,
+            team_id=team.id,
+            added_by=owner["id"],
+        ),
+    )
+    dbsession.flush()
+
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    # Deliberately write ONLY to the team root — never the personal path — so the
+    # test fails if the probe still looks at {user_id}/{agent_id}/Transcripts.
+    team_context_name = f"Teams/{team.id}/Transcripts"
+    medium = svc.onboarding_graph.MS_TEAMS_BOT_MEDIUM
+    base = datetime(2026, 1, 1, 12, 0, 0)
+
+    def progress() -> list[str]:
+        return svc.derive_onboarding_progress(
+            dbsession,
+            coordinator=coordinator,
+            state={"onboarding_active": True},
+        )
+
+    def insert_message(*, role: str, offset: int) -> None:
+        is_assistant = role == "assistant"
+        created_at = base + timedelta(seconds=offset)
+        _insert_log(
+            dbsession,
+            project=project,
+            context_name=team_context_name,
+            created_at=created_at,
+            data={
+                "medium": medium,
+                "sender_id": (
+                    svc.PERSONAL_SELF_CONTACT_ID
+                    if is_assistant
+                    else svc.PERSONAL_BOSS_CONTACT_ID
+                ),
+                "receiver_ids": [
+                    (
+                        svc.PERSONAL_BOSS_CONTACT_ID
+                        if is_assistant
+                        else svc.PERSONAL_SELF_CONTACT_ID
+                    ),
+                ],
+                "timestamp": created_at.isoformat(),
+                "content": "hi",
+            },
+        )
+
+    assert svc.ONBOARDING_STEP_MS_TEAMS_REFERENCE not in progress()
+    assert svc.ONBOARDING_STEP_MS_TEAMS_MESSAGE not in progress()
+
+    # User -> Twin inbound completes ms-teams-reference (bot is reply-only).
+    insert_message(role="user", offset=1)
+    derived = progress()
+    assert svc.ONBOARDING_STEP_MS_TEAMS_REFERENCE in derived
+    assert svc.ONBOARDING_STEP_MS_TEAMS_MESSAGE not in derived
+
+    # Twin -> user reply completes ms-teams-message.
+    insert_message(role="assistant", offset=2)
+    derived = progress()
+    assert svc.ONBOARDING_STEP_MS_TEAMS_REFERENCE in derived
+    assert svc.ONBOARDING_STEP_MS_TEAMS_MESSAGE in derived
 
 
 def _assert_coordinator_provisioned(
