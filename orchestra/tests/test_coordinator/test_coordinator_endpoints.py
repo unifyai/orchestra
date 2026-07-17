@@ -1739,16 +1739,15 @@ async def test_coordinator_state_reset_clears_user_contact_field(
 
 
 @pytest.mark.anyio
-async def test_coordinator_state_reset_child_step_clears_discord_id(
+async def test_coordinator_state_reset_child_step_keeps_sticky_discord_id(
     client: AsyncClient,
     dbsession: Session,
 ) -> None:
-    """Resetting a downstream Discord beat cascades up and clears ``discord_id``.
+    """Resetting ``discord-connect`` leaves sticky ``discord-id`` completed.
 
-    ``discord-connect`` depends on ``discord-id`` (COMPLETED), so the reset
-    cascade pulls the setup step in — mirroring how resetting a WhatsApp beat
-    already rewinds ``whatsapp-number``. The saved Discord ID must be cleared
-    so the step does not immediately re-derive.
+    Contact-detail steps are sticky: resetting a downstream Discord beat
+    clears the connect step but keeps ``discord-id`` completed and preserves
+    the stored Discord ID unless ``discord-id`` itself is reset.
     """
     owner = await _create_user(client, "reset-discord-cascade")
     create = await client.post(
@@ -1773,12 +1772,12 @@ async def test_coordinator_state_reset_child_step_clears_discord_id(
     )
     assert reset.status_code == status.HTTP_200_OK, reset.json()
     completed = reset.json()["info"]["completed_step_ids"]
-    assert "discord-id" not in completed
+    assert "discord-id" in completed
     assert "discord-connect" not in completed
 
     dbsession.expire_all()
     user = dbsession.get(User, owner["id"])
-    assert user.discord_id is None
+    assert user.discord_id == "123456789012345678"
 
 
 @pytest.mark.anyio

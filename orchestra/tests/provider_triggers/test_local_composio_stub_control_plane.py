@@ -46,6 +46,7 @@ from orchestra.tests.provider_triggers.control_plane_harness import (
     run_trigger_worker_cycle,
     seed_integration_connection,
     seed_provider_event_binding,
+    seed_provider_event_fixture_prerequisites,
 )
 from orchestra.tests.utils import HEADERS
 from orchestra.workers.provider_trigger_worker import run_worker_cycle
@@ -406,12 +407,14 @@ async def test_typed_task_enable_reconciles_through_local_stub(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stub_healthy_provider_trigger_topology(monkeypatch)
+    monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
     assistant_id = await create_assistant(client)
-    connection = seed_integration_connection(
+    connection = seed_provider_event_fixture_prerequisites(
         dbsession,
         assistant_id=assistant_id,
         connection_id=f"conn-{assistant_id}-github",
     )
+    dbsession.commit()
 
     response = await client.post(
         f"/v0/assistants/{assistant_id}/tasks",

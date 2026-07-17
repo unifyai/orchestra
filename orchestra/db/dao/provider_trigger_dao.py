@@ -1024,6 +1024,21 @@ class ProviderTriggerDAO:
         )
         return and_(due, or_(lease_available, stale_processing))
 
+    def list_reconcile_backlog(
+        self,
+        *,
+        limit: int,
+    ) -> list[EventTriggerBinding]:
+        """Return bindings with the oldest due reconcile retries."""
+
+        rows = self.session.execute(
+            select(EventTriggerBinding)
+            .where(EventTriggerBinding.reconcile_next_retry_at.isnot(None))
+            .order_by(EventTriggerBinding.reconcile_next_retry_at.asc())
+            .limit(limit),
+        ).scalars()
+        return list(rows)
+
     def claim_bindings_for_reconcile(
         self,
         *,

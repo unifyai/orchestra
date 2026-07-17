@@ -18,6 +18,8 @@ def _make_assistant_with_external_ip(
     dbsession: Session,
 ) -> tuple[Assistant, AssistantExternalIP]:
     user = User(id="regional-migration-user", email="regional-migration@test.com")
+    dbsession.add(user)
+    dbsession.flush()
     assistant = Assistant(user_id=user.id, first_name="Placement", surname="Test")
     external_ip = AssistantExternalIP(
         assistant=assistant,
@@ -27,7 +29,7 @@ def _make_assistant_with_external_ip(
         region="us-central1",
         state="reserved",
     )
-    dbsession.add_all((user, assistant, external_ip))
+    dbsession.add_all((assistant, external_ip))
     dbsession.flush()
     return assistant, external_ip
 

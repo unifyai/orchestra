@@ -212,9 +212,11 @@ async def test_enable_managed_desktop_endpoint_charges_and_sets_status(
         "gcp_address_name": None,
         "address": None,
         "region": None,
+        "pool_location": None,
         "hostname": None,
         "state": "pending",
         "active_operation": "reserve",
+        "rotation": None,
     }
 
     disable_response = await client.delete(
