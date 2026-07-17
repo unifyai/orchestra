@@ -30,6 +30,8 @@ from orchestra.web.api.admin import (
 )
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import router as assistant_router
+from orchestra.web.api.chat import admin_router as chat_admin_router
+from orchestra.web.api.chat import router as chat_router
 from orchestra.web.api.context.views import admin_router as context_admin_router
 from orchestra.web.api.dashboard.views import admin_router as dashboard_admin_router
 from orchestra.web.api.dashboard.views import router as dashboard_router
@@ -45,7 +47,6 @@ from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.messages import admin_router as messages_admin_router
 from orchestra.web.api.messages import router as messages_router
 from orchestra.web.api.ms_teams_bot import admin_router as ms_teams_bot_admin_router
-from orchestra.web.api.org_chat import admin_router as org_chat_admin_router
 from orchestra.web.api.org_chat import router as org_chat_router
 from orchestra.web.api.organization import admin_router as organization_admin_router
 from orchestra.web.api.phone import admin_router as phone_admin_router
@@ -385,9 +386,15 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
-    org_chat_admin_router,
+    chat_router,
+    tags=["Chat"],
+    include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    chat_admin_router,
     prefix="/admin",
-    tags=["Org Chat"],
+    tags=["Chat"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

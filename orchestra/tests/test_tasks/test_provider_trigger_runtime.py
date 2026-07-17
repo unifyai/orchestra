@@ -60,6 +60,7 @@ async def assistant_id(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> int:
+    stub_healthy_provider_trigger_topology(monkeypatch)
     monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
     response = await client.post(
         "/v0/assistant",

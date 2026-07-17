@@ -250,7 +250,7 @@ async def test_pipedream_stub_paused_binding_records_ignored_receipt_only(
 
 
 @pytest.mark.anyio
-async def test_pipedream_stub_non_opened_delivery_is_ignored(
+async def test_pipedream_stub_non_opened_delivery_is_accepted(
     dbsession: Session,
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -283,7 +283,7 @@ async def test_pipedream_stub_non_opened_delivery_is_ignored(
         signing_secret=signing_secret,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["status"] == "ignored"
+    assert response.json()["status"] == "accepted"
     assert (
         dbsession.execute(
             select(ProviderEventDispatch).where(
@@ -292,7 +292,6 @@ async def test_pipedream_stub_non_opened_delivery_is_ignored(
         )
         .scalars()
         .all()
-        == []
     )
 
 

@@ -1784,14 +1784,15 @@ async def wake_up_coordinator_best_effort(assistant_id: str | int) -> None:
         )
 
 
-async def dispatch_org_chat(payload: dict) -> dict:
-    """Hand one org-chat message to the hosted communication layer.
+async def dispatch_chat(payload: dict) -> dict:
+    """Hand one chat message / reaction / call event to the hosted layer.
 
-    Adapters own all Pub/Sub work: ensuring the per-organization topic,
-    publishing the Console frame, and (for human-sent team messages) fanning
-    out standard ``unify_message`` envelopes to each listed assistant runtime.
+    Adapters own all Pub/Sub work: ensuring the relevant topic, publishing
+    the Console frame (per-organization topic for org threads, per-assistant
+    topic for assistant DMs), and fanning out standard ``unify_message``
+    envelopes to each listed assistant runtime.
     """
-    url = _adapters_url() + "/unify/org-chat"
+    url = _adapters_url() + "/unify/chat"
     client = get_async_client()
     response = await client.post(
         url,
@@ -1803,21 +1804,21 @@ async def dispatch_org_chat(payload: dict) -> dict:
     return response.json()
 
 
-async def dispatch_org_chat_best_effort(payload: dict) -> bool:
-    """`dispatch_org_chat` that logs instead of raising.
+async def dispatch_chat_best_effort(payload: dict) -> bool:
+    """`dispatch_chat` that logs instead of raising.
 
     Persistence has already committed by the time dispatch runs; a hosted
     delivery hiccup must not turn an accepted message into an API error.
     """
     try:
-        await dispatch_org_chat(payload)
+        await dispatch_chat(payload)
         return True
     except Exception:
         logging.exception(
-            "org-chat dispatch failed (kind=%s, org=%s, team=%s)",
+            "chat dispatch failed (kind=%s, org=%s, thread=%s)",
             payload.get("kind"),
             payload.get("organization_id"),
-            payload.get("team_id"),
+            payload.get("thread_id"),
         )
         return False
 

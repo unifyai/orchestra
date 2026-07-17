@@ -1,7 +1,7 @@
 """Schemas for org roster, team group chat, human DMs, and call sessions."""
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -88,37 +88,12 @@ class OrgChatMessageCreate(BaseModel):
         raise ValueError("Either content or attachments is required.")
 
 
-class TeamMessageCreate(OrgChatMessageCreate):
-    """Body for a human posting to a team group chat."""
+class OrgChatReaction(BaseModel):
+    """One emoji reaction on an org-chat message."""
 
-    mentions: List[ChatMention] = Field(default_factory=list)
-
-
-class AssistantTeamMessageCreate(OrgChatMessageCreate):
-    """Body for an assistant runtime posting a group-chat reply (admin auth)."""
-
-    assistant_id: int
-    mentions: List[ChatMention] = Field(default_factory=list)
-
-
-class TeamMessageResponse(BaseModel):
-    """One stored team group-chat message."""
-
-    message_id: int
-    team_id: int
-    organization_id: int
-    timestamp: str
-    sender_kind: Literal["user", "assistant"]
-    sender_user_id: Optional[str] = None
-    sender_assistant_id: Optional[int] = None
-    sender_name: str
-    content: str
-    mentions: List[dict[str, Any]] = Field(default_factory=list)
-    attachments: List[OrgChatAttachment] = Field(default_factory=list)
-
-
-class TeamMessagesPage(BaseModel):
-    messages: List[TeamMessageResponse]
+    user_id: str
+    emoji: str
+    updated_at: Optional[str] = None
 
 
 class ChatGroupCreate(BaseModel):
@@ -145,67 +120,6 @@ class ChatGroupResponse(BaseModel):
 
 class ChatGroupsPage(BaseModel):
     groups: List[ChatGroupResponse]
-
-
-class GroupMessageCreate(OrgChatMessageCreate):
-    mentions: List[ChatMention] = Field(default_factory=list)
-
-
-class AssistantGroupMessageCreate(OrgChatMessageCreate):
-    assistant_id: int
-    mentions: List[ChatMention] = Field(default_factory=list)
-
-
-class GroupMessageResponse(BaseModel):
-    message_id: int
-    group_id: int
-    organization_id: int
-    timestamp: str
-    sender_kind: Literal["user", "assistant"]
-    sender_user_id: Optional[str] = None
-    sender_assistant_id: Optional[int] = None
-    sender_name: str
-    content: str
-    mentions: List[dict[str, Any]] = Field(default_factory=list)
-    attachments: List[OrgChatAttachment] = Field(default_factory=list)
-
-
-class GroupMessagesPage(BaseModel):
-    messages: List[GroupMessageResponse]
-
-
-class DmMessageCreate(OrgChatMessageCreate):
-    """Body for sending a DM to another org member."""
-
-
-class DmMessageResponse(BaseModel):
-    """One stored DM message."""
-
-    id: int
-    thread_id: int
-    sender_user_id: Optional[str] = None
-    content: str
-    created_at: datetime
-    attachments: List[OrgChatAttachment] = Field(default_factory=list)
-
-
-class DmMessagesPage(BaseModel):
-    thread_id: int
-    organization_id: int
-    user_ids: List[str]
-    messages: List[DmMessageResponse]
-
-
-class OrgChatSearchResult(BaseModel):
-    id: str
-    scope: Literal["dm", "team", "group"]
-    content: str
-    timestamp: Optional[str] = None
-    sender_name: str
-
-
-class OrgChatSearchPage(BaseModel):
-    results: List[OrgChatSearchResult]
 
 
 OrgCallStatus = Literal["ringing", "active", "ended"]
@@ -239,6 +153,7 @@ class OrgCallSessionResponse(BaseModel):
     callee_user_id: str | None = None
     team_id: int | None = None
     group_id: int | None = None
+    thread_id: int | None = None
     dm_thread_id: int | None = None
     user_ids: List[str] = Field(default_factory=list)
     participants: List[OrgCallParticipantResponse] = Field(default_factory=list)

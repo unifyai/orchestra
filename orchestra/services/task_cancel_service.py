@@ -152,8 +152,15 @@ def apply_task_cancel(
     if project is None:
         raise ValueError("Assistants project not found for caller.")
 
-    task_row = session.get(LogEvent, int(target.source_task_log_id))
-    if task_row is None or task_row.project_id != project.id:
+    task_row = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == project.id,
+            LogEvent.id == int(target.source_task_log_id),
+        )
+        .one_or_none()
+    )
+    if task_row is None:
         raise ValueError(
             f"Task log_event_id={target.source_task_log_id} not found.",
         )

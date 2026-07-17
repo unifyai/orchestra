@@ -34,6 +34,7 @@ class FieldTypeDAO:
         value,
         context_id: int,
         mutable: bool = True,
+        ui_editable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -108,6 +109,7 @@ class FieldTypeDAO:
             field_type=normalized_type,
             field_category=field_category,
             mutable=mutable,
+            ui_editable=ui_editable,
             context_id=context_id,
             enum_values=enum_values,
             enum_restrict=enum_restrict,
@@ -155,6 +157,7 @@ class FieldTypeDAO:
                     "field_type": get_display_type(None, field_type.field_type),
                     "field_category": field_type.field_category,
                     "mutable": field_type.mutable,
+                    "ui_editable": field_type.ui_editable,
                     "unique": field_type.unique,
                     "enum_values": field_type.enum_values,
                     "restrict": field_type.enum_restrict,
@@ -180,6 +183,7 @@ class FieldTypeDAO:
         value,
         context_id: int,
         mutable: bool = True,
+        ui_editable: bool = True,
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
@@ -236,6 +240,7 @@ class FieldTypeDAO:
             field_type=normalized_type,
             field_category=field_category,
             mutable=mutable,
+            ui_editable=ui_editable,
             context_id=context_id,
             enum_values=enum_values,
             enum_restrict=enum_restrict,
@@ -250,6 +255,7 @@ class FieldTypeDAO:
                 "field_type": normalized_type,
                 "field_category": field_category,
                 "mutable": mutable,
+                "ui_editable": ui_editable,
                 "enum_values": enum_values,
                 "enum_restrict": enum_restrict,
                 "unique": unique,
@@ -651,6 +657,7 @@ class FieldTypeDAO:
         for field_name, field_info in fields.items():
             field_type = DEFAULT_FIELD_TYPE  # Default to DEFAULT_FIELD_TYPE ("Any")
             mutable = True
+            ui_editable = True
             unique = False
             enum_values = None
             enum_restrict = False
@@ -660,6 +667,7 @@ class FieldTypeDAO:
                 # Handle EnumType separately
                 field_type = "enum"
                 mutable = True  # Enums need to be mutable to accept different values
+                ui_editable = True
                 unique = False
                 enum_values = field_info.values
                 enum_restrict = (
@@ -674,6 +682,7 @@ class FieldTypeDAO:
                 else:
                     field_type = field_info.type
                 mutable = field_info.mutable
+                ui_editable = field_info.ui_editable
                 unique = field_info.unique
                 field_description = getattr(field_info, "description", None)
                 if field_type.lower() == "enum":
@@ -715,6 +724,7 @@ class FieldTypeDAO:
                     "field_type": normalized_type,
                     "field_category": "entry",
                     "mutable": mutable,
+                    "ui_editable": ui_editable,
                     "unique": unique,
                     "context_id": context_id,
                     "enum_values": enum_values,
@@ -741,6 +751,7 @@ class FieldTypeDAO:
                 set_={
                     "field_type": stmt.excluded.field_type,
                     "mutable": stmt.excluded.mutable,
+                    "ui_editable": stmt.excluded.ui_editable,
                     "unique": stmt.excluded.unique,
                     "enum_values": stmt.excluded.enum_values,
                     "enum_restrict": stmt.excluded.enum_restrict,
@@ -816,6 +827,7 @@ class FieldTypeDAO:
                 - value: The value (not used for type inference anymore)
                 - context_id: The context ID
                 - mutable: Optional, defaults to True
+                - ui_editable: Optional, defaults to True (UI hint; does not gate updates)
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
                     - "derived_entry": Derived field values
@@ -860,6 +872,7 @@ class FieldTypeDAO:
                 if field_category == "derived_entry"
                 else data.get("mutable", True)
             )
+            ui_editable = data.get("ui_editable", True)
             unique = data.get("unique", False)
             field_description = data.get("description", description)
 
@@ -914,6 +927,7 @@ class FieldTypeDAO:
                     "field_type": field_type,
                     "field_category": field_category,
                     "mutable": mutable,
+                    "ui_editable": ui_editable,
                     "context_id": context_id,
                     "unique": unique,
                     "enum_values": enum_values if enum_values else [],
@@ -962,6 +976,7 @@ class FieldTypeDAO:
                 "field_type": ft.field_type,
                 "field_category": ft.field_category,
                 "mutable": ft.mutable,
+                "ui_editable": ft.ui_editable,
                 "unique": ft.unique,
                 "enum_values": ft.enum_values,
                 "enum_restrict": ft.enum_restrict,

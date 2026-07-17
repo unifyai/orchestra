@@ -1,5 +1,5 @@
-"""Org roster, team group chat, and human DM API."""
+"""Org roster, chat-group management, and org call API."""
 
-from orchestra.web.api.org_chat.views import admin_router, router
+from orchestra.web.api.org_chat.views import router
 
-__all__ = ["admin_router", "router"]
+__all__ = ["router"]

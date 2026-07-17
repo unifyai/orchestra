@@ -63,6 +63,8 @@ class StandardFieldDefinition(BaseModel):
 
     The `type` field specifies the data type of the field.
     The `mutable` flag controls whether the field can later be modified via update endpoints.
+    The `ui_editable` flag is a UI hint (e.g. Console Data pane); it does not affect
+    update-endpoint enforcement — that remains governed by `mutable`.
     The `unique` flag controls whether the field can only have one value per log.
     The `description` field provides an optional human-readable description of the field.
     """
@@ -71,6 +73,10 @@ class StandardFieldDefinition(BaseModel):
     mutable: bool = Field(
         default=True,
         description="If true, entries under this field can be updated via update endpoints; otherwise they are immutable after creation (default true).",
+    )
+    ui_editable: bool = Field(
+        default=True,
+        description="If true, UIs may offer editing for this field (default true). Does not gate update endpoints.",
     )
     unique: bool = False
     description: Optional[str] = Field(
@@ -163,7 +169,7 @@ class CreateLogConfig(BaseModel):
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
         "for batch processing. "
         "Values must be JSON serializable. If an `explicit_types` dictionary is present, "
-        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
+        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, UI-editable via a 'ui_editable' boolean flag, or unique via a 'unique' boolean flag. "
         "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding). "
         "If `infer_untyped_fields` is set to True, fields with type 'Any' (untyped) will have their type inferred from the logged values and updated, locking in the type. "
         "For contexts with nested unique IDs, parent ID values for the leftmost N-1 unique columns can be supplied as normal entry keys. "
@@ -499,9 +505,10 @@ class CreateFieldsRequest(BaseModel):
     """
     Request model for creating fields in a project context.
 
-    Fields can be defined with various properties including mutability. The `mutable` flag
-    determines whether field values can be updated after creation via update endpoints.
-    Immutable fields (mutable=False) provide data integrity guarantees once set.
+    Fields can be defined with various properties including mutability and UI editability.
+    The `mutable` flag determines whether field values can be updated after creation via
+    update endpoints. Immutable fields (mutable=False) provide data integrity guarantees
+    once set. The `ui_editable` flag is a UI hint only and does not affect update endpoints.
     """
 
     project_name: str = Field(
@@ -521,7 +528,7 @@ class CreateFieldsRequest(BaseModel):
         "Supports multiple formats:\n"
         "- Simple string: 'str', 'int', 'float', 'bool', 'list', 'dict', 'datetime', 'image', etc.\n"
         "- JSON Schema types: 'string', 'integer', 'number', 'boolean', 'array', 'object'\n"
-        "- StandardFieldDefinition: {'type': 'str', 'mutable': True, 'unique': False}\n"
+        "- StandardFieldDefinition: {'type': 'str', 'mutable': True, 'ui_editable': True, 'unique': False}\n"
         "- Full JSON Schema: {'type': 'string', 'format': 'date-time'} or {'$ref': '#/$defs/MyModel'}\n"
         "- EnumType: {'type': 'enum', 'values': ['a', 'b', 'c']}\n"
         "- None: Untyped field (accepts any value)",

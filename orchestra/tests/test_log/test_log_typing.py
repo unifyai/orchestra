@@ -532,6 +532,108 @@ async def test_create_log_with_mutable_fields(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_fields_ui_editable_round_trip(client: AsyncClient):
+    """ui_editable is stored/returned but does not gate log updates."""
+    project_name = "test_ui_editable_fields"
+    _ = await _create_project(client, project_name)
+
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "ui_locked": {
+                    "type": "str",
+                    "mutable": True,
+                    "ui_editable": False,
+                },
+                "ui_open": {
+                    "type": "str",
+                    "mutable": True,
+                    "ui_editable": True,
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Upsert flips ui_editable on existing fields
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "ui_locked": {
+                    "type": "str",
+                    "mutable": True,
+                    "ui_editable": True,
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["ui_locked"]["ui_editable"] is True
+    assert field_types["ui_open"]["ui_editable"] is True
+
+    # Reset ui_locked to false and confirm updates still succeed (mutable=True)
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "ui_locked": {
+                    "type": "str",
+                    "mutable": True,
+                    "ui_editable": False,
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {
+                "ui_locked": "initial",
+                "ui_open": "initial",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "entries": {"ui_locked": "updated"},
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.json()["ui_locked"]["ui_editable"] is False
+
+
+@pytest.mark.anyio
 async def test_create_log_default_mutable(client: AsyncClient):
     """Test that implicitly created fields default to mutable."""
     project_name = "test_default_mutable"

@@ -19,6 +19,35 @@ from orchestra.tests.test_tasks.test_trigger_task import _auth_user_id, _seed_ta
 from orchestra.tests.utils import HEADERS
 
 
+@pytest.fixture(autouse=True)
+def mock_assistant_infra_calls():
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+    ):
+        mock_wake_up.return_value.status_code = 200
+        mock_reawaken.return_value.status_code = 200
+        mock_reawaken.return_value.json.return_value = {}
+        yield
+
+
+@pytest.fixture
+async def assistant_id(client: AsyncClient) -> int:
+    response = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Cancel", "surname": "Task", "create_infra": False},
+        headers=HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    return int(response.json()["info"]["agent_id"])
+
+
 @pytest.fixture
 def mock_comms_job_stop():
     with patch(
@@ -110,7 +139,6 @@ async def test_cancel_task_marks_active_instance_cancelled(
     assistant_id: int,
     mock_comms_job_stop: AsyncMock,
     mock_task_cancel_event: AsyncMock,
-    mock_assistant_infra_calls,
 ):
     task_row = _seed_task(
         dbsession,
@@ -162,7 +190,6 @@ async def test_cancel_task_live_emits_system_event(
     assistant_id: int,
     mock_comms_job_stop: AsyncMock,
     mock_task_cancel_event: AsyncMock,
-    mock_assistant_infra_calls,
 ):
     _seed_task(
         dbsession,
@@ -188,7 +215,6 @@ async def test_cancel_task_returns_409_when_already_terminal(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
-    mock_assistant_infra_calls,
 ):
     _seed_task(
         dbsession,
@@ -210,7 +236,6 @@ async def test_cancel_task_returns_409_when_already_terminal(
 async def test_cancel_task_returns_404_when_missing(
     client: AsyncClient,
     assistant_id: int,
-    mock_assistant_infra_calls,
 ):
     response = await client.post(
         "/v0/tasks/404404/cancel",

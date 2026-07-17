@@ -5526,6 +5526,7 @@ def get_fields(
                     ],  # Full type: "List[int]", "str", "Any", etc.
                     "field_type": info["field_category"],
                     "mutable": info["mutable"],
+                    "ui_editable": info["ui_editable"],
                     "unique": info.get("unique", False),
                     "enum_values": info["enum_values"],
                     "restrict": info["restrict"],
@@ -5572,6 +5573,7 @@ def get_fields(
             ],  # Full type: "List[int]", "str", "Any", etc.
             "field_type": info["field_category"],
             "mutable": info["mutable"],
+            "ui_editable": info["ui_editable"],
             "unique": info.get("unique", False),
             "enum_values": info["enum_values"],
             "restrict": info["restrict"],

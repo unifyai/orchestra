@@ -80,14 +80,15 @@ async def test_sync_lease_acquire_and_release(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_sync_lease_serializes_concurrent_first_acquire(client: AsyncClient):
+async def test_sync_lease_serializes_concurrent_first_acquire(
+    client_concurrent: AsyncClient,
+):
     """Exactly one concurrent first acquire should win."""
     project_name = "sync-lease-race"
-    await _create_project(client, project_name)
+    await _create_project(client_concurrent, project_name)
 
-    # Use the ASGI app directly with parallel acquires.
     async def _acquire(holder: str):
-        return await client.post(
+        return await client_concurrent.post(
             "/v0/sync_lease/acquire",
             json={
                 "project": project_name,

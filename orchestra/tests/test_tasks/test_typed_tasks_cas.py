@@ -13,6 +13,12 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Context, LogEvent, Project
 from orchestra.db.models.provider_trigger_models import EventTriggerBinding
+from orchestra.tests.provider_triggers.conftest import (
+    stub_healthy_provider_trigger_topology,
+)
+from orchestra.tests.provider_triggers.control_plane_harness import (
+    seed_provider_event_fixture_prerequisites,
+)
 from orchestra.tests.test_tasks.test_trigger_task import _auth_user_id
 from orchestra.tests.utils import HEADERS
 
@@ -47,6 +53,7 @@ async def assistant_id(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> int:
+    stub_healthy_provider_trigger_topology(monkeypatch)
     monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
     response = await client.post(
         "/v0/assistant",
