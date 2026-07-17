@@ -331,10 +331,11 @@ def get_chat_messages(
     thread_id: int,
     limit: int = Query(100, ge=1, le=500),
     before_id: int | None = Query(None, ge=0),
+    after_id: int | None = Query(None, ge=0),
     q: str | None = Query(None, min_length=1, max_length=200),
     session: Session = Depends(get_db_session),
 ) -> ChatMessagesPage:
-    """History for one thread (most recent last)."""
+    """History for one thread (oldest first within the page)."""
     user_id = request_fastapi.state.user_id
     thread = _require_thread(session, thread_id)
     _require_human_thread_access(session, thread=thread, user_id=user_id)
@@ -342,6 +343,7 @@ def get_chat_messages(
         thread_id=thread.id,
         limit=limit,
         before_id=before_id,
+        after_id=after_id,
         q=q,
     )
     return ChatMessagesPage(
@@ -359,18 +361,28 @@ def get_chat_messages(
 def search_chat_messages(
     request_fastapi: Request,
     thread_id: int,
-    q: str = Query(..., min_length=1, max_length=200),
+    q: str | None = Query(None, max_length=200),
+    sender_kind: str | None = Query(None, pattern="^(user|assistant)$"),
+    after: datetime.datetime | None = Query(None),
+    before: datetime.datetime | None = Query(None),
+    has_attachments: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> ChatMessagesPage:
-    """Most-recent-first content matches inside one thread."""
+    """Most-recent-first filtered matches inside one thread."""
     user_id = request_fastapi.state.user_id
     thread = _require_thread(session, thread_id)
     _require_human_thread_access(session, thread=thread, user_id=user_id)
     matches = ChatDAO(session).search_messages(
         thread_id=thread.id,
         q=q,
+        sender_kind=sender_kind,
+        after=after,
+        before=before,
+        has_attachments=has_attachments,
         limit=limit,
+        offset=offset,
     )
     return ChatMessagesPage(
         thread=_thread_response(thread),
@@ -734,6 +746,42 @@ def list_calls(
                 utterance_count=row.utterance_count,
             )
             for row in rows
+        ],
+    )
+
+
+@router.get("/calls/utterances/search", response_model=CallUtterancesPage)
+def search_call_utterances(
+    request_fastapi: Request,
+    assistant_id: int = Query(...),
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_db_session),
+) -> CallUtterancesPage:
+    """Most-recent-first utterance matches across one assistant's calls."""
+    require_owned_assistant(request_fastapi, assistant_id, session)
+    utterances = ChatDAO(session).search_utterances(
+        reporter_assistant_id=assistant_id,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return CallUtterancesPage(
+        call_id="",
+        utterances=[
+            CallUtteranceResponse(
+                id=utterance.id,
+                call_id=utterance.call_id,
+                reporter_assistant_id=utterance.reporter_assistant_id,
+                speaker_user_id=utterance.speaker_user_id,
+                speaker_assistant_id=utterance.speaker_assistant_id,
+                speaker_name=utterance.speaker_name,
+                content=utterance.content,
+                spoken_at=utterance.spoken_at,
+                metadata=utterance.meta or {},
+            )
+            for utterance in utterances
         ],
     )
 

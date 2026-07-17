@@ -179,14 +179,27 @@ class ChatDAO:
         thread_id: int,
         limit: int = 100,
         before_id: int | None = None,
+        after_id: int | None = None,
         q: str | None = None,
     ) -> list[ChatMessage]:
-        """Most-recent-last page of messages for a thread."""
+        """One page of messages for a thread, oldest first.
+
+        ``before_id`` pages backwards (the ``limit`` newest messages older
+        than the id); ``after_id`` pages forwards (the ``limit`` oldest
+        messages newer than the id).
+        """
         query = select(ChatMessage).where(ChatMessage.thread_id == thread_id)
         if before_id is not None:
             query = query.where(ChatMessage.id < before_id)
+        if after_id is not None:
+            query = query.where(ChatMessage.id > after_id)
         if q and q.strip():
             query = query.where(ChatMessage.content.ilike(f"%{q.strip()}%"))
+        if after_id is not None:
+            rows = self.session.scalars(
+                query.order_by(ChatMessage.id.asc()).limit(limit),
+            ).all()
+            return list(rows)
         rows = self.session.scalars(
             query.order_by(ChatMessage.id.desc()).limit(limit),
         ).all()
@@ -196,20 +209,55 @@ class ChatDAO:
         self,
         *,
         thread_id: int,
+        q: str | None = None,
+        sender_kind: str | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        has_attachments: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ChatMessage]:
+        """Most-recent-first filtered matches for a thread."""
+        query = select(ChatMessage).where(ChatMessage.thread_id == thread_id)
+        needle = (q or "").strip()
+        if needle:
+            query = query.where(ChatMessage.content.ilike(f"%{needle}%"))
+        if sender_kind == "assistant":
+            query = query.where(ChatMessage.sender_assistant_id.isnot(None))
+        elif sender_kind == "user":
+            query = query.where(ChatMessage.sender_assistant_id.is_(None))
+        if after is not None:
+            query = query.where(ChatMessage.created_at >= after)
+        if before is not None:
+            query = query.where(ChatMessage.created_at <= before)
+        if has_attachments:
+            query = query.where(func.jsonb_array_length(ChatMessage.attachments) > 0)
+        return list(
+            self.session.scalars(
+                query.order_by(ChatMessage.id.desc()).offset(offset).limit(limit),
+            ).all(),
+        )
+
+    def search_utterances(
+        self,
+        *,
+        reporter_assistant_id: int,
         q: str,
         limit: int = 50,
-    ) -> list[ChatMessage]:
-        """Most-recent-first content matches for a thread."""
+        offset: int = 0,
+    ) -> list[CallUtterance]:
+        """Most-recent-first utterance matches across one assistant's calls."""
         needle = q.strip()
         if not needle:
             return []
         query = (
-            select(ChatMessage)
+            select(CallUtterance)
             .where(
-                ChatMessage.thread_id == thread_id,
-                ChatMessage.content.ilike(f"%{needle}%"),
+                CallUtterance.reporter_assistant_id == reporter_assistant_id,
+                CallUtterance.content.ilike(f"%{needle}%"),
             )
-            .order_by(ChatMessage.id.desc())
+            .order_by(CallUtterance.id.desc())
+            .offset(offset)
             .limit(limit)
         )
         return list(self.session.scalars(query).all())
