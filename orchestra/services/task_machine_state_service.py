@@ -1271,6 +1271,90 @@ def create_task_run_if_absent(
     return created_row, created.created
 
 
+def release_active_task_source(
+    session: Session,
+    project_id: int,
+    *,
+    source_task_log_id: int,
+    mode: str,
+    info: str | None = None,
+) -> dict[str, Any]:
+    """Release a Tasks row that is still ``active`` after its worker is gone.
+
+    ``mode="fail"`` terminalizes the row (crash / SIGTERM writeback).
+    ``mode="reopen"`` returns it to a runnable status so offline retry can
+    reclaim the same ``source_task_log_id`` via ``TaskScheduler.execute``.
+
+    No-op (and reports ``updated=False``) when the row is missing or not
+    currently ``active``, so concurrent ActiveTask finalization wins cleanly.
+    """
+
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in {"fail", "reopen"}:
+        raise ValueError(
+            f"release_active_task_source mode must be 'fail' or 'reopen', "
+            f"got {mode!r}.",
+        )
+
+    task_row = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.id == int(source_task_log_id),
+        )
+        .one_or_none()
+    )
+    if task_row is None:
+        return {
+            "updated": False,
+            "source_task_log_id": int(source_task_log_id),
+            "status_before": None,
+            "status_after": None,
+            "mode": normalized_mode,
+            "reason": "missing",
+        }
+
+    payload = dict(task_row.data or {})
+    status_before = str(payload.get("status") or "")
+    if status_before != "active":
+        return {
+            "updated": False,
+            "source_task_log_id": int(source_task_log_id),
+            "status_before": status_before,
+            "status_after": status_before,
+            "mode": normalized_mode,
+            "reason": "not_active",
+        }
+
+    if normalized_mode == "fail":
+        status_after = "failed"
+    elif payload.get("trigger") not in (None, "", {}):
+        status_after = "triggerable"
+    else:
+        status_after = "scheduled"
+
+    payload["status"] = status_after
+    release_info = (info or "").strip()
+    if release_info:
+        existing_info = payload.get("info")
+        if isinstance(existing_info, dict):
+            merged = dict(existing_info)
+            merged["release_reason"] = release_info
+            payload["info"] = merged
+        else:
+            payload["info"] = release_info
+    _replace_log_payload(task_row, payload)
+    session.flush()
+    return {
+        "updated": True,
+        "source_task_log_id": int(source_task_log_id),
+        "status_before": status_before,
+        "status_after": status_after,
+        "mode": normalized_mode,
+        "reason": "released",
+    }
+
+
 def update_task_run(
     session: Session,
     project_id: int,
