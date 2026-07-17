@@ -1,86 +1,31 @@
 """Chat groups: lightweight multi-party org chats (humans + assistants).
 
-Messages live in ``Groups/{group_id}/GroupChat`` under the org Assistants
-project with ``owner_scope='group'`` so the thread is purged with the group.
-Realtime delivery mirrors team chat: Console SSE via adapters ``kind=group``
+Group *messages* live in the unified chat store
+(:mod:`orchestra.db.dao.chat_dao`) and are served by the ``/chat`` API. This
+module owns group membership CRUD and participant resolution. Realtime
+delivery mirrors team chat: Console SSE via adapters ``POST /unify/chat``
 plus ``unify_message`` fan-out to every non-coordinator member assistant.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.log_queries import project_scoped_log_events
 from orchestra.db.models.orchestra_models import (
     Assistant,
     ChatGroup,
     ChatGroupMember,
-    Context,
-    LogEvent,
-    LogEventContext,
     Project,
     User,
 )
-from orchestra.db.scope import OwnerScope, purge_owner, resolve_owner, single_owner_key
-from orchestra.services.org_chat_service import (
-    ASSISTANTS_PROJECT_NAME,
-    GROUP_CHAT_AUTO_COUNTING,
-    GROUP_CHAT_CONTEXT_SUFFIX,
-    GROUP_CHAT_UNIQUE_KEYS,
-    SENDER_KIND_USER,
-    _build_project_dao,
-    _resolve_org_assistants_project,
-    apply_user_reaction,
-)
-from orchestra.web.api.log.schema import CreateLogConfig
-from orchestra.web.api.log.utils.logging_utils import create_logs_internal
+from orchestra.db.scope import OwnerScope, purge_owner
+from orchestra.services.org_chat_service import ASSISTANTS_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
-
-
-def chat_group_context_name(group_id: int) -> str:
-    return f"Groups/{group_id}/{GROUP_CHAT_CONTEXT_SUFFIX}"
-
-
-def _ensure_chat_group_context(
-    session: Session,
-    *,
-    project_id: int,
-    group_id: int,
-) -> Context:
-    context_name = chat_group_context_name(group_id)
-    context = session.scalar(
-        select(Context).where(
-            Context.project_id == project_id,
-            Context.name == context_name,
-        ),
-    )
-    if context is not None:
-        return context
-
-    owner_scope, owner_id = resolve_owner(context_name)
-    context = Context(
-        project_id=project_id,
-        name=context_name,
-        is_versioned=False,
-        allow_duplicates=True,
-        unique_key_names=list(GROUP_CHAT_UNIQUE_KEYS.keys()),
-        unique_key_types=list(GROUP_CHAT_UNIQUE_KEYS.values()),
-        auto_counting=GROUP_CHAT_AUTO_COUNTING,
-        owner_scope=owner_scope,
-        owner_id=owner_id,
-    )
-    session.add(context)
-    session.flush()
-    return context
 
 
 def list_groups_for_user(
@@ -268,7 +213,12 @@ def replace_group_membership(
 
 
 def delete_chat_group(session: Session, *, group: ChatGroup) -> None:
-    """Mark deleted and purge Groups/{id}/... contexts in Assistants projects."""
+    """Mark deleted and purge legacy Groups/{id}/... contexts.
+
+    The unified-store thread and messages are retained (the group row is
+    soft-deleted, so the thread is unreachable); the context purge only
+    clears legacy log-backed GroupChat data.
+    """
     group_id = group.id
     organization_id = group.organization_id
     group.status = "deleted"
@@ -329,256 +279,6 @@ def chat_group_participants(
         if not assistant.is_coordinator
     ]
     return {"humans": humans, "assistants": assistants}
-
-
-def persist_group_message(
-    session: Session,
-    *,
-    group: ChatGroup,
-    sender_kind: str,
-    sender_user_id: str | None,
-    sender_assistant_id: int | None,
-    sender_name: str,
-    content: str,
-    mentions: list[dict[str, Any]] | None = None,
-    attachments: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    project = _resolve_org_assistants_project(
-        session,
-        organization_id=group.organization_id,
-    )
-    context = _ensure_chat_group_context(
-        session,
-        project_id=project.id,
-        group_id=group.id,
-    )
-    entries = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "sender_kind": sender_kind,
-        "sender_name": sender_name,
-        "content": content,
-        "mentions": mentions or [],
-        "attachments": attachments or [],
-    }
-    if sender_user_id is not None:
-        entries["sender_user_id"] = sender_user_id
-    if sender_assistant_id is not None:
-        entries["sender_assistant_id"] = sender_assistant_id
-    result = create_logs_internal(
-        request=CreateLogConfig(
-            project_name=ASSISTANTS_PROJECT_NAME,
-            context=context.name,
-            entries=entries,
-        ),
-        project_id=project.id,
-        context_id=context.id,
-        project_dao=_build_project_dao(session),
-        field_type_dao=FieldTypeDAO(session),
-        log_event_dao=LogEventDAO(session),
-        context_dao=ContextDAO(session),
-        context_obj=context,
-    )
-    if result.get("failed"):
-        first_error = result["failed"][0].get("error", "Message creation failed")
-        raise ValueError(str(first_error))
-    session.flush()
-
-    log_event_id = result["log_event_ids"][0]
-    stored = session.scalar(
-        select(LogEvent).where(
-            LogEvent.project_id == project.id,
-            LogEvent.id == log_event_id,
-        ),
-    )
-    payload = dict(stored.data)
-    payload["group_id"] = group.id
-    payload["organization_id"] = group.organization_id
-    return payload
-
-
-def list_group_messages(
-    session: Session,
-    *,
-    group: ChatGroup,
-    limit: int = 100,
-    before_message_id: int | None = None,
-) -> list[dict[str, Any]]:
-    project = _resolve_org_assistants_project(
-        session,
-        organization_id=group.organization_id,
-    )
-    context = session.scalar(
-        select(Context).where(
-            Context.project_id == project.id,
-            Context.name == chat_group_context_name(group.id),
-        ),
-    )
-    if context is None:
-        return []
-
-    query = (
-        project_scoped_log_events(
-            context.project_id,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
-        )
-        .where(LogEventContext.context_id == context.id)
-        .order_by(LogEvent.id.desc())
-        .limit(limit)
-    )
-    rows = session.scalars(query).all()
-    messages = []
-    for row in reversed(rows):
-        data = dict(row.data)
-        message_id = data.get("message_id")
-        if before_message_id is not None and (
-            not isinstance(message_id, int) or message_id >= before_message_id
-        ):
-            continue
-        data.setdefault("mentions", [])
-        data.setdefault("attachments", [])
-        data.setdefault("reactions", [])
-        data["group_id"] = group.id
-        data["organization_id"] = group.organization_id
-        messages.append(data)
-    return messages
-
-
-def toggle_group_message_reaction(
-    session: Session,
-    *,
-    group: ChatGroup,
-    message_id: int,
-    user_id: str,
-    emoji: str | None,
-) -> dict[str, Any]:
-    """Toggle one user's reaction on a group chat message."""
-    project = _resolve_org_assistants_project(
-        session,
-        organization_id=group.organization_id,
-    )
-    context = session.scalar(
-        select(Context).where(
-            Context.project_id == project.id,
-            Context.name == chat_group_context_name(group.id),
-        ),
-    )
-    if context is None:
-        raise ValueError("Message not found")
-
-    from sqlalchemy.orm.attributes import flag_modified
-
-    query = (
-        project_scoped_log_events(
-            context.project_id,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
-        )
-        .where(
-            LogEventContext.context_id == context.id,
-            LogEvent.data["message_id"].astext == str(message_id),
-        )
-        .limit(1)
-    )
-    row = session.scalars(query).first()
-    if row is None:
-        raise ValueError("Message not found")
-
-    data = dict(row.data)
-    data["reactions"] = apply_user_reaction(
-        data.get("reactions") if isinstance(data.get("reactions"), list) else [],
-        user_id=user_id,
-        emoji=emoji,
-    )
-    row.data = data
-    flag_modified(row, "data")
-    session.flush()
-
-    data.setdefault("mentions", [])
-    data.setdefault("attachments", [])
-    data["group_id"] = group.id
-    data["organization_id"] = group.organization_id
-    return data
-
-
-def search_group_messages(
-    session: Session,
-    *,
-    group: ChatGroup,
-    q: str,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    needle = q.strip()
-    if not needle:
-        return []
-    project = _resolve_org_assistants_project(
-        session,
-        organization_id=group.organization_id,
-    )
-    context = session.scalar(
-        select(Context).where(
-            Context.project_id == project.id,
-            Context.name == chat_group_context_name(group.id),
-        ),
-    )
-    if context is None:
-        return []
-
-    query = (
-        project_scoped_log_events(
-            context.project_id,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
-        )
-        .where(
-            LogEventContext.context_id == context.id,
-            LogEvent.data["content"].astext.ilike(f"%{needle}%"),
-        )
-        .order_by(LogEvent.id.desc())
-        .limit(limit)
-    )
-    rows = session.scalars(query).all()
-    matches = []
-    for row in rows:
-        data = dict(row.data)
-        data.setdefault("mentions", [])
-        data.setdefault("attachments", [])
-        data["group_id"] = group.id
-        data["organization_id"] = group.organization_id
-        matches.append(data)
-    return matches
-
-
-def build_group_dispatch_payload(
-    session: Session,
-    *,
-    group: ChatGroup,
-    message: dict[str, Any],
-    sender_email: str = "",
-    exclude_assistant_id: int | None = None,
-) -> dict[str, Any]:
-    participants = chat_group_participants(session, group=group)
-    return {
-        "kind": "group",
-        "organization_id": group.organization_id,
-        "group_id": group.id,
-        "message": message,
-        "fanout_assistant_ids": [
-            entry["assistant_id"]
-            for entry in participants["assistants"]
-            if entry["assistant_id"] != exclude_assistant_id
-        ],
-        "assistant_event": {
-            "group_id": group.id,
-            "group_name": group.name,
-            "organization_id": group.organization_id,
-            "body": message.get("content") or "",
-            "group_message_id": message.get("message_id"),
-            "sender_kind": message.get("sender_kind") or SENDER_KIND_USER,
-            "sender_user_id": message.get("sender_user_id") or "",
-            "sender_assistant_id": message.get("sender_assistant_id"),
-            "sender_email": sender_email,
-            "sender_name": message.get("sender_name") or "",
-            "attachments": message.get("attachments") or [],
-        },
-    }
 
 
 def group_to_roster_dict(session: Session, group: ChatGroup) -> dict[str, Any]:

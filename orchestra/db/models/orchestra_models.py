@@ -1051,6 +1051,11 @@ class OrgCallSession(Base):
         ForeignKey("dm_thread.id", ondelete="SET NULL"),
         nullable=True,
     )
+    thread_id = Column(
+        Integer,
+        ForeignKey("chat_thread.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     team_id = Column(
         Integer,
         ForeignKey("team.id", ondelete="SET NULL"),
@@ -1162,6 +1167,217 @@ class OrgCallParticipant(Base):
             "ix_org_call_participant_user_status",
             "user_id",
             "status",
+        ),
+    )
+
+
+class ChatThread(Base):
+    """One first-class conversation of any kind.
+
+    The unified store behind every Console chat surface:
+
+    * ``dm`` — human-to-human pair inside one organization. The pair is
+      stored normalized (``user_a_id < user_b_id`` lexicographically).
+    * ``assistant_dm`` — one human and one assistant (the Console 1-on-1
+      panel). ``organization_id`` is NULL for personal assistants.
+    * ``team`` — a team's group chat (all team humans + assistants).
+    * ``group`` — an ad-hoc chat group's thread.
+
+    Scope columns are per-kind; exactly the columns for the thread's kind
+    are set, everything else is NULL. Uniqueness is enforced with partial
+    indexes so one thread exists per scope.
+    """
+
+    __tablename__ = "chat_thread"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    kind = Column(String, nullable=False)
+    user_a_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    user_b_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    group_id = Column(
+        Integer,
+        ForeignKey("chat_group.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "kind IN ('dm', 'assistant_dm', 'team', 'group')",
+            name="ck_chat_thread_kind",
+        ),
+        sa.CheckConstraint(
+            "user_a_id IS NULL OR user_b_id IS NULL OR user_a_id < user_b_id",
+            name="ck_chat_thread_normalized_pair",
+        ),
+        Index(
+            "uq_chat_thread_dm_pair",
+            "organization_id",
+            "user_a_id",
+            "user_b_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'dm'"),
+        ),
+        Index(
+            "uq_chat_thread_assistant_dm",
+            "assistant_id",
+            "user_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'assistant_dm'"),
+        ),
+        Index(
+            "uq_chat_thread_team",
+            "team_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'team'"),
+        ),
+        Index(
+            "uq_chat_thread_group",
+            "group_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'group'"),
+        ),
+    )
+
+
+class ChatMessage(Base):
+    """One message inside a :class:`ChatThread`.
+
+    ``sender_user_id`` XOR ``sender_assistant_id`` identifies the author;
+    ``sender_name`` is denormalized so history renders without joins even
+    after the sender is deleted. ``call_id`` links call-event messages
+    (call pills) to their :class:`OrgCallSession`.
+    """
+
+    __tablename__ = "chat_message"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    thread_id = Column(
+        Integer,
+        ForeignKey("chat_thread.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sender_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sender_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sender_name = Column(String, nullable=False, server_default="")
+    content = Column(Text, nullable=False)
+    mentions = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    )
+    attachments = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    )
+    reactions = Column(
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    )
+    call_id = Column(String, nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (Index("ix_chat_message_thread_id_id", "thread_id", "id"),)
+
+
+class CallUtterance(Base):
+    """One spoken utterance on a Unify Meet / org call.
+
+    First-class call-transcript storage: Console reads utterances from here
+    (never from assistant Transcripts, which only mirror them as memory).
+
+    ``call_id`` is a plain call key — the :class:`OrgCallSession` id for org
+    calls, or the LiveKit room name for 1-on-1 assistant meets (which have no
+    session row). ``reporter_assistant_id`` is the runtime that transcribed
+    the utterance; multi-assistant calls yield one transcript per reporter,
+    and readers select one reporter's view.
+    """
+
+    __tablename__ = "call_utterance"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    call_id = Column(String, nullable=False)
+    reporter_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    speaker_user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    speaker_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    speaker_name = Column(String, nullable=False, server_default="")
+    content = Column(Text, nullable=False)
+    spoken_at = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    meta = Column(
+        "metadata",
+        JSONB,
+        nullable=False,
+        server_default=sa.text("'{}'::jsonb"),
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_call_utterance_call_reporter_id",
+            "call_id",
+            "reporter_assistant_id",
+            "id",
         ),
     )
 

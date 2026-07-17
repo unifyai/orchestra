@@ -988,6 +988,28 @@ def seed_coordinator_transcript(
             },
         },
     )
+
+    # The Console 1-on-1 panel reads from the unified chat store, so the
+    # opener must exist there too; the Transcripts row above is the
+    # coordinator's own memory mirror.
+    from orchestra.db.dao.chat_dao import ChatDAO
+    from orchestra.services.chat_service import assistant_display_name
+
+    chat_dao = ChatDAO(session)
+    thread = chat_dao.resolve_assistant_dm_thread(
+        assistant_id=coordinator.agent_id,
+        user_id=coordinator.user_id,
+        organization_id=coordinator.organization_id,
+    )
+    if not chat_dao.list_messages(thread_id=thread.id, limit=1):
+        chat_dao.add_message(
+            thread=thread,
+            sender_user_id=None,
+            sender_assistant_id=coordinator.agent_id,
+            sender_name=assistant_display_name(coordinator),
+            content=content,
+        )
+
     session.flush()
     return transcript_result["log_event_ids"][0]
 

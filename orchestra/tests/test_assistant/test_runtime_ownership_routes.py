@@ -72,7 +72,7 @@ def org_chat_dispatch_mock(monkeypatch) -> AsyncMock:
     """Capture hosted org-chat dispatches instead of calling adapters."""
     mock = AsyncMock(return_value=True)
     monkeypatch.setattr(
-        "orchestra.web.api.org_chat.views.dispatch_org_chat_best_effort",
+        "orchestra.web.api.chat.views.dispatch_chat_best_effort",
         mock,
     )
     return mock
@@ -648,9 +648,9 @@ async def test_team_message_as_owned_assistant(
     dbsession.commit()
 
     owner_resp = await client.post(
-        f"/v0/assistant/{author.agent_id}/teams/{team['id']}/messages",
+        f"/v0/assistant/{author.agent_id}/chat/messages",
         headers=owner["headers"],
-        json={"content": "On it."},
+        json={"team_id": team["id"], "content": "On it."},
     )
     assert owner_resp.status_code == status.HTTP_201_CREATED, owner_resp.json()
     reply = owner_resp.json()
@@ -661,33 +661,37 @@ async def test_team_message_as_owned_assistant(
 
     # A different user's key cannot post through someone else's assistant.
     other_resp = await client.post(
-        f"/v0/assistant/{author.agent_id}/teams/{team['id']}/messages",
+        f"/v0/assistant/{author.agent_id}/chat/messages",
         headers=other["headers"],
-        json={"content": "Should fail"},
+        json={"team_id": team["id"], "content": "Should fail"},
     )
     assert other_resp.status_code == status.HTTP_404_NOT_FOUND
 
     # An owned assistant that is not on the team is rejected.
     non_member_resp = await client.post(
-        f"/v0/assistant/{outsider.agent_id}/teams/{team['id']}/messages",
+        f"/v0/assistant/{outsider.agent_id}/chat/messages",
         headers=owner["headers"],
-        json={"content": "Not a member"},
+        json={"team_id": team["id"], "content": "Not a member"},
     )
     assert non_member_resp.status_code == status.HTTP_403_FORBIDDEN
 
     # Admin key works on the user route (system bypass).
     admin_resp = await client.post(
-        f"/v0/assistant/{author.agent_id}/teams/{team['id']}/messages",
+        f"/v0/assistant/{author.agent_id}/chat/messages",
         headers=ADMIN_HEADERS,
-        json={"content": "Admin still fine"},
+        json={"team_id": team["id"], "content": "Admin still fine"},
     )
     assert admin_resp.status_code == status.HTTP_201_CREATED, admin_resp.json()
 
     # The admin route is untouched.
     legacy_resp = await client.post(
-        f"/v0/admin/teams/{team['id']}/messages",
+        "/v0/admin/chat/messages",
         headers=ADMIN_HEADERS,
-        json={"assistant_id": author.agent_id, "content": "Legacy path"},
+        json={
+            "assistant_id": author.agent_id,
+            "team_id": team["id"],
+            "content": "Admin body path",
+        },
     )
     assert legacy_resp.status_code == status.HTTP_201_CREATED, legacy_resp.json()
 
