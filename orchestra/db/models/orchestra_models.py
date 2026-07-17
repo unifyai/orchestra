@@ -1034,23 +1034,26 @@ class DmMessage(Base):
     __table_args__ = (Index("ix_dm_message_thread_id_id", "thread_id", "id"),)
 
 
-class OrgCallSession(Base):
-    """Multi-party org voice/video call (DM, team, or group) backed by one LiveKit room."""
+class CallSession(Base):
+    """One voice/video call backed by one LiveKit room.
 
-    __tablename__ = "org_call_session"
+    Covers every scope of the unified call surface: human-to-human DMs,
+    teams, groups, and 1:1 assistant calls (``assistant_dm``). Assistants on
+    the call live in ``assistant_ids``; humans are :class:`CallParticipant`
+    rows. Every session binds to the :class:`ChatThread` of the conversation
+    it belongs to. ``organization_id`` is NULL for personal-workspace
+    assistant calls.
+    """
+
+    __tablename__ = "call_session"
 
     id = Column(String, primary_key=True, default=_new_string_uuid)
     organization_id = Column(
         Integer,
         ForeignKey("organization.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    scope = Column(String, nullable=False)
-    dm_thread_id = Column(
-        Integer,
-        ForeignKey("dm_thread.id", ondelete="SET NULL"),
         nullable=True,
     )
+    scope = Column(String, nullable=False)
     thread_id = Column(
         Integer,
         ForeignKey("chat_thread.id", ondelete="SET NULL"),
@@ -1071,9 +1074,19 @@ class OrgCallSession(Base):
         ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Set when an assistant initiated the call (assistant-rings-owner);
+    # created_by_user_id is then the human the ring targets.
+    created_by_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="SET NULL"),
+        nullable=True,
+    )
     livekit_room = Column(String, nullable=False)
     status = Column(String, nullable=False, server_default="ringing")
     assistant_ids = Column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
+    # Voice-agent opening behavior (opener/recorded/speak) carried through
+    # every (re)dispatch of the call, so redispatch keeps opener fidelity.
+    opening_config = Column(JSONB, nullable=True)
     created_at = Column(
         TIMESTAMP(timezone=True),
         nullable=False,
@@ -1089,47 +1102,47 @@ class OrgCallSession(Base):
     ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
     participants = relationship(
-        "OrgCallParticipant",
+        "CallParticipant",
         back_populates="call_session",
         cascade="all, delete-orphan",
     )
 
     __table_args__ = (
         sa.CheckConstraint(
-            "scope IN ('dm', 'team', 'group')",
-            name="ck_org_call_session_scope",
+            "scope IN ('dm', 'team', 'group', 'assistant_dm')",
+            name="ck_call_session_scope",
         ),
         sa.CheckConstraint(
             "status IN ('ringing', 'active', 'ended')",
-            name="ck_org_call_session_status",
+            name="ck_call_session_status",
         ),
         Index(
-            "ix_org_call_session_org_status",
+            "ix_call_session_org_status",
             "organization_id",
             "status",
         ),
         Index(
-            "ix_org_call_session_team_status",
+            "ix_call_session_team_status",
             "team_id",
             "status",
         ),
         Index(
-            "ix_org_call_session_group_status",
+            "ix_call_session_group_status",
             "group_id",
             "status",
         ),
     )
 
 
-class OrgCallParticipant(Base):
-    """Human invitee/joiner on an org call."""
+class CallParticipant(Base):
+    """Human invitee/joiner on a call session."""
 
-    __tablename__ = "org_call_participant"
+    __tablename__ = "call_participant"
 
     id = Column(String, primary_key=True, default=_new_string_uuid)
     call_id = Column(
         String,
-        ForeignKey("org_call_session.id", ondelete="CASCADE"),
+        ForeignKey("call_session.id", ondelete="CASCADE"),
         nullable=False,
     )
     user_id = Column(
@@ -1147,24 +1160,24 @@ class OrgCallParticipant(Base):
     joined_at = Column(TIMESTAMP(timezone=True), nullable=True)
     left_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
-    call_session = relationship("OrgCallSession", back_populates="participants")
+    call_session = relationship("CallSession", back_populates="participants")
 
     __table_args__ = (
         sa.CheckConstraint(
             "role IN ('host', 'member')",
-            name="ck_org_call_participant_role",
+            name="ck_call_participant_role",
         ),
         sa.CheckConstraint(
             "status IN ('invited', 'joined', 'declined', 'left')",
-            name="ck_org_call_participant_status",
+            name="ck_call_participant_status",
         ),
         UniqueConstraint(
             "call_id",
             "user_id",
-            name="uq_org_call_participant_call_user",
+            name="uq_call_participant_call_user",
         ),
         Index(
-            "ix_org_call_participant_user_status",
+            "ix_call_participant_user_status",
             "user_id",
             "status",
         ),
@@ -1278,7 +1291,7 @@ class ChatMessage(Base):
     ``sender_user_id`` XOR ``sender_assistant_id`` identifies the author;
     ``sender_name`` is denormalized so history renders without joins even
     after the sender is deleted. ``call_id`` links call-event messages
-    (call pills) to their :class:`OrgCallSession`.
+    (call pills) to their :class:`CallSession`.
     """
 
     __tablename__ = "chat_message"
@@ -1332,11 +1345,11 @@ class CallUtterance(Base):
     First-class call-transcript storage: Console reads utterances from here
     (never from assistant Transcripts, which only mirror them as memory).
 
-    ``call_id`` is a plain call key — the :class:`OrgCallSession` id for org
-    calls, or the LiveKit room name for 1-on-1 assistant meets (which have no
-    session row). ``reporter_assistant_id`` is the runtime that transcribed
-    the utterance; multi-assistant calls yield one transcript per reporter,
-    and readers select one reporter's view.
+    ``call_id`` is a plain call key — the :class:`CallSession` id (older
+    rows predate the unified session store and carry room-name or client
+    ``meet-…`` keys as opaque history). ``reporter_assistant_id`` is the
+    runtime that transcribed the utterance; multi-assistant calls yield one
+    transcript per reporter, and readers select one reporter's view.
     """
 
     __tablename__ = "call_utterance"

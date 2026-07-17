@@ -1,4 +1,4 @@
-"""Ensure Contacts rows for every human and peer assistant on an org call."""
+"""Ensure Contacts rows for every human and peer assistant on a call."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from sqlalchemy.orm.attributes import flag_modified
 from orchestra.db.log_queries import project_scoped_log_events
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    CallSession,
     LogEvent,
     LogEventContext,
-    OrgCallSession,
     User,
 )
 from orchestra.db.scope import single_owner_key
@@ -29,7 +29,7 @@ from orchestra.services.assistant_bootstrap import (
     _resolve_assistants_project,
     ensure_context,
 )
-from orchestra.web.api.org_chat.schema import OrgCallRosterMember
+from orchestra.web.api.calls.schema import CallRosterMember
 
 # Metadata keys stored on Contacts rows for stable org-call attribution.
 ORG_CALL_USER_ID_KEY = "org_user_id"
@@ -184,9 +184,9 @@ def _ensure_humans_for_assistant(
     session: Session,
     *,
     assistant: Assistant,
-    call_session: OrgCallSession,
-) -> list[OrgCallRosterMember]:
-    roster: list[OrgCallRosterMember] = []
+    call_session: CallSession,
+) -> list[CallRosterMember]:
+    roster: list[CallRosterMember] = []
     user_ids = [p.user_id for p in (call_session.participants or [])]
     if not user_ids:
         return roster
@@ -209,7 +209,7 @@ def _ensure_humans_for_assistant(
             part for part in [user.name or "", user.last_name or ""] if part
         ).strip() or (user.email or user.id)
         roster.append(
-            OrgCallRosterMember(
+            CallRosterMember(
                 kind="human",
                 user_id=user.id,
                 assistant_id=None,
@@ -226,8 +226,8 @@ def _ensure_peer_assistants_for_assistant(
     *,
     assistant: Assistant,
     peer_ids: list[int],
-) -> list[OrgCallRosterMember]:
-    roster: list[OrgCallRosterMember] = []
+) -> list[CallRosterMember]:
+    roster: list[CallRosterMember] = []
     peers = [
         p
         for p in session.scalars(
@@ -244,7 +244,7 @@ def _ensure_peer_assistants_for_assistant(
             lookup_value=str(peer.agent_id),
         )
         roster.append(
-            OrgCallRosterMember(
+            CallRosterMember(
                 kind="assistant",
                 user_id=None,
                 assistant_id=peer.agent_id,
@@ -263,12 +263,12 @@ def _ensure_peer_assistants_for_assistant(
     return roster
 
 
-def ensure_org_call_contacts(
+def ensure_call_contacts(
     session: Session,
     *,
-    call_session: OrgCallSession,
+    call_session: CallSession,
     for_assistant_id: int,
-) -> list[OrgCallRosterMember]:
+) -> list[CallRosterMember]:
     """Ensure Contacts for humans + peer assistants; return roster for ``for_assistant_id``.
 
     Also backfills peer Contacts on every other assistant already on the call so
