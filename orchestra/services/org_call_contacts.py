@@ -36,14 +36,20 @@ ORG_CALL_USER_ID_KEY = "org_user_id"
 ORG_CALL_PEER_ASSISTANT_ID_KEY = "peer_assistant_id"
 
 
-def _next_contact_id(session: Session, *, context_id: int, project_id: int) -> int:
+def _next_contact_id(
+    session: Session,
+    *,
+    context_id: int,
+    project_id: int,
+    owner_key: str | None = None,
+) -> int:
     max_id = session.scalar(
-        select(func.max(cast(LogEvent.data.op("->>")("contact_id"), Numeric)))
-        .select_from(LogEvent)
-        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-        .where(
+        project_scoped_log_events(
+            project_id,
+            func.max(cast(LogEvent.data.op("->>")("contact_id"), Numeric)),
+            owner_key=owner_key,
+        ).where(
             LogEventContext.context_id == context_id,
-            LogEvent.project_id == project_id,
             LogEvent.data.has_key("contact_id"),
         ),
     )
@@ -116,6 +122,7 @@ def _upsert_contact(
         session,
         context_id=context.id,
         project_id=project.id,
+        owner_key=single_owner_key(context.owner_scope, context.owner_id),
     )
     entries = {**entries, "contact_id": contact_id}
     try:
