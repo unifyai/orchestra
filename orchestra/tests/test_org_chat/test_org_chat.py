@@ -505,6 +505,73 @@ async def test_team_call_create_rings_members(
 
 
 @pytest.mark.anyio
+async def test_active_calls_lists_live_sessions_with_roster(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    owner, member, org = await _create_org_with_member(client, "active-calls")
+    team = await _create_team(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Active Calls Team",
+    )
+    add_member = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/members",
+        headers=org["headers"],
+        json={"user_ids": [member["id"]]},
+    )
+    assert add_member.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), add_member.json()
+
+    empty_response = await client.get(
+        f"/v0/organizations/{org['id']}/calls/active",
+        headers=org["headers"],
+    )
+    assert empty_response.status_code == status.HTTP_200_OK
+    assert empty_response.json()["calls"] == []
+
+    create_response = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/calls",
+        headers=org["headers"],
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    call = create_response.json()
+
+    # Session responses carry the display roster (names for tiles).
+    roster = call["roster"]
+    assert {m["kind"] for m in roster} == {"human"}
+    assert {m["user_id"] for m in roster} == {owner["id"], member["id"]}
+    assert all(m["display_name"] for m in roster)
+
+    active_response = await client.get(
+        f"/v0/organizations/{org['id']}/calls/active",
+        headers=org["headers"],
+    )
+    assert active_response.status_code == status.HTTP_200_OK
+    active_calls = active_response.json()["calls"]
+    assert [c["call_id"] for c in active_calls] == [call["call_id"]]
+    assert active_calls[0]["status"] == "ringing"
+
+    end_response = await client.post(
+        f"/v0/organizations/{org['id']}/calls/{call['call_id']}/end",
+        headers=org["headers"],
+    )
+    assert end_response.status_code == status.HTTP_200_OK, end_response.json()
+
+    ended_active = await client.get(
+        f"/v0/organizations/{org['id']}/calls/active",
+        headers=org["headers"],
+    )
+    assert ended_active.json()["calls"] == []
+
+
+@pytest.mark.anyio
 async def test_dm_rejects_self_and_outsiders(client: AsyncClient):
     owner, _member, org = await _create_org_with_member(client, "dm-guard")
     outsider = await create_test_user(client, "dm-guard-outsider@test.com")

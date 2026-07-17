@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from orchestra.db.dao.chat_dao import ChatDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
@@ -40,18 +40,21 @@ from orchestra.services.chat_group_service import (
     list_groups_for_user,
     replace_group_membership,
 )
+from orchestra.services.chat_service import assistant_display_name
 from orchestra.services.org_call_contacts import ensure_org_call_contacts
 from orchestra.web.api.org_chat.schema import (
     ChatGroupCreate,
     ChatGroupResponse,
     ChatGroupsPage,
     ChatGroupUpdate,
+    OrgCallActiveListResponse,
     OrgCallAddAssistantRequest,
     OrgCallCreateResponse,
     OrgCallParticipantResponse,
     OrgCallRosterMember,
     OrgCallSessionResponse,
     OrgRosterResponse,
+    RosterAssistant,
     RosterGroup,
     RosterHuman,
     RosterTeam,
@@ -103,8 +106,64 @@ def _org_call_event(call_session: OrgCallSession) -> dict[str, Any]:
     }
 
 
+def _display_roster(
+    session: Session,
+    call_session: OrgCallSession,
+) -> list[OrgCallRosterMember]:
+    """Display names/emails for everyone on the call.
+
+    Purely informational (no Contacts upserts) — the per-assistant contact
+    roster used for Meet dispatch is built by ``ensure_org_call_contacts``.
+    """
+    roster: list[OrgCallRosterMember] = []
+    user_ids = [p.user_id for p in (call_session.participants or [])]
+    if user_ids:
+        users = {
+            u.id: u
+            for u in session.scalars(select(User).where(User.id.in_(user_ids))).all()
+        }
+        for user_id in user_ids:
+            user = users.get(user_id)
+            if user is None:
+                continue
+            display = " ".join(
+                part for part in [user.name or "", user.last_name or ""] if part
+            ).strip() or (user.email or user.id)
+            roster.append(
+                OrgCallRosterMember(
+                    kind="human",
+                    user_id=user.id,
+                    display_name=display,
+                    email=user.email,
+                ),
+            )
+    assistant_ids = [int(a) for a in (call_session.assistant_ids or [])]
+    if assistant_ids:
+        assistants = {
+            a.agent_id: a
+            for a in session.scalars(
+                select(Assistant).where(Assistant.agent_id.in_(assistant_ids)),
+            ).all()
+        }
+        for assistant_id in assistant_ids:
+            assistant = assistants.get(assistant_id)
+            roster.append(
+                OrgCallRosterMember(
+                    kind="assistant",
+                    assistant_id=assistant_id,
+                    display_name=(
+                        assistant_display_name(assistant)
+                        if assistant is not None
+                        else f"Assistant {assistant_id}"
+                    ),
+                ),
+            )
+    return roster
+
+
 def _org_call_response(call_session: OrgCallSession) -> OrgCallSessionResponse:
     event = _org_call_event(call_session)
+    session = object_session(call_session)
     return OrgCallSessionResponse(
         call_id=event["call_id"],
         room_name=event["room_name"],
@@ -123,7 +182,7 @@ def _org_call_response(call_session: OrgCallSession) -> OrgCallSessionResponse:
             for participant in event["participants"]
         ],
         assistant_ids=event["assistant_ids"],
-        roster=[],
+        roster=_display_roster(session, call_session) if session is not None else [],
     )
 
 
@@ -283,11 +342,32 @@ def get_org_roster(
     ):
         groups.append(RosterGroup(**group_to_roster_dict(session, group)))
 
+    # Assistant directory: everyone reachable through a team or group, so
+    # call tiles and pickers can resolve names without a per-page assistant
+    # list fetch.
+    assistant_ids: set[int] = set()
+    for team in teams:
+        assistant_ids.update(team.assistant_member_ids)
+    for group in groups:
+        assistant_ids.update(group.assistant_member_ids)
+    assistants: list[RosterAssistant] = []
+    if assistant_ids:
+        for assistant in session.scalars(
+            select(Assistant).where(Assistant.agent_id.in_(assistant_ids)),
+        ).all():
+            assistants.append(
+                RosterAssistant(
+                    assistant_id=assistant.agent_id,
+                    name=assistant_display_name(assistant),
+                ),
+            )
+
     return OrgRosterResponse(
         organization_id=organization_id,
         humans=humans,
         teams=teams,
         groups=groups,
+        assistants=assistants,
     )
 
 
@@ -905,6 +985,45 @@ async def create_group_call(
         call_session=call_session,
     )
     return OrgCallCreateResponse(**_org_call_response(call_session).model_dump())
+
+
+@router.get(
+    "/organizations/{organization_id}/calls/active",
+    response_model=OrgCallActiveListResponse,
+)
+def list_active_org_calls(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> OrgCallActiveListResponse:
+    """Live (ringing/active) calls that include the caller as a participant.
+
+    Powers the Console rejoin banner after a page reload: the app-level call
+    engine re-attaches to any call the user was on.
+    """
+    user_id = request_fastapi.state.user_id
+    org = _require_org(session, organization_id)
+    _require_org_member(session, org=org, user_id=user_id)
+    call_sessions = (
+        session.scalars(
+            select(OrgCallSession)
+            .join(
+                OrgCallParticipant,
+                OrgCallParticipant.call_id == OrgCallSession.id,
+            )
+            .where(
+                OrgCallSession.organization_id == organization_id,
+                OrgCallSession.status.in_(["ringing", "active"]),
+                OrgCallParticipant.user_id == user_id,
+            )
+            .order_by(OrgCallSession.created_at.desc()),
+        )
+        .unique()
+        .all()
+    )
+    return OrgCallActiveListResponse(
+        calls=[_org_call_response(call_session) for call_session in call_sessions],
+    )
 
 
 @router.post(

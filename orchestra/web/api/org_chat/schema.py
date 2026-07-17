@@ -47,6 +47,14 @@ class RosterGroup(BaseModel):
     assistant_member_ids: List[int] = Field(default_factory=list)
 
 
+class RosterAssistant(BaseModel):
+    """Assistant directory entry (name + face) for call tiles and mentions."""
+
+    assistant_id: int
+    name: str
+    image: Optional[str] = None
+
+
 class OrgRosterResponse(BaseModel):
     """Everything the Console selector needs beyond the assistant list."""
 
@@ -54,6 +62,7 @@ class OrgRosterResponse(BaseModel):
     humans: List[RosterHuman]
     teams: List[RosterTeam]
     groups: List[RosterGroup] = Field(default_factory=list)
+    assistants: List[RosterAssistant] = Field(default_factory=list)
 
 
 class ChatMention(BaseModel):
@@ -163,6 +172,12 @@ class OrgCallSessionResponse(BaseModel):
 
 class OrgCallCreateResponse(OrgCallSessionResponse):
     pass
+
+
+class OrgCallActiveListResponse(BaseModel):
+    """Live (ringing/active) call sessions that include the caller."""
+
+    calls: List[OrgCallSessionResponse] = Field(default_factory=list)
 
 
 class OrgCallAddAssistantRequest(BaseModel):
