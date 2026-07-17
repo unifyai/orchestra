@@ -119,11 +119,33 @@ class TaskTriggerRequest(BaseModel):
         description="The assistant that owns the task to trigger.",
         examples=[1406],
     )
+    instance_id: int | None = Field(
+        default=None,
+        description=(
+            "Optional existing Tasks instance_id to start early. When omitted, "
+            "Orchestra forks a new instance decoupled from recurrence "
+            "(no schedule/repeat) and triggers that fork."
+        ),
+        examples=[3],
+    )
 
 
 class TaskTriggerStatus(BaseModel):
     task_id: int = Field(description="The logical task id requested by the caller.")
     assistant_id: int = Field(description="The assistant that owns the triggered task.")
+    instance_id: int = Field(
+        description=(
+            "Tasks instance_id that was dispatched (newly forked when "
+            "instance_id was omitted from the request)."
+        ),
+    )
+    source_task_log_id: int = Field(
+        description="Orchestra log id of the Tasks row that was dispatched.",
+    )
+    forked: bool = Field(
+        default=False,
+        description="True when this trigger created a new Tasks instance.",
+    )
     status: str = Field(
         default="accepted",
         description="Immediate dispatch status for the asynchronous task trigger.",
