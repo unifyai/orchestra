@@ -10,6 +10,7 @@ from orchestra.services.task_machine_state_service import (
     get_latest_task_run_for_task,
     get_task_activation,
     get_task_run,
+    release_active_task_source,
     resolve_tasks_context_name,
     sync_task_activations_for_task_ids,
     update_task_outbound_operation,
@@ -31,6 +32,8 @@ from orchestra.web.api.log.task_machine_schema import (
     TaskRunLatestResponse,
     TaskRunMutationResponse,
     TaskRunUpdateRequest,
+    TaskSourceReleaseRequest,
+    TaskSourceReleaseResponse,
 )
 
 router = APIRouter()
@@ -240,6 +243,29 @@ def patch_task_run_core(session, request: TaskRunUpdateRequest) -> dict:
     return {"run": dict(run.data or {})}
 
 
+def release_active_task_source_core(
+    session,
+    request: TaskSourceReleaseRequest,
+) -> dict:
+    """Release one active Tasks source row for offline crash/retry writeback."""
+
+    project = _get_internal_project_or_404(
+        session,
+        project_name=request.project_name,
+        assistant_id=request.assistant_id,
+    )
+    try:
+        return release_active_task_source(
+            session=session,
+            project_id=project.id,
+            source_task_log_id=request.source_task_log_id,
+            mode=request.mode,
+            info=request.info,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def get_latest_task_run_core(session, request: TaskRunLatestRequest) -> dict:
     """Return the most recently updated task run for one assistant/task pair."""
 
@@ -351,6 +377,20 @@ def patch_task_run(
     """Apply a partial payload update to an existing task run row."""
 
     return patch_task_run_core(session, request)
+
+
+@router.post(
+    "/task-source/release-active",
+    response_model=TaskSourceReleaseResponse,
+)
+def release_active_task_source_route(
+    request: TaskSourceReleaseRequest,
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Release a Tasks row left active after its offline worker vanished."""
+
+    return release_active_task_source_core(session, request)
 
 
 @router.post(

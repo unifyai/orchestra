@@ -143,6 +143,55 @@ class TaskRunUpdateRequest(BaseModel):
     )
 
 
+class TaskSourceReleaseRequest(BaseModel):
+    """Release a Tasks row left ``active`` after its offline worker vanished."""
+
+    project_name: str = Field(
+        default=TASK_MACHINE_PROJECT_NAME,
+        description="Project that owns the internal task machine contexts.",
+    )
+    assistant_id: str = Field(
+        description="Assistant identifier used to resolve the Assistants project.",
+    )
+    source_task_log_id: int = Field(
+        description="Physical Tasks-row log id to release when still active.",
+    )
+    mode: str = Field(
+        description=(
+            "'fail' terminalizes the row; 'reopen' returns it to scheduled/"
+            "triggerable so a retry can reclaim the same source_task_log_id."
+        ),
+        examples=["fail", "reopen"],
+    )
+    info: Optional[str] = Field(
+        default=None,
+        description="Optional diagnostic note stored on the Tasks row.",
+    )
+
+
+class TaskSourceReleaseResponse(BaseModel):
+    """Outcome of one active Tasks-source release attempt."""
+
+    updated: bool = Field(
+        description="True when the Tasks row transitioned away from active.",
+    )
+    source_task_log_id: int = Field(
+        description="Physical Tasks-row log id that was targeted.",
+    )
+    status_before: Optional[str] = Field(
+        default=None,
+        description="Status observed before the release attempt.",
+    )
+    status_after: Optional[str] = Field(
+        default=None,
+        description="Status after the release attempt (unchanged when no-op).",
+    )
+    mode: str = Field(description="Release mode that was applied.")
+    reason: str = Field(
+        description="Why the row was or was not updated (released/not_active/missing).",
+    )
+
+
 class TaskRunLatestRequest(BaseModel):
     """Lookup the latest run row for one assistant/task pair."""
 
