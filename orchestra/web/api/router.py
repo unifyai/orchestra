@@ -18,6 +18,7 @@ from orchestra.web.api import (  # noqa: WPS235
     project,
     roles,
     storage,
+    sync_lease,
     teams,
     users,
 )
@@ -297,6 +298,11 @@ api_router.include_router(
 )
 api_router.include_router(
     log.router,
+    tags=["Logs"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    sync_lease.router,
     tags=["Logs"],
     dependencies=API_KEY_AUTH,
 )
