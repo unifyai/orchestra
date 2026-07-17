@@ -44,6 +44,7 @@ class TaskTriggerTarget:
     instance_id: int
     is_local: bool
     offline: bool = False
+    enabled: bool = True
     activation_revision: str | None = None
     entrypoint: int | None = None
     max_runtime_seconds: int | None = None
@@ -90,6 +91,7 @@ def resolve_task_trigger_target(
             continue
         destination = _destination_from_context_name(context_name)
         offline = _coerce_bool(data.get("offline"))
+        enabled = True if "enabled" not in data else _coerce_bool(data.get("enabled"))
         activation_revision = None
         entrypoint = None
         max_runtime_seconds = None
@@ -121,6 +123,7 @@ def resolve_task_trigger_target(
                 instance_id=_coerce_int(data.get("instance_id")) or 0,
                 is_local=bool(assistant.is_local),
                 offline=offline,
+                enabled=enabled,
                 activation_revision=activation_revision,
                 entrypoint=entrypoint,
                 max_runtime_seconds=max_runtime_seconds,
@@ -259,12 +262,17 @@ def _destination_from_context_name(context_name: str) -> str | None:
 
 
 def _select_current_target(targets: list[TaskTriggerTarget]) -> TaskTriggerTarget:
+    """Prefer runnable, enabled, team-destined rows that can actually dispatch."""
+
     return sorted(
         targets,
         key=lambda target: (
             _row_status_rank(target),
-            target.instance_id,
-            target.source_task_log_id,
+            0 if target.enabled else 1,
+            0 if target.destination else 1,
+            0 if target.activation_revision else 1,
+            -target.instance_id,
+            -target.source_task_log_id,
         ),
     )[0]
 
