@@ -46,11 +46,11 @@ def org_chat_dispatch_mock(monkeypatch) -> AsyncMock:
 
     mock = AsyncMock(return_value=True)
     monkeypatch.setattr(
-        "orchestra.web.api.org_chat.views.dispatch_chat_best_effort",
+        "orchestra.web.api.chat.views.dispatch_chat_best_effort",
         mock,
     )
     monkeypatch.setattr(
-        "orchestra.web.api.chat.views.dispatch_chat_best_effort",
+        "orchestra.web.api.calls.views.dispatch_chat_best_effort",
         mock,
     )
     return mock
@@ -71,12 +71,16 @@ async def _resolve_thread(
 
 
 @pytest.fixture(autouse=True)
-def org_call_roster_refresh_mock(monkeypatch) -> AsyncMock:
-    """Skip adapters fan-out when refreshing mid-call Meet rosters."""
+def call_meet_dispatch_mock(monkeypatch) -> AsyncMock:
+    """Skip the adapters HTTP hop when dispatching assistants into rooms.
+
+    Contacts provisioning (`ensure_call_contacts`) still runs for real; only
+    the outbound POST /unify/meet is captured.
+    """
 
     mock = AsyncMock(return_value=None)
     monkeypatch.setattr(
-        "orchestra.web.api.org_chat.views._refresh_org_call_assistant_rosters",
+        "orchestra.web.api.calls.views._post_meet_dispatch",
         mock,
     )
     return mock
@@ -432,8 +436,13 @@ async def test_dm_call_create(
     owner, member, org = await _create_org_with_member(client, "dm-call")
 
     create_response = await client.post(
-        f"/v0/organizations/{org['id']}/dms/{member['id']}/calls",
+        "/v0/calls",
         headers=org["headers"],
+        json={
+            "kind": "dm",
+            "organization_id": org["id"],
+            "peer_user_id": member["id"],
+        },
     )
     assert (
         create_response.status_code == status.HTTP_201_CREATED
@@ -443,17 +452,18 @@ async def test_dm_call_create(
     assert body["caller_user_id"] == owner["id"]
     assert body["callee_user_id"] == member["id"]
     assert body["scope"] == "dm"
+    assert body["thread_id"] is not None
     assert set(body["user_ids"]) == {owner["id"], member["id"]}
-    assert body["room_name"] == f"unity_org_{org['id']}_call_{body['call_id']}"
+    assert body["room_name"] == f"unity_call_{body['call_id']}"
 
-    from orchestra.db.models.orchestra_models import OrgCallSession
+    from orchestra.db.models.orchestra_models import CallSession
 
-    call_session = dbsession.get(OrgCallSession, body["call_id"])
+    call_session = dbsession.get(CallSession, body["call_id"])
     assert call_session is not None
     assert call_session.livekit_room == body["room_name"]
 
     payload = org_chat_dispatch_mock.await_args.args[0]
-    assert payload["kind"] == "org_call"
+    assert payload["kind"] == "call"
     assert payload["action"] == "incoming"
     assert payload["call"]["call_id"] == body["call_id"]
     assert payload["call"]["room_name"] == body["room_name"]
@@ -485,8 +495,9 @@ async def test_team_call_create_rings_members(
     ), add_member.json()
 
     create_response = await client.post(
-        f"/v0/organizations/{org['id']}/teams/{team['id']}/calls",
+        "/v0/calls",
         headers=org["headers"],
+        json={"kind": "team", "team_id": team["id"]},
     )
     assert (
         create_response.status_code == status.HTTP_201_CREATED
@@ -496,10 +507,10 @@ async def test_team_call_create_rings_members(
     assert body["team_id"] == team["id"]
     assert body["status"] == "ringing"
     assert set(body["user_ids"]) == {owner["id"], member["id"]}
-    assert body["room_name"] == f"unity_org_{org['id']}_call_{body['call_id']}"
+    assert body["room_name"] == f"unity_call_{body['call_id']}"
 
     payload = org_chat_dispatch_mock.await_args.args[0]
-    assert payload["kind"] == "org_call"
+    assert payload["kind"] == "call"
     assert payload["action"] == "incoming"
     assert set(payload["call"]["user_ids"]) == {owner["id"], member["id"]}
 
@@ -528,15 +539,16 @@ async def test_active_calls_lists_live_sessions_with_roster(
     ), add_member.json()
 
     empty_response = await client.get(
-        f"/v0/organizations/{org['id']}/calls/active",
+        "/v0/calls/active",
         headers=org["headers"],
     )
     assert empty_response.status_code == status.HTTP_200_OK
     assert empty_response.json()["calls"] == []
 
     create_response = await client.post(
-        f"/v0/organizations/{org['id']}/teams/{team['id']}/calls",
+        "/v0/calls",
         headers=org["headers"],
+        json={"kind": "team", "team_id": team["id"]},
     )
     assert (
         create_response.status_code == status.HTTP_201_CREATED
@@ -550,7 +562,7 @@ async def test_active_calls_lists_live_sessions_with_roster(
     assert all(m["display_name"] for m in roster)
 
     active_response = await client.get(
-        f"/v0/organizations/{org['id']}/calls/active",
+        "/v0/calls/active",
         headers=org["headers"],
     )
     assert active_response.status_code == status.HTTP_200_OK
@@ -559,16 +571,182 @@ async def test_active_calls_lists_live_sessions_with_roster(
     assert active_calls[0]["status"] == "ringing"
 
     end_response = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{call['call_id']}/end",
+        f"/v0/calls/{call['call_id']}/end",
         headers=org["headers"],
     )
     assert end_response.status_code == status.HTTP_200_OK, end_response.json()
 
     ended_active = await client.get(
-        f"/v0/organizations/{org['id']}/calls/active",
+        "/v0/calls/active",
         headers=org["headers"],
     )
     assert ended_active.json()["calls"] == []
+
+
+@pytest.mark.anyio
+async def test_assistant_dm_call_create_dispatches_assistant(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
+):
+    owner, _member, org = await _create_org_with_member(client, "adm-call")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Twin",
+        surname="Bot",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={
+            "kind": "assistant_dm",
+            "assistant_id": assistant.agent_id,
+            "opening_config": {"mode": "speak"},
+        },
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    body = create_response.json()
+    assert body["scope"] == "assistant_dm"
+    # No human to ring: the caller is joined and the session starts active.
+    assert body["status"] == "active"
+    assert body["assistant_ids"] == [assistant.agent_id]
+    assert body["thread_id"] is not None
+    assert body["room_name"] == f"unity_call_{body['call_id']}"
+    assert body["user_ids"] == [owner["id"]]
+
+    # The assistant was dispatched into the room with session + roster.
+    dispatch_call = call_meet_dispatch_mock.await_args
+    assert dispatch_call.kwargs["assistant_id"] == assistant.agent_id
+    dispatched_session = dispatch_call.args[0]
+    assert dispatched_session.id == body["call_id"]
+    assert dispatched_session.opening_config == {"mode": "speak"}
+    roster = dispatch_call.kwargs["roster"]
+    assert any(m.kind == "human" and m.user_id == owner["id"] for m in roster)
+
+    end_response = await client.post(
+        f"/v0/calls/{body['call_id']}/end",
+        headers=org["headers"],
+    )
+    assert end_response.status_code == status.HTTP_200_OK, end_response.json()
+    assert end_response.json()["status"] == "ended"
+
+
+@pytest.mark.anyio
+async def test_assistant_ring_lifecycle(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
+):
+    """Assistant rings its human: session first, dispatch only on answer."""
+    owner, _member, org = await _create_org_with_member(client, "ring-call")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Ring",
+        surname="Bot",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    ring_response = await client.post(
+        f"/v0/assistant/{assistant.agent_id}/calls",
+        headers=org["headers"],
+        json={"opening_config": {"mode": "opener", "opener_text": "Quick sync?"}},
+    )
+    assert ring_response.status_code == status.HTTP_201_CREATED, ring_response.json()
+    ring = ring_response.json()
+    assert ring["scope"] == "assistant_dm"
+    assert ring["status"] == "ringing"
+    assert ring["created_by_assistant_id"] == assistant.agent_id
+    assert ring["participants"] == [
+        {"user_id": owner["id"], "role": "member", "status": "invited"},
+    ]
+
+    # The ring is a session frame, not a Meet dispatch.
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "call"
+    assert payload["action"] == "incoming"
+    assert payload["call"]["created_by_assistant_id"] == assistant.agent_id
+    assert call_meet_dispatch_mock.await_count == 0
+
+    answer_response = await client.post(
+        f"/v0/calls/{ring['call_id']}/answer",
+        headers=org["headers"],
+    )
+    assert answer_response.status_code == status.HTTP_200_OK, answer_response.json()
+    assert answer_response.json()["status"] == "active"
+    # Answering dispatches the assistant with the stored opening config.
+    assert call_meet_dispatch_mock.await_count == 1
+    dispatched_session = call_meet_dispatch_mock.await_args.args[0]
+    assert dispatched_session.opening_config == {
+        "mode": "opener",
+        "opener_text": "Quick sync?",
+    }
+
+    # The runtime can end its own call (e.g. hang-up or ring timeout).
+    end_response = await client.post(
+        f"/v0/assistant/{assistant.agent_id}/calls/{ring['call_id']}/end",
+        headers=org["headers"],
+    )
+    assert end_response.status_code == status.HTTP_200_OK, end_response.json()
+    assert end_response.json()["status"] == "ended"
+
+
+@pytest.mark.anyio
+async def test_assistant_ring_decline_ends_call(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
+):
+    owner, _member, org = await _create_org_with_member(client, "ring-decl")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Decline",
+        surname="Bot",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    ring_response = await client.post(
+        f"/v0/assistant/{assistant.agent_id}/calls",
+        headers=org["headers"],
+        json={},
+    )
+    assert ring_response.status_code == status.HTTP_201_CREATED, ring_response.json()
+    ring = ring_response.json()
+
+    decline_response = await client.post(
+        f"/v0/calls/{ring['call_id']}/decline",
+        headers=org["headers"],
+    )
+    assert decline_response.status_code == status.HTTP_200_OK, decline_response.json()
+    assert decline_response.json()["status"] == "ended"
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "call"
+    assert payload["action"] == "declined"
+    assert call_meet_dispatch_mock.await_count == 0
 
 
 @pytest.mark.anyio
@@ -603,7 +781,7 @@ async def test_dm_rejects_self_and_outsiders(client: AsyncClient):
 async def test_team_call_accepts_multiple_assistants(
     client: AsyncClient,
     dbsession,
-    org_call_roster_refresh_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
 ):
     owner, member, org = await _create_org_with_member(client, "n-assist")
     await ensure_assistants_project(client, org["headers"])
@@ -624,7 +802,7 @@ async def test_team_call_accepts_multiple_assistants(
     ), add_member.json()
 
     from orchestra.db.models.orchestra_models import Assistant, TeamAssistantMembership
-    from orchestra.services.org_call_contacts import (
+    from orchestra.services.call_contacts import (
         ORG_CALL_PEER_ASSISTANT_ID_KEY,
         ORG_CALL_USER_ID_KEY,
     )
@@ -660,8 +838,9 @@ async def test_team_call_accepts_multiple_assistants(
     dbsession.commit()
 
     create_response = await client.post(
-        f"/v0/organizations/{org['id']}/teams/{team['id']}/calls",
+        "/v0/calls",
         headers=org["headers"],
+        json={"kind": "team", "team_id": team["id"]},
     )
     assert (
         create_response.status_code == status.HTTP_201_CREATED
@@ -669,7 +848,7 @@ async def test_team_call_accepts_multiple_assistants(
     call_id = create_response.json()["call_id"]
 
     first = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{call_id}/assistants",
+        f"/v0/calls/{call_id}/assistants",
         headers=org["headers"],
         json={"assistant_id": a1.agent_id},
     )
@@ -680,7 +859,7 @@ async def test_team_call_accepts_multiple_assistants(
     assert all(m.get("contact_id") is not None for m in first_body["roster"])
 
     second = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{call_id}/assistants",
+        f"/v0/calls/{call_id}/assistants",
         headers=org["headers"],
         json={"assistant_id": a2.agent_id},
     )
@@ -694,7 +873,7 @@ async def test_team_call_accepts_multiple_assistants(
 
     # Idempotent re-add of the same assistant.
     again = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{call_id}/assistants",
+        f"/v0/calls/{call_id}/assistants",
         headers=org["headers"],
         json={"assistant_id": a2.agent_id},
     )
@@ -724,7 +903,7 @@ async def test_team_call_accepts_multiple_assistants(
     }
     assert owner["id"] in human_ids
     assert str(a1.agent_id) in peer_ids
-    assert org_call_roster_refresh_mock.await_count >= 1
+    assert call_meet_dispatch_mock.await_count >= 1
 
 
 async def _create_group(
@@ -983,7 +1162,7 @@ async def test_group_call_create_and_add_assistant(
     client: AsyncClient,
     dbsession,
     org_chat_dispatch_mock: AsyncMock,
-    org_call_roster_refresh_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
 ):
     owner, member, org = await _create_org_with_member(client, "grp-call")
     await ensure_assistants_project(client, org["headers"])
@@ -1015,8 +1194,9 @@ async def test_group_call_create_and_add_assistant(
     )
 
     create_response = await client.post(
-        f"/v0/organizations/{org['id']}/groups/{group['group_id']}/calls",
+        "/v0/calls",
         headers=org["headers"],
+        json={"kind": "group", "group_id": group["group_id"]},
     )
     assert (
         create_response.status_code == status.HTTP_201_CREATED
@@ -1026,17 +1206,17 @@ async def test_group_call_create_and_add_assistant(
     assert body["group_id"] == group["group_id"]
     assert body["status"] == "ringing"
     assert set(body["user_ids"]) == {owner["id"], member["id"]}
-    assert body["room_name"] == f"unity_org_{org['id']}_call_{body['call_id']}"
+    assert body["room_name"] == f"unity_call_{body['call_id']}"
 
     payload = org_chat_dispatch_mock.await_args.args[0]
-    assert payload["kind"] == "org_call"
+    assert payload["kind"] == "call"
     assert payload["action"] == "incoming"
     assert payload["call"]["scope"] == "group"
     assert payload["call"]["group_id"] == group["group_id"]
     assert set(payload["call"]["user_ids"]) == {owner["id"], member["id"]}
 
     first = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{body['call_id']}/assistants",
+        f"/v0/calls/{body['call_id']}/assistants",
         headers=org["headers"],
         json={"assistant_id": a1.agent_id},
     )
@@ -1045,14 +1225,14 @@ async def test_group_call_create_and_add_assistant(
     assert any(m["kind"] == "human" for m in first.json()["roster"])
 
     second = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{body['call_id']}/assistants",
+        f"/v0/calls/{body['call_id']}/assistants",
         headers=org["headers"],
         json={"assistant_id": a2.agent_id},
     )
     assert second.status_code == status.HTTP_200_OK, second.json()
     assert set(second.json()["assistant_ids"]) == {a1.agent_id, a2.agent_id}
     # Roster refresh fans out to peers already on the call.
-    assert org_call_roster_refresh_mock.await_count >= 1
+    assert call_meet_dispatch_mock.await_count >= 1
 
     # Non-member assistant is rejected.
     other = Assistant(
@@ -1064,7 +1244,7 @@ async def test_group_call_create_and_add_assistant(
     dbsession.add(other)
     dbsession.commit()
     rejected = await client.post(
-        f"/v0/organizations/{org['id']}/calls/{body['call_id']}/assistants",
+        f"/v0/calls/{body['call_id']}/assistants",
         headers=org["headers"],
         json={"assistant_id": other.agent_id},
     )

@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     Context,
@@ -26,6 +27,10 @@ from orchestra.services.task_machine_state_service import (
     get_task_activation,
     is_task_surface_context_name,
 )
+
+# Tasks contexts provisioned by TaskScheduler use this auto_counting shape.
+_TASKS_INSTANCE_AUTO_COUNTING = {"task_id": None, "instance_id": "task_id"}
+_TASKS_UNIQUE_KEYS = {"task_id": "int", "instance_id": "int"}
 
 _TERMINAL_OR_UNRUNNABLE_STATUSES = {
     "active",
@@ -196,6 +201,40 @@ def _target_for_existing_instance(
     return _select_current_target(runnable)
 
 
+def _allocate_next_instance_id(
+    session: Session,
+    *,
+    project_id: int,
+    context: Context,
+    task_id: int,
+    bound_rows: list[tuple[LogEvent, str, Assistant, dict[str, Any]]],
+) -> int:
+    """Reserve the next ``instance_id`` for ``task_id``.
+
+    Uses the same ``context_counter`` / auto_counting path as TaskScheduler
+    clones (``_store.log`` omitting ``instance_id``). Forks that previously
+    used ``max(instance_id)+1`` without bumping the counter collided with the
+    next clone and produced duplicate ``(task_id, instance_id)`` rows.
+    """
+
+    auto_counting = context.auto_counting or {}
+    if auto_counting.get("instance_id") == "task_id":
+        unique_keys = context.unique_keys or dict(_TASKS_UNIQUE_KEYS)
+        assigned = LogEventDAO(session).get_next_composite_ids(
+            project_id=project_id,
+            context_id=int(context.id),
+            unique_keys=unique_keys,
+            provided_values=[{"task_id": int(task_id)}],
+        )
+        return int(assigned[0]["instance_id"])
+
+    # Legacy / under-provisioned Tasks contexts (no auto_counting yet).
+    return (
+        max((_coerce_int(data.get("instance_id")) or 0) for _, _, _, data in bound_rows)
+        + 1
+    )
+
+
 def _fork_and_target_new_instance(
     *,
     session: Session,
@@ -233,9 +272,21 @@ def _fork_and_target_new_instance(
         )
         .one()
     )
-    next_instance_id = (
-        max((_coerce_int(data.get("instance_id")) or 0) for _, _, _, data in bound_rows)
-        + 1
+    # Ensure counter-backed allocation even when the context was created by
+    # older tests / plants without TaskScheduler provision metadata.
+    if not (context.auto_counting or {}).get("instance_id"):
+        context.auto_counting = dict(_TASKS_INSTANCE_AUTO_COUNTING)
+    if not context.unique_key_names:
+        context.unique_key_names = list(_TASKS_UNIQUE_KEYS.keys())
+        context.unique_key_types = list(_TASKS_UNIQUE_KEYS.values())
+    session.flush()
+
+    next_instance_id = _allocate_next_instance_id(
+        session,
+        project_id=project_id,
+        context=context,
+        task_id=task_id,
+        bound_rows=bound_rows,
     )
     fork_data = {
         key: value
