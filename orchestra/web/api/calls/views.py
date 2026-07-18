@@ -713,6 +713,12 @@ async def create_assistant_call_as_assistant(
 # ---------------------------------------------------------------------------
 
 
+# A ring that was never answered cannot still be live after this long; the
+# creating surface (Console engine or assistant runtime) ends unanswered
+# rings itself, so anything older is an orphan from a crashed caller.
+_RING_EXPIRY = datetime.timedelta(minutes=10)
+
+
 @router.get("/calls/active", response_model=CallsActiveResponse)
 def list_active_calls(
     request_fastapi: Request,
@@ -721,7 +727,9 @@ def list_active_calls(
     """Live (ringing/active) calls that include the caller as a participant.
 
     Powers the Console rejoin banner after a page reload: the app-level call
-    engine re-attaches to any call the user was on.
+    engine re-attaches to any call the user was on. Orphaned rings (the
+    caller crashed before answering/cancelling) are lazily ended here so
+    they can never surface as a permanently resumable ghost call.
     """
     user_id = request_fastapi.state.user_id
     call_sessions = (
@@ -740,6 +748,19 @@ def list_active_calls(
         .unique()
         .all()
     )
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stale = [
+        call_session
+        for call_session in call_sessions
+        if call_session.status == "ringing"
+        and call_session.created_at < now - _RING_EXPIRY
+    ]
+    if stale:
+        for call_session in stale:
+            call_session.status = "ended"
+            call_session.ended_at = now
+        session.commit()
+        call_sessions = [c for c in call_sessions if c not in stale]
     return CallsActiveResponse(
         calls=[_call_response(call_session) for call_session in call_sessions],
     )
