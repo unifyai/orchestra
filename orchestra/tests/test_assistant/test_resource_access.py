@@ -2904,3 +2904,118 @@ async def test_transfer_keeps_denormalized_project_id_consistent(
     assert (
         luc_drift == 0
     ), "log_unique_constraint.project_id drifted from parent after transfer"
+
+
+# =============================================================================
+# Read access for non-creator org members (require_owned_assistant)
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_org_member_can_read_shared_assistant_chat(
+    client: AsyncClient,
+    dbsession,
+):
+    """Org members read org assistants by role, despite the creator's grant.
+
+    Every org assistant carries a bootstrap Owner ResourceAccess row for its
+    creator, which switches the per-resource RBAC check into
+    explicit-grants-only mode. Read surfaces (chat thread resolve, call
+    listings) must still be open to any member whose org role grants
+    ``assistant:read``, matching the org-wide assistant list.
+    """
+    owner = await create_test_user(client, "shared_read_owner@test.com")
+    member = await create_test_user(client, "shared_read_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Shared Assistant Read Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_data = org_resp.json()
+    owner_org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_data['id']}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == 201
+    member_org_headers = {
+        "Authorization": f"Bearer {add_member_resp.json()['api_key']}",
+    }
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Shared", "surname": "Helper", "create_infra": False},
+        headers=owner_org_headers,
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    # The creator's bootstrap grant is the only explicit RBAC row.
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    assert (
+        resource_access_dao.get_user_access(member["id"], "assistant", agent_id) == []
+    )
+
+    # Non-creator member resolves their own DM thread with the shared assistant.
+    resolve_resp = await client.post(
+        "/v0/chat/threads/resolve",
+        json={"kind": "assistant_dm", "assistant_id": agent_id},
+        headers=member_org_headers,
+    )
+    assert resolve_resp.status_code == status.HTTP_200_OK, resolve_resp.json()
+    thread = resolve_resp.json()
+    assert thread["kind"] == "assistant_dm"
+    assert thread["assistant_id"] == agent_id
+    assert thread["user_id"] == member["id"]
+
+
+@pytest.mark.anyio
+async def test_org_coordinator_hidden_from_other_members(
+    client: AsyncClient,
+    dbsession,
+):
+    """Another member's org coordinator 404s on assistant-scoped reads."""
+    owner = await create_test_user(client, "coord_hide_owner@test.com")
+    member = await create_test_user(client, "coord_hide_member@test.com")
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Coordinator Hiding Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_data = org_resp.json()
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_data['id']}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == 201
+    member_org_headers = {
+        "Authorization": f"Bearer {add_member_resp.json()['api_key']}",
+    }
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    # Org creation auto-provisions the owner's workspace coordinator.
+    coordinator = (
+        dbsession.query(Assistant)
+        .filter(
+            Assistant.organization_id == org_data["id"],
+            Assistant.user_id == owner["id"],
+            Assistant.is_coordinator.is_(True),
+        )
+        .one()
+    )
+
+    resolve_resp = await client.post(
+        "/v0/chat/threads/resolve",
+        json={"kind": "assistant_dm", "assistant_id": coordinator.agent_id},
+        headers=member_org_headers,
+    )
+    assert resolve_resp.status_code == status.HTTP_404_NOT_FOUND
