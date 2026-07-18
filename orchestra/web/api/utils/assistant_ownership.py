@@ -29,6 +29,15 @@ def require_owned_assistant(
     assistant (personal scope) or belong to its organization with the
     appropriate RBAC permission (org scope); otherwise 404/403.
 
+    Org reads are role-based: any member whose org role grants
+    ``assistant:read`` may access non-coordinator org assistants, matching
+    the assistant list surface. This matters because every org assistant
+    carries a bootstrap Owner grant for its creator, which flips the
+    per-resource RBAC check into explicit-grants-only mode; without the
+    role fallback, reads would be denied to every other member. Writes
+    stay strictly per-resource. Org coordinators are per-user twins and
+    404 for everyone except their own user.
+
     :param request: FastAPI request carrying the auth state set by
         ``auth_api_key``.
     :param agent_id: Target assistant agent id.
@@ -63,14 +72,26 @@ def require_owned_assistant(
             detail="Assistant not found.",
         )
     if organization_id is not None:
+        if assistant.is_coordinator and assistant.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
         ra_dao = ResourceAccessDAO(session)
         permission = "assistant:write" if write else "assistant:read"
-        if not ra_dao.check_user_permission(
+        allowed = ra_dao.check_user_permission(
             user_id,
             "assistant",
             agent_id,
             permission,
-        ):
+        )
+        if not allowed and not write:
+            allowed = ra_dao.check_org_member_permission(
+                user_id,
+                organization_id,
+                permission,
+            )
+        if not allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to access this assistant.",
