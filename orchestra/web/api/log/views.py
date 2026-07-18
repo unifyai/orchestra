@@ -1698,6 +1698,16 @@ def _atomic_field_update_impl(
             log_event.project_id,
         )
 
+        from orchestra.services.auto_counting_guards import (
+            reject_atomic_auto_counting_identity_mutation,
+        )
+
+        reject_atomic_auto_counting_identity_mutation(
+            session=session,
+            log_id=int(log_id),
+            field_name=str(field_name),
+        )
+
         # Build the atomic SQL update. project_id is redundant (the row is
         # already identified by id) but prunes the LIST(project_id) partition.
         sql = text(
@@ -2193,6 +2203,17 @@ def _update_logs(
                 context_name=ctx_obj_cache.name,
                 log_event_ids=ids_to_update,
             )
+
+    from orchestra.services.auto_counting_guards import (
+        reject_auto_counting_identity_mutations,
+    )
+
+    reject_auto_counting_identity_mutations(
+        session=session,
+        context=ctx_obj_cache,
+        log_ids=list(ids_to_update),
+        entries=body.entries,
+    )
 
     seam_response = maybe_apply_provider_event_log_updates(
         session,

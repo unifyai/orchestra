@@ -707,9 +707,59 @@ class LogEventDAO:
                 "parent_values_hash": parent_values_hash,
             }
 
-            if counter_key not in reserved_counters:
-                _lock_counter(col_name, parent_values)
-                reserved_value = self.session.execute(
+            def _existing_max_value() -> int | None:
+                query = (
+                    self.session.query(
+                        func.max(
+                            cast(
+                                func.nullif(
+                                    LogEvent.data.op("->>")(col_name),
+                                    "null",
+                                ),
+                                Integer,
+                            ),
+                        ),
+                    )
+                    .join(
+                        LogEventContext,
+                        log_event_context_join(owner_key=owner_key_filter),
+                    )
+                    .filter(LogEvent.project_id == project_id)
+                    .filter(
+                        owner_scope_clause(LogEvent, owner_key_filter),
+                        owner_scope_clause(LogEventContext, owner_key_filter),
+                    )
+                    .filter(LogEventContext.context_id == context_id)
+                )
+                for parent_key, parent_value in parent_values.items():
+                    query = query.filter(
+                        LogEvent.data.op("->>")(parent_key) == str(parent_value),
+                    )
+                return query.scalar()
+
+            def _value_exists(candidate: int) -> bool:
+                query = (
+                    self.session.query(LogEvent.id)
+                    .join(
+                        LogEventContext,
+                        log_event_context_join(owner_key=owner_key_filter),
+                    )
+                    .filter(LogEvent.project_id == project_id)
+                    .filter(
+                        owner_scope_clause(LogEvent, owner_key_filter),
+                        owner_scope_clause(LogEventContext, owner_key_filter),
+                    )
+                    .filter(LogEventContext.context_id == context_id)
+                    .filter(LogEvent.data.op("->>")(col_name) == str(candidate))
+                )
+                for parent_key, parent_value in parent_values.items():
+                    query = query.filter(
+                        LogEvent.data.op("->>")(parent_key) == str(parent_value),
+                    )
+                return query.first() is not None
+
+            def _reserve_once() -> int:
+                reserved = self.session.execute(
                     text(
                         """
                         UPDATE context_counter
@@ -723,15 +773,14 @@ class LogEventDAO:
                     ),
                     counter_params,
                 ).scalar_one_or_none()
-
-                if reserved_value is None:
+                if reserved is None:
                     _seed_counter_if_missing(
                         col_name,
                         parent_values,
                         parent_values_json,
                         parent_values_hash,
                     )
-                    reserved_value = self.session.execute(
+                    reserved = self.session.execute(
                         text(
                             """
                             UPDATE context_counter
@@ -745,24 +794,42 @@ class LogEventDAO:
                         ),
                         counter_params,
                     ).scalar_one()
+                return int(reserved)
 
-                reserved_counters[counter_key] = int(reserved_value)
-            else:
-                reserved_counters[counter_key] += 1
+            _lock_counter(col_name, parent_values)
+            reserved_counters[counter_key] = _reserve_once()
+
+            # Stale counters (rows inserted with explicit ids without bumping)
+            # can hand out values that already exist. Reseed past MAX and retry.
+            value = reserved_counters[counter_key]
+            heal_attempts = 0
+            while _value_exists(value):
+                heal_attempts += 1
+                if heal_attempts > 5:
+                    raise ValueError(
+                        f"Unable to allocate unused auto-counting value for "
+                        f"'{col_name}' with parents {parent_values}",
+                    )
+                max_existing = _existing_max_value()
+                floor = (max_existing if max_existing is not None else value) + 1
+                if floor <= value:
+                    floor = value + 1
                 self.session.execute(
                     text(
                         """
                         UPDATE context_counter
-                        SET next_value = next_value + 1,
+                        SET next_value = GREATEST(next_value, :floor),
                             updated_at = now()
                         WHERE context_id = :context_id
                           AND column_name = :column_name
                           AND parent_values_hash = :parent_values_hash
                         """,
                     ),
-                    counter_params,
+                    {**counter_params, "floor": floor},
                 )
-            return reserved_counters[counter_key]
+                value = _reserve_once()
+                reserved_counters[counter_key] = value
+            return value
 
         def _reconcile_provided_value(
             col_name: str,

@@ -314,6 +314,117 @@ async def test_trigger_task_fork_instance_ids_do_not_collide_with_counter(
 
 
 @pytest.mark.anyio
+async def test_trigger_task_fork_heals_stale_counter_past_existing_ids(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    mock_task_trigger_dispatch: AsyncMock,
+):
+    """Stale context_counter must not reissue an instance_id that already exists."""
+    from orchestra.db.models.core_models import ContextCounter
+
+    task_row = _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=31,
+        with_schedule=True,
+    )
+    # Prior explicit-id row (simulates a pre-fix fork that never bumped the counter).
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=31,
+        instance_id=3,
+        status_value="failed",
+    )
+    project = dbsession.query(Project).filter(Project.id == task_row.project_id).one()
+    context = (
+        dbsession.query(Context)
+        .filter(
+            Context.project_id == project.id,
+            Context.name == f"{_auth_user_id()}/{assistant_id}/Tasks",
+        )
+        .one()
+    )
+    context.auto_counting = {"task_id": None, "instance_id": "task_id"}
+    context.unique_key_names = ["task_id", "instance_id"]
+    context.unique_key_types = ["int", "int"]
+    parent = {"task_id": 31}
+    parent_json = __import__("json").dumps(parent, sort_keys=True)
+    parent_hash = (
+        __import__("hashlib")
+        .md5(
+            parent_json.encode(),
+            usedforsecurity=False,
+        )
+        .hexdigest()
+    )
+    dbsession.add(
+        ContextCounter(
+            context_id=context.id,
+            column_name="instance_id",
+            parent_values_hash=parent_hash,
+            parent_values=parent,
+            next_value=3,
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.post(
+        "/v0/tasks/31/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    fork_iid = int(response.json()["info"]["instance_id"])
+    assert fork_iid == 4
+
+
+@pytest.mark.anyio
+async def test_update_logs_refuses_instance_id_mutation_on_tasks_context(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+):
+    task_row = _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=32,
+    )
+    project = dbsession.query(Project).filter(Project.id == task_row.project_id).one()
+    context = (
+        dbsession.query(Context)
+        .filter(
+            Context.project_id == project.id,
+            Context.name == f"{_auth_user_id()}/{assistant_id}/Tasks",
+        )
+        .one()
+    )
+    context.auto_counting = {"task_id": None, "instance_id": "task_id"}
+    context.unique_key_names = ["task_id", "instance_id"]
+    context.unique_key_types = ["int", "int"]
+    dbsession.commit()
+
+    response = await client.put(
+        "/v0/logs",
+        headers=HEADERS,
+        json={
+            "project": "Assistants",
+            "context": context.name,
+            "logs": [task_row.id],
+            "entries": {"instance_id": 99, "status": "failed"},
+        },
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
+    assert "instance_id" in str(response.json().get("detail", "")).lower()
+    dbsession.refresh(task_row)
+    assert task_row.data["instance_id"] == 0
+
+
+@pytest.mark.anyio
 async def test_trigger_task_second_fork_gets_distinct_instance_id(
     client: AsyncClient,
     dbsession: Session,
