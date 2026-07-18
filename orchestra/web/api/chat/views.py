@@ -24,6 +24,8 @@ from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    CallParticipant,
+    CallSession,
     ChatGroup,
     ChatThread,
     Organization,
@@ -724,6 +726,46 @@ def post_call_utterances_as_assistant(
     return _store_utterances(session, assistant=assistant, body=body)
 
 
+def _readable_call_ids(
+    session: Session,
+    *,
+    user_id: str,
+    assistant: Assistant,
+    call_ids: list[str],
+) -> set[str]:
+    """Calls whose transcripts the caller may read.
+
+    A shared org assistant transcribes every member's private 1:1 calls, so
+    role-level ``assistant:read`` must not expose call content the way it
+    exposes the assistant itself. The assistant's own user reads everything
+    it transcribed (matching the pre-store Transcripts scope); everyone else
+    reads only calls whose session lists them as a participant. Legacy call
+    keys (phone/WhatsApp rooms, pre-session Meets) have no session row and
+    therefore stay owner-only.
+    """
+    unique_ids = list(dict.fromkeys(call_ids))
+    if assistant.user_id == user_id:
+        return set(unique_ids)
+    if not unique_ids:
+        return set()
+    rows = (
+        session.execute(
+            select(CallSession.id)
+            .join(
+                CallParticipant,
+                CallParticipant.call_id == CallSession.id,
+            )
+            .where(
+                CallSession.id.in_(unique_ids),
+                CallParticipant.user_id == user_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    return set(rows)
+
+
 @router.get("/calls", response_model=CallsPage)
 def list_calls(
     request_fastapi: Request,
@@ -732,10 +774,16 @@ def list_calls(
     session: Session = Depends(get_db_session),
 ) -> CallsPage:
     """Call summaries transcribed by one assistant (most recent last)."""
-    require_owned_assistant(request_fastapi, assistant_id, session)
+    assistant = require_owned_assistant(request_fastapi, assistant_id, session)
     rows = ChatDAO(session).list_calls(
         reporter_assistant_id=assistant_id,
         limit=limit,
+    )
+    readable = _readable_call_ids(
+        session,
+        user_id=request_fastapi.state.user_id,
+        assistant=assistant,
+        call_ids=[row.call_id for row in rows],
     )
     return CallsPage(
         calls=[
@@ -746,6 +794,7 @@ def list_calls(
                 utterance_count=row.utterance_count,
             )
             for row in rows
+            if row.call_id in readable
         ],
     )
 
@@ -760,13 +809,20 @@ def search_call_utterances(
     session: Session = Depends(get_db_session),
 ) -> CallUtterancesPage:
     """Most-recent-first utterance matches across one assistant's calls."""
-    require_owned_assistant(request_fastapi, assistant_id, session)
+    assistant = require_owned_assistant(request_fastapi, assistant_id, session)
     utterances = ChatDAO(session).search_utterances(
         reporter_assistant_id=assistant_id,
         q=q,
         limit=limit,
         offset=offset,
     )
+    readable = _readable_call_ids(
+        session,
+        user_id=request_fastapi.state.user_id,
+        assistant=assistant,
+        call_ids=[utterance.call_id for utterance in utterances],
+    )
+    utterances = [u for u in utterances if u.call_id in readable]
     return CallUtterancesPage(
         call_id="",
         utterances=[
