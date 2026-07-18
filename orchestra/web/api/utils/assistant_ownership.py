@@ -77,6 +77,13 @@ def require_owned_assistant(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+        # The assistant's own user always passes: the runtime pod
+        # authenticates with the creator's key, and org RBAC must never
+        # block an assistant acting as itself (org coordinators carry no
+        # bootstrap resource grant, and a Viewer-role creator's role lacks
+        # assistant:write).
+        if assistant.user_id == user_id:
+            return assistant
         ra_dao = ResourceAccessDAO(session)
         permission = "assistant:write" if write else "assistant:read"
         allowed = ra_dao.check_user_permission(

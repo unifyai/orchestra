@@ -288,6 +288,17 @@ def _fork_and_target_new_instance(
         task_id=task_id,
         bound_rows=bound_rows,
     )
+    # Defense in depth: refuse to insert a fork that would duplicate an
+    # existing (task_id, instance_id) even if the counter was stale.
+    for _, _, _, data in bound_rows:
+        existing_iid = _coerce_int(data.get("instance_id"))
+        if existing_iid is not None and int(existing_iid) == int(next_instance_id):
+            raise ValueError(
+                f"Refusing fork for task_id={task_id}: instance_id="
+                f"{next_instance_id} already exists on an accessible Tasks row. "
+                "context_counter was stale; heal the counter or delete the "
+                "duplicate owner before triggering again.",
+            )
     fork_data = {
         key: value
         for key, value in template_data.items()
@@ -324,6 +335,33 @@ def _fork_and_target_new_instance(
         ),
     )
     session.flush()
+
+    # Register the composite unique key the same way create_logs does, so a
+    # later colliding write fails at the constraint layer instead of silently
+    # inserting a second owner for the same identity.
+    if context.unique_key_names:
+        from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
+        unique_dao = UniqueConstraintDAO(session)
+        duplicate = unique_dao.check_composite_keys_batch(
+            context_id=int(context.id),
+            log_entries=[
+                (
+                    int(fork_row.id),
+                    {
+                        "task_id": int(task_id),
+                        "instance_id": int(next_instance_id),
+                    },
+                ),
+            ],
+            key_columns=list(context.unique_key_names),
+            project_id=project_id,
+        )
+        if duplicate:
+            raise ValueError(
+                f"Duplicate composite key already exists for this context: "
+                f"{duplicate[1]}",
+            )
 
     return _build_target_from_row(
         session=session,
