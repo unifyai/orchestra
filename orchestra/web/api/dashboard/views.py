@@ -11,6 +11,7 @@ Provides endpoints for:
 - Dashboard action metadata (admin read/write for Dashboards/Actions context)
 """
 
+import json
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -41,9 +42,18 @@ admin_router = APIRouter()
 
 
 async def _reject_legacy_filter(request: Request) -> None:
+    """Reject legacy filter_expr on JSON bodies without breaking empty GETs."""
+    if request.method in ("GET", "HEAD", "OPTIONS", "DELETE"):
+        return
     if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
         return
-    body = await request.json()
+    body_bytes = await request.body()
+    if not body_bytes:
+        return
+    try:
+        body = json.loads(body_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return
     if isinstance(body, dict) and "filter_expr" in body:
         raise HTTPException(
             status_code=400,

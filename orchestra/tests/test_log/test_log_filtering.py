@@ -206,6 +206,24 @@ async def test_get_logs_rejects_legacy_filter_expr(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_logs_accepts_json_content_type_without_body(client: AsyncClient):
+    """UniSDK always sets Content-Type: application/json on GET /logs."""
+    project_name = "test_get_logs_json_ct"
+    await _create_project(client, project_name)
+    headers = {
+        **HEADERS,
+        "Content-Type": "application/json",
+    }
+    response = await client.get(
+        "/v0/logs",
+        params={"project_name": project_name},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert "logs" in response.json()
+
+
+@pytest.mark.anyio
 async def test_full_name_filter_expression(client: AsyncClient):
     project_name = "test_full_name_filter"
     await _create_project(client, project_name)

@@ -127,16 +127,31 @@ admin_router.include_router(task_machine_admin_router)
 
 
 async def _reject_legacy_filter(request: Request) -> None:
-    """Reject the removed filter_expr request field with an actionable error."""
+    """Reject the removed filter_expr request field with an actionable error.
+
+    UniSDK (and many clients) set ``Content-Type: application/json`` on GET
+    requests with an empty body. Never call ``request.json()`` in that case —
+    empty-body decode raises and becomes a 500. Body inspection is limited to
+    methods that carry a body; ``request.body()`` is cached so FastAPI can
+    still parse the payload afterwards.
+    """
 
     if "filter_expr" in request.query_params:
         raise HTTPException(
             status_code=400,
             detail="The 'filter_expr' parameter was renamed to 'filter'.",
         )
+    if request.method in ("GET", "HEAD", "OPTIONS", "DELETE"):
+        return
     if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
         return
-    body = await request.json()
+    body_bytes = await request.body()
+    if not body_bytes:
+        return
+    try:
+        body = json.loads(body_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return
     if not isinstance(body, dict):
         return
     if "filter_expr" in body:
