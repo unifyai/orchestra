@@ -718,6 +718,12 @@ async def create_assistant_call_as_assistant(
 # rings itself, so anything older is an orphan from a crashed caller.
 _RING_EXPIRY = datetime.timedelta(minutes=10)
 
+# Active sessions end when the last joined human leaves — but a crashed
+# browser never posts /leave, leaving the session active forever and
+# re-offering a "rejoin" banner on every reload. No legitimate call runs
+# this long.
+_ACTIVE_EXPIRY = datetime.timedelta(hours=24)
+
 
 @router.get("/calls/active", response_model=CallsActiveResponse)
 def list_active_calls(
@@ -752,8 +758,15 @@ def list_active_calls(
     stale = [
         call_session
         for call_session in call_sessions
-        if call_session.status == "ringing"
-        and call_session.created_at < now - _RING_EXPIRY
+        if (
+            call_session.status == "ringing"
+            and call_session.created_at < now - _RING_EXPIRY
+        )
+        or (
+            call_session.status == "active"
+            and (call_session.answered_at or call_session.created_at)
+            < now - _ACTIVE_EXPIRY
+        )
     ]
     if stale:
         for call_session in stale:
