@@ -1172,7 +1172,7 @@ async def test_filter_logs_by_enum(client: AsyncClient):
     # Filter logs by enum value
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "status == 'error'"},
+        params={"filter": "status == 'error'"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1186,7 +1186,7 @@ async def test_filter_logs_by_enum(client: AsyncClient):
     # Filter by the other enum value
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "status == 'ok'"},
+        params={"filter": "status == 'ok'"},
         headers=HEADERS,
     )
     assert response.status_code == 200

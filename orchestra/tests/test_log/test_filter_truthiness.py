@@ -93,7 +93,7 @@ async def test_metadata_get_truthiness(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata.get('key')",
+            "filter": "metadata.get('key')",
         },
         headers=HEADERS,
     )
@@ -129,7 +129,7 @@ async def test_missing_key_is_falsy(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata.get('missing_key')",
+            "filter": "metadata.get('missing_key')",
         },
         headers=HEADERS,
     )
@@ -163,7 +163,7 @@ async def test_negated_truthiness(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "not metadata.get('key')",
+            "filter": "not metadata.get('key')",
         },
         headers=HEADERS,
     )
@@ -214,7 +214,7 @@ async def test_chained_truthiness_short_circuit(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata.get('a') and metadata['a'].get('b')",
+            "filter": "metadata.get('a') and metadata['a'].get('b')",
         },
         headers=HEADERS,
     )
@@ -286,7 +286,7 @@ async def test_membership_with_or_fallback(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "'vip' in (metadata.get('tags') or [])",
+            "filter": "'vip' in (metadata.get('tags') or [])",
         },
         headers=HEADERS,
     )
@@ -330,7 +330,7 @@ async def test_or_fallback_with_non_empty_default(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "'default' in (metadata.get('tags') or ['default'])",
+            "filter": "'default' in (metadata.get('tags') or ['default'])",
         },
         headers=HEADERS,
     )
@@ -381,7 +381,7 @@ async def test_nested_or_fallback_pattern(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "'vip' in (metadata['thread'].get('tags') or [])",
+            "filter": "'vip' in (metadata['thread'].get('tags') or [])",
         },
         headers=HEADERS,
     )
@@ -455,7 +455,7 @@ async def test_full_complex_filter(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": complex_filter,
+            "filter": complex_filter,
         },
         headers=HEADERS,
     )
@@ -501,7 +501,7 @@ async def test_truthiness_in_or_expression(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata.get('primary') or metadata.get('fallback')",
+            "filter": "metadata.get('primary') or metadata.get('fallback')",
         },
         headers=HEADERS,
     )
@@ -566,7 +566,7 @@ async def test_field_not_equals_none_filter(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "custom_hash != None",
+            "filter": "custom_hash != None",
         },
         headers=HEADERS,
     )
@@ -585,7 +585,7 @@ async def test_field_not_equals_none_filter(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "None != custom_hash",
+            "filter": "None != custom_hash",
         },
         headers=HEADERS,
     )
@@ -636,7 +636,7 @@ async def test_field_equals_none_filter(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "optional_field == None",
+            "filter": "optional_field == None",
         },
         headers=HEADERS,
     )
@@ -687,7 +687,7 @@ async def test_explicit_json_null_vs_missing_key(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "status != None",
+            "filter": "status != None",
         },
         headers=HEADERS,
     )
@@ -700,7 +700,7 @@ async def test_explicit_json_null_vs_missing_key(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "status == None",
+            "filter": "status == None",
         },
         headers=HEADERS,
     )
@@ -740,7 +740,7 @@ async def test_nested_field_none_comparison(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata['level1']['level2'] != None",
+            "filter": "metadata['level1']['level2'] != None",
         },
         headers=HEADERS,
     )
@@ -780,7 +780,7 @@ async def test_none_comparison_with_is_operator(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "field is not None",
+            "filter": "field is not None",
         },
         headers=HEADERS,
     )
@@ -793,7 +793,7 @@ async def test_none_comparison_with_is_operator(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "field is None",
+            "filter": "field is None",
         },
         headers=HEADERS,
     )
@@ -829,7 +829,7 @@ async def test_chained_none_comparisons(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "field1 != None and field2 != None",
+            "filter": "field1 != None and field2 != None",
         },
         headers=HEADERS,
     )
@@ -865,7 +865,7 @@ async def test_none_comparison_with_or(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "field1 != None or field2 != None",
+            "filter": "field1 != None or field2 != None",
         },
         headers=HEADERS,
     )
@@ -908,7 +908,7 @@ async def test_none_comparison_after_get_method(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata.get('key') != None",
+            "filter": "metadata.get('key') != None",
         },
         headers=HEADERS,
     )
@@ -946,7 +946,7 @@ async def test_mixed_none_and_value_comparison(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "status != None and status != 'excluded'",
+            "filter": "status != None and status != 'excluded'",
         },
         headers=HEADERS,
     )
@@ -989,7 +989,7 @@ async def test_none_in_list_membership(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "status in [None, 'a', 'b']",
+            "filter": "status in [None, 'a', 'b']",
         },
         headers=HEADERS,
     )
@@ -1015,7 +1015,7 @@ async def test_truthiness_in_grouping_filter(
     Test that truthiness works correctly in grouping context.
 
     The fix touches grouping_utils.py, so we need to verify it works
-    when using filter_expr with grouping operations.
+    when using filter with grouping operations.
     """
     project_name = "test-truthiness-grouping"
     await _create_project(client, project_name)
@@ -1037,7 +1037,7 @@ async def test_truthiness_in_grouping_filter(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "metadata.get('enabled')",
+            "filter": "metadata.get('enabled')",
             "groupby": "group",
         },
         headers=HEADERS,

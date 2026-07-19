@@ -1566,7 +1566,7 @@ async def test_add_logs_via_arguments(client: AsyncClient):
         json={
             "context_name": context_name,
             "log_args": {
-                "filter_expr": "metric > 0.9",
+                "filter": "metric > 0.9",
             },
         },
         headers=HEADERS,
@@ -1633,7 +1633,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
         json={
             "context_name": context_name,
             "log_args": {
-                "filter_expr": "metric > 0.85",
+                "filter": "metric > 0.85",
             },
             "copy": True,
         },

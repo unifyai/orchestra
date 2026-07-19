@@ -479,7 +479,7 @@ class GetLogsMetricRequest(BaseModel):
         default=None,
         description="Optional per-key metrics mapping. If provided, overrides the path metric for those keys.",
     )
-    filter_expr: Optional[Union[str, Dict[str, str]]] = Field(
+    filter: Optional[Union[str, Dict[str, str]]] = Field(
         default=None,
         description="Expression to filter logs (string or key->expr dict).",
     )
@@ -605,8 +605,8 @@ class JoinLogsRequest(BaseModel):
         ...,
         description="Two sets of filtering criteria for logs to join",
         example=[
-            {"context": "context_a", "filter_expr": "user_id == 1"},
-            {"context": "context_b", "filter_expr": "user_id == 2"},
+            {"context": "context_a", "filter": "user_id == 1"},
+            {"context": "context_b", "filter": "user_id == 2"},
         ],
     )
     join_expr: str = Field(
@@ -657,10 +657,10 @@ class JoinQueryRequest(BaseModel):
 
     * **Row mode** (``metric`` is ``None``): returns paginated rows from the
       joined result, optionally filtered and sorted.  Accepts ``sorting``,
-      ``limit``, ``offset``, and ``filter_expr``.
+      ``limit``, ``offset``, and ``filter``.
     * **Reduce mode** (``metric`` + ``key`` provided): returns aggregated
       metric values, optionally grouped via ``group_by``.  Accepts
-      ``filter_expr`` and ``group_by``.
+      ``filter`` and ``group_by``.
 
     Not all parameters apply to both modes.  Invalid combinations are
     rejected with an actionable error message pointing to the correct
@@ -671,7 +671,7 @@ class JoinQueryRequest(BaseModel):
     pair_of_args: List[Dict[str, Any]] = Field(
         ...,
         description="Two sets of filtering criteria for logs to join. "
-        "Each dict may contain 'context', 'filter_expr', 'from_ids', 'exclude_ids'.",
+        "Each dict may contain 'context', 'filter', 'from_ids', 'exclude_ids'.",
     )
     join_expr: str = Field(
         ...,
@@ -691,7 +691,7 @@ class JoinQueryRequest(BaseModel):
     project_name: str = Field(..., description="Name of the project.")
 
     # --- Post-join query ---
-    filter_expr: Optional[str] = Field(
+    filter: Optional[str] = Field(
         default=None,
         description="Boolean expression to filter the joined rows "
         "(uses output column names). Applies to both modes.",
@@ -754,7 +754,7 @@ class JoinQueryRequest(BaseModel):
                     "`limit` only applies to row mode (metric=None). "
                     "Reduce mode returns one value per group — all groups "
                     "are always returned. To limit input rows before "
-                    "aggregating, use `filter_expr` or pre-join filters "
+                    "aggregating, use `filter` or pre-join filters "
                     "in `pair_of_args`.",
                 )
             if self.offset != 0:
@@ -793,7 +793,7 @@ class QueryLogsPostBody(BaseModel):
     ```json
     {
         "project_name": "my-project",
-        "filter_expr": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3"
+        "filter": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3"
     }
     ```
     """
@@ -805,7 +805,7 @@ class QueryLogsPostBody(BaseModel):
         description="The context (prepending '/' seperated field names) from which to retrieve the logs.",
         example="subjects/science/physics",
     )
-    filter_expr: Optional[str] = Field(
+    filter: Optional[str] = Field(
         None,
         description="Boolean string to filter entries. Supports embed_image() for image similarity queries.",
         example="len(output) > 200 and temperature == 0.5",

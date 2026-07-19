@@ -696,7 +696,7 @@ async def test_duplicate_project(client: AsyncClient):
     # Create derived logs to test they are also duplicated
     key = "derived_key"
     equation = "{Table:source_key} + ' hello'"
-    referenced_logs = {"Table": {"filter_expr": "", "context": context_name}}
+    referenced_logs = {"Table": {"filter": "", "context": context_name}}
     response = await _create_derived_entry(
         client,
         source_project_name,

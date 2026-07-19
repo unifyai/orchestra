@@ -427,13 +427,13 @@ async def test_get_logs_including_derived(client: AsyncClient):
             # After context stripping, they become simple names
             pass  # Just verify the response is parseable
 
-    # 6) Test a filter_expr,
-    filter_expr = "_/temperature > 100"
+    # 6) Test a filter,
+    filter = "_/temperature > 100"
     resp = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -1123,7 +1123,7 @@ async def test_advanced_comprehensions_and_conditionals(
     ), f"Failed to create derived entry: {response.text}"
 
     response = await client.get(
-        f"/v0/logs?project_name={project}&filter_expr={field} is not None",
+        f"/v0/logs?project_name={project}&filter={field} is not None",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1424,12 +1424,12 @@ async def test_derived_embedding_and_filtering(client: AsyncClient):
     assert response.status_code == 200, response.text
 
     # 3) Filter logs by similarity to 'cute little cat'
-    filter_expr = "cosine(desc_vec, embed('cute little cat')) < 0.2"
+    filter = "cosine(desc_vec, embed('cute little cat')) < 0.2"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -1641,19 +1641,19 @@ async def test_derived_image_embedding_and_filtering(
     # Construct filter and sorting expressions with embed_image()
     # The same expression is used for both filtering and sorting
     similarity_expr = f"cosine(screenshot_embedding, embed_image('data:image/png;base64,{query_img_b64}'))"
-    filter_expr = f"{similarity_expr} < 0.35"
+    filter = f"{similarity_expr} < 0.35"
 
     # Sort by cosine distance (ascending = most similar first)
     sorting = json.dumps({similarity_expr: "ascending"})
 
-    # Query using POST /logs/query (simplified - just pass filter_expr and sorting like GET)
+    # Query using POST /logs/query (simplified - just pass filter and sorting like GET)
     # POST allows large base64 strings that would exceed URL limits in GET
     query_response = await client.post(
         "/v0/logs/query",
         json={
             "project_name": project,
             "context": context,
-            "filter_expr": filter_expr,
+            "filter": filter,
             "sorting": sorting,  # Sort by similarity
             "limit": 10,
         },
@@ -1985,12 +1985,12 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
     # Test filtering by similarity to 'little kitty'
     # This should match logs with valid cat-related descriptions
-    filter_expr = "cosine(desc_vec, embed('little kitty')) < 0.5"
+    filter = "cosine(desc_vec, embed('little kitty')) < 0.5"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -2020,7 +2020,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         "/v0/logs",
         params={
             "project_name": project,
-            "filter_expr": filter_expr_strict,
+            "filter": filter_expr_strict,
         },
         headers=HEADERS,
     )
@@ -2142,7 +2142,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
     # 4. Verify all animal images have valid pHashes
     response = await client.get(
         f"/v0/logs?project_name={project_name}&context={context_name}"
-        f"&filter_expr=type == 'animal'",
+        f"&filter=type == 'animal'",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2173,7 +2173,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
         params={
             "project_name": project_name,
             "context": context_name,
-            "filter_expr": "type == 'animal'",  # Filter down to relevant images first
+            "filter": "type == 'animal'",  # Filter down to relevant images first
             "sorting": f'{{"{sorting_expression}": "ascending"}}',  # Sort by distance
         },
         headers=HEADERS,
@@ -2722,12 +2722,12 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     # Query for "cute kitty" - should match cat and kitten descriptions more closely
     # Using a threshold of 0.5 which is reasonable for semantic similarity with OpenAI embeddings
     # (cosine distance of 0.25-0.5 indicates high similarity for non-identical text)
-    filter_expr = "cosine(desc_embedding, embed('cute kitty')) < 0.5"
+    filter = "cosine(desc_embedding, embed('cute kitty')) < 0.5"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -2789,7 +2789,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr_animals,
+            "filter": filter_expr_animals,
             "sorting": sorting_dog,
         },
         headers=HEADERS,

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from orchestra.web.api.plot.validation import (
     VALID_AGGREGATES,
@@ -199,7 +199,7 @@ class ProjectConfigInput(BaseModel):
         None,
         description="Column context for field resolution",
     )
-    filter_expr: Optional[str] = Field(
+    filter: Optional[str] = Field(
         None,
         description="Boolean expression to filter entries",
     )
@@ -248,6 +248,14 @@ class ProjectConfigInput(BaseModel):
         None,
         description="Maximum depth of nested groups",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_filter(cls, values: Any) -> Any:
+        if isinstance(values, dict) and "filter_expr" in values:
+            raise ValueError("'filter_expr' was renamed to 'filter'")
+        return values
+
     groups_only: Optional[bool] = Field(
         None,
         description="Return only groups without full logs",

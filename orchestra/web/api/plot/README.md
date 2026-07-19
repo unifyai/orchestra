@@ -38,7 +38,7 @@ Create a new shareable plot.
   },
   "project_config": {
     "project_name": "my-project",
-    "filter_expr": "status == 'success'",
+    "filter": "status == 'success'",
     "limit": 1000
   },
   "title": "Cost vs Latency by Model"

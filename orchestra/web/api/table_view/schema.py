@@ -84,7 +84,7 @@ class ProjectConfigInput(BaseModel):
         None,
         description="Static context to filter logs by",
     )
-    filter_expr: Optional[str] = Field(
+    filter: Optional[str] = Field(
         None,
         description="Boolean expression to filter entries",
     )
@@ -111,6 +111,13 @@ class ProjectConfigInput(BaseModel):
         None,
         description="JSON-encoded sorting configuration",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_filter(cls, values: Any) -> Any:
+        if isinstance(values, dict) and "filter_expr" in values:
+            raise ValueError("'filter_expr' was renamed to 'filter'")
+        return values
 
 
 class CreateTableViewRequest(BaseModel):

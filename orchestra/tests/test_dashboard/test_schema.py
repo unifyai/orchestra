@@ -98,14 +98,14 @@ class TestFilterBridgeRequestValidation:
     def test_minimal_request(self):
         req = FilterBridgeRequest(context="my-project/Logs")
         assert req.context == "my-project/Logs"
-        assert req.filter_expr is None
+        assert req.filter is None
         assert req.from_fields is None
         assert req.limit == 1000
 
     def test_full_request(self):
         req = FilterBridgeRequest(
             context="proj/Logs",
-            filter_expr="model == 'gpt-4'",
+            filter="model == 'gpt-4'",
             from_fields="model&latency&cost",
             exclude_fields="raw_data",
             sorting='{"cost": "ascending"}',
@@ -120,10 +120,9 @@ class TestFilterBridgeRequestValidation:
         assert req.offset == 50
         assert req.group_by == ["model"]
 
-    def test_console_alias_filter(self):
-        """Console proxy sends 'filter' instead of 'filter_expr'."""
+    def test_filter(self):
         req = FilterBridgeRequest(context="proj/Logs", filter="model == 'gpt-4'")
-        assert req.filter_expr == "model == 'gpt-4'"
+        assert req.filter == "model == 'gpt-4'"
 
     def test_console_alias_columns(self):
         """Console proxy sends 'columns' instead of 'from_fields'."""
@@ -135,14 +134,12 @@ class TestFilterBridgeRequestValidation:
         req = FilterBridgeRequest(context="proj/Logs", exclude_columns="raw")
         assert req.exclude_fields == "raw"
 
-    def test_canonical_names_take_precedence(self):
-        """When both alias and canonical are sent, canonical wins."""
-        req = FilterBridgeRequest(
-            context="proj/Logs",
-            filter_expr="canonical",
-            filter="alias",
-        )
-        assert req.filter_expr == "canonical"
+    def test_legacy_filter_expr_rejected(self):
+        with pytest.raises(ValidationError, match="renamed to 'filter'"):
+            FilterBridgeRequest(
+                context="proj/Logs",
+                filter_expr="legacy",
+            )
 
     def test_all_console_aliases_together(self):
         req = FilterBridgeRequest(
@@ -151,7 +148,7 @@ class TestFilterBridgeRequestValidation:
             columns="a&b",
             exclude_columns="c",
         )
-        assert req.filter_expr == "x == 1"
+        assert req.filter == "x == 1"
         assert req.from_fields == "a&b"
         assert req.exclude_fields == "c"
 
@@ -195,7 +192,7 @@ class TestReduceBridgeRequestValidation:
         )
         assert req.columns == "score"
         assert req.metric == "count"
-        assert req.filter_expr is None
+        assert req.filter is None
         assert req.group_by is None
 
     def test_multi_key(self):
@@ -215,23 +212,23 @@ class TestReduceBridgeRequestValidation:
         )
         assert req.group_by == ["model"]
 
-    def test_with_filter_expr(self):
+    def test_with_filter(self):
         req = ReduceBridgeRequest(
             context="proj/Logs",
             metric="max",
             columns="latency",
-            filter_expr="model == 'gpt-4'",
-        )
-        assert req.filter_expr == "model == 'gpt-4'"
-
-    def test_console_alias_filter(self):
-        req = ReduceBridgeRequest(
-            context="proj/Logs",
-            metric="count",
-            columns="score",
             filter="model == 'gpt-4'",
         )
-        assert req.filter_expr == "model == 'gpt-4'"
+        assert req.filter == "model == 'gpt-4'"
+
+    def test_legacy_filter_expr_rejected(self):
+        with pytest.raises(ValidationError, match="renamed to 'filter'"):
+            ReduceBridgeRequest(
+                context="proj/Logs",
+                metric="count",
+                columns="score",
+                filter_expr="model == 'gpt-4'",
+            )
 
     def test_missing_metric_rejected(self):
         with pytest.raises(ValidationError):

@@ -126,6 +126,35 @@ admin_router = APIRouter()
 admin_router.include_router(task_machine_admin_router)
 
 
+async def _reject_legacy_filter(request: Request) -> None:
+    """Reject the removed filter_expr request field with an actionable error."""
+
+    if "filter_expr" in request.query_params:
+        raise HTTPException(
+            status_code=400,
+            detail="The 'filter_expr' parameter was renamed to 'filter'.",
+        )
+    if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+        return
+    body = await request.json()
+    if not isinstance(body, dict):
+        return
+    if "filter_expr" in body:
+        raise HTTPException(
+            status_code=400,
+            detail="The 'filter_expr' field was renamed to 'filter'.",
+        )
+    for pair in body.get("pair_of_args", []):
+        if isinstance(pair, dict) and "filter_expr" in pair:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The 'pair_of_args[].filter_expr' field was renamed to "
+                    "'pair_of_args[].filter'."
+                ),
+            )
+
+
 def _require_mutable_task_machine_context(
     *,
     project_name: str,
@@ -607,7 +636,7 @@ def prepare_resolved_ids(
             request_fastapi=request_fastapi,
             project_name=project_name,
             context=query_dict.get("context"),
-            filter_expr=query_dict.get("filter_expr"),
+            filter=query_dict.get("filter_expr"),
             sorting=query_dict.get("sorting"),
             from_ids=query_dict.get("from_ids"),
             exclude_ids=query_dict.get("exclude_ids"),
@@ -808,7 +837,7 @@ def create_from_logs(
         # Create static entries in base logs
         try:
             # 1) Substitute placeholders and prepare for computation
-            filter_expr, alias_to_key_map = _substitute_placeholders(
+            filter, alias_to_key_map = _substitute_placeholders(
                 body.equation,
                 resolved_ids,
             )
@@ -817,7 +846,7 @@ def create_from_logs(
                 context_id=context_id,
             )
             filter_dict = str_filter_exp_to_dict(
-                filter_expr,
+                filter,
                 field_names=list(field_types.keys()),
             )
 
@@ -915,7 +944,7 @@ def create_from_logs(
                         break
 
             # Build filter_dict and compute values
-            filter_expr, alias_to_key_map = _substitute_placeholders(
+            filter, alias_to_key_map = _substitute_placeholders(
                 body.equation,
                 resolved_ids,
             )
@@ -926,7 +955,7 @@ def create_from_logs(
             )
 
             filter_dict = str_filter_exp_to_dict(
-                filter_expr,
+                filter,
                 field_names=list(field_types.keys()),
             )
 
@@ -3652,6 +3681,7 @@ def get_logs(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     column_context: Optional[str] = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to retrieve the logs.",
@@ -3670,7 +3700,7 @@ def get_logs(
         None,
         description="Maximum number of characters to return for string values.",
     ),
-    filter_expr: Optional[str] = Query(
+    filter: Optional[str] = Query(
         None,
         description="Boolean string to filter entries.",
         example="len(output) > 200 and temperature == 0.5",
@@ -3791,7 +3821,7 @@ def get_logs(
 
       4. **Dynamic expression sorting**:
          - In addition to static field-based sorting, you can use dynamic expressions for sorting.
-         - The same grammar supported for `filter_expr` applies to sorting expressions.
+         - The same grammar supported for `filter` applies to sorting expressions.
 
     The response always includes:
       - `params`: The parameter versions used across the logs.
@@ -3838,7 +3868,7 @@ def get_logs(
                 request_fastapi,
                 project_name=project_name,
                 context=context,
-                filter_expr=filter_expr,
+                filter=filter,
                 sorting=sorting,
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
@@ -3928,7 +3958,7 @@ def get_logs(
             request_fastapi=request_fastapi,
             project_name=project_name,
             context=context,
-            filter_expr=filter_expr,
+            filter=filter,
             from_ids=from_ids,
             exclude_ids=exclude_ids,
             project_dao=project_dao,
@@ -4157,6 +4187,7 @@ def get_logs(
 def query_logs_post(
     request_fastapi: Request,
     body: QueryLogsPostBody = Body(...),
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     session=Depends(get_db_session),
 ):
     """
@@ -4172,7 +4203,7 @@ def query_logs_post(
     ```json
     {
         "project_name": "my-project",
-        "filter_expr": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3",
+        "filter": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3",
         "limit": 10
     }
     ```
@@ -4212,7 +4243,7 @@ def query_logs_post(
             request_fastapi,
             project_name=body.project_name,
             context=body.context,
-            filter_expr=body.filter_expr,
+            filter=body.filter,
             sorting=body.sorting,
             from_ids=body.from_ids,
             exclude_ids=body.exclude_ids,
@@ -4276,7 +4307,7 @@ def query_logs_post(
             request_fastapi=request_fastapi,
             project_name=body.project_name,
             context=body.context,
-            filter_expr=body.filter_expr,
+            filter=body.filter,
             from_ids=body.from_ids,
             exclude_ids=body.exclude_ids,
             project_dao=project_dao,
@@ -4384,6 +4415,7 @@ def get_logs_latest_timestamp(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     column_context: Optional[str] = Query(
         None,
         description="The context (prepending '/' seperated field names) from which to "
@@ -4395,7 +4427,7 @@ def get_logs_latest_timestamp(
         description="Static context to filter logs by.",
         example="training",
     ),
-    filter_expr: Optional[str] = Query(
+    filter: Optional[str] = Query(
         None,
         description="Boolean string to filter entries.",
         example="len(output) > 200 and temperature == 0.5",
@@ -4462,7 +4494,7 @@ def get_logs_latest_timestamp(
         request_fastapi,
         project_name=project_name,
         context=context,
-        filter_expr=filter_expr,
+        filter=filter,
         sorting=sorting,
         from_ids=from_ids,
         exclude_ids=exclude_ids,
@@ -4500,6 +4532,7 @@ def get_logs_metric(
     request_fastapi: Request,
     default_metric: str = Path(...),
     project_name: str = Query(...),
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     request: Optional[GetLogsMetricRequest] = Body(None),
     session=Depends(get_db_session),
 ) -> Union[Dict[str, Any], float, int, bool, str, None]:
@@ -4560,7 +4593,7 @@ def get_logs_metric(
     # Handle old usage if request body is not provided
     if request is None:
         key_param = request_fastapi.query_params.get("key")
-        filter_expr = request_fastapi.query_params.get("filter_expr")
+        filter = request_fastapi.query_params.get("filter")
         from_ids = request_fastapi.query_params.get("from_ids")
         exclude_ids = request_fastapi.query_params.get("exclude_ids")
         context = request_fastapi.query_params.get("context")
@@ -4576,7 +4609,7 @@ def get_logs_metric(
             parsed_keys = json.loads(key_param)
             request = GetLogsMetricRequest(
                 key=parsed_keys,
-                filter_expr=filter_expr,
+                filter=filter,
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
                 context=context,
@@ -4587,7 +4620,7 @@ def get_logs_metric(
             # Single key usage
             request = GetLogsMetricRequest(
                 key=key_param,
-                filter_expr=filter_expr,
+                filter=filter,
                 from_ids=from_ids,
                 exclude_ids=exclude_ids,
                 context=context,
@@ -4644,7 +4677,7 @@ def get_logs_metric(
 
             # Resolve key-specific filters
             (
-                key_filter_expr,
+                key_filter,
                 key_from_ids,
                 key_exclude_ids,
             ) = _resolve_key_specific_filters(request, k)
@@ -4657,7 +4690,7 @@ def get_logs_metric(
                 context_id=context_id,
                 field_types=field_types,
                 group_by=request.group_by,
-                key_filter_expr=key_filter_expr,
+                key_filter=key_filter,
                 key_from_ids=key_from_ids,
                 key_exclude_ids=key_exclude_ids,
                 session=session,
@@ -4686,11 +4719,11 @@ def get_logs_metric(
             has_key_specific_filters = False
             for k in all_keys:
                 (
-                    key_filter_expr,
+                    key_filter,
                     key_from_ids,
                     key_exclude_ids,
                 ) = _resolve_key_specific_filters(request, k)
-                if key_filter_expr or key_from_ids or key_exclude_ids:
+                if key_filter or key_from_ids or key_exclude_ids:
                     has_key_specific_filters = True
                     break
 
@@ -4703,7 +4736,7 @@ def get_logs_metric(
                     project_id=project_obj.id,
                     context_id=context_id,
                     field_types=field_types,
-                    filter_expr=request.filter_expr,
+                    filter=request.filter,
                     from_ids=request.from_ids,
                     exclude_ids=request.exclude_ids,
                     session=session,
@@ -4725,7 +4758,7 @@ def get_logs_metric(
 
             # Resolve key-specific filters
             (
-                key_filter_expr,
+                key_filter,
                 key_from_ids,
                 key_exclude_ids,
             ) = _resolve_key_specific_filters(request, k)
@@ -4737,7 +4770,7 @@ def get_logs_metric(
                 project_obj=project_obj,
                 context_id=context_id,
                 field_types=field_types,
-                key_filter_expr=key_filter_expr,
+                key_filter=key_filter,
                 key_from_ids=key_from_ids,
                 key_exclude_ids=key_exclude_ids,
                 session=session,
@@ -4790,12 +4823,13 @@ def get_log_groups(
         description="Name of the log entry to get distinct values from.",
         example="system_prompt",
     ),
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     context: Optional[str] = Query(
         None,
         description="Static context to filter logs by.",
         example="training",
     ),
-    filter_expr: Optional[str] = Query(
+    filter: Optional[str] = Query(
         None,
         description="Boolean string to filter entries before grouping.",
         example="len(output) > 200 and temperature == 0.5",
@@ -4821,7 +4855,7 @@ def get_log_groups(
     """
     Returns a dict with the different versions as keys and the values of the remaining
     items within a given project based on its key.
-    The logs can be filtered using filter_expr, from_ids, and exclude_ids parameters
+    The logs can be filtered using filter, from_ids, and exclude_ids parameters
     before grouping.
     """
     # Instantiate DAOs with shared session
@@ -4870,14 +4904,14 @@ def get_log_groups(
         params["exclude_ids"] = [int(x) for x in exclude_ids.split("&") if x]
         id_clause = "AND NOT (le.id = ANY(:exclude_ids))"
 
-    # filter_expr still goes through the full query path when present (rare for
+    # filter still goes through the full query path when present (rare for
     # this endpoint); otherwise use a set-based DISTINCT.
-    if filter_expr:
+    if filter:
         rows, _ = _get_logs_query(
             request_fastapi=request_fastapi,
             project_name=project_name,
             context=context,
-            filter_expr=filter_expr,
+            filter=filter,
             sorting=None,
             from_ids=from_ids,
             exclude_ids=exclude_ids,
@@ -5124,6 +5158,7 @@ def rename_field(
 def join_logs(
     request_fastapi: Request,
     request: JoinLogsRequest,
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     session=Depends(get_db_session),
 ):
     """
@@ -5134,7 +5169,7 @@ def join_logs(
 
     Args:
         pair_of_args: List of two dictionaries containing filtering criteria for logs to join.
-                     Each dictionary can include context, filter_expr, from_ids, etc.
+                     Each dictionary can include context, filter, from_ids, etc.
         join_expr: SQL expression for the join condition using aliases A and B
                   (e.g., 'A.user_id = B.user_id')
         mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
@@ -5276,6 +5311,7 @@ def join_logs(
 def join_query(
     request_fastapi: Request,
     request: JoinQueryRequest,
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     session=Depends(get_db_session),
 ):
     """Execute a join and query or reduce the result without materialisation.
@@ -5353,7 +5389,7 @@ def join_query(
                     "`limit` only applies to row mode (metric=None). "
                     "Reduce mode returns one value per group — all groups "
                     "are always returned. To limit input rows before "
-                    "aggregating, use `filter_expr` or pre-join filters "
+                    "aggregating, use `filter` or pre-join filters "
                     "in `pair_of_args`."
                 ),
             )
@@ -5396,7 +5432,7 @@ def join_query(
             join_expr=request.join_expr,
             mode=request.mode,
             columns=request.columns,
-            filter_expr=request.filter_expr,
+            filter=request.filter,
             sorting=request.sorting,
             limit=request.limit,
             offset=request.offset,

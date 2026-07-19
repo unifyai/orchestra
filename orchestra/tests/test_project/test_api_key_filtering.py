@@ -115,7 +115,7 @@ async def test_assistant_jobs_system_project_admin_only(
         params={
             "project_name": "AssistantJobs",
             "context": "startup_events",
-            "filter_expr": 'assistant_id == "42"',
+            "filter": 'assistant_id == "42"',
             "limit": 1,
         },
         headers=admin_headers,
@@ -242,7 +242,7 @@ async def test_builtins_system_project_allows_admin_seed_and_user_reads(
         params={
             "project_name": "Builtins",
             "context": "Smoke/BuiltinsSeed/test",
-            "filter_expr": 'smoke_id == "test"',
+            "filter": 'smoke_id == "test"',
             "limit": 1,
         },
         headers=reader["headers"],

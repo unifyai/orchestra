@@ -250,7 +250,7 @@ async def test_get_log_groups_combined(client: AsyncClient):
 
     # Test filtering by system_prompt
     response = await client.get(
-        f"/v0/logs/groups?project_name={project_name}&key=system_prompt&filter_expr=len(a/input) > 10",
+        f"/v0/logs/groups?project_name={project_name}&key=system_prompt&filter=len(a/input) > 10",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -265,7 +265,7 @@ async def test_get_log_groups_combined(client: AsyncClient):
 
     # Test with no matching logs after filtering
     response = await client.get(
-        f"/v0/logs/groups?project_name={project_name}&key=system_prompt&filter_expr=a/input == 'nonexistent'",
+        f"/v0/logs/groups?project_name={project_name}&key=system_prompt&filter=a/input == 'nonexistent'",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1600,14 +1600,14 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient):
     ), f"Expected logs {selected_ids}, but found {log_ids_found}"
 
     #
-    # ==========  SCENARIO D: group_by + filter_expr  ==========
+    # ==========  SCENARIO D: group_by + filter  ==========
     #
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
             "group_by": ["entries/_/state"],
-            "filter_expr": "_/temperature > 0",  # Only logs 1, 3 should match
+            "filter": "_/temperature > 0",  # Only logs 1, 3 should match
         },
         headers=HEADERS,
     )
