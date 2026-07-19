@@ -3100,9 +3100,9 @@ class ContextDAO:
         if entry is not None:
             if name is not None:
                 # check if name is valid
-                if not re.match(r"^[a-zA-Z0-9_/]+$", name):
+                if not re.match(r"^[a-zA-Z0-9_/-]+$", name):
                     raise ValueError(
-                        "Context name must contain only alphanumeric characters and '/'",
+                        "Context name must contain only alphanumeric characters, hyphens, underscores, and '/'",
                     )
                 setattr(entry, "name", name)
             if description is not None:  # Allow setting description to None
@@ -3309,9 +3309,9 @@ class ContextDAO:
 
         Returns the number of contexts renamed.
         """
-        if not re.match(r"^[a-zA-Z0-9_/]+$", new_prefix):
+        if not re.match(r"^[a-zA-Z0-9_/-]+$", new_prefix):
             raise ValueError(
-                "Context name must contain only alphanumeric characters and '/'",
+                "Context name must contain only alphanumeric characters, hyphens, underscores, and '/'",
             )
         old_len = len(old_prefix)
         stmt = (

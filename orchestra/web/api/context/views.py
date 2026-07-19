@@ -1000,6 +1000,8 @@ def rename_context(
             )
         else:
             context_dao.update(id=ctx_list[0][0].id, name=new_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except IntegrityError:
         raise HTTPException(
             status_code=400,
