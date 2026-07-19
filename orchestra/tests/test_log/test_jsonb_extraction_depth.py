@@ -121,15 +121,15 @@ async def test_nested_category_filter_with_stale_top_level_field_type(
         ),
     ]
 
-    for filter_expr, expected_names in cases:
+    for filter, expected_names in cases:
         resp = await client.get(
             "/v0/logs",
-            params={"project_name": project_name, "filter_expr": filter_expr},
+            params={"project_name": project_name, "filter": filter},
             headers=HEADERS,
         )
         assert resp.status_code == 200, resp.text
         names = {log["entries"]["name"] for log in resp.json()["logs"]}
-        assert names == expected_names, f"filter_expr={filter_expr!r} got {names}"
+        assert names == expected_names, f"filter_expr={filter!r} got {names}"
 
 
 @pytest.mark.anyio
@@ -170,7 +170,7 @@ async def test_stale_top_level_category_field_type_without_top_level_row_data(
         params={
             "project_name": project_name,
             "context": context_name,
-            "filter_expr": 'category == "alpha"',
+            "filter": 'category == "alpha"',
         },
         headers=HEADERS,
     )
@@ -182,7 +182,7 @@ async def test_stale_top_level_category_field_type_without_top_level_row_data(
         params={
             "project_name": project_name,
             "context": context_name,
-            "filter_expr": 'metadata["details"]["category"] == "alpha"',
+            "filter": 'metadata["details"]["category"] == "alpha"',
         },
         headers=HEADERS,
     )
@@ -215,7 +215,7 @@ async def test_top_level_category_row_does_not_break_nested_category_filter(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": 'metadata["details"]["category"] == "alpha"',
+            "filter": 'metadata["details"]["category"] == "alpha"',
         },
         headers=HEADERS,
     )

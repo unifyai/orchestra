@@ -348,13 +348,20 @@ class AddLogsToContextRequest(BaseModel):
     )
     log_args: Optional[Dict[str, Any]] = Field(
         None,
-        description="Dictionary of arguments (e.g. filter_expr) to select logs by criteria.",
-        json_schema_extra={"example": {"filter_expr": "metric > 0.9"}},
+        description="Dictionary of arguments (e.g. filter) to select logs by criteria.",
+        json_schema_extra={"example": {"filter": "metric > 0.9"}},
     )
     copy: bool = Field(
         default=False,
         description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used.",
     )
+
+    @field_validator("log_args")
+    @classmethod
+    def reject_legacy_filter(cls, value: Optional[Dict[str, Any]]):
+        if value is not None and "filter_expr" in value:
+            raise ValueError("'log_args.filter_expr' was renamed to 'log_args.filter'")
+        return value
 
 
 class RenameContextRequest(BaseModel):

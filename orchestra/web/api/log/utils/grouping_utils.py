@@ -248,13 +248,13 @@ def _get_distinct_group_values(
             # Set context and capture
             set_test_context(
                 test_name="distinct_group_values",
-                filter_expr=f"distinct_groups({group_key})",
+                filter=f"distinct_groups({group_key})",
                 mode=mode,
             )
             capture_sql(
                 sql=compiled_sql,
                 explain_analyze=explain_output,
-                filter_expr_override=f"distinct_groups({group_key})",
+                filter_override=f"distinct_groups({group_key})",
             )
     except ImportError:
         pass  # sql_capture module not available (production environment)
@@ -404,7 +404,7 @@ def _get_all_filtered_log_event_ids(
     request_fastapi: Request,
     project_name: str,
     context: Optional[str],
-    filter_expr: Optional[str],
+    filter: Optional[str],
     from_ids: Optional[str],
     exclude_ids: Optional[str],
     project_dao: ProjectDAO,
@@ -415,7 +415,7 @@ def _get_all_filtered_log_event_ids(
 ) -> Union[Tuple[List[int], int], Tuple[Subquery, int]]:
     """
     Return all log_event_ids (no pagination, no field-level filtering) that match
-    these top-level filters: from_ids, exclude_ids, filter_expr, context, and project.
+    these top-level filters: from_ids, exclude_ids, filter, context, and project.
 
     Prefer ``as_subquery=True`` (the default) so large contexts never materialize
     every matching id into Python.
@@ -466,10 +466,10 @@ def _get_all_filtered_log_event_ids(
     else:
         context_id = None
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
-    # Handle user-defined filter_expr => build SQL expression on LogEvent
-    if filter_expr:
+    # Handle user-defined filter => build SQL expression on LogEvent
+    if filter:
         filter_dict = str_filter_exp_to_dict(
-            filter_expr,
+            filter,
             field_names=list(field_types.keys()),
         )
         if filter_dict:
@@ -2042,13 +2042,13 @@ def _build_grouped_data(
             )
             set_test_context(
                 test_name=test_name,
-                filter_expr=f"group_by({current_group_key})",
+                filter=f"group_by({current_group_key})",
                 mode=mode,
             )
             capture_sql(
                 sql=compiled_sql,
                 explain_analyze=explain_output,
-                filter_expr_override=f"group_by({current_group_key})",
+                filter_override=f"group_by({current_group_key})",
             )
     except ImportError:
         pass  # sql_capture module not available (production environment)

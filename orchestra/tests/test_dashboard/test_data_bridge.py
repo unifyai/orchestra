@@ -158,7 +158,7 @@ async def test_filter_bridge_respects_filter_expr(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Filter bridge forwards filter_expr so only matching logs are returned."""
+    """Filter bridge forwards filter so only matching logs are returned."""
     user = await create_test_user(client, "bridge_filter@test.com")
     await _seed_project_with_logs(client, user, "bridge-filter-proj")
 
@@ -175,7 +175,7 @@ async def test_filter_bridge_respects_filter_expr(
 
     resp = await client.post(
         "/v0/admin/dashboards/tiles/bridge_flt01/filter",
-        json={"context": "", "filter_expr": "model == 'claude-3'"},
+        json={"context": "", "filter": "model == 'claude-3'"},
         headers=ADMIN_HEADERS,
     )
 
@@ -368,7 +368,7 @@ async def test_reduce_bridge_with_filter(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Reduce bridge respects filter_expr."""
+    """Reduce bridge respects filter."""
     user = await create_test_user(client, "red_brg_flt@test.com")
     await _seed_project_with_logs(client, user, "red-brg-flt-proj")
 
@@ -389,7 +389,7 @@ async def test_reduce_bridge_with_filter(
             "context": "",
             "metric": "count",
             "columns": "model",
-            "filter_expr": "model == 'gpt-4'",
+            "filter": "model == 'gpt-4'",
         },
         headers=ADMIN_HEADERS,
     )

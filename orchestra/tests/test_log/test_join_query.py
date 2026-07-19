@@ -283,7 +283,7 @@ async def test_join_query_count_with_filter(client: AsyncClient, seeded):
         seeded,
         metric="count",
         key="amount",
-        filter_expr="amount > 15",
+        filter="amount > 15",
     )
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
@@ -297,7 +297,7 @@ async def test_join_query_no_matches(client: AsyncClient, seeded):
         seeded,
         metric="count",
         key="amount",
-        filter_expr="amount > 9999",
+        filter="amount > 9999",
     )
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
@@ -467,7 +467,7 @@ async def test_join_query_reduce_pushes_side_local_filter(client: AsyncClient):
             project_name,
             fact_context,
             dim_context,
-            filter_expr="amount > 10",
+            filter="amount > 10",
         ),
         headers=HEADERS,
     )
@@ -516,7 +516,7 @@ async def test_join_query_reduce_cross_side_filter_falls_back(
             project_name,
             fact_context,
             dim_context,
-            filter_expr="amount > 10 and category == 'alpha'",
+            filter="amount > 10 and category == 'alpha'",
         ),
         headers=HEADERS,
     )
@@ -823,7 +823,7 @@ async def test_join_query_rows_direct_path_pushes_side_local_filter(
             project_name,
             fact_context,
             dim_context,
-            filter_expr="amount > 10",
+            filter="amount > 10",
             sorting=json.dumps({"amount": "ascending"}),
         ),
         headers=HEADERS,
@@ -982,7 +982,7 @@ async def test_join_query_rows_cross_side_filter_falls_back(
             project_name,
             fact_context,
             dim_context,
-            filter_expr="amount > 10 and category == 'alpha'",
+            filter="amount > 10 and category == 'alpha'",
             sorting=json.dumps({"amount": "ascending"}),
         ),
         headers=HEADERS,
@@ -1008,7 +1008,7 @@ async def test_join_query_rows_basic(client: AsyncClient, seeded):
 
 @pytest.mark.anyio
 async def test_join_query_rows_with_filter(client: AsyncClient, seeded):
-    payload = _base_payload(seeded, filter_expr="city == 'NYC'")
+    payload = _base_payload(seeded, filter="city == 'NYC'")
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
     data = resp.json()
@@ -1340,7 +1340,7 @@ async def test_join_query_filtered_reduce_excludes_unused_fields(
         },
         "metric": "sum",
         "key": "amount",
-        "filter_expr": "city == 'NYC'",
+        "filter": "city == 'NYC'",
     }
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
@@ -1364,7 +1364,7 @@ async def test_join_query_count_ungrouped_single_row(client: AsyncClient, seeded
         seeded,
         metric="count",
         key="amount",
-        filter_expr="amount == 40",
+        filter="amount == 40",
     )
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
@@ -1386,7 +1386,7 @@ async def test_join_query_sum_ungrouped_identical_values(client: AsyncClient, se
         seeded,
         metric="sum",
         key="user_id",
-        filter_expr="name == 'Alice'",
+        filter="name == 'Alice'",
     )
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
@@ -1457,7 +1457,7 @@ async def test_join_query_mean_ungrouped_single_row(client: AsyncClient, seeded)
         seeded,
         metric="mean",
         key="amount",
-        filter_expr="amount == 40",
+        filter="amount == 40",
     )
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200
@@ -1475,7 +1475,7 @@ async def test_join_query_var_ungrouped_identical_values(client: AsyncClient, se
         seeded,
         metric="var",
         key="user_id",
-        filter_expr="name == 'Alice'",
+        filter="name == 'Alice'",
     )
     resp = await client.post("/v0/logs/join_query", json=payload, headers=HEADERS)
     assert resp.status_code == 200

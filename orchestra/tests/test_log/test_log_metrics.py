@@ -330,7 +330,7 @@ async def test_get_logs_metric_batch(client: AsyncClient):
         f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": json.dumps(["_/temperature", "_/safe"]),
-            "filter_expr": json.dumps(filter_expr_dict),
+            "filter": json.dumps(filter_expr_dict),
         },
         headers=HEADERS,
     )
@@ -613,7 +613,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient):
         params={
             "key": "_/temperature",
             "group_by": "entries/_/state",
-            "filter_expr": "_/safe is True",
+            "filter": "_/safe is True",
         },
         headers=HEADERS,
     )
@@ -1770,7 +1770,7 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
             f"/v0/logs/metric/mean?project_name={project_name}",
             params={
                 "key": json.dumps(all_fields_list),
-                "filter_expr": json.dumps(filter_expr_dict),
+                "filter": json.dumps(filter_expr_dict),
             },
             headers=HEADERS,
         )
@@ -1821,7 +1821,7 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
                 f"/v0/logs/metric/{metric}?project_name={project_name}",
                 params={
                     "key": json.dumps(all_fields_list),
-                    "filter_expr": json.dumps(filter_expr_dict),
+                    "filter": json.dumps(filter_expr_dict),
                 },
                 headers=HEADERS,
             )

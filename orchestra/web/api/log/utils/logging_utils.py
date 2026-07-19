@@ -776,7 +776,7 @@ def _get_logs_query(
     request_fastapi: Request,
     project_name: str,
     context: Optional[str],
-    filter_expr: Optional[str],
+    filter: Optional[str],
     sorting: Optional[str],
     from_ids: Optional[Any],
     exclude_ids: Optional[Any],
@@ -808,7 +808,7 @@ def _get_logs_query(
         request_fastapi: The FastAPI request object containing user info
         project_name: Project name to filter logs for
         context: Optional context name to filter logs within
-        filter_expr: Optional filter expression string (Python-like syntax)
+        filter: Optional filter expression string (Python-like syntax)
         sorting: Optional JSON string specifying sort order, e.g. '{"field": "ascending"}'
         from_ids: Optional ampersand-separated list of log event IDs to include
         exclude_ids: Optional ampersand-separated list of log event IDs to exclude
@@ -929,10 +929,10 @@ def _get_logs_query(
     # =========================================================================
     # STEP 5: Apply filter expression (Python-like syntax → SQL WHERE clause)
     # =========================================================================
-    if filter_expr:
+    if filter:
         try:
             filter_dict = str_filter_exp_to_dict(
-                filter_expr,
+                filter,
                 field_names=list(field_types.keys()),
             )
         except Exception as e:
@@ -1564,13 +1564,13 @@ def _get_logs_query(
             # Set context and capture
             set_test_context(
                 test_name=test_name,
-                filter_expr=filter_expr,
+                filter=filter,
                 mode=mode,
             )
             capture_sql(
                 sql=compiled_sql,
                 explain_analyze=explain_output,
-                filter_expr_override=filter_expr if filter_expr else None,
+                filter_override=filter if filter else None,
             )
     except ImportError:
         pass  # sql_capture module not available (production environment)
@@ -2981,7 +2981,7 @@ class _DirectJoinPlan:
     projected_aliases: tuple[str, ...]
     sorting: Optional[Dict[str, str]] = None
     filter_side: Optional[str] = None
-    filter_expr: Optional[str] = None
+    filter: Optional[str] = None
 
 
 _TEXT_JOIN_FIELD_TYPES = frozenset({"str", "enum"})
@@ -3118,18 +3118,18 @@ def _can_use_text_join_key(
 
 
 def _classify_side_local_filter(
-    filter_expr: Optional[str],
+    filter: Optional[str],
     alias_map: Dict[str, tuple[str, str]],
 ) -> Optional[tuple[Optional[str], Optional[str], set[str]]]:
     """Return the single source side a filter references, or None if unsafe."""
-    if not filter_expr:
+    if not filter:
         return None, None, set()
 
     from orchestra.web.api.log.python2SQL.parsers import (
         str_filter_exp_to_dict_using_ast,
     )
 
-    filter_dict = str_filter_exp_to_dict_using_ast(filter_expr)
+    filter_dict = str_filter_exp_to_dict_using_ast(filter)
     identifiers = _collect_filter_identifiers(filter_dict)
     if not identifiers or not identifiers.issubset(alias_map):
         return None
@@ -3137,7 +3137,7 @@ def _classify_side_local_filter(
     sides = {alias_map[identifier][0] for identifier in identifiers}
     if len(sides) != 1:
         return None
-    return sides.pop(), filter_expr, identifiers
+    return sides.pop(), filter, identifiers
 
 
 def _get_existing_context_id(
@@ -3174,7 +3174,7 @@ def _classify_direct_join_plan(
     join_expr: str,
     mode: str,
     columns: Optional[Union[Dict[str, str], List[str]]],
-    filter_expr: Optional[str],
+    filter: Optional[str],
     sorting: Optional[str],
     limit: Optional[int],
     offset: int,
@@ -3206,7 +3206,7 @@ def _classify_direct_join_plan(
         if not side_args.get("context"):
             return None
         if (
-            side_args.get("filter_expr")
+            side_args.get("filter")
             or side_args.get("from_ids")
             or side_args.get("exclude_ids")
         ):
@@ -3244,10 +3244,10 @@ def _classify_direct_join_plan(
     if not required_aliases or not required_aliases.issubset(alias_map):
         return None
 
-    pushed_filter = _classify_side_local_filter(filter_expr, alias_map)
+    pushed_filter = _classify_side_local_filter(filter, alias_map)
     if pushed_filter is None:
         return None
-    filter_side, pushed_filter_expr, filter_aliases = pushed_filter
+    filter_side, pushed_filter, filter_aliases = pushed_filter
 
     context_a_id = _get_existing_context_id(
         context_dao,
@@ -3307,7 +3307,7 @@ def _classify_direct_join_plan(
         projected_aliases=projected_aliases,
         sorting=sort_spec,
         filter_side=filter_side,
-        filter_expr=pushed_filter_expr,
+        filter=pushed_filter,
     )
 
 
@@ -3322,7 +3322,7 @@ def _build_direct_join_side_source(
     side: str,
     join_key: str,
     fields: set[str],
-    filter_expr: Optional[str],
+    filter: Optional[str],
     filter_alias_map: Dict[str, tuple[str, str]],
     session,
 ):
@@ -3353,7 +3353,7 @@ def _build_direct_join_side_source(
             LogEvent.data.op("->>")(join_key).isnot(None),
         )
     )
-    if filter_expr:
+    if filter:
         from orchestra.web.api.log.python2SQL.parsers import (
             str_filter_exp_to_dict_using_ast,
         )
@@ -3362,7 +3362,7 @@ def _build_direct_join_side_source(
         for alias, (_side, field_name) in filter_alias_map.items():
             local_scope[alias] = (LogEvent.data.op("->")(field_name), "Any")
 
-        filter_dict = str_filter_exp_to_dict_using_ast(filter_expr)
+        filter_dict = str_filter_exp_to_dict_using_ast(filter)
         filter_condition = build_sql_query(
             filter_dict,
             LogEvent,
@@ -3512,7 +3512,7 @@ def _build_direct_join_sources(
         side="A",
         join_key=plan.join_key_a,
         fields=fields_a,
-        filter_expr=plan.filter_expr if plan.filter_side == "A" else None,
+        filter=plan.filter if plan.filter_side == "A" else None,
         filter_alias_map={
             alias: source
             for alias, source in plan.alias_map.items()
@@ -3526,7 +3526,7 @@ def _build_direct_join_sources(
         side="B",
         join_key=plan.join_key_b,
         fields=fields_b,
-        filter_expr=plan.filter_expr if plan.filter_side == "B" else None,
+        filter=plan.filter if plan.filter_side == "B" else None,
         filter_alias_map={
             alias: source
             for alias, source in plan.alias_map.items()
@@ -3724,7 +3724,7 @@ def _build_log_subquery(
 
     Args:
         args: Dictionary containing filtering criteria.  Recognised keys:
-            ``context``, ``filter_expr``, ``from_ids``, ``exclude_ids``,
+            ``context``, ``filter``, ``from_ids``, ``exclude_ids``,
             and ``from_fields``.  When ``from_fields`` is provided (an
             ``&``-separated string of field names) only those keys are
             projected from the JSONB ``data`` column via
@@ -3747,7 +3747,7 @@ def _build_log_subquery(
 
     # Extract filtering criteria from args
     context = args.get("context")
-    filter_expr = args.get("filter_expr")
+    filter = args.get("filter")
     from_ids = args.get("from_ids")
     exclude_ids = args.get("exclude_ids")
     from_fields = args.get("from_fields")
@@ -3757,7 +3757,7 @@ def _build_log_subquery(
         request_fastapi=request_fastapi,
         project_name=project_name,
         context=context,
-        filter_expr=filter_expr,
+        filter=filter,
         from_ids=from_ids,
         exclude_ids=exclude_ids,
         project_dao=project_dao,
@@ -4531,12 +4531,12 @@ def _join_logs_internal(
             )
 
         # Preprocess filter expressions to remove context prefixes
-        filter_expr_a = pair_of_args[0].get("filter_expr")
-        filter_expr_b = pair_of_args[1].get("filter_expr")
-        if filter_expr_a:
-            pair_of_args[0]["filter_expr"] = filter_expr_a.replace(context_a + ".", "")
-        if filter_expr_b:
-            pair_of_args[1]["filter_expr"] = filter_expr_b.replace(context_b + ".", "")
+        filter_a = pair_of_args[0].get("filter")
+        filter_b = pair_of_args[1].get("filter")
+        if filter_a:
+            pair_of_args[0]["filter"] = filter_a.replace(context_a + ".", "")
+        if filter_b:
+            pair_of_args[1]["filter"] = filter_b.replace(context_b + ".", "")
 
         # Replace context names with A/B aliases in join expression
         join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
@@ -4652,7 +4652,7 @@ def _join_query_internal(
     mode: str,
     columns: Optional[Union[Dict[str, str], List[str]]] = None,
     *,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     sorting: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
@@ -4693,15 +4693,15 @@ def _join_query_internal(
                 f"Got: {context_a} and {context_b}",
             )
 
-        filter_expr_a = pair_of_args[0].get("filter_expr")
-        filter_expr_b = pair_of_args[1].get("filter_expr")
-        if filter_expr_a:
-            pair_of_args[0]["filter_expr"] = filter_expr_a.replace(
+        filter_a = pair_of_args[0].get("filter")
+        filter_b = pair_of_args[1].get("filter")
+        if filter_a:
+            pair_of_args[0]["filter"] = filter_a.replace(
                 context_a + ".",
                 "",
             )
-        if filter_expr_b:
-            pair_of_args[1]["filter_expr"] = filter_expr_b.replace(
+        if filter_b:
+            pair_of_args[1]["filter"] = filter_b.replace(
                 context_b + ".",
                 "",
             )
@@ -4735,7 +4735,7 @@ def _join_query_internal(
             join_expr=join_expr,
             mode=mode,
             columns=columns,
-            filter_expr=filter_expr,
+            filter=filter,
             sorting=sorting,
             limit=limit,
             offset=offset,
@@ -4834,11 +4834,11 @@ def _join_query_internal(
                         pair_of_args[side_idx]["from_fields"] = "&".join(
                             sorted(rkeys),
                         )
-            elif metric is not None and filter_expr:
+            elif metric is not None and filter:
                 # Filtered reduce: narrow to filter-referenced + agg fields
                 # so we don't drag embeddings through the merge needlessly.
                 _filter_refs: set = set()
-                for m in _re_proj.finditer(r"\b(\w+)\b", filter_expr):
+                for m in _re_proj.finditer(r"\b(\w+)\b", filter):
                     _filter_refs.add(m.group(1))
 
                 filt_keys_a: set = set(_reduce_keys_a)
@@ -4938,7 +4938,7 @@ def _join_query_internal(
             project_id=project_id,
         )
 
-        if filter_expr:
+        if filter:
             pre_subq = joined_query.subquery("_pre_filter")
             pre_merged = pre_subq.c.merged_data
 
@@ -4959,7 +4959,7 @@ def _join_query_internal(
 
             from ..python2SQL.parsers import str_filter_exp_to_dict_using_ast
 
-            filter_dict = str_filter_exp_to_dict_using_ast(filter_expr)
+            filter_dict = str_filter_exp_to_dict_using_ast(filter)
             filter_cond = build_sql_query(
                 filter_dict,
                 LogEvent,

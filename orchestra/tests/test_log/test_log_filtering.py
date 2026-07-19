@@ -155,7 +155,7 @@ async def test_log_filter_helper(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": expression,
+            "filter": expression,
         },
         headers=HEADERS,
     )
@@ -191,6 +191,18 @@ async def test_log_filter_helper(
         # This is a fallback for complex expressions
         print(f"Could not evaluate expression '{expression}': {e}")
         # We'll assume the API handled it correctly
+
+
+@pytest.mark.anyio
+async def test_get_logs_rejects_legacy_filter_expr(client: AsyncClient):
+    response = await client.get(
+        "/v0/logs",
+        params={"project_name": "unused", "filter_expr": "score > 0"},
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "filter" in response.text
 
 
 @pytest.mark.anyio
@@ -234,7 +246,7 @@ async def test_full_name_filter_expression(client: AsyncClient):
 
     r = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": expr},
+        params={"project_name": project_name, "filter": expr},
         headers=HEADERS,
     )
     assert r.status_code == 200, r.text
@@ -1372,7 +1384,7 @@ async def test_log_filter_with_whitespace_field_names(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": expression,
+            "filter": expression,
         },
         headers=HEADERS,
     )
@@ -1416,19 +1428,19 @@ async def test_isinstance_function_in_filter_expressions(
     log_id = response.json()["log_event_ids"][0]
 
     # Verify that isinstance(key, types) matches expected
-    filter_expr = f"isinstance({key}, {types_expr})"
+    filter = f"isinstance({key}, {types_expr})"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
     data = response.json()
     if should_match:
-        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter}"
         assert data["logs"][0]["id"] == log_id
     else:
-        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {filter_expr}"
+        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {filter}"
 
 
 @pytest.mark.anyio
@@ -1448,7 +1460,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
     # get existing key
     r = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": "d1.get('a') == 1"},
+        params={"project_name": project_name, "filter": "d1.get('a') == 1"},
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1457,7 +1469,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
     # get missing key -> None
     r = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": "d1.get('b') is None"},
+        params={"project_name": project_name, "filter": "d1.get('b') is None"},
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1466,7 +1478,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
     # get with default for missing -> default
     r = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": "d2.get('b', 5) == 5"},
+        params={"project_name": project_name, "filter": "d2.get('b', 5) == 5"},
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1477,7 +1489,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "d1.setdefault('a', 9) == 1",
+            "filter": "d1.setdefault('a', 9) == 1",
         },
         headers=HEADERS,
     )
@@ -1489,7 +1501,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "d2.setdefault('c', 7) == 7",
+            "filter": "d2.setdefault('c', 7) == 7",
         },
         headers=HEADERS,
     )
@@ -1838,7 +1850,7 @@ async def test_log_filter_helper_w_arithmetic(
     assert response.status_code == 200, response.text
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": expression},
+        params={"project_name": project_name, "filter": expression},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -2389,7 +2401,7 @@ async def test_filtering_and_sorting_base_and_derived_logs(
     logs_filtered = await fetch_logs(
         client,
         project_name,
-        filter_expr="derv/calcA > 50 or derv/calcB <= 10",
+        filter="derv/calcA > 50 or derv/calcB <= 10",
     )
     assert len(logs_filtered) == 2, "Both logs match the filter expression."
 
@@ -2448,29 +2460,25 @@ async def test_get_logs_w_timestamp_filtering(
     assert response.status_code == 200, response.text
 
     # Filter logs using the specified filter format
-    filter_expr = f'student/timestamp == "{filter_format}"'
+    filter = f'student/timestamp == "{filter_format}"'
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
 
     logs = response.json()["logs"]
     if should_match:
-        assert (
-            len(logs) == 1
-        ), f"Expected 1 log for filter: {filter_expr}, got {len(logs)}"
+        assert len(logs) == 1, f"Expected 1 log for filter: {filter}, got {len(logs)}"
     else:
-        assert (
-            len(logs) == 0
-        ), f"Expected 0 logs for filter: {filter_expr}, got {len(logs)}"
+        assert len(logs) == 0, f"Expected 0 logs for filter: {filter}, got {len(logs)}"
 
     # Also test greater-than comparison
-    filter_expr = f'student/timestamp > "{filter_format}"'
+    filter = f'student/timestamp > "{filter_format}"'
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -2480,7 +2488,7 @@ async def test_get_logs_w_timestamp_filtering(
     logs = response.json()["logs"]
     assert (
         len(logs) == expected_count
-    ), f"Expected {expected_count} logs for filter: {filter_expr}, got {len(logs)}"
+    ), f"Expected {expected_count} logs for filter: {filter}, got {len(logs)}"
 
 
 @pytest.mark.anyio
@@ -2492,7 +2500,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # temperature == -210.0
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "_/temperature == -210.0"},
+        params={"filter": "_/temperature == -210.0"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2510,7 +2518,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # temperature != -210.0
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "_/temperature != -210.0"},
+        params={"filter": "_/temperature != -210.0"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2528,7 +2536,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # temperature > 0.
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "_/temperature > 0."},
+        params={"filter": "_/temperature > 0."},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2554,7 +2562,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # timestamp later than 23/03/1993
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": '_/timestamp > "1993-03-23"'},
+        params={"filter": '_/timestamp > "1993-03-23"'},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2580,7 +2588,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # timestamp earlier than 23/03/1993
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": '_/timestamp < "1993-03-23"'},
+        params={"filter": '_/timestamp < "1993-03-23"'},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2618,7 +2626,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # timestamp is 23/03/1993
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": '_/timestamp == "1993-03-23"'},
+        params={"filter": '_/timestamp == "1993-03-23"'},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2629,7 +2637,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         params={
-            "filter_expr": '_/timestamp < "1993-03-23" or _/timestamp > "1993-03-23"',
+            "filter": '_/timestamp < "1993-03-23" or _/timestamp > "1993-03-23"',
         },
         headers=HEADERS,
     )
@@ -2640,7 +2648,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # liquid not in state
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "'liquid' not in _/state"},
+        params={"filter": "'liquid' not in _/state"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2656,7 +2664,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "_/description == 'boiling water'"},
+        params={"filter": "_/description == 'boiling water'"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2667,7 +2675,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check multiple conditions
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "('liquid' not in _/state) or (_/temperature == 0)"},
+        params={"filter": "('liquid' not in _/state) or (_/temperature == 0)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2707,7 +2715,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Now test filtering for logs where updated_at > created_at
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "updated_at > created_at"},
+        params={"filter": "updated_at > created_at"},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2720,7 +2728,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test filtering for logs where updated_at = created_at
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "updated_at == created_at"},
+        params={"filter": "updated_at == created_at"},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2733,7 +2741,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         params={
-            "filter_expr": "updated_at > created_at and _/state == 'gas->liquid'",
+            "filter": "updated_at > created_at and _/state == 'gas->liquid'",
         },
         headers=HEADERS,
     )
@@ -2747,7 +2755,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         params={
-            "filter_expr": f'updated_at >= "{initial_time.isoformat()}"',
+            "filter": f'updated_at >= "{initial_time.isoformat()}"',
         },
         headers=HEADERS,
     )
@@ -2760,7 +2768,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check exists
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "exists(_/state)"},
+        params={"filter": "exists(_/state)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2770,7 +2778,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check not exists
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "not exists(_/temperature)"},
+        params={"filter": "not exists(_/temperature)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2780,7 +2788,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test log_id equality filtering
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "log_id == 1"},
+        params={"filter": "log_id == 1"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2791,7 +2799,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test log_id inequality filtering
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "log_id != 1"},
+        params={"filter": "log_id != 1"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2802,7 +2810,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test log_id in operator
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "log_id in [1, 2, 3]"},
+        params={"filter": "log_id in [1, 2, 3]"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2813,7 +2821,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test log_id not in operator
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "log_id not in [1, 2, 3]"},
+        params={"filter": "log_id not in [1, 2, 3]"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2824,7 +2832,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test nested conditions with log_id
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "log_id > 2 and _/temperature > 0"},
+        params={"filter": "log_id > 2 and _/temperature > 0"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2837,7 +2845,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # Test non-existent log_id
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "log_id == 9999"},
+        params={"filter": "log_id == 9999"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2848,7 +2856,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
         params={
-            "filter_expr": "(log_id > 1 and log_id < 4) and (_/temperature > 0 or _/safe is True)",
+            "filter": "(log_id > 1 and log_id < 4) and (_/temperature > 0 or _/safe is True)",
         },
         headers=HEADERS,
     )
@@ -2865,7 +2873,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check len
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "len(_/description) < 10"},
+        params={"filter": "len(_/description) < 10"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2875,7 +2883,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "len(_/_data) > 2"},
+        params={"filter": "len(_/_data) > 2"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2886,7 +2894,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check in
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "'lava' in _/description"},
+        params={"filter": "'lava' in _/description"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2897,7 +2905,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # check is <val>
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "_/safe is True"},
+        params={"filter": "_/safe is True"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2921,7 +2929,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert response.status_code == 200, response.json()
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "_/description is None"},
+        params={"filter": "_/description is None"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2937,7 +2945,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     # num_tokens derived behavior sanity
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "num_tokens(_/description) >= 1"},
+        params={"filter": "num_tokens(_/description) >= 1"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2992,7 +3000,7 @@ async def test_num_tokens_function_w_various_types(client: AsyncClient):
     for expr, expected_key in cases:
         r = await client.get(
             "/v0/logs",
-            params={"project_name": project_name, "filter_expr": expr},
+            params={"project_name": project_name, "filter": expr},
             headers=HEADERS,
         )
         assert r.status_code == 200, r.text
@@ -3043,7 +3051,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient):
     # 1. Test now() > past timestamp
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": "now() > dt/timestamp"},
+        params={"project_name": project_name, "filter": "now() > dt/timestamp"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -3054,7 +3062,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient):
     # 2. Test now() < future timestamp
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": "now() < dt/timestamp"},
+        params={"project_name": project_name, "filter": "now() < dt/timestamp"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -3067,7 +3075,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "(now() - dt/timestamp) > 'PT12H'",
+            "filter": "(now() - dt/timestamp) > 'PT12H'",
         },
         headers=HEADERS,
     )
@@ -3081,7 +3089,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "date(now()) >= date(dt/timestamp)",
+            "filter": "date(now()) >= date(dt/timestamp)",
         },
         headers=HEADERS,
     )
@@ -3146,7 +3154,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/utc_time == dt/est_time and dt/name == 'same_instant_different_zones'",
+            "filter": "dt/utc_time == dt/est_time and dt/name == 'same_instant_different_zones'",
         },
         headers=HEADERS,
     )
@@ -3160,7 +3168,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/utc_time != dt/est_time and dt/name == 'same_wall_time_different_zones'",
+            "filter": "dt/utc_time != dt/est_time and dt/name == 'same_wall_time_different_zones'",
         },
         headers=HEADERS,
     )
@@ -3174,7 +3182,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/utc_time < dt/est_time and dt/name == 'same_wall_time_different_zones'",
+            "filter": "dt/utc_time < dt/est_time and dt/name == 'same_wall_time_different_zones'",
         },
         headers=HEADERS,
     )
@@ -3188,7 +3196,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "now() - dt/utc_time > 'PT0.000001S'",
+            "filter": "now() - dt/utc_time > 'PT0.000001S'",
         },
         headers=HEADERS,
     )
@@ -3199,7 +3207,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient):
     # 5. Test that now() preserves timezone information in comparisons
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": "dt/est_time < now()"},
+        params={"project_name": project_name, "filter": "dt/est_time < now()"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -3296,7 +3304,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/precise_ts == '2023-06-15T14:30:45.123+00:00'",
+            "filter": "dt/precise_ts == '2023-06-15T14:30:45.123+00:00'",
         },
         headers=HEADERS,
     )
@@ -3310,7 +3318,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/precise_ts == '2023-06-15T14:30:45.123456+00:00'",
+            "filter": "dt/precise_ts == '2023-06-15T14:30:45.123456+00:00'",
         },
         headers=HEADERS,
     )
@@ -3324,7 +3332,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/start_ts + 'PT2H30M' == '2023-06-15T12:45:30.500+00:00'",
+            "filter": "dt/start_ts + 'PT2H30M' == '2023-06-15T12:45:30.500+00:00'",
         },
         headers=HEADERS,
     )
@@ -3338,7 +3346,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/end_ts - dt/start_ts == 'PT2H30M15.25S'",
+            "filter": "dt/end_ts - dt/start_ts == 'PT2H30M15.25S'",
         },
         headers=HEADERS,
     )
@@ -3353,7 +3361,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/est_ts - dt/utc_ts == 'PT5H'",
+            "filter": "dt/est_ts - dt/utc_ts == 'PT5H'",
         },
         headers=HEADERS,
     )
@@ -3367,7 +3375,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "date(dt/timestamp) == dt/date and time(dt/timestamp) == dt/time",
+            "filter": "date(dt/timestamp) == dt/date and time(dt/timestamp) == dt/time",
         },
         headers=HEADERS,
     )
@@ -3381,7 +3389,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/middle == (dt/start + ((dt/end - dt/start) / 2))",
+            "filter": "dt/middle == (dt/start + ((dt/end - dt/start) / 2))",
         },
         headers=HEADERS,
     )
@@ -3396,7 +3404,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/feb01 - dt/jan31 == 'PT0.002S'",
+            "filter": "dt/feb01 - dt/jan31 == 'PT0.002S'",
         },
         headers=HEADERS,
     )
@@ -3410,7 +3418,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "(dt/precise_ts > '2023-06-15T00:00:00.000+00:00') and (date(dt/precise_ts) == '2023-06-15')",
+            "filter": "(dt/precise_ts > '2023-06-15T00:00:00.000+00:00') and (date(dt/precise_ts) == '2023-06-15')",
         },
         headers=HEADERS,
     )
@@ -3425,7 +3433,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "dt/precise_ts + 'PT0.877S' == '2023-06-15T14:30:46.000+00:00'",
+            "filter": "dt/precise_ts + 'PT0.877S' == '2023-06-15T14:30:46.000+00:00'",
         },
         headers=HEADERS,
     )
@@ -3442,7 +3450,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "'2' in str(_/_data)"},
+        params={"filter": "'2' in str(_/_data)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -3451,7 +3459,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": "str('2') in str(_/_data)"},
+        params={"filter": "str('2') in str(_/_data)"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -3460,7 +3468,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": """'{"a": 2' in str(_/_data)"""},
+        params={"filter": """'{"a": 2' in str(_/_data)"""},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -3469,7 +3477,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient):
 
     response = await client.get(
         f"/v0/logs?project_name={project_name}",
-        params={"filter_expr": """str('{"a": 2') in str(_/_data)"""},
+        params={"filter": """str('{"a": 2') in str(_/_data)"""},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -3530,12 +3538,12 @@ async def test_array_membership_operator(
     log_id = response.json()["log_event_ids"][0]
 
     # Test the membership operator
-    filter_expr = f"{test_value!r} in test_array"
+    filter = f"{test_value!r} in test_array"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -3543,10 +3551,10 @@ async def test_array_membership_operator(
     data = response.json()
 
     if should_match:
-        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter}"
         assert data["logs"][0]["id"] == log_id
     else:
-        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {filter_expr}"
+        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {filter}"
 
 
 @pytest.mark.parametrize(
@@ -3582,12 +3590,12 @@ async def test_boolean_membership_operator_error(
     assert response.status_code == 200
 
     # Test the membership operator
-    filter_expr = f"{test_value!r} in test_bool"
+    filter = f"{test_value!r} in test_bool"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -3664,7 +3672,7 @@ async def test_capitalize_behavior(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": f"derived_capitalize == '{expected_result}'",
+            "filter": f"derived_capitalize == '{expected_result}'",
         },
         headers=HEADERS,
     )
@@ -3743,7 +3751,7 @@ async def test_unicode_whitespace_stripping(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": f"derived_strip == '{expected_stripped}'",
+            "filter": f"derived_strip == '{expected_stripped}'",
         },
         headers=HEADERS,
     )
@@ -3791,12 +3799,12 @@ async def test_string_pattern_binding(
     log_id = response.json()["log_event_ids"][0]
 
     # Test filtering with the string method
-    filter_expr = f"test_string.{method}('{pattern}')"
+    filter = f"test_string.{method}('{pattern}')"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -3804,10 +3812,10 @@ async def test_string_pattern_binding(
     logs = response.json()["logs"]
 
     if should_match:
-        assert len(logs) == 1, f"Expected match for {filter_expr}"
+        assert len(logs) == 1, f"Expected match for {filter}"
         assert logs[0]["id"] == log_id
     else:
-        assert len(logs) == 0, f"Expected no match for {filter_expr}"
+        assert len(logs) == 0, f"Expected no match for {filter}"
 
 
 @pytest.mark.parametrize(
@@ -3860,19 +3868,19 @@ async def test_string_slicing(
         slice_expr = f"test_string[{start}:{stop}]"
 
     # Test filtering with the slice
-    filter_expr = f"{slice_expr} == '{expected_result}'"
+    filter = f"{slice_expr} == '{expected_result}'"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
     assert response.status_code == 200
     logs = response.json()["logs"]
 
-    assert len(logs) == 1, f"Expected match for {filter_expr}"
+    assert len(logs) == 1, f"Expected match for {filter}"
     assert logs[0]["id"] == log_id
 
     # Create a derived entry with the slice
@@ -3971,7 +3979,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": f"content == {json.dumps(math_question)}",
+            "filter": f"content == {json.dumps(math_question)}",
         },
         headers=HEADERS,
     )
@@ -3985,7 +3993,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": f"content == {json.dumps(probability_question)}",
+            "filter": f"content == {json.dumps(probability_question)}",
         },
         headers=HEADERS,
     )
@@ -4014,12 +4022,12 @@ async def test_filters_on_nones(
             entries={"some_field": None},
         )
     assert response.status_code == 200
-    filter_expr = f"some_field == 'mystr'"
+    filter = f"some_field == 'mystr'"
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": filter_expr,
+            "filter": filter,
         },
         headers=HEADERS,
     )
@@ -4066,7 +4074,7 @@ async def test_embed_column_function(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "l2(embed(text_content), embed('apple')) < 1.1",
+            "filter": "l2(embed(text_content), embed('apple')) < 1.1",
             "sorting": json.dumps(
                 {"l2(embed(text_content), embed('apple'))": "ascending"},
             ),
@@ -4086,7 +4094,7 @@ async def test_embed_column_function(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "cosine(embed(text_content), embed('fruit')) > 0.5",
+            "filter": "cosine(embed(text_content), embed('fruit')) > 0.5",
         },
         headers=HEADERS,
     )
@@ -4101,7 +4109,7 @@ async def test_embed_column_function(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "ip(embed(text_content), embed('orange juice')) < 0.",
+            "filter": "ip(embed(text_content), embed('orange juice')) < 0.",
         },
         headers=HEADERS,
     )
@@ -4118,7 +4126,7 @@ async def test_embed_column_function(client: AsyncClient):
         "/v0/logs",
         params={
             "project_name": project_name,
-            "filter_expr": "l1(embed(text_content), embed('banana')) > 10",
+            "filter": "l1(embed(text_content), embed('banana')) > 10",
         },
         headers=HEADERS,
     )
@@ -4227,7 +4235,7 @@ async def test_filter_on_field_with_existing_embedding(
     string_filter_expr = f"doc_text == '{log_content}'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": string_filter_expr},
+        params={"project_name": project_name, "filter": string_filter_expr},
         headers=HEADERS,
     )
 
@@ -4252,7 +4260,7 @@ async def test_filter_on_field_with_existing_embedding(
     )
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": vector_filter_expr},
+        params={"project_name": project_name, "filter": vector_filter_expr},
         headers=HEADERS,
     )
 
@@ -4302,15 +4310,15 @@ async def test_type_function_in_filter_expressions(
     log_id = response.json()["log_event_ids"][0]
 
     # Verify that type(key) matches the expected inferred type
-    filter_expr = f"type({key}) == '{expected_type}'"
+    filter = f"type({key}) == '{expected_type}'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
     data = response.json()
-    assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+    assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter}"
     assert data["logs"][0]["id"] == log_id
 
 
@@ -4463,7 +4471,7 @@ async def test_safe_temporal_casting_with_invalid_values(
 
     # Test 1: Filter date column with valid date range, excluding invalid values
     # This should only match logs with valid dates in the range
-    filter_expr = (
+    filter = (
         "WorksOrderStatusDescription in ('Complete','Closed') "
         "and WorksOrderReportedCompletedDate != 'NULL' "
         "and WorksOrderReportedCompletedDate >= '2025-09-01' "
@@ -4471,7 +4479,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     )
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     # Should not fail with InvalidDatetimeFormat error
@@ -4490,10 +4498,10 @@ async def test_safe_temporal_casting_with_invalid_values(
     )
 
     # Test 2: Filter time column, excluding invalid values
-    filter_expr = "event_time != 'NULL' and event_time >= '12:00:00'"
+    filter = "event_time != 'NULL' and event_time >= '12:00:00'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4507,10 +4515,10 @@ async def test_safe_temporal_casting_with_invalid_values(
     )
 
     # Test 3: Filter date column with != 'NULL', should exclude invalid dates
-    filter_expr = "WorksOrderReportedCompletedDate != 'NULL'"
+    filter = "WorksOrderReportedCompletedDate != 'NULL'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4525,10 +4533,10 @@ async def test_safe_temporal_casting_with_invalid_values(
     )
 
     # Test 4: Filter timedelta column, excluding invalid values
-    filter_expr = "duration != 'NULL' and duration > 'PT1H'"
+    filter = "duration != 'NULL' and duration > 'PT1H'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4542,10 +4550,10 @@ async def test_safe_temporal_casting_with_invalid_values(
     )
 
     # Test 5: Verify that valid temporal values still work correctly
-    filter_expr = "WorksOrderReportedCompletedDate == '2025-09-15'"
+    filter = "WorksOrderReportedCompletedDate == '2025-09-15'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4558,10 +4566,10 @@ async def test_safe_temporal_casting_with_invalid_values(
     # Note: Empty strings in data get cast to NULL, and NULL != '' evaluates to True with NULL-safe comparison
     # However, invalid values like "NULL" string also cast to NULL, and the actual behavior
     # is that only valid dates match this filter
-    filter_expr = "WorksOrderReportedCompletedDate != ''"
+    filter = "WorksOrderReportedCompletedDate != ''"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4681,10 +4689,10 @@ async def test_null_safe_equality_inequality_comparisons(
     # Test 1: NULL != 'NULL' should exclude rows where completion_date is NULL
     # After safe casting, invalid values become NULL, so NULL != NULL evaluates to False
     # This should only match logs with valid dates
-    filter_expr = "completion_date != 'NULL'"
+    filter = "completion_date != 'NULL'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4697,10 +4705,10 @@ async def test_null_safe_equality_inequality_comparisons(
 
     # Test 2: NULL == 'NULL' should only match rows where completion_date is NULL
     # After safe casting, invalid values become NULL, so NULL == NULL evaluates to True
-    filter_expr = "completion_date == 'NULL'"
+    filter = "completion_date == 'NULL'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4713,14 +4721,14 @@ async def test_null_safe_equality_inequality_comparisons(
 
     # Test 3: Combined filter: != 'NULL' AND date range
     # Should only match logs with valid dates in the range
-    filter_expr = (
+    filter = (
         "completion_date != 'NULL' "
         "and completion_date >= '2025-09-01' "
         "and completion_date < '2025-10-01'"
     )
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4735,10 +4743,10 @@ async def test_null_safe_equality_inequality_comparisons(
 
     # Test 4: Test with empty string comparison
     # Empty string gets cast to NULL, so NULL != '' should exclude those rows
-    filter_expr = "completion_date != ''"
+    filter = "completion_date != ''"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4750,10 +4758,10 @@ async def test_null_safe_equality_inequality_comparisons(
     )
 
     # Test 5: Test equality with valid value - should work normally
-    filter_expr = "completion_date == '2025-09-15'"
+    filter = "completion_date == '2025-09-15'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4766,10 +4774,10 @@ async def test_null_safe_equality_inequality_comparisons(
     )
 
     # Test 6: Test inequality with valid value - should work normally
-    filter_expr = "completion_date != '2025-09-15'"
+    filter = "completion_date != '2025-09-15'"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4786,14 +4794,14 @@ async def test_null_safe_equality_inequality_comparisons(
     )
 
     # Test 7: Complex filter combining status and date with NULL exclusion
-    filter_expr = (
+    filter = (
         "status in ('complete','closed') "
         "and completion_date != 'NULL' "
         "and completion_date >= '2025-09-01'"
     )
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4875,10 +4883,10 @@ async def test_filter_with_json_schema_typed_field(
     log_id = log_response.json()["log_event_ids"][0]
 
     # Step 3: Test filtering on simple type field (should work)
-    filter_expr = "exchange_id == 12345"
+    filter = "exchange_id == 12345"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert (
@@ -4889,10 +4897,10 @@ async def test_filter_with_json_schema_typed_field(
     assert data["logs"][0]["id"] == log_id
 
     # Step 4: Test filtering on JSON schema type field (this is the regression case)
-    filter_expr = "sender_id == 3"
+    filter = "sender_id == 3"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, (
@@ -4924,10 +4932,10 @@ async def test_filter_with_json_schema_typed_field(
 
     # Step 4c: Test comparison operator that would fail with text comparison
     # "10" > "5" is FALSE in text (lexicographic), but 10 > 5 is TRUE numerically
-    filter_expr = "sender_id > 5"
+    filter = "sender_id > 5"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, (
@@ -4942,10 +4950,10 @@ async def test_filter_with_json_schema_typed_field(
     assert data["logs"][0]["id"] == log_id_10
 
     # Step 4d: Test 'in' operator on JSON schema type field
-    filter_expr = "sender_id in [1, 2, 3, 4]"
+    filter = "sender_id in [1, 2, 3, 4]"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, (
@@ -4957,10 +4965,10 @@ async def test_filter_with_json_schema_typed_field(
     assert data["logs"][0]["id"] == log_id
 
     # Step 5: Test combined filter (both fields in expression)
-    filter_expr = "sender_id == 3 and exchange_id == 12345"
+    filter = "sender_id == 3 and exchange_id == 12345"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Combined filter failed: {response.text}"
@@ -4985,10 +4993,10 @@ async def test_filter_with_json_schema_typed_field(
     log_id_null = log_response_null.json()["log_event_ids"][0]
 
     # Filter for NULL sender_id
-    filter_expr = "sender_id is None"
+    filter = "sender_id is None"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Filter for None failed: {response.text}"
@@ -4997,10 +5005,10 @@ async def test_filter_with_json_schema_typed_field(
     assert data["logs"][0]["id"] == log_id_null
 
     # Filter for non-NULL sender_id (should return both sender_id=3 and sender_id=10)
-    filter_expr = "sender_id is not None"
+    filter = "sender_id is not None"
     response = await client.get(
         "/v0/logs",
-        params={"project_name": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter": filter},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Filter for not None failed: {response.text}"

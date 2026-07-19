@@ -38,13 +38,12 @@ class TokenResolutionResponse(BaseModel):
 class FilterBridgeRequest(BaseModel):
     """Request body for the filter bridge proxy.
 
-    Accepts both Orchestra-native field names (filter_expr, from_fields,
-    exclude_fields) and Console proxy names (filter, columns,
-    exclude_columns).  Console aliases take precedence when both are sent.
+    Accepts Orchestra field names (filter, from_fields, exclude_fields) and
+    the Console column aliases (columns, exclude_columns).
     """
 
     context: str
-    filter_expr: Optional[str] = None
+    filter: Optional[str] = None
     from_fields: Optional[str] = None
     exclude_fields: Optional[str] = None
     sorting: Optional[str] = None
@@ -65,8 +64,9 @@ class FilterBridgeRequest(BaseModel):
         """Map Console proxy field names to Orchestra names."""
         if not isinstance(values, dict):
             return values
+        if "filter_expr" in values:
+            raise ValueError("'filter_expr' was renamed to 'filter'")
         alias_map = {
-            "filter": "filter_expr",
             "columns": "from_fields",
             "exclude_columns": "exclude_fields",
         }
@@ -110,7 +110,7 @@ class ReduceBridgeRequest(BaseModel):
         ...,
         description="Column(s) to aggregate (maps to 'key' internally).",
     )
-    filter_expr: Optional[str] = Field(
+    filter: Optional[str] = Field(
         None,
         description="Filter expression applied before aggregation.",
     )
@@ -121,13 +121,9 @@ class ReduceBridgeRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _accept_console_aliases(cls, values: Any) -> Any:
-        if not isinstance(values, dict):
-            return values
-        if "filter" in values and "filter_expr" not in values:
-            values["filter_expr"] = values.pop("filter")
-        elif "filter" in values:
-            values.pop("filter")
+    def _reject_legacy_filter(cls, values: Any) -> Any:
+        if isinstance(values, dict) and "filter_expr" in values:
+            raise ValueError("'filter_expr' was renamed to 'filter'")
         return values
 
 

@@ -68,24 +68,22 @@ def _resolve_key_specific_filters(
     key: str,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Extract key-specific filter_expr, from_ids, and exclude_ids from the request object.
+    Extract key-specific filter, from_ids, and exclude_ids from the request object.
 
     Args:
         request: The GetLogsMetricRequest object
         key: The field key to extract filters for
 
     Returns:
-        Tuple of (key_filter_expr, key_from_ids, key_exclude_ids)
+        Tuple of (key_filter, key_from_ids, key_exclude_ids)
     """
-    # Parse filter_expr if it's a JSON string
-    if request.filter_expr is not None and isinstance(request.filter_expr, str):
-        if request.filter_expr.strip().startswith("{"):
-            request.filter_expr = json.loads(request.filter_expr)
+    # Parse filter if it's a JSON string
+    if request.filter is not None and isinstance(request.filter, str):
+        if request.filter.strip().startswith("{"):
+            request.filter = json.loads(request.filter)
 
-    key_filter_expr = (
-        request.filter_expr.get(key)
-        if isinstance(request.filter_expr, dict)
-        else request.filter_expr
+    key_filter = (
+        request.filter.get(key) if isinstance(request.filter, dict) else request.filter
     )
 
     # Parse from_ids if it's a JSON string
@@ -110,7 +108,7 @@ def _resolve_key_specific_filters(
         else request.exclude_ids
     )
 
-    return key_filter_expr, key_from_ids, key_exclude_ids
+    return key_filter, key_from_ids, key_exclude_ids
 
 
 def _postprocess_aggregator_value(
@@ -794,7 +792,7 @@ def _compute_metric_for_key_grouped(
     context_id: Optional[int],
     field_types,
     group_by: Union[str, List[str]],
-    key_filter_expr: Optional[str] = None,
+    key_filter: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
     session=None,
@@ -809,7 +807,7 @@ def _compute_metric_for_key_grouped(
         context_id: The context ID
         field_types: Dict of field types
         group_by: Field(s) to group by (string or list of strings)
-        key_filter_expr: Key-specific filter expression
+        key_filter: Key-specific filter expression
         key_from_ids: Key-specific from_ids
         key_exclude_ids: Key-specific exclude_ids
         session: Database session
@@ -825,7 +823,7 @@ def _compute_metric_for_key_grouped(
         context_id,
         field_types,
         group_by,
-        key_filter_expr,
+        key_filter,
         key_from_ids,
         key_exclude_ids,
         session,
@@ -839,7 +837,7 @@ def _compute_metric_for_key_grouped(
     context_id: Optional[int],
     field_types,
     group_by: Union[str, List[str]],
-    key_filter_expr: Optional[str] = None,
+    key_filter: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
     session=None,
@@ -902,9 +900,9 @@ def _compute_metric_for_key_grouped(
             LogEvent.id.notin_([int(i) for i in key_exclude_ids.split("&")]),
         )
 
-    if key_filter_expr:
+    if key_filter:
         filter_dict = str_filter_exp_to_dict(
-            key_filter_expr,
+            key_filter,
             field_names=list(field_types.keys()),
         )
         if filter_dict:
@@ -974,7 +972,7 @@ def compute_metric_for_key(
     project_obj,
     context_id: Optional[int],
     field_types,
-    key_filter_expr: Optional[str] = None,
+    key_filter: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
     session=None,
@@ -988,7 +986,7 @@ def compute_metric_for_key(
         project_obj: The project object
         context_id: The context ID
         field_types: Dict of field types
-        key_filter_expr: Key-specific filter expression
+        key_filter: Key-specific filter expression
         key_from_ids: Key-specific from_ids
         key_exclude_ids: Key-specific exclude_ids
         session: Database session
@@ -1003,7 +1001,7 @@ def compute_metric_for_key(
         project_obj,
         context_id,
         field_types,
-        key_filter_expr,
+        key_filter,
         key_from_ids,
         key_exclude_ids,
         session,
@@ -1016,7 +1014,7 @@ def compute_metric_for_key(
     project_obj,
     context_id: Optional[int],
     field_types,
-    key_filter_expr: Optional[str] = None,
+    key_filter: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
     session=None,
@@ -1064,9 +1062,9 @@ def compute_metric_for_key(
             LogEvent.id.notin_([int(i) for i in key_exclude_ids.split("&")]),
         )
 
-    if key_filter_expr:
+    if key_filter:
         filter_dict = str_filter_exp_to_dict(
-            key_filter_expr,
+            key_filter,
             field_names=list(field_types.keys()),
         )
         if filter_dict:
@@ -1141,13 +1139,13 @@ def compute_metric_for_key(
             # Set context and capture
             set_test_context(
                 test_name="metric_query",
-                filter_expr=f"metric({metric}, {key})",
+                filter=f"metric({metric}, {key})",
                 mode=mode,
             )
             capture_sql(
                 sql=compiled_sql,
                 explain_analyze=explain_output,
-                filter_expr_override=f"metric({metric}, {key})",
+                filter_override=f"metric({metric}, {key})",
             )
     except ImportError:
         pass  # sql_capture module not available (production environment)
@@ -1173,7 +1171,7 @@ def compute_metric_bulk(
     project_id: int,
     context_id: Optional[int],
     field_types: Dict[str, str],
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     from_ids: Optional[str] = None,
     exclude_ids: Optional[str] = None,
     session=None,
@@ -1185,7 +1183,7 @@ def compute_metric_bulk(
         metric: The metric to compute (mean, sum, etc.)
         project_id: The project ID
         field_types: Dict of field types
-        filter_expr: Filter expression
+        filter: Filter expression
         from_ids: IDs to include
         exclude_ids: IDs to exclude
         session: Database session
@@ -1200,7 +1198,7 @@ def compute_metric_bulk(
         project_id,
         context_id,
         field_types,
-        filter_expr,
+        filter,
         from_ids,
         exclude_ids,
         session,
@@ -1213,7 +1211,7 @@ def compute_metric_bulk(
     project_id: int,
     context_id: Optional[int],
     field_types: Dict[str, str],
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     from_ids: Optional[str] = None,
     exclude_ids: Optional[str] = None,
     session=None,
@@ -1254,9 +1252,9 @@ def compute_metric_bulk(
         )
 
     use_filtered_id_fallback = False
-    if filter_expr:
+    if filter:
         filter_dict = str_filter_exp_to_dict(
-            filter_expr,
+            filter,
             field_names=list(field_types.keys()),
         )
         if filter_dict:
@@ -1369,13 +1367,13 @@ def compute_metric_bulk(
             keys_str = ", ".join(keys)
             set_test_context(
                 test_name="metric_bulk_query",
-                filter_expr=f"metric_bulk({metric}, {keys_str})",
+                filter=f"metric_bulk({metric}, {keys_str})",
                 mode=mode,
             )
             capture_sql(
                 sql=compiled_sql,
                 explain_analyze=explain_output,
-                filter_expr_override=f"metric_bulk({metric}, {keys_str})",
+                filter_override=f"metric_bulk({metric}, {keys_str})",
             )
     except ImportError:
         pass  # sql_capture module not available (production environment)

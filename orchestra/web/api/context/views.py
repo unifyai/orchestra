@@ -786,7 +786,7 @@ def add_logs_to_context(
                 request_fastapi=request_fastapi,
                 project_name=project_name,
                 context=log_args.get("context"),
-                filter_expr=log_args.get("filter_expr"),
+                filter=log_args.get("filter"),
                 sorting=log_args.get("sorting"),
                 from_ids=log_args.get("from_ids"),
                 exclude_ids=log_args.get("exclude_ids"),

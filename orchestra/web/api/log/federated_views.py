@@ -292,7 +292,7 @@ def get_federated_logs(
                 request_fastapi,
                 project_name=project_name,
                 context=spec.context,
-                filter_expr=combined_filter,
+                filter=combined_filter,
                 sorting=backend_sorting,
                 from_ids=None,
                 exclude_ids=None,

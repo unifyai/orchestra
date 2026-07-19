@@ -40,6 +40,17 @@ router = APIRouter()
 admin_router = APIRouter()
 
 
+async def _reject_legacy_filter(request: Request) -> None:
+    if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+        return
+    body = await request.json()
+    if isinstance(body, dict) and "filter_expr" in body:
+        raise HTTPException(
+            status_code=400,
+            detail="The 'filter_expr' field was renamed to 'filter'.",
+        )
+
+
 def _resolve_tile_token(session: Session, token: str):
     """Resolve a token and verify it belongs to a tile.
 
@@ -227,6 +238,7 @@ def admin_resolve_token(
 def admin_filter_bridge(
     token: str,
     body: FilterBridgeRequest,
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     session: Session = Depends(get_db_session),
 ) -> FilterBridgeResponse:
     """Fetch filtered log data for a tile token.
@@ -253,7 +265,7 @@ def admin_filter_bridge(
         request_fastapi=fake_request,
         project_name=project_name,
         context=body.context,
-        filter_expr=body.filter_expr,
+        filter=body.filter,
         sorting=body.sorting,
         from_ids=None,
         exclude_ids=None,
@@ -325,6 +337,7 @@ def admin_filter_bridge(
 def admin_reduce_bridge(
     token: str,
     body: ReduceBridgeRequest,
+    _legacy_filter_check: None = Depends(_reject_legacy_filter),
     session: Session = Depends(get_db_session),
 ) -> ReduceBridgeResponse:
     """Compute an aggregation metric for a tile token.
@@ -366,7 +379,7 @@ def admin_reduce_bridge(
                 context_id=context_id,
                 field_types=field_types,
                 group_by=body.group_by,
-                key_filter_expr=body.filter_expr,
+                key_filter=body.filter,
                 key_from_ids=None,
                 key_exclude_ids=None,
                 session=session,
@@ -382,7 +395,7 @@ def admin_reduce_bridge(
                 project_obj=project_obj,
                 context_id=context_id,
                 field_types=field_types,
-                key_filter_expr=body.filter_expr,
+                key_filter=body.filter,
                 key_from_ids=None,
                 key_exclude_ids=None,
                 session=session,
@@ -429,8 +442,8 @@ def admin_join_bridge(
     project_obj = entry.project
 
     pair_of_args = [
-        {"context": body.tables[0], "filter_expr": body.left_where},
-        {"context": body.tables[1], "filter_expr": body.right_where},
+        {"context": body.tables[0], "filter": body.left_where},
+        {"context": body.tables[1], "filter": body.right_where},
     ]
 
     try:
@@ -441,7 +454,7 @@ def admin_join_bridge(
             join_expr=body.join_expr,
             mode=body.mode,
             columns=body.select,
-            filter_expr=body.result_where,
+            filter=body.result_where,
             sorting=None,
             limit=body.result_limit,
             offset=body.result_offset,
@@ -503,8 +516,8 @@ def admin_join_reduce_bridge(
     project_obj = entry.project
 
     pair_of_args = [
-        {"context": body.tables[0], "filter_expr": body.left_where},
-        {"context": body.tables[1], "filter_expr": body.right_where},
+        {"context": body.tables[0], "filter": body.left_where},
+        {"context": body.tables[1], "filter": body.right_where},
     ]
 
     try:
@@ -515,7 +528,7 @@ def admin_join_reduce_bridge(
             join_expr=body.join_expr,
             mode=body.mode,
             columns=body.select,
-            filter_expr=body.result_where,
+            filter=body.result_where,
             sorting=None,
             limit=None,
             offset=0,
@@ -612,7 +625,7 @@ def admin_get_dashboard_action(
         request_fastapi=fake_request,
         project_name=project_name,
         context=actions_context,
-        filter_expr=f"tile_token == '{tile_token}' and action_name == '{action_name}'",
+        filter=f"tile_token == '{tile_token}' and action_name == '{action_name}'",
         sorting=None,
         from_ids=None,
         exclude_ids=None,
@@ -688,7 +701,7 @@ def admin_list_dashboard_actions(
         request_fastapi=fake_request,
         project_name=project_name,
         context=actions_context,
-        filter_expr=f"tile_token == '{tile_token}'",
+        filter=f"tile_token == '{tile_token}'",
         sorting=None,
         from_ids=None,
         exclude_ids=None,
