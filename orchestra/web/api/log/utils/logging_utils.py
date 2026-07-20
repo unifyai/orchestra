@@ -2001,6 +2001,25 @@ def _create_logs_internal(
 
             # If we made it here, this log is valid; stage its artifacts
             new_field_types.extend(perlog_field_types)
+            # Only after the row succeeds: later logs must see these fields as
+            # already staged so a fresh context does not restage O(rows × fields).
+            for staged in perlog_field_types:
+                field_name = staged["field_name"]
+                if field_name in field_types:
+                    continue
+                field_types[field_name] = {
+                    "field_type": (
+                        staged["field_type"]
+                        if staged.get("field_type") is not None
+                        else "Any"
+                    ),
+                    "field_category": staged.get("field_category", "entry"),
+                    "mutable": staged.get("mutable", True),
+                    "ui_editable": staged.get("ui_editable", True),
+                    "unique": staged.get("unique", False),
+                    "enum_values": staged.get("enum_values"),
+                    "restrict": staged.get("enum_restrict", False),
+                }
             successful_indices.append(i)
             log_data_updates.append((log_event_id, log_data, key_order))
 

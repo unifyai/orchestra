@@ -4,6 +4,10 @@ import os
 import cv2
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.orm import Session
+
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.models.core_models import Context, FieldType, Project
 
 from . import HEADERS, _create_log, _create_project
 
@@ -398,6 +402,77 @@ async def test_create_logs(client: AsyncClient):
 
     # When no unique_keys/auto_counting are configured, auto_counting should be empty dict
     assert response.json()["auto_counting"] == {}
+
+
+@pytest.mark.anyio
+async def test_batch_create_stages_each_new_field_type_once(
+    client: AsyncClient,
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Fresh-context batches must not restage the same field once per row."""
+    project_name = "batch-field-type-dedupe"
+    context_name = "Functions/Primitives"
+    field_names = ("name", "argspec", "docstring")
+    batch_size = 40
+    await _create_project(client, project_name)
+
+    staged_sizes: list[int] = []
+    original_bulk_create = FieldTypeDAO.bulk_create_field_types
+
+    def _bulk_create(self, field_types_data, description=None):
+        staged_sizes.append(len(field_types_data))
+        return original_bulk_create(self, field_types_data, description=description)
+
+    monkeypatch.setattr(FieldTypeDAO, "bulk_create_field_types", _bulk_create)
+
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context_name,
+            "entries": [
+                {
+                    "name": f"tool_{index}",
+                    "argspec": "() -> None",
+                    "docstring": f"doc {index}",
+                }
+                for index in range(batch_size)
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert len(response.json()["log_event_ids"]) == batch_size
+    assert staged_sizes == [len(field_names)]
+
+    project = dbsession.query(Project).filter(Project.name == project_name).one()
+    context = (
+        dbsession.query(Context)
+        .filter(
+            Context.project_id == project.id,
+            Context.name == context_name,
+        )
+        .one()
+    )
+    field_rows = (
+        dbsession.query(FieldType)
+        .filter(
+            FieldType.project_id == project.id,
+            FieldType.context_id == context.id,
+            FieldType.field_name.in_(field_names),
+        )
+        .all()
+    )
+    assert {row.field_name for row in field_rows} == set(field_names)
+    assert len(field_rows) == len(field_names)
+
+    fields_resp = await client.get(
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert fields_resp.status_code == 200, fields_resp.json()
+    assert set(field_names).issubset(fields_resp.json())
 
 
 @pytest.mark.anyio
