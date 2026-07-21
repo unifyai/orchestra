@@ -295,7 +295,7 @@ class ProviderEventDispatchAdoptionService:
             ("receipt_id", str(dispatch.receipt_id), str(authorization.receipt_id)),
             (
                 "accepted_revision",
-                str(dispatch.accepted_activation_revision),
+                str(dispatch.accepted_revision),
                 str(authorization.accepted_revision),
             ),
             (

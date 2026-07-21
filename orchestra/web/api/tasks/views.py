@@ -696,8 +696,8 @@ def get_assistant_task_trigger_health(
     binding = service.get_binding_for_task(assistant=assistant, task_id=task_id)
     remediation = None
     runtime_health: str = "absent"
-    desired_activation_revision = None
-    observed_activation_revision = None
+    desired_revision = None
+    observed_revision = None
     acceptance_epoch = None
     local_acceptance_open = False
     active_generation_id = None
@@ -705,8 +705,8 @@ def get_assistant_task_trigger_health(
     coverage_ended_at = None
     if binding is not None:
         runtime_health = binding.runtime_health
-        desired_activation_revision = binding.desired_activation_revision
-        observed_activation_revision = binding.observed_activation_revision
+        desired_revision = binding.desired_revision
+        observed_revision = binding.observed_revision
         acceptance_epoch = binding.acceptance_epoch
         local_acceptance_open = binding.local_acceptance_open
         active_generation_id = binding.active_generation_id
@@ -736,8 +736,8 @@ def get_assistant_task_trigger_health(
             authored_trigger_state=authored_state,
             task_enabled=bool(row.data.get("enabled", True)),
             runtime_health=runtime_health,  # type: ignore[arg-type]
-            desired_revision=desired_activation_revision,
-            observed_revision=observed_activation_revision,
+            desired_revision=desired_revision,
+            observed_revision=observed_revision,
             acceptance_epoch=acceptance_epoch,
             local_acceptance_open=local_acceptance_open,
             active_generation_id=active_generation_id,

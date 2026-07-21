@@ -211,8 +211,7 @@ class ProviderTriggerReconciliationService:
         if (
             generation.lifecycle_state == GenerationLifecycle.active.value
             and binding.active_generation_id == generation.generation_id
-            and binding.observed_activation_revision
-            == binding.desired_activation_revision
+            and binding.observed_revision == binding.desired_revision
         ):
             binding.runtime_health = BindingRuntimeHealth.healthy.value
             binding.last_stable_error_code = None
@@ -382,8 +381,7 @@ class ProviderTriggerReconciliationService:
             binding_id=binding.binding_id,
         ):
             if (
-                generation.desired_activation_revision
-                != binding.desired_activation_revision
+                generation.desired_revision != binding.desired_revision
                 or generation.acceptance_epoch != binding.acceptance_epoch
             ) and generation.lifecycle_state in {
                 GenerationLifecycle.active.value,
@@ -407,8 +405,7 @@ class ProviderTriggerReconciliationService:
         if (
             binding.tombstoned_at is not None
             or binding.desired_trigger_state != DesiredTriggerState.enabled.value
-            or generation.desired_activation_revision
-            != binding.desired_activation_revision
+            or generation.desired_revision != binding.desired_revision
             or generation.acceptance_epoch != binding.acceptance_epoch
             or generation.delete_operation_state
             in {

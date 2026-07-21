@@ -52,7 +52,7 @@ class TaskExecutionReprojectResponse(BaseModel):
     )
 
 
-class TaskRunCreateOrAdoptRequest(BaseModel):
+class TaskExecutionCreateOrAdoptRequest(BaseModel):
     """Create a task run by run_key if absent, or adopt the existing row."""
 
     project_name: str = Field(
@@ -122,7 +122,7 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
     )
 
 
-class TaskRunUpdateRequest(BaseModel):
+class TaskExecutionUpdateRequest(BaseModel):
     """Apply a partial update to an existing task run row."""
 
     project_name: str = Field(
@@ -192,7 +192,7 @@ class TaskSourceReleaseResponse(BaseModel):
     )
 
 
-class TaskRunLatestRequest(BaseModel):
+class TaskExecutionLatestRequest(BaseModel):
     """Lookup the latest run row for one assistant/task pair."""
 
     project_name: str = Field(
@@ -207,7 +207,7 @@ class TaskRunLatestRequest(BaseModel):
     )
 
 
-class TaskRunLatestResponse(BaseModel):
+class TaskExecutionLatestResponse(BaseModel):
     """Latest task run lookup response."""
 
     run: Optional[Dict[str, Any]] = Field(
@@ -216,7 +216,7 @@ class TaskRunLatestResponse(BaseModel):
     )
 
 
-class TaskRunGetRequest(BaseModel):
+class TaskExecutionGetRequest(BaseModel):
     """Lookup one task run row by its idempotency key."""
 
     project_name: str = Field(
@@ -231,7 +231,7 @@ class TaskRunGetRequest(BaseModel):
     )
 
 
-class TaskRunGetResponse(BaseModel):
+class TaskExecutionGetResponse(BaseModel):
     """Task run lookup response keyed by run_key."""
 
     run: Optional[Dict[str, Any]] = Field(
@@ -240,7 +240,7 @@ class TaskRunGetResponse(BaseModel):
     )
 
 
-class TaskRunMutationResponse(BaseModel):
+class TaskExecutionMutationResponse(BaseModel):
     """Serialized task run payload returned by internal mutation endpoints."""
 
     run: Dict[str, Any] = Field(description="Materialized run row payload.")

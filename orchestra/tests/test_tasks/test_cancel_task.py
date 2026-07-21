@@ -76,7 +76,7 @@ def _seed_task_run(
     source_task_log_id: int,
     run_key: str = "offline:test:run-1",
     state: str = "running",
-    job_name: str | None = "unity-task-run-abc123",
+    job_name: str | None = "unity-task-execution-abc123",
 ) -> LogEvent:
     project = (
         dbsession.query(Project)
@@ -155,7 +155,7 @@ async def test_cancel_task_marks_active_instance_cancelled(
         user_id=_auth_user_id(),
         task_id=91,
         source_task_log_id=task_row.id,
-        job_name="unity-task-run-cancel-me",
+        job_name="unity-task-execution-cancel-me",
     )
 
     response = await client.post(
@@ -169,10 +169,12 @@ async def test_cancel_task_marks_active_instance_cancelled(
     assert info["assistant_id"] == assistant_id
     assert info["status"] == "cancelled"
     assert info["run_key"] == "offline:test:run-1"
-    assert info["job_name"] == "unity-task-run-cancel-me"
+    assert info["job_name"] == "unity-task-execution-cancel-me"
     assert info["job_stop_requested"] is True
 
-    mock_comms_job_stop.assert_awaited_once_with(job_name="unity-task-run-cancel-me")
+    mock_comms_job_stop.assert_awaited_once_with(
+        job_name="unity-task-execution-cancel-me",
+    )
     mock_task_cancel_event.assert_not_awaited()
 
     dbsession.refresh(task_row)

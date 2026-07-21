@@ -230,7 +230,7 @@ def _classify_delivery(
         return ReceiptClassificationReason.inactive
     if generation.lifecycle_state != GenerationLifecycle.active.value:
         return ReceiptClassificationReason.stale
-    if generation.desired_activation_revision != binding.desired_activation_revision:
+    if generation.desired_revision != binding.desired_revision:
         return ReceiptClassificationReason.stale
     if generation.acceptance_epoch != binding.acceptance_epoch:
         return ReceiptClassificationReason.stale
@@ -438,7 +438,7 @@ def _accept_matched_delivery(
 
     authorization = {
         "classification": ReceiptClassificationReason.matched.value,
-        "accepted_revision": locked_generation.desired_activation_revision,
+        "accepted_revision": locked_generation.desired_revision,
         "acceptance_epoch": locked_generation.acceptance_epoch,
         "generation_id": locked_generation.generation_id,
         "provider_event_identity": delivery.provider_event_identity,
@@ -472,7 +472,7 @@ def _accept_matched_delivery(
         assistant_id=str(locked_binding.assistant_id),
         task_id=locked_binding.task_id,
         binding_id=locked_binding.binding_id,
-        revision=receipt.accepted_activation_revision,
+        revision=receipt.accepted_revision,
         event_identity_hmac=identity_hmac,
         delivery=run_delivery,  # type: ignore[arg-type]
     )
@@ -486,7 +486,7 @@ def _accept_matched_delivery(
         "wake": "provider_event",
         "delivery": run_delivery,
         "state": "pending",
-        "revision": receipt.accepted_activation_revision,
+        "revision": receipt.accepted_revision,
         "provider_event_binding_id": locked_binding.binding_id,
         "provider_event_receipt_id": receipt.receipt_id,
         "provider_event_backend_id": locked_binding.backend_id,

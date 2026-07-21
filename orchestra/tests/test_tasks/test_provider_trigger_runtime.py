@@ -153,7 +153,7 @@ async def test_create_persists_binding_and_projects_provider_event_execution(
     assert (
         execution["provider_event_binding_id"] == created["provider_event_binding_id"]
     )
-    assert execution["revision"] == binding.desired_activation_revision
+    assert execution["revision"] == binding.desired_revision
     assert execution["connection_id"] == created["trigger"]["connection_id"]
 
 

@@ -1,4 +1,4 @@
-"""Provider-event activation revision hashing."""
+"""Provider-event revision hashing."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def normalize_trigger_config(config: Mapping[str, Any] | None) -> dict[str, Any]
     return json.loads(json.dumps(dict(config), sort_keys=True))
 
 
-def provider_event_activation_revision_payload(
+def provider_event_revision_payload(
     *,
     trigger: ProviderEventTrigger | Mapping[str, Any],
     binding_id: str,
@@ -30,7 +30,7 @@ def provider_event_activation_revision_payload(
     requires_filesystem: bool = False,
     requires_computer: bool = False,
 ) -> dict[str, Any]:
-    """Build the config-only payload hashed into provider activation revisions."""
+    """Build the config-only payload hashed into provider-event revisions."""
 
     if isinstance(trigger, ProviderEventTrigger):
         trigger_payload = trigger
@@ -57,7 +57,7 @@ def provider_event_activation_revision_payload(
     return payload
 
 
-def compute_provider_event_activation_revision(
+def compute_provider_event_revision(
     *,
     trigger: ProviderEventTrigger | Mapping[str, Any],
     binding_id: str,
@@ -67,9 +67,9 @@ def compute_provider_event_activation_revision(
     requires_filesystem: bool = False,
     requires_computer: bool = False,
 ) -> str:
-    """Return the SHA-256 digest for one provider-event activation revision."""
+    """Return the SHA-256 digest for one provider-event revision."""
 
-    payload = provider_event_activation_revision_payload(
+    payload = provider_event_revision_payload(
         trigger=trigger,
         binding_id=binding_id,
         execution_mode=execution_mode,

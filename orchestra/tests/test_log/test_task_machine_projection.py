@@ -1047,7 +1047,7 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     }
 
     first = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json=payload,
         headers=ADMIN_HEADERS,
     )
@@ -1066,7 +1066,7 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     assert first_run["task_description"] == "Prepare the team's daily summary."
 
     second = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json=payload,
         headers=ADMIN_HEADERS,
     )
@@ -1099,7 +1099,7 @@ async def test_task_run_get_returns_precreated_run_or_none(
     source_task_log_id = source_task.json()["log_event_ids"][0]
     run_key = "offline:provider_event:42:101:binding-a:rev123:abcdef0123456789"
     create_response = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "run_key": run_key,
@@ -1117,7 +1117,7 @@ async def test_task_run_get_returns_precreated_run_or_none(
     created_run = create_response.json()["run"]
 
     get_response = await client.post(
-        "/v0/admin/task-run/get",
+        "/v0/admin/task-execution/get",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": str(assistant.agent_id),
@@ -1132,7 +1132,7 @@ async def test_task_run_get_returns_precreated_run_or_none(
     assert fetched_run["run_key"] == run_key
 
     missing_response = await client.post(
-        "/v0/admin/task-run/get",
+        "/v0/admin/task-execution/get",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": str(assistant.agent_id),
@@ -1178,7 +1178,7 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
 
     run_key = f"offline:scheduled:{assistant.agent_id}:team:{team.id}:321:rev-1"
     create_response = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "run_key": run_key,
@@ -1205,7 +1205,7 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
     # Update WITHOUT source_task_log_id (older runtime): the key-based
     # team-surface fallback must find the row.
     fallback_update = await client.post(
-        "/v0/admin/task-run/update",
+        "/v0/admin/task-execution/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": str(assistant.agent_id),
@@ -1219,7 +1219,7 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
 
     # Update WITH source_task_log_id (current runtimes): direct resolution.
     direct_update = await client.post(
-        "/v0/admin/task-run/update",
+        "/v0/admin/task-execution/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": str(assistant.agent_id),
@@ -1261,7 +1261,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     source_task_log_id = source_task.json()["log_event_ids"][0]
     run_key = "offline:42:202:rev-2"
     create_response = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "run_key": run_key,
@@ -1277,7 +1277,7 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
     assert create_response.status_code == 200, create_response.json()
 
     update_response = await client.post(
-        "/v0/admin/task-run/update",
+        "/v0/admin/task-execution/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -1314,7 +1314,7 @@ async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient)
 
     for run_key in ("live:42:303:first", "live:42:303:second"):
         create_response = await client.post(
-            "/v0/admin/task-run/create-or-adopt",
+            "/v0/admin/task-execution/create-or-adopt",
             json={
                 "project_name": TASK_MACHINE_PROJECT_NAME,
                 "run_key": run_key,
@@ -1330,7 +1330,7 @@ async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient)
         assert create_response.status_code == 200, create_response.json()
 
     update_response = await client.post(
-        "/v0/admin/task-run/update",
+        "/v0/admin/task-execution/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -1342,7 +1342,7 @@ async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient)
     assert update_response.status_code == 200, update_response.json()
 
     latest_response = await client.post(
-        "/v0/admin/task-run/latest",
+        "/v0/admin/task-execution/latest",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -1392,7 +1392,7 @@ async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient
         ("live:42:313:second", second_source_log_id),
     ):
         create_response = await client.post(
-            "/v0/admin/task-run/create-or-adopt",
+            "/v0/admin/task-execution/create-or-adopt",
             json={
                 "project_name": TASK_MACHINE_PROJECT_NAME,
                 "run_key": run_key,
@@ -1408,7 +1408,7 @@ async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient
         assert create_response.status_code == 200, create_response.json()
 
     update_response = await client.post(
-        "/v0/admin/task-run/update",
+        "/v0/admin/task-execution/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -1420,7 +1420,7 @@ async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient
     assert update_response.status_code == 200, update_response.json()
 
     scoped_response = await client.post(
-        "/v0/admin/task-run/latest",
+        "/v0/admin/task-execution/latest",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -1433,7 +1433,7 @@ async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient
     assert scoped_response.json()["run"]["run_key"] == "live:42:313:first"
 
     unscoped_response = await client.post(
-        "/v0/admin/task-run/latest",
+        "/v0/admin/task-execution/latest",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -1879,7 +1879,7 @@ async def test_task_run_admin_mutations_resolve_assistant_scoped_project(
     run_key = f"offline:{assistant.agent_id}:{task_id}:rev-2"
 
     create_response = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "run_key": run_key,
@@ -1896,7 +1896,7 @@ async def test_task_run_admin_mutations_resolve_assistant_scoped_project(
     assert create_response.json()["created"] is True
 
     update_response = await client.post(
-        "/v0/admin/task-run/update",
+        "/v0/admin/task-execution/update",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": str(assistant.agent_id),

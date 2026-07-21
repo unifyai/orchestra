@@ -38,8 +38,8 @@ from orchestra.db.models.orchestra_models import (
     TeamAssistantMembership,
 )
 from orchestra.db.scope import single_owner_key_for_context
-from orchestra.provider_triggers.activation_revision import (
-    compute_provider_event_activation_revision,
+from orchestra.provider_triggers.revision import (
+    compute_provider_event_revision,
     normalize_trigger_config,
 )
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
@@ -1388,7 +1388,7 @@ def update_task_run(
     return existing
 
 
-def get_task_run(
+def get_task_execution(
     session: Session,
     project_id: int,
     run_key: str,
@@ -1429,7 +1429,7 @@ def get_task_run(
     )
 
 
-def get_task_run_by_run_id(
+def get_task_execution_by_run_id(
     session: Session,
     project_id: int,
     *,
@@ -1460,7 +1460,7 @@ def get_task_run_by_run_id(
     )
 
 
-def get_latest_task_run_for_task(
+def get_latest_task_execution_for_task(
     session: Session,
     project_id: int,
     *,
@@ -1860,7 +1860,7 @@ def _project_provider_event_execution_payload(
     requires_filesystem = _requires_filesystem_from_row(row.data)
     requires_computer = _requires_computer_from_row(row.data)
     normalized_trigger_config = normalize_trigger_config(trigger.trigger_config)
-    revision = compute_provider_event_activation_revision(
+    revision = compute_provider_event_revision(
         trigger=trigger,
         binding_id=binding_id,
         execution_mode=delivery,
@@ -1909,16 +1909,10 @@ def _project_provider_event_execution_payload(
 
 
 def _normalize_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Map API payloads onto the execution field contract."""
+    """Normalize execution field contract; strip obsolete identity keys."""
 
     normalized = dict(payload)
-    if "wake" not in normalized and normalized.get("source_type"):
-        normalized["wake"] = normalized.pop("source_type")
-    if "delivery" not in normalized and normalized.get("execution_mode"):
-        normalized["delivery"] = normalized.pop("execution_mode")
-    if "revision" not in normalized and normalized.get("activation_revision"):
-        normalized["revision"] = normalized.pop("activation_revision")
-    for legacy_key in (
+    for obsolete_key in (
         "source_type",
         "execution_mode",
         "activation_revision",
@@ -1927,7 +1921,7 @@ def _normalize_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "next_due_at",
         "instance_id",
     ):
-        normalized.pop(legacy_key, None)
+        normalized.pop(obsolete_key, None)
     state = str(normalized.get("state") or "").lower()
     if state in {"", "pending"}:
         wake = str(normalized.get("wake") or "").lower()

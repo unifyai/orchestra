@@ -11,7 +11,7 @@ from orchestra.db.models.orchestra_models import LogEvent
 from orchestra.services.task_machine_state_service import (
     _delete_open_executions_for_task,
     _replace_log_payload,
-    get_latest_task_run_for_task,
+    get_latest_task_execution_for_task,
     lookup_task_machine_executions_context_id,
     resolve_tasks_context_name,
     update_task_run,
@@ -176,7 +176,7 @@ def apply_task_cancel(
     run_state_after: str | None = None
     job_name: str | None = None
 
-    latest_run = get_latest_task_run_for_task(
+    latest_run = get_latest_task_execution_for_task(
         session,
         project.id,
         assistant_id=str(target.assistant_id),

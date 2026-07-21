@@ -20,11 +20,11 @@ from orchestra.db.models.provider_trigger_models import (
     ProviderEventReceipt,
     ProviderTriggerWorkerHeartbeat,
 )
-from orchestra.provider_triggers.activation_revision import (
-    compute_provider_event_activation_revision,
+from orchestra.provider_triggers.private_event_storage import EncryptedEventObject
+from orchestra.provider_triggers.revision import (
+    compute_provider_event_revision,
     normalize_trigger_config,
 )
-from orchestra.provider_triggers.private_event_storage import EncryptedEventObject
 from orchestra.provider_triggers.runtime_types import (
     BindingRuntimeHealth,
     BlobAuditAction,
@@ -99,7 +99,7 @@ class ProviderTriggerDAO:
         """Insert one derived binding for a new provider-event task."""
 
         desired_state = DesiredTriggerState(trigger.state)
-        desired_revision = compute_provider_event_activation_revision(
+        desired_revision = compute_provider_event_revision(
             trigger=trigger,
             binding_id=binding_id,
             execution_mode=execution_mode,
@@ -121,7 +121,7 @@ class ProviderTriggerDAO:
             assistant_id=assistant_id,
             task_revision=task_revision,
             desired_trigger_state=desired_state.value,
-            desired_activation_revision=desired_revision,
+            desired_revision=desired_revision,
             acceptance_epoch=1,
             connection_id=trigger.connection_id,
             backend_id=trigger.backend_id,
@@ -156,16 +156,14 @@ class ProviderTriggerDAO:
         desired_state = DesiredTriggerState(trigger.state)
         binding.task_revision = task_revision
         binding.desired_trigger_state = desired_state.value
-        binding.desired_activation_revision = (
-            compute_provider_event_activation_revision(
-                trigger=trigger,
-                binding_id=binding.binding_id,
-                execution_mode=execution_mode,
-                entrypoint=entrypoint,
-                provider_account_subject_hmac=binding.provider_account_subject_hmac,
-                requires_filesystem=requires_filesystem,
-                requires_computer=requires_computer,
-            )
+        binding.desired_revision = compute_provider_event_revision(
+            trigger=trigger,
+            binding_id=binding.binding_id,
+            execution_mode=execution_mode,
+            entrypoint=entrypoint,
+            provider_account_subject_hmac=binding.provider_account_subject_hmac,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
         )
         binding.connection_id = trigger.connection_id
         binding.backend_id = trigger.backend_id
@@ -227,7 +225,7 @@ class ProviderTriggerDAO:
         generation = EventTriggerSubscriptionGeneration(
             generation_id=resolved_generation_id,
             binding_id=binding.binding_id,
-            desired_activation_revision=binding.desired_activation_revision,
+            desired_revision=binding.desired_revision,
             acceptance_epoch=binding.acceptance_epoch,
             provider_create_idempotency_key=f"create-{resolved_generation_id}",
             ingress_key=secrets.token_urlsafe(24),
@@ -341,7 +339,7 @@ class ProviderTriggerDAO:
         generation.lifecycle_state = GenerationLifecycle.active.value
         generation.activated_at = datetime.now(timezone.utc)
         binding.active_generation_id = generation.generation_id
-        binding.observed_activation_revision = generation.desired_activation_revision
+        binding.observed_revision = generation.desired_revision
         binding.local_acceptance_open = True
         binding.runtime_health = BindingRuntimeHealth.healthy.value
         binding.coverage_started_at = datetime.now(timezone.utc)
@@ -394,7 +392,7 @@ class ProviderTriggerDAO:
             binding_id=binding.binding_id,
             generation_id=generation.generation_id,
             provider_event_identity_hmac=provider_event_identity_hmac,
-            accepted_activation_revision=generation.desired_activation_revision,
+            accepted_revision=generation.desired_revision,
             acceptance_epoch=generation.acceptance_epoch,
             schema_version="0",
             processing_state=processing_state,
@@ -446,7 +444,7 @@ class ProviderTriggerDAO:
             run_id=run_id,
             run_key=run_key,
             dispatch_mode=binding.execution_mode,
-            accepted_activation_revision=receipt.accepted_activation_revision,
+            accepted_revision=receipt.accepted_revision,
             event_context_ref=receipt.event_context_ref,
             audience=audience,
             processing_state=DispatchProcessingState.pending.value,
@@ -1126,8 +1124,7 @@ class ProviderTriggerDAO:
         rows = self.list_generations_for_binding(binding_id=binding.binding_id)
         for generation in reversed(rows):
             if (
-                generation.desired_activation_revision
-                == binding.desired_activation_revision
+                generation.desired_revision == binding.desired_revision
                 and generation.acceptance_epoch == binding.acceptance_epoch
                 and generation.lifecycle_state
                 in {

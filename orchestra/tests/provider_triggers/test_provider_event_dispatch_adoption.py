@@ -147,7 +147,7 @@ def _seed_dispatch(
     receipt.run_id = run.id
     receipt.run_key = run_key
     receipt.event_context_ref = f"blob://{binding.binding_id}/{receipt_id}"
-    receipt.accepted_activation_revision = binding.desired_activation_revision
+    receipt.accepted_revision = binding.desired_revision
     dispatch = dao.adopt_dispatch(
         receipt=receipt,
         binding=binding,
@@ -165,7 +165,7 @@ def _seed_dispatch(
         binding_id=binding.binding_id,
         receipt_id=receipt.receipt_id,
         operation_id=dispatch.operation_id,
-        accepted_revision=dispatch.accepted_activation_revision,
+        accepted_revision=dispatch.accepted_revision,
         dispatch_mode=dispatch_mode,
         audience=audience,
         project_id=project.id,
@@ -598,12 +598,12 @@ async def test_worker_converges_from_orchestra_adoption_and_run_state_without_ra
     claimed = service.claim(
         authorization=_authorization(fixture),
         claimant_id="communication-1",
-        launch_identity=f"unity-task-run-{fixture.operation_id}",
+        launch_identity=f"unity-task-execution-{fixture.operation_id}",
     )
     service.report_started(
         operation_id=fixture.operation_id,
         fencing_token=claimed.fencing_token,
-        launch_identity=f"unity-task-run-{fixture.operation_id}",
+        launch_identity=f"unity-task-execution-{fixture.operation_id}",
     )
     dispatch = (
         dbsession.query(ProviderEventDispatch)
