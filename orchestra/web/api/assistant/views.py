@@ -79,9 +79,9 @@ from orchestra.services.assistant_cleanup_service import (
 )
 from orchestra.services.assistant_external_ip_service import (
     ensure_pending_assistant_external_ip,
+    reconcile_assistant_external_ip,
     record_assistant_external_ip_attachment,
     record_timezone_pool_location_intent,
-    reconcile_assistant_external_ip,
     release_managed_desktop_external_ip,
     request_assistant_external_ip_rotation,
     run_assistant_external_ip_rotation,
@@ -3759,6 +3759,11 @@ async def disconnect_assistant_account(
             )
             break
 
+    from orchestra.provider_triggers.workspace_connection_facade import (
+        deactivate_workspace_trigger_connections,
+    )
+
+    deactivate_workspace_trigger_connections(session, assistant_id=assistant_id)
     session.commit()
 
     try:
@@ -4343,6 +4348,12 @@ async def create_assistant_secret(
         body.secret_name,
         body.secret_value,
     )
+    if body.secret_name.startswith(("GOOGLE_", "MICROSOFT_")):
+        from orchestra.provider_triggers.workspace_connection_facade import (
+            ensure_workspace_trigger_connections,
+        )
+
+        ensure_workspace_trigger_connections(session, assistant_id=assistant_id)
     session.commit()
     # Reactive narration: fire-and-forget tell the Coordinator a
     # secret just landed so it can comment in-conversation. The
@@ -4416,6 +4427,12 @@ async def update_assistant_secret(
         secret_name,
         body.secret_value,
     )
+    if secret_name.startswith(("GOOGLE_", "MICROSOFT_")):
+        from orchestra.provider_triggers.workspace_connection_facade import (
+            ensure_workspace_trigger_connections,
+        )
+
+        ensure_workspace_trigger_connections(session, assistant_id=assistant_id)
     session.commit()
     # See sibling note on the POST handler — same narration emit, same
     # gating semantics. Updates pass ``is_create=False`` so the workspace
