@@ -55,7 +55,9 @@ def _catalog_environment() -> str:
     return os.getenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "staging")
 
 
-def _capability_from_candidate_json(candidate_json: dict[str, Any]) -> TriggerCapability:
+def _capability_from_candidate_json(
+    candidate_json: dict[str, Any],
+) -> TriggerCapability:
     config_schema = candidate_json.get("config_schema")
     return TriggerCapability(
         config_schema=config_schema if isinstance(config_schema, dict) else {},
