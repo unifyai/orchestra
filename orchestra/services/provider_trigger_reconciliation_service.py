@@ -379,6 +379,55 @@ class ProviderTriggerReconciliationService:
                 error_code=ReconcileErrorCode.provider_connection_missing,
             )
             return False
+
+        if not self._capability_prerequisites_met(binding):
+            return False
+        return True
+
+    def _capability_prerequisites_met(self, binding: EventTriggerBinding) -> bool:
+        """Refuse to provision delivery-only / not-live-ready / under-configured
+        native slugs (honest capability bar). Non-native backends stay ungated.
+        """
+
+        from orchestra.services.staged_trigger_catalog_service import (
+            missing_required_config,
+            resolve_trigger_capability,
+        )
+
+        capability = resolve_trigger_capability(
+            self._session,
+            backend_id=binding.backend_id,
+            provider_trigger_slug=binding.provider_trigger_slug,
+        )
+        if capability is None or not capability.is_gated:
+            return True
+
+        if capability.delivery_only:
+            self._mark_binding_terminal(
+                binding,
+                health=BindingRuntimeHealth.needs_attention,
+                error_code=ReconcileErrorCode.trigger_delivery_only,
+            )
+            return False
+        if not capability.live_ready:
+            self._mark_binding_terminal(
+                binding,
+                health=BindingRuntimeHealth.needs_attention,
+                error_code=ReconcileErrorCode.trigger_not_live_ready,
+            )
+            return False
+
+        missing = missing_required_config(
+            capability.config_schema,
+            binding.trigger_config_json or {},
+        )
+        if missing:
+            self._mark_binding_terminal(
+                binding,
+                health=BindingRuntimeHealth.needs_attention,
+                error_code=ReconcileErrorCode.required_config_missing,
+            )
+            return False
         return True
 
     def _drain_stale_generations(self, binding: EventTriggerBinding) -> None:
