@@ -288,6 +288,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
             "id": 2,
             "entries": {"a/b/c/numeric_input": 4.5},
             "derived_entries": {},
+            "external_entries": {},
             "versions": {},
             "clipped_fields": [],
         },

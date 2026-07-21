@@ -804,22 +804,39 @@ class FieldTypeDAO:
         pending_backfill_fields: List[str] = []
         if values_to_insert:
             stmt = pg_insert(FieldType).values(values_to_insert)
+            # Preserve derived_entry category/mutability on conflict: a bare
+            # type string (category defaults to "entry") must not reclassify an
+            # existing derived field, or reads will surface it under entries.
+            preserve_derived = FieldType.field_category == "derived_entry"
             stmt = stmt.on_conflict_do_update(
                 index_elements=["project_id", "field_name", "context_id"],
                 set_={
                     "field_type": stmt.excluded.field_type,
-                    "field_category": stmt.excluded.field_category,
-                    "mutable": stmt.excluded.mutable,
-                    "ui_editable": stmt.excluded.ui_editable,
+                    "field_category": case(
+                        (preserve_derived, FieldType.field_category),
+                        else_=stmt.excluded.field_category,
+                    ),
+                    "mutable": case(
+                        (preserve_derived, FieldType.mutable),
+                        else_=stmt.excluded.mutable,
+                    ),
+                    "ui_editable": case(
+                        (preserve_derived, FieldType.ui_editable),
+                        else_=stmt.excluded.ui_editable,
+                    ),
                     "unique": stmt.excluded.unique,
                     "enum_values": stmt.excluded.enum_values,
                     "enum_restrict": stmt.excluded.enum_restrict,
                     "description": stmt.excluded.description,
                 },
-            ).returning(FieldType.field_name, FieldType.backfilled_at)
+            ).returning(
+                FieldType.field_name,
+                FieldType.backfilled_at,
+                FieldType.field_category,
+            )
             result = self.session.execute(stmt)
-            for field_name, backfilled_at in result.all():
-                if backfilled_at is None:
+            for field_name, backfilled_at, field_category in result.all():
+                if backfilled_at is None and field_category != "derived_entry":
                     pending_backfill_fields.append(field_name)
             self.session.commit()
 
