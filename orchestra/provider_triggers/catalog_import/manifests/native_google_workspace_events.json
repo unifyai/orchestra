@@ -1,0 +1,38 @@
+{
+  "catalog_version": "native-google-v1",
+  "entries": [
+    {
+      "provider_trigger_slug": "google.workspace.meet.transcript.v2.fileGenerated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "retry_stable_identity_field": "event_id",
+      "signature_headers": [
+        "x-unify-webhook-id",
+        "x-unify-webhook-timestamp",
+        "x-unify-webhook-signature"
+      ],
+      "signature_scheme": "native_hmac_sha256_timestamp_dot_body",
+      "timestamp_tolerance_seconds": 300,
+      "provisioning_idempotency_supported": true,
+      "required_scopes": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ],
+      "raw_metadata": {
+        "source": "native_manifest",
+        "name": "Meet transcript ready",
+        "description": "Fires when a Google Meet transcript file is generated.",
+        "config": {
+          "type": "object",
+          "properties": {
+            "organizer_email": {
+              "type": "string",
+              "description": "Optional organizer email filter."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}
