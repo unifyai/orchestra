@@ -41,6 +41,22 @@ def pipedream_delivery_identity(
     return None
 
 
+def native_event_identity(payload: Mapping[str, Any]) -> str | None:
+    """Return retry-stable native trigger event id when present."""
+
+    for field in ("event_id", "id", "resource_id"):
+        candidate = payload.get(field)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    data = payload.get("data")
+    if isinstance(data, Mapping):
+        for field in ("event_id", "id", "resource_id", "transcript_file_id"):
+            candidate = data.get(field)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
 def binding_event_identity_hmac(
     *,
     binding_hmac_key: bytes,
