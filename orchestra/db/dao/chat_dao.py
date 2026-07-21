@@ -12,10 +12,15 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
-from orchestra.db.models.orchestra_models import CallUtterance, ChatMessage, ChatThread
+from orchestra.db.models.orchestra_models import (
+    CallSession,
+    CallUtterance,
+    ChatMessage,
+    ChatThread,
+)
 
 KIND_DM = "dm"
 KIND_ASSISTANT_DM = "assistant_dm"
@@ -324,6 +329,31 @@ class ChatDAO:
             .limit(limit)
         )
         return self.session.execute(query).all()
+
+    def list_ended_calls_for_thread(
+        self,
+        *,
+        thread_id: int,
+        limit: int = 100,
+    ) -> list[CallSession]:
+        """Most-recent-last ended call sessions bound to one chat thread.
+
+        Session-derived (``call_session``), not transcript-derived: this
+        backs duration-only call pills in human chat timelines and never
+        touches ``call_utterance``. Participants are eager-loaded so the
+        caller can label the pill without extra round trips.
+        """
+        query = (
+            select(CallSession)
+            .where(
+                CallSession.thread_id == thread_id,
+                CallSession.status == "ended",
+            )
+            .options(selectinload(CallSession.participants))
+            .order_by(CallSession.ended_at.asc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(query).all())
 
     def list_utterances(
         self,

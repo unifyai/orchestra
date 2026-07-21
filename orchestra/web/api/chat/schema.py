@@ -147,3 +147,26 @@ class CallSummaryResponse(BaseModel):
 
 class CallsPage(BaseModel):
     calls: List[CallSummaryResponse]
+
+
+class ThreadCallSummary(BaseModel):
+    """Session-derived summary of one ended call in a human chat thread.
+
+    Duration-only: carries no transcript/utterance data. Renders as a
+    non-interactive call pill in the chat timeline. ``missed`` is true when
+    the call was never answered (no talk time).
+    """
+
+    call_id: str
+    scope: ChatThreadKind
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration_seconds: int = 0
+    missed: bool = False
+    participant_user_ids: List[str] = Field(default_factory=list)
+    assistant_ids: List[int] = Field(default_factory=list)
+
+
+class ThreadCallsPage(BaseModel):
+    thread_id: int
+    calls: List[ThreadCallSummary]
