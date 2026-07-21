@@ -18,20 +18,14 @@
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/calendar.readonly"
       ],
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
       "raw_metadata": {
         "source": "native_fixture",
         "name": "Meet transcript ready",
-        "description": "Fires when a Google Meet transcript file is generated.",
-        "config": {
-          "type": "object",
-          "properties": {
-            "organizer_email": {
-              "type": "string",
-              "description": "Optional organizer email filter."
-            }
-          },
-          "additionalProperties": false
-        }
+        "description": "Fires when a Google Meet transcript file is generated."
       }
     }
   ]

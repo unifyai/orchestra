@@ -22,7 +22,30 @@ class ProviderTriggerCatalogEntry:
     timestamp_tolerance_seconds: int | None = None
     provisioning_idempotency_supported: bool | None = None
     required_scopes: tuple[str, ...] = ()
+    # Capability matrix (native honest bar). ``config_schema`` encodes the
+    # target-resource family the user/twin must supply (empty ``{}`` when no
+    # config is required). ``live_ready`` marks a slug as part of this
+    # milestone's live turn-on set; ``delivery_only`` marks output-only slugs
+    # (e.g. Google Chat ``*.batch*``) that can arrive on a base subscription but
+    # are never standalone enable targets. ``None`` means the backend does not
+    # participate in the native capability gate (Composio/Pipedream).
+    config_schema: dict[str, Any] = field(default_factory=dict)
+    live_ready: bool | None = None
+    delivery_only: bool | None = None
+    target_resource_family: str | None = None
     raw_metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def provisionable(self) -> bool | None:
+        """True when a slug is a standalone, live enable target.
+
+        ``None`` when the backend does not carry native capability metadata,
+        so non-native backends are never gated by the honest-bar checks.
+        """
+
+        if self.live_ready is None and self.delivery_only is None:
+            return None
+        return bool(self.live_ready) and not bool(self.delivery_only)
 
     def normalized_dict(self) -> dict[str, Any]:
         """Return a stable JSON-serializable representation for hashing."""
@@ -40,6 +63,10 @@ class ProviderTriggerCatalogEntry:
                 self.provisioning_idempotency_supported
             ),
             "required_scopes": list(self.required_scopes),
+            "config_schema": self.config_schema,
+            "live_ready": self.live_ready,
+            "delivery_only": self.delivery_only,
+            "target_resource_family": self.target_resource_family,
         }
 
     def unit_hash(self) -> str:
@@ -84,6 +111,7 @@ def entry_from_mapping(
 
     signature_headers = payload.get("signature_headers") or []
     required_scopes = payload.get("required_scopes") or []
+    config_schema = payload.get("config_schema")
     return ProviderTriggerCatalogEntry(
         backend_id=backend_id,
         provider_trigger_slug=str(payload["provider_trigger_slug"]),
@@ -119,5 +147,21 @@ def entry_from_mapping(
             else None
         ),
         required_scopes=tuple(str(item) for item in required_scopes),
+        config_schema=dict(config_schema) if isinstance(config_schema, dict) else {},
+        live_ready=(
+            bool(payload["live_ready"])
+            if payload.get("live_ready") is not None
+            else None
+        ),
+        delivery_only=(
+            bool(payload["delivery_only"])
+            if payload.get("delivery_only") is not None
+            else None
+        ),
+        target_resource_family=(
+            str(payload["target_resource_family"])
+            if payload.get("target_resource_family") is not None
+            else None
+        ),
         raw_metadata=dict(payload.get("raw_metadata") or {}),
     )
