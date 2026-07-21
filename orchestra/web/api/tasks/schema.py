@@ -101,6 +101,12 @@ class StagedProviderTrigger(BaseModel):
     display_name: str | None = None
     description: str | None = None
     config_schema: dict[str, Any] = Field(default_factory=dict)
+    # Honest capability bar (native backends). ``None`` for backends that do not
+    # carry native capability metadata (Composio/Pipedream).
+    live_ready: bool | None = None
+    delivery_only: bool | None = None
+    provisionable: bool | None = None
+    target_resource_family: str | None = None
 
 
 class TriggerCatalogResponse(BaseModel):
