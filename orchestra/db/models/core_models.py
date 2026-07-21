@@ -466,6 +466,98 @@ class FieldType(Base):
     )
 
 
+class ExternalFieldBinding(Base):
+    """REST-bound column metadata for ``field_category=external_entry``.
+
+    Bindings declare how a column is hydrated from an external connector.
+    Cached values and freshness sidecars live on ``LogEvent.data``; this table
+    only stores the binding contract (never resolved secrets).
+    """
+
+    __tablename__ = "external_field_binding"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    field_name = Column(String, nullable=False)
+    connector_id = Column(String, nullable=False)
+    # Declarative binding: inputs, batch, cache, on_error, connector config.
+    # Secret material must be referenced by name (auth_secret_ref → tenant
+    # Secrets vault), never inlined.
+    binding = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Bumped on binding updates to invalidate per-row cache sidecars.
+    binding_version = Column(Integer, nullable=False, server_default="1")
+    is_active = Column(Boolean, nullable=False, server_default="t")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "context_id",
+            "field_name",
+            name="uq_external_field_binding_project_context_field",
+        ),
+    )
+
+
+class ExternalWriteIntent(Base):
+    """Outbox row for through-writes to external REST connectors.
+
+    Intents are enqueued transactionally in Orchestra, then delivered by a
+    drain worker (or synchronously when ``deliver=sync``). External columns
+    observe; write intents mutate.
+    """
+
+    __tablename__ = "external_write_intent"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    field_name = Column(String, nullable=True)
+    connector_id = Column(String, nullable=False)
+    binding = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    payload = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    idempotency_key = Column(String, nullable=False)
+    log_event_ids = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    status = Column(String, nullable=False, server_default="pending")
+    attempts = Column(Integer, nullable=False, server_default="0")
+    last_error = Column(Text, nullable=True)
+    result = Column(JSONB, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+    confirmed_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "idempotency_key",
+            name="uq_external_write_intent_project_idempotency",
+        ),
+        Index("ix_external_write_intent_status", "status", "created_at"),
+    )
+
+
 class Embedding(Base):
     """Embeddings table.
 

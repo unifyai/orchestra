@@ -33,6 +33,7 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.web.api.log.utils.external_hydrate import apply_external_hydrate
 from orchestra.web.api.log.utils.logging_utils import _format_logs, _get_logs_query
 from orchestra.web.api.log.views import _sanitize_sql_error
 
@@ -113,6 +114,18 @@ class FederatedLogsRequest(BaseModel):
         default=None,
         ge=1,
         description="Maximum characters returned for string values.",
+    )
+    hydrate: Literal["none", "stale_ok", "force"] = Field(
+        default="stale_ok",
+        description="External field hydrate mode applied per context branch.",
+    )
+    hydrate_fields: Optional[List[str]] = Field(
+        default=None,
+        description="Optional subset of external fields to hydrate.",
+    )
+    materialize: bool = Field(
+        default=True,
+        description="Persist hydrated external values and cache sidecars.",
     )
 
 
@@ -339,6 +352,22 @@ def get_federated_logs(
             from_fields=from_fields_param,
             exclude_fields=exclude_fields_param,
         )
+        if request.hydrate != "none":
+            try:
+                logs_out = apply_external_hydrate(
+                    session=session,
+                    project_id=project_id,
+                    context_id=context_id,
+                    logs_out=logs_out,
+                    hydrate=request.hydrate,
+                    hydrate_fields=request.hydrate_fields,
+                    materialize=request.materialize,
+                    rows=rows,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except RuntimeError as exc:
+                raise HTTPException(status_code=502, detail=str(exc))
         for local_order, log in enumerate(logs_out):
             if request.annotate:
                 entries = log.get("entries")

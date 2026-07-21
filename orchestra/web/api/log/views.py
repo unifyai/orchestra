@@ -80,12 +80,16 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteFieldsRequest,
     DeleteLogEntryRequest,
+    DrainExternalWritesRequest,
+    ExternalWriteRequest,
     GetLogsMetricRequest,
+    HydrateLogsRequest,
     JoinLogsRequest,
     JoinQueryRequest,
     QueryLogsPostBody,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
+    UpdateExternalFieldBindingRequest,
     UpdateFieldRequest,
     UpdateLogRequest,
 )
@@ -3813,6 +3817,24 @@ def get_logs(
         False,
         description="If true and sorting takes the vector ANN fast-path, include the computed distance in each entry under the reserved '_sort_distance' key.",
     ),
+    hydrate: str = Query(
+        "stale_ok",
+        description=(
+            "External field hydrate mode: "
+            "'none' skips REST hydrate; "
+            "'stale_ok' uses cache when input hash + TTL are fresh; "
+            "'force' always re-fetches."
+        ),
+    ),
+    hydrate_fields: Optional[str] = Query(
+        None,
+        description="Optional ampersand-separated list of external fields to hydrate. Default: all active bindings.",
+        example="status&remote_updated_at",
+    ),
+    materialize: bool = Query(
+        True,
+        description="When true, persist hydrated external values and cache sidecars onto LogEvent.data.",
+    ),
     session=Depends(get_db_session),
 ):
     """
@@ -3928,6 +3950,29 @@ def get_logs(
                 exclude_fields=exclude_fields,
             )
 
+            from orchestra.web.api.log.utils.external_hydrate import (
+                apply_external_hydrate,
+            )
+
+            hydrate_field_list = (
+                [f for f in hydrate_fields.split("&") if f] if hydrate_fields else None
+            )
+            try:
+                logs_out = apply_external_hydrate(
+                    session=session,
+                    project_id=project_id,
+                    context_id=context_id,
+                    logs_out=logs_out,
+                    hydrate=hydrate,
+                    hydrate_fields=hydrate_field_list,
+                    materialize=materialize,
+                    rows=rows,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=502, detail=str(e))
+
             # Apply grouping of repeated fields if group_threshold is set
             grouped_entries = {}
             if group_threshold is not None and group_threshold > 0:
@@ -4029,6 +4074,9 @@ def get_logs(
                 value_limit=value_limit,
                 groups_only=groups_only,
                 return_timestamps=return_timestamps,
+                hydrate=hydrate,
+                hydrate_fields=hydrate_fields,
+                materialize=materialize,
             )
 
             final_result = {
@@ -4065,6 +4113,37 @@ def get_logs(
                 value_limit,
                 field_order_map,
             )
+
+            if (
+                not groups_only
+                and hydrate
+                and hydrate != "none"
+                and context_id is not None
+            ):
+                from orchestra.web.api.log.utils.external_hydrate import (
+                    apply_external_hydrate,
+                )
+
+                hydrate_field_list = (
+                    [f for f in hydrate_fields.split("&") if f]
+                    if hydrate_fields
+                    else None
+                )
+                try:
+                    logs_out = apply_external_hydrate(
+                        session=session,
+                        project_id=project_id,
+                        context_id=context_id,
+                        logs_out=logs_out,
+                        hydrate=hydrate,
+                        hydrate_fields=hydrate_field_list,
+                        materialize=materialize,
+                        rows=None,
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                except RuntimeError as e:
+                    raise HTTPException(status_code=502, detail=str(e))
 
             groups = {}
 
@@ -4303,6 +4382,32 @@ def query_logs_post(
             exclude_fields=body.exclude_fields,
         )
 
+        if body.hydrate != "none" and context_id is not None:
+            from orchestra.web.api.log.utils.external_hydrate import (
+                apply_external_hydrate,
+            )
+
+            hydrate_field_list = (
+                [f for f in body.hydrate_fields.split("&") if f]
+                if body.hydrate_fields
+                else None
+            )
+            try:
+                logs_out = apply_external_hydrate(
+                    session=session,
+                    project_id=project_id,
+                    context_id=context_id,
+                    logs_out=logs_out,
+                    hydrate=body.hydrate,
+                    hydrate_fields=hydrate_field_list,
+                    materialize=body.materialize,
+                    rows=rows,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=502, detail=str(e))
+
         # Apply group threshold if needed
         if body.group_threshold:
             logs_out = apply_group_threshold(logs_out, body.group_threshold)
@@ -4374,6 +4479,9 @@ def query_logs_post(
             value_limit=body.value_limit,
             groups_only=body.groups_only or False,
             return_timestamps=body.return_timestamps or False,
+            hydrate=body.hydrate,
+            hydrate_fields=body.hydrate_fields,
+            materialize=body.materialize,
         )
         return {
             "logs": grouped_result,
@@ -5572,6 +5680,44 @@ def get_fields(
         .all()
     }
 
+    from orchestra.db.dao.external_field_binding_dao import ExternalFieldBindingDAO
+    from orchestra.external_bindings.planner import public_binding_summary
+
+    binding_dao = ExternalFieldBindingDAO(session)
+
+    def _field_payload(key: str, info: dict, context_id_for_bindings: Optional[int]):
+        artifacts = derived_equations.get(key, "")
+        binding_summary = None
+        if info.get("field_category") == "external_entry" and context_id_for_bindings:
+            row = binding_dao.get(
+                project_id=project_obj.id,
+                context_id=context_id_for_bindings,
+                field_name=key,
+            )
+            if row is not None:
+                binding_summary = public_binding_summary(
+                    {
+                        "connector_id": row.connector_id,
+                        "binding_version": row.binding_version,
+                        "is_active": row.is_active,
+                        "binding": dict(row.binding or {}),
+                    },
+                )
+                artifacts = binding_summary
+        return {
+            "data_type": info["field_type"],
+            "field_type": info["field_category"],
+            "mutable": info["mutable"],
+            "ui_editable": info["ui_editable"],
+            "unique": info.get("unique", False),
+            "enum_values": info["enum_values"],
+            "restrict": info["restrict"],
+            "created_at": info["created_at"],
+            "artifacts": artifacts,
+            "description": info.get("description", ""),
+            "binding": binding_summary,
+        }
+
     # Wildcard: return mapping of context_name -> fields
     if context == "*":
         all_contexts = context_dao.filter(project_id=project_obj.id)
@@ -5592,21 +5738,7 @@ def get_fields(
                 continue
 
             result[ctx_name] = {
-                key: {
-                    "data_type": info[
-                        "field_type"
-                    ],  # Full type: "List[int]", "str", "Any", etc.
-                    "field_type": info["field_category"],
-                    "mutable": info["mutable"],
-                    "ui_editable": info["ui_editable"],
-                    "unique": info.get("unique", False),
-                    "enum_values": info["enum_values"],
-                    "restrict": info["restrict"],
-                    "created_at": info["created_at"],
-                    "artifacts": derived_equations.get(key, ""),
-                    "description": info.get("description", ""),
-                }
-                for key, info in types.items()
+                key: _field_payload(key, info, ctx_id) for key, info in types.items()
             }
 
         return result
@@ -5638,23 +5770,7 @@ def get_fields(
     )
 
     # Build response
-    return {
-        key: {
-            "data_type": info[
-                "field_type"
-            ],  # Full type: "List[int]", "str", "Any", etc.
-            "field_type": info["field_category"],
-            "mutable": info["mutable"],
-            "ui_editable": info["ui_editable"],
-            "unique": info.get("unique", False),
-            "enum_values": info["enum_values"],
-            "restrict": info["restrict"],
-            "created_at": info["created_at"],
-            "artifacts": derived_equations.get(key, ""),
-            "description": info.get("description", ""),
-        }
-        for key, info in types.items()
-    }
+    return {key: _field_payload(key, info, context_id) for key, info in types.items()}
 
 
 @router.post(
@@ -5760,7 +5876,7 @@ def create_fields(
     # every call forced a full-context scan of `log_event` even when no row
     # needed changing (the `?&` guard suppressed writes but not the scan).
     try:
-        pending_backfill_fields = field_type_dao.create_fields(
+        pending_backfill_fields, external_bindings = field_type_dao.create_fields(
             project_id=project_id,
             context_id=context_id,
             fields=request.fields,
@@ -5770,6 +5886,29 @@ def create_fields(
             status_code=400,
             detail=f"Failed to create fields: {str(e)}",
         )
+
+    if external_bindings:
+        from orchestra.db.dao.external_field_binding_dao import ExternalFieldBindingDAO
+        from orchestra.external_bindings.registry import get_connector
+
+        binding_dao = ExternalFieldBindingDAO(session)
+        for spec in external_bindings:
+            try:
+                get_connector(spec["connector_id"])
+            except KeyError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            binding_body = dict(spec["binding"])
+            # connector_id may live at top of binding; keep a copy on the row
+            binding_body.setdefault("connector_id", spec["connector_id"])
+            binding_dao.upsert(
+                project_id=project_id,
+                context_id=context_id,
+                field_name=spec["field_name"],
+                connector_id=spec["connector_id"],
+                binding=binding_body,
+                bump_version=False,
+            )
+        session.commit()
 
     # Null-merge pending fields into every row of the context, then stamp.
     #
@@ -5832,6 +5971,261 @@ def create_fields(
         "info": f"Fields created successfully. {'Backfilled ' + str(backfilled_count) + ' log events with None values.' if request.backfill_logs and backfilled_count > 0 else ''}",
         "backfilled_count": backfilled_count if request.backfill_logs else 0,
     }
+
+
+@router.put("/logs/fields/binding")
+def update_external_field_binding(
+    request_fastapi: Request,
+    request: UpdateExternalFieldBindingRequest,
+    session=Depends(get_db_session),
+):
+    """Replace the REST binding for an external_entry field (bumps binding_version)."""
+    from orchestra.db.dao.external_field_binding_dao import ExternalFieldBindingDAO
+    from orchestra.external_bindings.registry import get_connector
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
+
+    try:
+        user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project_name,
+            organization_id=organization_id,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project_name}' not found.",
+        )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
+
+    context_name = request.context if request.context else ""
+    context_rows = context_dao.filter(project_id=project_id, name=context_name)
+    if not context_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context_name}' not found",
+        )
+    context_id = context_rows[0][0].id
+
+    types = field_type_dao.get_field_types(
+        project_id,
+        context_id=context_id,
+        return_mutable=True,
+    )
+    meta = types.get(request.field_name)
+    if not meta or meta.get("field_category") != "external_entry":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Field '{request.field_name}' is not an external_entry column",
+        )
+
+    connector_id = request.binding.get("connector_id")
+    if not connector_id:
+        raise HTTPException(status_code=400, detail="binding.connector_id is required")
+    try:
+        get_connector(str(connector_id))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    row = ExternalFieldBindingDAO(session).upsert(
+        project_id=project_id,
+        context_id=context_id,
+        field_name=request.field_name,
+        connector_id=str(connector_id),
+        binding=dict(request.binding),
+        bump_version=True,
+    )
+    session.commit()
+    return {
+        "info": "External field binding updated.",
+        "field_name": request.field_name,
+        "binding_version": row.binding_version,
+    }
+
+
+@router.post("/logs/hydrate")
+def hydrate_logs_endpoint(
+    request_fastapi: Request,
+    request: HydrateLogsRequest,
+    session=Depends(get_db_session),
+):
+    """Explicitly hydrate external_entry columns for a set of logs."""
+    from orchestra.web.api.log.utils.external_hydrate import apply_external_hydrate
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
+
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+    try:
+        project_id = project_dao.get_readable_by_user_and_name(
+            name=request.project_name,
+            user_id=request_fastapi.state.user_id,
+            organization_id=organization_id,
+        ).id
+    except Exception:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project_name} not found.",
+        )
+
+    context_name = request.context if request.context else ""
+    context_rows = context_dao.filter(project_id=project_id, name=context_name)
+    if not context_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context_name}' not found",
+        )
+    context_id = context_rows[0][0].id
+
+    from_ids = None
+    if request.log_ids:
+        from_ids = "&".join(str(i) for i in request.log_ids)
+
+    rows, _total = _get_logs_query(
+        request_fastapi,
+        project_name=request.project_name,
+        context=context_name or None,
+        filter=request.filter,
+        sorting=None,
+        from_ids=from_ids,
+        exclude_ids=None,
+        from_fields=None,
+        exclude_fields=None,
+        limit=request.limit,
+        offset=0,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+    )
+    field_types = field_type_dao.get_field_types(
+        project_id,
+        context_id=context_id,
+        return_mutable=True,
+    )
+    field_order_map = field_type_dao.get_ordered_field_names(
+        project_id,
+        context_id=context_id,
+    )
+    logs_out, _ = _format_logs(
+        rows=rows,
+        field_types=field_types,
+        value_limit=None,
+        column_context=None,
+        field_order_map=field_order_map,
+    )
+    try:
+        logs_out = apply_external_hydrate(
+            session=session,
+            project_id=project_id,
+            context_id=context_id,
+            logs_out=logs_out,
+            hydrate=request.hydrate,
+            hydrate_fields=request.hydrate_fields,
+            materialize=request.materialize,
+            rows=rows,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return {"logs": logs_out, "count": len(logs_out)}
+
+
+@router.post("/logs/external_write")
+def external_write_endpoint(
+    request_fastapi: Request,
+    request: ExternalWriteRequest,
+    session=Depends(get_db_session),
+):
+    """Enqueue (and optionally sync-deliver) an external through-write intent."""
+    from orchestra.external_bindings.write import enqueue_external_write
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    try:
+        user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project_name,
+            organization_id=organization_id,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project_name}' not found.",
+        )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
+
+    context_name = request.context if request.context else ""
+    context_rows = context_dao.filter(project_id=project_id, name=context_name)
+    if not context_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context_name}' not found",
+        )
+    context_id = context_rows[0][0].id
+
+    connector_id = request.connector_id
+    if not connector_id and not request.field_name:
+        raise HTTPException(
+            status_code=400,
+            detail="field_name or connector_id is required",
+        )
+    try:
+        return enqueue_external_write(
+            session,
+            project_id=project_id,
+            context_id=context_id,
+            connector_id=connector_id or "",
+            payload=dict(request.payload or {}),
+            idempotency_key=request.idempotency_key,
+            binding=request.binding,
+            field_name=request.field_name,
+            log_event_ids=request.log_event_ids,
+            deliver=request.deliver,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@admin_router.post("/external_writes/drain")
+def drain_external_writes_endpoint(
+    request: DrainExternalWritesRequest,
+    session=Depends(get_db_session),
+):
+    """Deliver pending external write intents (cron / worker).
+
+    **Cloud Scheduler** (project ``gcp-project-saas`` / ``us-central1``):
+
+    - Staging: ``orchestra-external-writes-drain-scheduler-staging``
+      → ``POST https://internal.example.com/v0/admin/external_writes/drain``
+      every minute
+    - Production: ``orchestra-external-writes-drain-scheduler``
+      → ``POST https://api.unify.ai/v0/admin/external_writes/drain`` every minute
+
+    Auth: ``Authorization: Bearer <ORCHESTRA_ADMIN_KEY>`` (same pattern as
+    other Orchestra admin schedulers). Ensure / update jobs with
+    ``bash deploy/ensure_external_writes_drain_scheduler.sh``.
+    """
+    from orchestra.external_bindings.write import drain_external_writes
+
+    return drain_external_writes(session, limit=request.limit)
 
 
 @router.patch(

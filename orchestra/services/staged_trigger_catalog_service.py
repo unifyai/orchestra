@@ -9,11 +9,18 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dao.trigger_catalog_dao import TriggerCatalogDAO
+from orchestra.provider_triggers.backend_ids import (
+    NATIVE_GOOGLE_BACKEND_ID,
+    NATIVE_MICROSOFT_BACKEND_ID,
+)
 from orchestra.provider_triggers.catalog_import.registry import (
     supported_trigger_catalog_backends,
 )
 from orchestra.provider_triggers.task_trigger import ProviderEventTrigger
 from orchestra.provider_triggers.topology import evaluate_provider_trigger_topology
+from orchestra.provider_triggers.workspace_connection_facade import (
+    ensure_workspace_trigger_connections,
+)
 from orchestra.web.api.integrations.operations import OwnerContext
 
 _ACTIVE_CONNECTION_STATUSES = frozenset({"connected", "active"})
@@ -28,7 +35,11 @@ def _trigger_config_schema(
     backend_id: str,
     raw_metadata: dict[str, Any],
 ) -> dict[str, Any]:
-    if backend_id == "composio":
+    if backend_id in {
+        "composio",
+        NATIVE_GOOGLE_BACKEND_ID,
+        NATIVE_MICROSOFT_BACKEND_ID,
+    }:
         config = raw_metadata.get("config")
         return config if isinstance(config, dict) else {}
     if backend_id == "pipedream":
@@ -69,6 +80,11 @@ def list_staged_triggers_for_assistant(
     backend_id: str | None = None,
 ) -> dict[str, Any]:
     """Return staged provider triggers visible for one assistant's connections."""
+
+    # heal facade rows on catalog read so OAuth callbacks that only
+    # upsert assistant secrets still expose native triggers without a separate
+    # workspace-connect completion hook in Orchestra.
+    ensure_workspace_trigger_connections(session, assistant_id=assistant_id)
 
     topology = evaluate_provider_trigger_topology(session, require_worker=False)
     connected_apps = list_connected_app_slugs(

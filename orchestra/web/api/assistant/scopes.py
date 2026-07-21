@@ -25,11 +25,31 @@ GOOGLE_SCOPE_BUNDLES: dict[str, list[str]] = {
     "tasks": [
         "https://www.googleapis.com/auth/tasks",
     ],
+    # Google Meet Workspace Events subscriptions (transcript.v2.fileGenerated
+    # and friends) accept either meetings.space.readonly or
+    # meetings.space.created. Read-only metadata is the least privilege that
+    # still supports user-level transcript subscriptions where the user owns
+    # the meeting space; we never create/modify spaces from here, and the
+    # transcript file content in Drive is already covered by the ``drive``
+    # bundle. See GOOGLE_MEET_EVENT_SCOPES for the accepted-scope gate.
+    "meet": [
+        "https://www.googleapis.com/auth/meetings.space.readonly",
+    ],
 }
 
 GOOGLE_BASE_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
 ]
+
+# Scopes Google accepts to create a Workspace Events subscription for Meet
+# events. Either one authorizes the subscription; the facade treats a
+# connection as Meet-capable when at least one of these is granted.
+GOOGLE_MEET_EVENT_SCOPES = frozenset(
+    {
+        "https://www.googleapis.com/auth/meetings.space.readonly",
+        "https://www.googleapis.com/auth/meetings.space.created",
+    },
+)
 
 MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
     "email": ["Mail.Read", "Mail.Send", "Mail.ReadWrite"],
@@ -63,8 +83,14 @@ _BASE = {
     "microsoft": MICROSOFT_BASE_SCOPES,
 }
 
+# ``meet`` is required for Google so that every workspace connect grants the
+# Meet Workspace Events scope. The connect UX only ever sends a fixed feature
+# set (email/teams defaults + these required features) and has no per-feature
+# Meet toggle, so Meet would otherwise never be granted. Requiring it makes a
+# fresh Google connect Meet-capable; existing assistants must re-consent after
+# deploy for the added scope to take effect.
 REQUIRED_FEATURES: dict[str, list[str]] = {
-    "google": ["email", "drive"],
+    "google": ["email", "drive", "meet"],
     "microsoft": ["email", "teams", "drive", "sharepoint"],
 }
 

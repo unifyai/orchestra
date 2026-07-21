@@ -165,9 +165,29 @@ class TestMapScopesToFeatures:
         assert sorted(recovered) == sorted(features)
 
 
+class TestGoogleMeetBundle:
+    def test_meet_is_available_feature(self):
+        assert "meet" in available_features("google")
+
+    def test_meet_grants_meetings_space_readonly(self):
+        result = build_scope_string("google", ["meet"])
+        parts = result.split()
+        assert "https://www.googleapis.com/auth/meetings.space.readonly" in parts
+
+    def test_meet_roundtrips(self):
+        scope_str = build_scope_string("google", ["email", "meet"])
+        recovered = map_scopes_to_features("google", scope_str)
+        assert "meet" in recovered
+
+    def test_meet_absent_without_scope(self):
+        scope_str = build_scope_string("google", ["email"])
+        recovered = map_scopes_to_features("google", scope_str)
+        assert "meet" not in recovered
+
+
 class TestRequiredFeatures:
-    def test_google_requires_email_and_drive(self):
-        assert sorted(REQUIRED_FEATURES["google"]) == ["drive", "email"]
+    def test_google_requires_email_drive_and_meet(self):
+        assert sorted(REQUIRED_FEATURES["google"]) == ["drive", "email", "meet"]
 
     def test_microsoft_requires_email_teams_and_drive_options(self):
         assert sorted(REQUIRED_FEATURES["microsoft"]) == [

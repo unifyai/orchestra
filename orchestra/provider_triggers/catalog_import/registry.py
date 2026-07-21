@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from orchestra.provider_triggers.backend_ids import (
     COMPOSIO_BACKEND_ID,
+    NATIVE_GOOGLE_BACKEND_ID,
+    NATIVE_MICROSOFT_BACKEND_ID,
     PIPEDREAM_BACKEND_ID,
 )
 from orchestra.provider_triggers.catalog_import.composio import (
     ComposioTriggerCatalogImporter,
+)
+from orchestra.provider_triggers.catalog_import.native_google import (
+    NativeGoogleTriggerCatalogImporter,
+)
+from orchestra.provider_triggers.catalog_import.native_microsoft import (
+    NativeMicrosoftTriggerCatalogImporter,
 )
 from orchestra.provider_triggers.catalog_import.pipedream import (
     PipedreamTriggerCatalogImporter,
@@ -17,6 +25,8 @@ from orchestra.provider_triggers.catalog_import.types import TriggerCatalogImpor
 _TRIGGER_CATALOG_IMPORTERS: dict[str, type[TriggerCatalogImporter]] = {
     COMPOSIO_BACKEND_ID: ComposioTriggerCatalogImporter,
     PIPEDREAM_BACKEND_ID: PipedreamTriggerCatalogImporter,
+    NATIVE_GOOGLE_BACKEND_ID: NativeGoogleTriggerCatalogImporter,
+    NATIVE_MICROSOFT_BACKEND_ID: NativeMicrosoftTriggerCatalogImporter,
 }
 
 

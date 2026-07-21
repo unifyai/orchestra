@@ -1,0 +1,38 @@
+{
+  "catalog_version": "native-microsoft-v1",
+  "entries": [
+    {
+      "provider_trigger_slug": "microsoft.graph.onlineMeeting.transcript.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_teams",
+      "retry_stable_identity_field": "event_id",
+      "signature_headers": [
+        "x-unify-webhook-id",
+        "x-unify-webhook-timestamp",
+        "x-unify-webhook-signature"
+      ],
+      "signature_scheme": "native_hmac_sha256_timestamp_dot_body",
+      "timestamp_tolerance_seconds": 300,
+      "provisioning_idempotency_supported": true,
+      "required_scopes": [
+        "https://graph.microsoft.com/OnlineMeetings.Read",
+        "https://graph.microsoft.com/OnlineMeetingTranscript.Read.All"
+      ],
+      "raw_metadata": {
+        "source": "native_fixture",
+        "name": "Teams meeting transcript ready",
+        "description": "Fires when a Teams online meeting transcript becomes available.",
+        "config": {
+          "type": "object",
+          "properties": {
+            "organizer_email": {
+              "type": "string",
+              "description": "Optional organizer email filter."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}
