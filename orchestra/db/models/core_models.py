@@ -466,6 +466,50 @@ class FieldType(Base):
     )
 
 
+class ExternalFieldBinding(Base):
+    """REST-bound column metadata for ``field_category=external_entry``.
+
+    Bindings declare how a column is hydrated from an external connector.
+    Cached values and freshness sidecars live on ``LogEvent.data``; this table
+    only stores the binding contract (never resolved secrets).
+    """
+
+    __tablename__ = "external_field_binding"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_id = Column(
+        Integer,
+        ForeignKey("context.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    field_name = Column(String, nullable=False)
+    connector_id = Column(String, nullable=False)
+    # Declarative binding: inputs, batch, cache, on_error, connector config.
+    # Secret material must be referenced by name (auth_secret_ref), never inlined.
+    binding = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Bumped on binding updates to invalidate per-row cache sidecars.
+    binding_version = Column(Integer, nullable=False, server_default="1")
+    is_active = Column(Boolean, nullable=False, server_default="t")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "context_id",
+            "field_name",
+            name="uq_external_field_binding_project_context_field",
+        ),
+    )
+
+
 class Embedding(Base):
     """Embeddings table.
 

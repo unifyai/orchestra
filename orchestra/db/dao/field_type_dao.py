@@ -621,22 +621,13 @@ class FieldTypeDAO:
             fields: Dictionary mapping fields names to their definitions.
 
         Returns:
-            The subset of ``fields.keys()`` whose ``field_type.backfilled_at``
-            is ``NULL`` *after* the upsert, i.e. the fields that still need a
-            log_event null-merge pass. This includes:
-
-            - newly inserted rows (backfilled_at defaults to NULL),
-            - rows pre-existing with NULL (e.g. created as a side effect of
-              log insertion via ``bulk_create_field_types``, or a prior call
-              made with ``backfill_logs=False``).
-
-            Rows whose ``backfilled_at`` is already set are excluded -- the
-            caller may safely skip the expensive ``UPDATE log_event`` pass
-            for them. The ``ON CONFLICT DO UPDATE`` clause deliberately does
-            NOT touch ``backfilled_at`` so existing stamps are preserved.
+            Tuple of:
+            - pending backfill field names (``backfilled_at IS NULL`` after upsert)
+            - external binding specs to upsert:
+              ``[{field_name, connector_id, binding}, ...]``
         """
         if not fields:
-            return []
+            return [], []
 
         # Prepare values for bulk insertion
         # Import field definition types for isinstance checks
@@ -654,6 +645,7 @@ class FieldTypeDAO:
         )
 
         values_to_insert = []
+        external_bindings: List[dict] = []
         for field_name, field_info in fields.items():
             field_type = DEFAULT_FIELD_TYPE  # Default to DEFAULT_FIELD_TYPE ("Any")
             mutable = True
@@ -662,6 +654,8 @@ class FieldTypeDAO:
             enum_values = None
             enum_restrict = False
             field_description = None
+            field_category = "entry"
+            binding_cfg = None
 
             if isinstance(field_info, EnumType):
                 # Handle EnumType separately
@@ -685,6 +679,9 @@ class FieldTypeDAO:
                 ui_editable = field_info.ui_editable
                 unique = field_info.unique
                 field_description = getattr(field_info, "description", None)
+                if field_info.category:
+                    field_category = field_info.category
+                binding_cfg = field_info.binding
                 if field_type.lower() == "enum":
                     enum_values = getattr(field_info, "values", None)
                     enum_restrict = getattr(field_info, "restrict", False)
@@ -698,12 +695,73 @@ class FieldTypeDAO:
                 field_description = schema_dict.get("description")
             elif isinstance(field_info, str):
                 field_type = field_info
+            elif isinstance(field_info, dict) and (
+                "category" in field_info
+                or "binding" in field_info
+                or (
+                    "type" in field_info
+                    and not is_pydantic_schema(field_info)
+                    and field_info.get("type")
+                    in {
+                        "str",
+                        "int",
+                        "float",
+                        "bool",
+                        "list",
+                        "dict",
+                        "datetime",
+                        "Any",
+                        "enum",
+                        "string",
+                        "integer",
+                        "number",
+                        "boolean",
+                        "array",
+                        "object",
+                    }
+                )
+            ):
+                # Standard dict field definition (may include external binding)
+                field_type = field_info.get("type") or DEFAULT_FIELD_TYPE
+                mutable = field_info.get("mutable", True)
+                ui_editable = field_info.get("ui_editable", True)
+                unique = field_info.get("unique", False)
+                field_description = field_info.get("description")
+                field_category = field_info.get("category") or "entry"
+                binding_cfg = field_info.get("binding")
+                if str(field_type).lower() == "enum":
+                    enum_values = field_info.get("values")
+                    enum_restrict = field_info.get("restrict", False)
             elif isinstance(field_info, dict) and is_pydantic_schema(field_info):
                 schema = normalize_pydantic_schema(field_info)
                 field_type = pydantic_schema_to_string(schema)
             elif field_info is None:
                 # If None, use default DEFAULT_FIELD_TYPE
                 field_type = DEFAULT_FIELD_TYPE
+
+            if field_category == "external_entry":
+                mutable = False
+                ui_editable = False
+                if not binding_cfg or not isinstance(binding_cfg, dict):
+                    raise ValueError(
+                        f"Field '{field_name}' with category=external_entry requires a binding object",
+                    )
+                connector_id = binding_cfg.get("connector_id")
+                if not connector_id:
+                    raise ValueError(
+                        f"Field '{field_name}' binding requires connector_id",
+                    )
+                external_bindings.append(
+                    {
+                        "field_name": field_name,
+                        "connector_id": str(connector_id),
+                        "binding": dict(binding_cfg),
+                    },
+                )
+            elif field_category not in {"entry", "derived_entry", "external_entry"}:
+                raise ValueError(
+                    f"Invalid field category '{field_category}' for field '{field_name}'",
+                )
 
             # Normalize and validate the field type
             from orchestra.web.api.log.utils.type_utils import is_valid_field_type
@@ -722,7 +780,7 @@ class FieldTypeDAO:
                     "project_id": project_id,
                     "field_name": field_name,
                     "field_type": normalized_type,
-                    "field_category": "entry",
+                    "field_category": field_category,
                     "mutable": mutable,
                     "ui_editable": ui_editable,
                     "unique": unique,
@@ -750,6 +808,7 @@ class FieldTypeDAO:
                 index_elements=["project_id", "field_name", "context_id"],
                 set_={
                     "field_type": stmt.excluded.field_type,
+                    "field_category": stmt.excluded.field_category,
                     "mutable": stmt.excluded.mutable,
                     "ui_editable": stmt.excluded.ui_editable,
                     "unique": stmt.excluded.unique,
@@ -764,7 +823,7 @@ class FieldTypeDAO:
                     pending_backfill_fields.append(field_name)
             self.session.commit()
 
-        return pending_backfill_fields
+        return pending_backfill_fields, external_bindings
 
     def mark_backfilled(
         self,
@@ -811,7 +870,7 @@ class FieldTypeDAO:
         return result.rowcount or 0
 
     # Valid field categories for validation
-    VALID_FIELD_CATEGORIES = {"entry", "derived_entry"}
+    VALID_FIELD_CATEGORIES = {"entry", "derived_entry", "external_entry"}
 
     def bulk_create_field_types(
         self,
@@ -831,6 +890,7 @@ class FieldTypeDAO:
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
                     - "derived_entry": Derived field values
+                    - "external_entry": REST-bound columns (immutable; hydrated on read)
                 - unique: Optional, defaults to False
                 - field_type: Optional, the explicit type for this field
                 - enum_values: Optional, for enum types
@@ -866,13 +926,17 @@ class FieldTypeDAO:
             field_name = data["field_name"]
             context_id = data["context_id"]
             field_category = data.get("field_category", "entry")
-            # Derived entries are always immutable; others default to mutable
+            # Derived / external entries are always immutable
             mutable = (
                 False
-                if field_category == "derived_entry"
+                if field_category in {"derived_entry", "external_entry"}
                 else data.get("mutable", True)
             )
-            ui_editable = data.get("ui_editable", True)
+            ui_editable = (
+                False
+                if field_category == "external_entry"
+                else data.get("ui_editable", True)
+            )
             unique = data.get("unique", False)
             field_description = data.get("description", description)
 

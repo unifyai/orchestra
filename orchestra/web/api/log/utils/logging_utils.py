@@ -2624,6 +2624,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 "versions": {},
                 "context_versions": {},
                 "derived_entries": {},
+                "external_entries": {},
             }
 
         is_derived = row_source_type == "derived"
@@ -2726,6 +2727,12 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 "ts": data["ts"],
                 "entries": sorted_entries,
                 "derived_entries": sorted_derived,
+                "external_entries": dict(
+                    sorted(
+                        data.get("external_entries", {}).items(),
+                        key=lambda x: field_order_map.get(x[0], float("inf")),
+                    ),
+                ),
                 "versions": sorted_context_versions,
                 "clipped_fields": data.get("clipped_fields", []),
             },
@@ -2849,6 +2856,7 @@ def _format_logs(
                 "clipped_fields": [],
                 "entries": {},
                 "derived_entries": {},
+                "external_entries": {},
             }
 
         # Handle None or empty data
@@ -2860,6 +2868,10 @@ def _format_logs(
         data = reorder_nested_dict(data, key_order)
 
         for key, value in data.items():
+            # Hide hydrate cache sidecars from API consumers
+            if key.startswith("__ext__"):
+                continue
+
             # Apply column_context prefix filter
             if context_prefix and not key.startswith(context_prefix):
                 continue
@@ -2885,8 +2897,9 @@ def _format_logs(
 
             # Categorize field based on field_category
             if field_category == "derived_entry":
-                # Derived entries
                 formatted[event_id]["derived_entries"][display_key] = limited_val
+            elif field_category == "external_entry":
+                formatted[event_id]["external_entries"][display_key] = limited_val
             else:
                 # All other fields (entry and former param) go to entries
                 formatted[event_id]["entries"][display_key] = limited_val
@@ -2907,11 +2920,17 @@ def _format_logs(
                 key=lambda x: field_order_map.get(x[0], float("inf")),
             ),
         )
+        sorted_external = dict(
+            sorted(
+                data["external_entries"].items(),
+                key=lambda x: field_order_map.get(x[0], float("inf")),
+            ),
+        )
 
         # Skip logs with no data when field filters are applied
         # Logs without any matching fields don't appear
         if (allowed_fields_set or excluded_fields_set or context_prefix) and not (
-            sorted_entries or sorted_derived
+            sorted_entries or sorted_derived or sorted_external
         ):
             continue
 
@@ -2921,6 +2940,7 @@ def _format_logs(
                 "ts": data["ts"],
                 "entries": sorted_entries,
                 "derived_entries": sorted_derived,
+                "external_entries": sorted_external,
                 "versions": {},  # JSONB mode doesn't support context versions, but include empty for API compatibility
                 "clipped_fields": data.get("clipped_fields", []),
             },

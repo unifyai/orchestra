@@ -67,6 +67,8 @@ class StandardFieldDefinition(BaseModel):
     update-endpoint enforcement — that remains governed by `mutable`.
     The `unique` flag controls whether the field can only have one value per log.
     The `description` field provides an optional human-readable description of the field.
+    The `category` field selects entry / derived_entry / external_entry.
+    The `binding` object configures REST hydrate for ``external_entry`` columns.
     """
 
     type: str
@@ -83,6 +85,14 @@ class StandardFieldDefinition(BaseModel):
         None,
         max_length=256,
         description="Optional description for the field definition",
+    )
+    category: Optional[str] = Field(
+        default=None,
+        description="Field category: entry (default), derived_entry, or external_entry.",
+    )
+    binding: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="External binding config when category=external_entry.",
     )
 
 
@@ -598,6 +608,41 @@ class UpdateFieldRequest(BaseModel):
         description="Field description. This is the only supported field update. Use null to clear the description.",
         example="Human-readable score for this log entry",
     )
+
+
+class UpdateExternalFieldBindingRequest(BaseModel):
+    project_name: str = Field(description="Project containing the external field.")
+    context: Optional[str] = Field(default="", description="Context path.")
+    field_name: str = Field(description="External field name.")
+    binding: Dict[str, Any] = Field(
+        description="Full binding object (must include connector_id).",
+    )
+
+
+class HydrateLogsRequest(BaseModel):
+    project_name: str = Field(description="Project name.")
+    context: Optional[str] = Field(default="", description="Context path.")
+    log_ids: Optional[List[int]] = Field(
+        default=None,
+        description="Explicit log event ids to hydrate. Mutually exclusive with filter.",
+    )
+    filter: Optional[str] = Field(
+        default=None,
+        description="Optional filter expression when log_ids is omitted.",
+    )
+    hydrate_fields: Optional[List[str]] = Field(
+        default=None,
+        description="Subset of external fields to hydrate. Default: all active.",
+    )
+    hydrate: Literal["none", "stale_ok", "force"] = Field(
+        default="force",
+        description="Hydrate mode. Defaults to force for explicit hydrate calls.",
+    )
+    materialize: bool = Field(
+        default=True,
+        description="Persist hydrated values and cache sidecars.",
+    )
+    limit: int = Field(default=500, ge=1, le=500)
 
 
 class JoinLogsRequest(BaseModel):
