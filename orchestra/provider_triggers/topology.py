@@ -11,10 +11,14 @@ from sqlalchemy.orm import Session
 
 from orchestra.provider_triggers.backend_ids import (
     COMPOSIO_BACKEND_ID,
+    NATIVE_GOOGLE_BACKEND_ID,
     PIPEDREAM_BACKEND_ID,
 )
 from orchestra.provider_triggers.composio_trigger_adapter import (
     COMPOSIO_WEBHOOK_SECRET_REF,
+)
+from orchestra.provider_triggers.local_native_google_trigger_adapter import (
+    NATIVE_GOOGLE_WEBHOOK_SECRET_REF,
 )
 from orchestra.provider_triggers.private_event_storage import (
     TriggerKeyWrappingService,
@@ -45,6 +49,8 @@ class TopologyUnavailableReason(StrEnum):
     event_storage_unconfigured = "event_storage_unconfigured"
     signing_secret_unconfigured = "signing_secret_unconfigured"
     worker_unhealthy = "worker_unhealthy"
+    native_google_signing_unconfigured = "native_google_signing_unconfigured"
+    native_google_topic_unconfigured = "native_google_topic_unconfigured"
 
 
 _INTERNAL_CALLBACK_HOSTS = frozenset(
@@ -99,6 +105,43 @@ def signing_secrets_configured() -> bool:
         if not TriggerKeyWrappingService.is_configured():
             return False
     return True
+
+
+def native_google_signing_configured() -> bool:
+    """Return True when the native Google webhook signing secret resolves.
+
+    Adapters signs Meet bridge deliveries and Orchestra verifies them with the
+    same ``NATIVE_GOOGLE_WEBHOOK_SECRET``; without it no native Google delivery
+    can authenticate.
+    """
+
+    return bool(resolve_signing_secret_ref(NATIVE_GOOGLE_WEBHOOK_SECRET_REF))
+
+
+def native_google_meet_events_topic_configured() -> bool:
+    """Return True when the shared Meet Workspace Events topic is configured."""
+
+    return bool((settings.native_google_meet_events_pubsub_topic or "").strip())
+
+
+def native_google_meet_prerequisites_reason() -> TopologyUnavailableReason | None:
+    """Return the first missing native Google Meet prerequisite, or None.
+
+    Native Google Meet transcript triggers need a resolvable webhook signing
+    secret and a configured Workspace Events Pub/Sub topic for
+    ``notificationEndpoint.pubsubTopic``. Native provision uses this to fail
+    closed rather than registering a subscription that can never deliver. It is
+    intentionally separate from the global ``signing_secrets_configured`` gate so
+    Composio/Pipedream availability does not depend on native Google wiring.
+    """
+
+    if NATIVE_GOOGLE_BACKEND_ID not in TRIGGER_PROVIDER_ADAPTERS:
+        return None
+    if not native_google_signing_configured():
+        return TopologyUnavailableReason.native_google_signing_unconfigured
+    if not native_google_meet_events_topic_configured():
+        return TopologyUnavailableReason.native_google_topic_unconfigured
+    return None
 
 
 def worker_heartbeat_is_healthy(
