@@ -634,7 +634,7 @@ def test_public_binding_summary_strips_auth_secret_ref():
             "binding_version": 1,
             "is_active": True,
             "binding": {
-                "auth_secret_ref": "SMARTLEAD_API_KEY",
+                "auth_secret_ref": "MY_API_TOKEN",
                 "http": {"url_template": "https://example.com/{id}"},
             },
         },

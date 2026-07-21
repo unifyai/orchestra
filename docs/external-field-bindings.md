@@ -166,7 +166,7 @@ Do not encode side-effect sends inside hydrate `batch_fetch`.
 - DataManager / `primitives.data`: `create_external_column`,
   `filter(..., hydrate=...)`, `request_external_write`.
 - Auth: plant named secrets in the owning `Secrets` context before hydrate or
-  write. Orchestra does not need vendor API keys on Cloud Run.
+  write. Orchestra and shared Job env allowlists do not carry vendor SaaS keys.
 
 ## Catalog convention (user data)
 
