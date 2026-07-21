@@ -1,37 +1,1356 @@
 {
-  "catalog_version": "native-google-v1",
+  "catalog_version": "google-workspace-events-docs-2026-07",
   "entries": [
+    {
+      "provider_trigger_slug": "google.workspace.meet.conference.v2.started",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Conference started",
+        "description": "Conference started"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.conference.v2.ended",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Conference ended",
+        "description": "Conference ended"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.participant.v2.joined",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Participant joined",
+        "description": "Participant joined"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.participant.v2.left",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Participant left",
+        "description": "Participant left"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.recording.v2.started",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Recording started",
+        "description": "Recording started"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.recording.v2.ended",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Recording ended",
+        "description": "Recording ended"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.recording.v2.fileGenerated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Recording file generated",
+        "description": "Recording file generated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.smartNote.v2.started",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Smart note started",
+        "description": "Smart note started"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.smartNote.v2.ended",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Smart note ended",
+        "description": "Smart note ended"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.smartNote.v2.fileGenerated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Smart note file generated",
+        "description": "Smart note file generated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.transcript.v2.started",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Transcript started",
+        "description": "Transcript started"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.meet.transcript.v2.ended",
+      "provider_version": "1",
+      "canonical_app_hint": "google_meet",
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
+      "raw_metadata": {
+        "name": "Transcript ended",
+        "description": "Transcript ended"
+      }
+    },
     {
       "provider_trigger_slug": "google.workspace.meet.transcript.v2.fileGenerated",
       "provider_version": "1",
       "canonical_app_hint": "google_meet",
-      "retry_stable_identity_field": "event_id",
-      "signature_headers": [
-        "x-unify-webhook-id",
-        "x-unify-webhook-timestamp",
-        "x-unify-webhook-signature"
-      ],
-      "signature_scheme": "native_hmac_sha256_timestamp_dot_body",
-      "timestamp_tolerance_seconds": 300,
-      "provisioning_idempotency_supported": true,
-      "required_scopes": [
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/calendar.readonly"
-      ],
+      "config_schema": {},
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_meet_user",
       "raw_metadata": {
-        "source": "native_manifest",
-        "name": "Meet transcript ready",
-        "description": "Fires when a Google Meet transcript file is generated.",
-        "config": {
-          "type": "object",
-          "properties": {
-            "organizer_email": {
-              "type": "string",
-              "description": "Optional organizer email filter."
-            }
+        "name": "Transcript file generated",
+        "description": "Transcript file generated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.accessproposal.v3.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
           },
-          "additionalProperties": false
-        }
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive access proposal created",
+        "description": "Drive access proposal created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.accessproposal.v3.resolved",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive access proposal resolved",
+        "description": "Drive access proposal resolved"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.approval.v3.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive approval created",
+        "description": "Drive approval created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.approval.v3.cancelled",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive approval cancelled",
+        "description": "Drive approval cancelled"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.approval.v3.reset",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive approval reset",
+        "description": "Drive approval reset"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.approval.v3.completed",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive approval completed",
+        "description": "Drive approval completed"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.approval.v3.reviewersChanged",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive approval reviewers changed",
+        "description": "Drive approval reviewers changed"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.approval.v3.responded",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive approval reviewer responded",
+        "description": "Drive approval reviewer responded"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.comment.v3.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive comment created",
+        "description": "Drive comment created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.comment.v3.edited",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive comment edited",
+        "description": "Drive comment edited"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.comment.v3.resolved",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive comment resolved",
+        "description": "Drive comment resolved"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.comment.v3.reopened",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive comment reopened",
+        "description": "Drive comment reopened"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.comment.v3.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive comment deleted",
+        "description": "Drive comment deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file created",
+        "description": "Drive file created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.moved",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file moved",
+        "description": "Drive file moved"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.contentChanged",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file content changed",
+        "description": "Drive file content changed"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file deleted",
+        "description": "Drive file deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.trashed",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file trashed",
+        "description": "Drive file trashed"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.untrashed",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file untrashed",
+        "description": "Drive file untrashed"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.file.v3.renamed",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive file renamed",
+        "description": "Drive file renamed"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.permission.v3.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive permission created",
+        "description": "Drive permission created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.permission.v3.edited",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive permission edited",
+        "description": "Drive permission edited"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.permission.v3.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive permission deleted",
+        "description": "Drive permission deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.reply.v3.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive reply created",
+        "description": "Drive reply created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.reply.v3.edited",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive reply edited",
+        "description": "Drive reply edited"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.drive.reply.v3.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_drive",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Drive target resource name (a specific file, folder, or shared drive). Whole-Drive watches are not supported."
+          },
+          "include_descendants": {
+            "type": "boolean",
+            "description": "Watch changes within descendants of the target folder or shared drive."
+          }
+        },
+        "required": [
+          "target_resource"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_drive_resource",
+      "raw_metadata": {
+        "name": "Drive reply deleted",
+        "description": "Drive reply deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.message.v1.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat message created",
+        "description": "Chat message created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.message.v1.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat message updated",
+        "description": "Chat message updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.message.v1.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat message deleted",
+        "description": "Chat message deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.reaction.v1.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat reaction created",
+        "description": "Chat reaction created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.reaction.v1.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat reaction deleted",
+        "description": "Chat reaction deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.membership.v1.created",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat membership created",
+        "description": "Chat membership created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.membership.v1.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat membership updated",
+        "description": "Chat membership updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.membership.v1.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat membership deleted",
+        "description": "Chat membership deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.space.v1.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat space updated",
+        "description": "Chat space updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.space.v1.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat space deleted",
+        "description": "Chat space deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.spaceReadState.v1.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat space read state updated",
+        "description": "Chat space read state updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.threadReadState.v1.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat thread read state updated",
+        "description": "Chat thread read state updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.availability.v1.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "target_resource": {
+            "type": "string",
+            "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "live_ready": true,
+      "delivery_only": false,
+      "target_resource_family": "google_chat_space",
+      "raw_metadata": {
+        "name": "Chat availability updated",
+        "description": "Chat availability updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.message.v1.batchCreated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat messages batch created",
+        "description": "Chat messages batch created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.message.v1.batchUpdated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat messages batch updated",
+        "description": "Chat messages batch updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.message.v1.batchDeleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat messages batch deleted",
+        "description": "Chat messages batch deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.reaction.v1.batchCreated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat reactions batch created",
+        "description": "Chat reactions batch created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.reaction.v1.batchDeleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat reactions batch deleted",
+        "description": "Chat reactions batch deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.membership.v1.batchCreated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat memberships batch created",
+        "description": "Chat memberships batch created"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.membership.v1.batchUpdated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat memberships batch updated",
+        "description": "Chat memberships batch updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.membership.v1.batchDeleted",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat memberships batch deleted",
+        "description": "Chat memberships batch deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.space.v1.batchUpdated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat spaces batch updated",
+        "description": "Chat spaces batch updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.spaceReadState.v1.batchUpdated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat space read states batch updated",
+        "description": "Chat space read states batch updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "google.workspace.chat.threadReadState.v1.batchUpdated",
+      "provider_version": "1",
+      "canonical_app_hint": "google_chat",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": true,
+      "target_resource_family": "google_chat_batch_delivery",
+      "raw_metadata": {
+        "name": "Chat thread read states batch updated",
+        "description": "Chat thread read states batch updated"
       }
     }
   ]

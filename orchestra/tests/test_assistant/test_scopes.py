@@ -185,9 +185,48 @@ class TestGoogleMeetBundle:
         assert "meet" not in recovered
 
 
+class TestGoogleChatBundle:
+    _CHAT_SCOPES = (
+        "https://www.googleapis.com/auth/chat.messages.readonly",
+        "https://www.googleapis.com/auth/chat.memberships.readonly",
+        "https://www.googleapis.com/auth/chat.spaces.readonly",
+        "https://www.googleapis.com/auth/chat.users.readstate.readonly",
+        "https://www.googleapis.com/auth/chat.users.availability.readonly",
+    )
+
+    def test_chat_is_available_feature(self):
+        assert "chat" in available_features("google")
+
+    def test_chat_bundle_is_readonly_workspace_events_set(self):
+        assert tuple(GOOGLE_SCOPE_BUNDLES["chat"]) == self._CHAT_SCOPES
+
+    def test_chat_roundtrips(self):
+        scope_str = build_scope_string("google", ["email", "chat"])
+        recovered = map_scopes_to_features("google", scope_str)
+        assert "chat" in recovered
+        for scope in self._CHAT_SCOPES:
+            assert scope in scope_str.split()
+
+    def test_chat_absent_for_partial_bundle(self):
+        scopes = " ".join(
+            GOOGLE_BASE_SCOPES
+            + [
+                "https://www.googleapis.com/auth/chat.messages.readonly",
+                "https://www.googleapis.com/auth/chat.spaces.readonly",
+            ],
+        )
+        recovered = map_scopes_to_features("google", scopes)
+        assert "chat" not in recovered
+
+
 class TestRequiredFeatures:
-    def test_google_requires_email_drive_and_meet(self):
-        assert sorted(REQUIRED_FEATURES["google"]) == ["drive", "email", "meet"]
+    def test_google_requires_email_drive_meet_and_chat(self):
+        assert sorted(REQUIRED_FEATURES["google"]) == [
+            "chat",
+            "drive",
+            "email",
+            "meet",
+        ]
 
     def test_microsoft_requires_email_teams_and_drive_options(self):
         assert sorted(REQUIRED_FEATURES["microsoft"]) == [

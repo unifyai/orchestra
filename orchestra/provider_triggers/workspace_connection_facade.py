@@ -38,9 +38,12 @@ class _WorkspaceFacadeApp:
     secret_refs: dict[str, str]
     provider_connection_prefix: str
     # When non-empty, the facade connection only upserts as ``connected`` if the
-    # granted scope set contains at least one of these scopes. Empty means the
-    # app is available whenever the workspace OAuth is connected at all.
+    # granted scope set contains at least one of these scopes.
     required_any_scopes: frozenset[str] = frozenset()
+    # When non-empty, every listed scope must be present (in addition to any
+    # ``required_any_scopes`` check). Empty + empty ``required_any_scopes``
+    # means the app is available whenever the workspace OAuth is connected.
+    required_all_scopes: frozenset[str] = frozenset()
 
 
 _GOOGLE_SECRET_REFS = {
@@ -62,23 +65,40 @@ _MICROSOFT_SECRET_REFS = {
 
 def _google_facade_apps(
     meet_event_scopes: frozenset[str],
+    drive_event_scopes: frozenset[str],
+    chat_event_scopes: frozenset[str],
 ) -> tuple[_WorkspaceFacadeApp, ...]:
-    return tuple(
+    return (
         _WorkspaceFacadeApp(
             backend_id=NATIVE_GOOGLE_BACKEND_ID,
-            canonical_app_slug=slug,
-            provider_app_id=provider_app_id,
+            canonical_app_slug=NATIVE_GOOGLE_MEET_APP_SLUG,
+            provider_app_id="GOOGLE_MEET",
             scopes_secret="GOOGLE_GRANTED_SCOPES",
             account_email_secret="GOOGLE_ACCOUNT_EMAIL",
             secret_refs=dict(_GOOGLE_SECRET_REFS),
             provider_connection_prefix="google",
-            required_any_scopes=required_any_scopes,
-        )
-        for slug, provider_app_id, required_any_scopes in (
-            (NATIVE_GOOGLE_MEET_APP_SLUG, "GOOGLE_MEET", meet_event_scopes),
-            (NATIVE_GOOGLE_DRIVE_APP_SLUG, "GOOGLE_DRIVE", frozenset()),
-            (NATIVE_GOOGLE_CHAT_APP_SLUG, "GOOGLE_CHAT", frozenset()),
-        )
+            required_any_scopes=meet_event_scopes,
+        ),
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_GOOGLE_BACKEND_ID,
+            canonical_app_slug=NATIVE_GOOGLE_DRIVE_APP_SLUG,
+            provider_app_id="GOOGLE_DRIVE",
+            scopes_secret="GOOGLE_GRANTED_SCOPES",
+            account_email_secret="GOOGLE_ACCOUNT_EMAIL",
+            secret_refs=dict(_GOOGLE_SECRET_REFS),
+            provider_connection_prefix="google",
+            required_any_scopes=drive_event_scopes,
+        ),
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_GOOGLE_BACKEND_ID,
+            canonical_app_slug=NATIVE_GOOGLE_CHAT_APP_SLUG,
+            provider_app_id="GOOGLE_CHAT",
+            scopes_secret="GOOGLE_GRANTED_SCOPES",
+            account_email_secret="GOOGLE_ACCOUNT_EMAIL",
+            secret_refs=dict(_GOOGLE_SECRET_REFS),
+            provider_connection_prefix="google",
+            required_all_scopes=chat_event_scopes,
+        ),
     )
 
 
@@ -109,10 +129,18 @@ def _workspace_facade_apps() -> tuple[_WorkspaceFacadeApp, ...]:
     # Imported lazily: ``scopes`` lives under the ``orchestra.web.api.assistant``
     # package whose ``__init__`` pulls in views → services → this module, so a
     # top-level import here would be circular. At call time everything is loaded.
-    from orchestra.web.api.assistant.scopes import GOOGLE_MEET_EVENT_SCOPES
+    from orchestra.web.api.assistant.scopes import (
+        GOOGLE_CHAT_EVENT_SCOPES,
+        GOOGLE_DRIVE_EVENT_SCOPES,
+        GOOGLE_MEET_EVENT_SCOPES,
+    )
 
     return (
-        *_google_facade_apps(GOOGLE_MEET_EVENT_SCOPES),
+        *_google_facade_apps(
+            GOOGLE_MEET_EVENT_SCOPES,
+            GOOGLE_DRIVE_EVENT_SCOPES,
+            GOOGLE_CHAT_EVENT_SCOPES,
+        ),
         *_microsoft_facade_apps(),
     )
 
@@ -139,9 +167,16 @@ def ensure_workspace_trigger_connections(
         scopes = (secrets.get(app.scopes_secret) or "").strip()
         account_email = (secrets.get(app.account_email_secret) or "").strip().lower()
         granted_scope_set = set(scopes.split())
-        has_required_scopes = not app.required_any_scopes or bool(
-            app.required_any_scopes & granted_scope_set,
-        )
+        has_required_scopes = True
+        if app.required_any_scopes:
+            has_required_scopes = bool(
+                app.required_any_scopes & granted_scope_set,
+            )
+        if app.required_all_scopes:
+            has_required_scopes = (
+                has_required_scopes
+                and app.required_all_scopes.issubset(granted_scope_set)
+            )
         if scopes and account_email and has_required_scopes:
             values = _facade_connection_values(
                 assistant_id=assistant_id,

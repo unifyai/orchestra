@@ -1,37 +1,241 @@
 {
-  "catalog_version": "native-microsoft-v1",
+  "catalog_version": "microsoft-graph-subscriptions-docs-2026-07",
   "entries": [
     {
       "provider_trigger_slug": "microsoft.graph.onlineMeeting.transcript.created",
       "provider_version": "1",
       "canonical_app_hint": "microsoft_teams",
-      "retry_stable_identity_field": "event_id",
-      "signature_headers": [
-        "x-unify-webhook-id",
-        "x-unify-webhook-timestamp",
-        "x-unify-webhook-signature"
-      ],
-      "signature_scheme": "native_hmac_sha256_timestamp_dot_body",
-      "timestamp_tolerance_seconds": 300,
-      "provisioning_idempotency_supported": true,
-      "required_scopes": [
-        "https://graph.microsoft.com/OnlineMeetings.Read",
-        "https://graph.microsoft.com/OnlineMeetingTranscript.Read.All"
-      ],
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_app_only",
       "raw_metadata": {
-        "source": "native_manifest",
-        "name": "Teams meeting transcript ready",
-        "description": "Fires when a Teams online meeting transcript becomes available.",
-        "config": {
-          "type": "object",
-          "properties": {
-            "organizer_email": {
-              "type": "string",
-              "description": "Optional organizer email filter."
-            }
-          },
-          "additionalProperties": false
-        }
+        "name": "Teams call transcript created",
+        "description": "Teams call transcript created",
+        "graph_resource": "communications/onlineMeetings/getAllTranscripts",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.callTranscript.created.meeting",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_teams",
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "online_meeting_id": {
+            "type": "string",
+            "description": "Microsoft Graph onlineMeeting id whose transcripts to watch."
+          }
+        },
+        "required": [
+          "online_meeting_id"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Teams meeting transcript created",
+        "description": "Teams meeting transcript created",
+        "graph_resource": "communications/onlineMeetings/{onlineMeetingId}/transcripts",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.callRecording.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_teams",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_app_only",
+      "raw_metadata": {
+        "name": "Teams call recording created",
+        "description": "Teams call recording created",
+        "graph_resource": "communications/onlineMeetings/getAllRecordings",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.chatMessage.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_teams",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_app_only",
+      "raw_metadata": {
+        "name": "Teams chat message created",
+        "description": "Teams chat message created",
+        "graph_resource": "chats/getAllMessages",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.channelMessage.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_teams",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_app_only",
+      "raw_metadata": {
+        "name": "Teams channel message created",
+        "description": "Teams channel message created",
+        "graph_resource": "teams/getAllMessages",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.mailMessage.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_outlook",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Outlook message created",
+        "description": "Outlook message created",
+        "graph_resource": "me/messages",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.mailMessage.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_outlook",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Outlook message updated",
+        "description": "Outlook message updated",
+        "graph_resource": "me/messages",
+        "change_type": "updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.event.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_outlook",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Outlook calendar event created",
+        "description": "Outlook calendar event created",
+        "graph_resource": "me/events",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.event.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_outlook",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Outlook calendar event updated",
+        "description": "Outlook calendar event updated",
+        "graph_resource": "me/events",
+        "change_type": "updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.event.deleted",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_outlook",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Outlook calendar event deleted",
+        "description": "Outlook calendar event deleted",
+        "graph_resource": "me/events",
+        "change_type": "deleted"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.driveItem.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_onedrive",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "OneDrive item updated",
+        "description": "OneDrive item updated",
+        "graph_resource": "me/drive/root",
+        "change_type": "updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.contact.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_outlook",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "Outlook contact created",
+        "description": "Outlook contact created",
+        "graph_resource": "me/contacts",
+        "change_type": "created"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.group.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_groups",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_app_only",
+      "raw_metadata": {
+        "name": "Group updated",
+        "description": "Group updated",
+        "graph_resource": "groups",
+        "change_type": "updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.user.updated",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_directory",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_app_only",
+      "raw_metadata": {
+        "name": "User updated",
+        "description": "User updated",
+        "graph_resource": "users",
+        "change_type": "updated"
+      }
+    },
+    {
+      "provider_trigger_slug": "microsoft.graph.todoTask.created",
+      "provider_version": "1",
+      "canonical_app_hint": "microsoft_todo",
+      "config_schema": {},
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
+      "raw_metadata": {
+        "name": "To-do task created",
+        "description": "To-do task created",
+        "graph_resource": "me/todo/lists/{todoTaskListId}/tasks",
+        "change_type": "created"
       }
     }
   ]

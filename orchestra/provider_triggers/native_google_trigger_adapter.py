@@ -1,4 +1,4 @@
-"""Native Google Meet trigger adapter backed by workspace OAuth credentials."""
+"""Native Google Workspace Events trigger adapter backed by workspace OAuth."""
 
 from __future__ import annotations
 
@@ -17,6 +17,11 @@ from orchestra.provider_triggers.local_native_google_trigger_adapter import (
     NATIVE_GOOGLE_WEBHOOK_SECRET_REF,
     LocalNativeGoogleTriggerAdapter,
     _parse_provider_connection_id,
+)
+from orchestra.provider_triggers.native_google_subscription import (
+    NativeGoogleTargetFamily,
+    build_workspace_events_subscription_body,
+    infer_native_google_target_family,
 )
 from orchestra.provider_triggers.provider_identity import (
     native_event_identity,
@@ -47,7 +52,6 @@ WORKSPACE_EVENTS_BASE_URL = "https://workspaceevents.googleapis.com/v1"
 # form the user-level ``targetResource`` for Meet subscriptions. ``userinfo.email``
 # (granted on every Google connect) is sufficient for this field.
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
-CLOUD_IDENTITY_USER_RESOURCE_PREFIX = "//cloudidentity.googleapis.com/users/"
 # subscriptions.create returns an LRO; poll it a few times when it is not
 # immediately marked done before failing closed.
 _OPERATION_POLL_ATTEMPTS = 5
@@ -82,7 +86,7 @@ def _subscription_name_from_operation(payload: Mapping[str, Any]) -> str | None:
 
 
 class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
-    """Google Workspace Events transport for native Meet trigger subscriptions."""
+    """Google Workspace Events transport for native Meet/Drive/Chat triggers."""
 
     backend_id = NATIVE_GOOGLE_BACKEND_ID
 
@@ -180,32 +184,40 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
         if not credentials.access_token:
             raise PermissionError("workspace access token missing for native Google")
 
-        pubsub_topic = self._resolved_pubsub_topic()
-        if not pubsub_topic:
-            # Fail closed: without the shared Meet events topic no subscription
-            # can ever deliver, so never register a false-healthy generation.
-            raise RuntimeError(
-                "native Google Meet events pubsub topic is not configured",
-            )
-
-        user_id = self._resolve_cloud_identity_user(credentials)
-        target_resource = f"{CLOUD_IDENTITY_USER_RESOURCE_PREFIX}{user_id}"
-        event_type = (
+        slug = (
             str(request.provider_trigger_slug).strip()
             or NATIVE_GOOGLE_MEET_TRANSCRIPT_SLUG
         )
-        body: dict[str, Any] = {
-            "targetResource": target_resource,
-            "eventTypes": [event_type],
-            "notificationEndpoint": {"pubsubTopic": pubsub_topic},
-            # Meet events never include resource data in the payload; excluding it
-            # also grants the maximum subscription TTL for the staging window.
-            "payloadOptions": {"includeResource": False},
-        }
+        pubsub_topic = self._resolved_pubsub_topic()
+        if not pubsub_topic:
+            # Fail closed: without the shared events topic no subscription can
+            # ever deliver, so never register a false-healthy generation.
+            raise RuntimeError(
+                "native Google events pubsub topic is not configured",
+            )
+
+        family = infer_native_google_target_family(slug)
+        cloud_identity_user_id: str | None = None
+        if family is NativeGoogleTargetFamily.meet_user:
+            cloud_identity_user_id = self._resolve_cloud_identity_user(credentials)
+
+        try:
+            body = build_workspace_events_subscription_body(
+                provider_trigger_slug=slug,
+                trigger_config=request.trigger_config,
+                cloud_identity_user_id=cloud_identity_user_id,
+                pubsub_topic=pubsub_topic,
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        target_resource = str(body["targetResource"])
         logger.info(
-            "native_google provision assistant=%s slug=%s target=%s callback=%s",
+            "native_google provision assistant=%s slug=%s family=%s target=%s "
+            "callback=%s",
             credentials.account_email,
-            event_type,
+            slug,
+            family.value,
             target_resource,
             request.callback_url,
         )
@@ -238,7 +250,8 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
             raw={
                 "id": subscription_name,
                 "target_resource": target_resource,
-                "event_type": event_type,
+                "event_type": slug,
+                "target_resource_family": family.value,
                 "pubsub_topic": pubsub_topic,
                 "account_email": credentials.account_email,
             },

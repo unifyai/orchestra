@@ -18,20 +18,26 @@
         "https://graph.microsoft.com/OnlineMeetings.Read",
         "https://graph.microsoft.com/OnlineMeetingTranscript.Read.All"
       ],
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "online_meeting_id": {
+            "type": "string",
+            "description": "Microsoft Graph onlineMeeting id whose transcripts to watch."
+          }
+        },
+        "required": [
+          "online_meeting_id"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": false,
+      "delivery_only": false,
+      "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
         "source": "native_fixture",
         "name": "Teams meeting transcript ready",
-        "description": "Fires when a Teams online meeting transcript becomes available.",
-        "config": {
-          "type": "object",
-          "properties": {
-            "organizer_email": {
-              "type": "string",
-              "description": "Optional organizer email filter."
-            }
-          },
-          "additionalProperties": false
-        }
+        "description": "Fires when a Teams online meeting transcript becomes available."
       }
     }
   ]

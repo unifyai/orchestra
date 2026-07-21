@@ -168,6 +168,116 @@ def test_native_google_provision_fails_closed_without_pubsub_topic() -> None:
         adapter.provision(_provision_request())
 
 
+DRIVE_EVENT_TYPE = "google.workspace.drive.file.v3.created"
+CHAT_EVENT_TYPE = "google.workspace.chat.message.v1.created"
+CHAT_BATCH_EVENT_TYPE = "google.workspace.chat.message.v1.batchCreated"
+
+
+def test_native_google_provision_drive_target_with_include_descendants() -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/subscriptions"):
+            return _FakeResponse(
+                payload={
+                    "done": True,
+                    "response": {"name": SUBSCRIPTION_NAME, "state": "ACTIVE"},
+                },
+            )
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    adapter = _adapter(request_fn=request_fn)
+    result = adapter.provision(
+        _provision_request(
+            provider_trigger_slug=DRIVE_EVENT_TYPE,
+            canonical_app_slug="google_drive",
+            trigger_config={
+                "target_resource": "files/1aaabbbAAABBB111222-_",
+                "include_descendants": True,
+            },
+        ),
+    )
+
+    assert result.external_trigger_id == SUBSCRIPTION_NAME
+    assert not any(c[1].endswith("/userinfo") for c in calls)
+    create_call = next(c for c in calls if c[1].endswith("/subscriptions"))
+    assert create_call[2]["json"] == {
+        "targetResource": ("//drive.googleapis.com/files/1aaabbbAAABBB111222-_"),
+        "eventTypes": [DRIVE_EVENT_TYPE],
+        "notificationEndpoint": {"pubsubTopic": PUBSUB_TOPIC},
+        "payloadOptions": {"includeResource": False},
+        "driveOptions": {"includeDescendants": True},
+    }
+
+
+def test_native_google_provision_chat_space_target() -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/subscriptions"):
+            return _FakeResponse(
+                payload={
+                    "done": True,
+                    "response": {"name": SUBSCRIPTION_NAME, "state": "ACTIVE"},
+                },
+            )
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    adapter = _adapter(request_fn=request_fn)
+    result = adapter.provision(
+        _provision_request(
+            provider_trigger_slug=CHAT_EVENT_TYPE,
+            canonical_app_slug="google_chat",
+            trigger_config={"target_resource": "spaces/AAAABBBB"},
+        ),
+    )
+
+    assert result.external_trigger_id == SUBSCRIPTION_NAME
+    assert not any(c[1].endswith("/userinfo") for c in calls)
+    create_call = next(c for c in calls if c[1].endswith("/subscriptions"))
+    assert create_call[2]["json"] == {
+        "targetResource": "//chat.googleapis.com/spaces/AAAABBBB",
+        "eventTypes": [CHAT_EVENT_TYPE],
+        "notificationEndpoint": {"pubsubTopic": PUBSUB_TOPIC},
+        "payloadOptions": {"includeResource": False},
+    }
+
+
+@pytest.mark.parametrize(
+    ("slug", "trigger_config", "match"),
+    [
+        (
+            CHAT_BATCH_EVENT_TYPE,
+            {},
+            "delivery-only",
+        ),
+        (
+            DRIVE_EVENT_TYPE,
+            {},
+            "target_resource is required",
+        ),
+    ],
+)
+def test_native_google_provision_fails_closed_for_batch_or_missing_config(
+    slug: str,
+    trigger_config: dict[str, Any],
+    match: str,
+) -> None:
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        raise AssertionError("no HTTP call expected for fail-closed provision")
+
+    adapter = _adapter(request_fn=request_fn)
+    with pytest.raises(RuntimeError, match=match):
+        adapter.provision(
+            _provision_request(
+                provider_trigger_slug=slug,
+                trigger_config=trigger_config,
+            ),
+        )
+
+
 def test_native_google_provision_fails_closed_without_access_token() -> None:
     def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
         raise AssertionError("no HTTP call expected without a token")

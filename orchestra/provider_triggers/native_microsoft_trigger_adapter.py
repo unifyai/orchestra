@@ -8,10 +8,8 @@ from typing import Any, Mapping, Sequence
 
 from orchestra.provider_triggers.backend_ids import NATIVE_MICROSOFT_BACKEND_ID
 from orchestra.provider_triggers.local_native_microsoft_trigger_adapter import (
-    NATIVE_MICROSOFT_WEBHOOK_SECRET_REF,
     LocalNativeMicrosoftTriggerAdapter,
     _parse_provider_connection_id,
-    _stable_external_trigger_id,
 )
 from orchestra.provider_triggers.provider_identity import (
     native_event_identity,
@@ -95,23 +93,20 @@ class NativeMicrosoftTriggerAdapter(TriggerProviderAdapter):
                 "workspace access token missing for native Microsoft",
             )
 
-        external_trigger_id = _stable_external_trigger_id(request)
+        # Fail closed: real Microsoft Graph change-notification create/renew is
+        # not yet wired (ticket 31). With a workspace session present we must NOT
+        # return a deterministic ``nm_*`` stub as a healthy generation, or a
+        # binding would falsely report Active without any live subscription.
         logger.info(
-            "native_microsoft provision assistant=%s slug=%s callback=%s",
+            "native_microsoft provision fail-closed (graph transport pending) "
+            "assistant=%s slug=%s callback=%s",
             credentials.account_email,
             request.provider_trigger_slug,
             request.callback_url,
         )
-        return TriggerProvisionResult(
-            external_trigger_id=external_trigger_id,
-            signing_secret_ref=NATIVE_MICROSOFT_WEBHOOK_SECRET_REF,
-            signing_secret_version="project",
-            raw={
-                "id": external_trigger_id,
-                "status": "active",
-                "provider_trigger_slug": request.provider_trigger_slug,
-                "account_email": credentials.account_email,
-            },
+        raise RuntimeError(
+            "native Microsoft Graph subscription provisioning is not yet "
+            "available; enable fails closed until Graph transport ships",
         )
 
     def delete(self, request: TriggerDeleteRequest) -> None:
