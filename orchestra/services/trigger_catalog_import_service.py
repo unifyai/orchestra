@@ -10,11 +10,18 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.trigger_catalog_dao import TriggerCatalogDAO
+from orchestra.provider_triggers.backend_ids import (
+    NATIVE_GOOGLE_BACKEND_ID,
+    NATIVE_MICROSOFT_BACKEND_ID,
+)
 from orchestra.provider_triggers.catalog_import import (
     compute_catalog_content_hash,
     get_trigger_catalog_importer,
 )
 from orchestra.provider_triggers.catalog_import.fixtures import load_fixture_catalog
+from orchestra.provider_triggers.catalog_import.native_manifest import (
+    load_native_catalog_entries,
+)
 from orchestra.provider_triggers.catalog_types import TriggerCatalogImportStatus
 
 
@@ -139,6 +146,8 @@ class TriggerCatalogImportService:
     ) -> str:
         if (
             environment == "selfhost"
+            and backend_id
+            not in {NATIVE_GOOGLE_BACKEND_ID, NATIVE_MICROSOFT_BACKEND_ID}
             and not os.getenv(
                 {
                     "composio": "COMPOSIO_API_KEY",
@@ -152,6 +161,16 @@ class TriggerCatalogImportService:
                 return catalog_version
             except FileNotFoundError:
                 pass
+        if backend_id in {NATIVE_GOOGLE_BACKEND_ID, NATIVE_MICROSOFT_BACKEND_ID}:
+            try:
+                catalog_version, _ = load_native_catalog_entries(backend_id)
+                return catalog_version
+            except FileNotFoundError:
+                try:
+                    catalog_version, _ = load_fixture_catalog(backend_id)
+                    return catalog_version
+                except FileNotFoundError:
+                    pass
         if not entries:
             return "empty"
         versions = [

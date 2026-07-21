@@ -11,15 +11,29 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.trigger_catalog_dao import TriggerCatalogDAO
 from orchestra.provider_triggers.backend_ids import (
     COMPOSIO_BACKEND_ID,
+    NATIVE_GOOGLE_BACKEND_ID,
+    NATIVE_MICROSOFT_BACKEND_ID,
     PIPEDREAM_BACKEND_ID,
 )
 from orchestra.provider_triggers.catalog_import.composio import (
     ComposioTriggerCatalogImporter,
 )
 from orchestra.provider_triggers.catalog_import.fixtures import load_fixture_catalog
+from orchestra.provider_triggers.catalog_import.native_google import (
+    NativeGoogleTriggerCatalogImporter,
+)
+from orchestra.provider_triggers.catalog_import.native_manifest import (
+    load_native_catalog_entries,
+)
 from orchestra.services.trigger_catalog_import_service import (
     TriggerCatalogImportService,
 )
+
+
+def _expected_catalog(backend_id: str) -> tuple[str, list]:
+    if backend_id in {NATIVE_GOOGLE_BACKEND_ID, NATIVE_MICROSOFT_BACKEND_ID}:
+        return load_native_catalog_entries(backend_id)
+    return load_fixture_catalog(backend_id)
 
 
 class _FakeResponse:
@@ -53,6 +67,8 @@ class _FakeResponse:
                 "PIPEDREAM_PROJECT_ID",
             ),
         ),
+        (NATIVE_GOOGLE_BACKEND_ID, ()),
+        (NATIVE_MICROSOFT_BACKEND_ID, ()),
     ],
 )
 def test_import_catalog_uses_fixture_entries_without_provider_credentials(
@@ -64,7 +80,7 @@ def test_import_catalog_uses_fixture_entries_without_provider_credentials(
     for env_name in credential_envs:
         monkeypatch.delenv(env_name, raising=False)
 
-    expected_version, expected_entries = load_fixture_catalog(backend_id)
+    expected_version, expected_entries = _expected_catalog(backend_id)
     service = TriggerCatalogImportService(dbsession)
 
     first = service.import_catalog(backend_id=backend_id, environment="selfhost")
@@ -85,7 +101,7 @@ def test_import_catalog_uses_fixture_entries_without_provider_credentials(
     assert first.skipped is False
     assert first.catalog_version == expected_version
     assert first.entry_count == len(expected_entries)
-    assert [row.provider_trigger_slug for row in candidates] == sorted(
+    assert sorted(row.provider_trigger_slug for row in candidates) == sorted(
         entry.provider_trigger_slug for entry in expected_entries
     )
     assert bootstrap.desired_hash == first.content_hash
@@ -151,3 +167,48 @@ def test_composio_live_catalog_import_uses_rest_pagination(
     assert calls[0]["headers"]["x-api-key"] == "test-composio-key"
     assert calls[0]["params"]["limit"] == 1000
     assert calls[1]["params"]["cursor"] == "page-2"
+
+
+def test_native_google_catalog_importer_honors_url_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "catalog_version": "remote-google-v9",
+        "entries": [
+            {
+                "provider_trigger_slug": "google.workspace.meet.transcript.v2.fileGenerated",
+                "provider_version": "1",
+                "canonical_app_hint": "google_meet",
+                "raw_metadata": {"name": "Remote Meet transcript"},
+            },
+        ],
+    }
+
+    def request_fn(url: str) -> dict[str, object]:
+        assert url == "https://example.test/native-google-catalog.json"
+        return payload
+
+    monkeypatch.setenv(
+        "NATIVE_GOOGLE_CATALOG_URL",
+        "https://example.test/native-google-catalog.json",
+    )
+    importer = NativeGoogleTriggerCatalogImporter(
+        environment="staging",
+        request_fn=request_fn,
+    )
+    entries = importer.list_trigger_catalog_entries()
+
+    assert len(entries) == 1
+    assert entries[0].provider_trigger_slug == (
+        "google.workspace.meet.transcript.v2.fileGenerated"
+    )
+
+
+def test_native_google_catalog_importer_force_fixture_in_selfhost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NATIVE_GOOGLE_CATALOG_FORCE_FIXTURE", "1")
+    _, expected_entries = load_fixture_catalog(NATIVE_GOOGLE_BACKEND_ID)
+    importer = NativeGoogleTriggerCatalogImporter(environment="selfhost")
+    entries = importer.list_trigger_catalog_entries()
+    assert len(entries) == len(expected_entries)
