@@ -105,10 +105,33 @@ External columns **observe** remote state. Mutations go through an outbox:
 
 1. `POST /logs/external_write` enqueues an `external_write_intent`
    (`deliver=async` default, or `deliver=sync` for in-request delivery).
-2. Admin `POST /admin/external_writes/drain` delivers pending intents
-   (Cloud Scheduler / worker loop).
+2. Admin `POST /admin/external_writes/drain` delivers pending intents.
 3. On confirm, hydrate sidecars for `log_event_ids` are invalidated so the
    next read re-fetches.
+
+### Cloud Scheduler (drain)
+
+Jobs live in GCP project `gcp-project-saas` / location `us-central1`. Auth matches
+other Orchestra admin crons: static Bearer `ORCHESTRA_ADMIN_KEY` from Secret
+Manager (not OIDC).
+
+| Job | URI | Schedule |
+|---|---|---|
+| `orchestra-external-writes-drain-scheduler-staging` | `https://internal.example.com/v0/admin/external_writes/drain` | `* * * * *` (every minute) |
+| `orchestra-external-writes-drain-scheduler` | `https://api.unify.ai/v0/admin/external_writes/drain` | `* * * * *` (every minute) |
+
+Body: `{"limit": 100}`. Attempt deadline 180s; one retry with 10–120s backoff.
+
+Ensure / update idempotently:
+
+```bash
+bash deploy/ensure_external_writes_drain_scheduler.sh
+bash deploy/ensure_external_writes_drain_scheduler.sh --dry-run
+```
+
+Latency-sensitive callers (e.g. SmartLead reply drain inside a tick) may still
+use `deliver=sync`. Prefer `deliver=async` for fire-and-forget mutations that
+can wait up to ~1 minute for the scheduler.
 
 Idempotency is unique on `(project_id, idempotency_key)`. Connectors implement
 `execute_write` (see `http.generic` with `binding.write.url_template`).

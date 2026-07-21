@@ -6209,7 +6209,20 @@ def drain_external_writes_endpoint(
     request: DrainExternalWritesRequest,
     session=Depends(get_db_session),
 ):
-    """Deliver pending external write intents (cron / worker)."""
+    """Deliver pending external write intents (cron / worker).
+
+    **Cloud Scheduler** (project ``gcp-project-saas`` / ``us-central1``):
+
+    - Staging: ``orchestra-external-writes-drain-scheduler-staging``
+      → ``POST https://internal.example.com/v0/admin/external_writes/drain``
+      every minute
+    - Production: ``orchestra-external-writes-drain-scheduler``
+      → ``POST https://api.unify.ai/v0/admin/external_writes/drain`` every minute
+
+    Auth: ``Authorization: Bearer <ORCHESTRA_ADMIN_KEY>`` (same pattern as
+    other Orchestra admin schedulers). Ensure / update jobs with
+    ``bash deploy/ensure_external_writes_drain_scheduler.sh``.
+    """
     from orchestra.external_bindings.write import drain_external_writes
 
     return drain_external_writes(session, limit=request.limit)
