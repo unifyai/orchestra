@@ -3969,7 +3969,7 @@ class TestConnectEndpoint:
         assert "_sig" not in state
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
-        assert state["features"] == ["email", "drive"]
+        assert state["features"] == ["email", "drive", "meet"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4163,7 +4163,7 @@ class TestConnectEndpoint:
         assert len(sig) == 64
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
-        assert state["features"] == ["email", "drive"]
+        assert state["features"] == ["email", "drive", "meet"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4435,7 +4435,7 @@ class TestConnectEndpointEdgeCases:
         parsed = urlparse(oauth_url)
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
-        assert state["features"] == ["email", "drive"]
+        assert state["features"] == ["email", "drive", "meet"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4903,7 +4903,7 @@ class TestGrantedFeaturesRequiredField:
 
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()["info"]
-        assert sorted(data["required_features"]) == ["drive", "email"]
+        assert sorted(data["required_features"]) == ["drive", "email", "meet"]
 
     @pytest.mark.anyio
     async def test_microsoft_required_features(
@@ -5694,7 +5694,7 @@ class TestConnectEndpointOrg:
                 parse_qs(urlparse(oauth_url).query)["state"][0],
             ),
         )
-        assert state["features"] == ["email", "drive"]
+        assert state["features"] == ["email", "drive", "meet"]
         assert state["actions"] == {
             "register_email_contact": False,
             "setup_email_watch": False,
@@ -6230,7 +6230,7 @@ class TestGrantedFeaturesEndpointOrg:
         data = resp.json()["info"]
         assert data["provider"] == "google"
         assert "email" in data["features"]
-        assert sorted(data["required_features"]) == ["drive", "email"]
+        assert sorted(data["required_features"]) == ["drive", "email", "meet"]
 
     @pytest.mark.anyio
     async def test_org_member_with_read_can_read(
