@@ -180,6 +180,17 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
         if not credentials.access_token:
             raise PermissionError("workspace access token missing for native Google")
 
+        slug = str(request.provider_trigger_slug).strip()
+        if slug and not slug.startswith("google.workspace.meet."):
+            # Drive/Chat families need a resource-scoped ``targetResource`` in the
+            # Workspace Events create body (ticket 26). Until that lands, fail
+            # closed rather than register a user-level subscription that would
+            # falsely report healthy for the wrong resource.
+            raise RuntimeError(
+                "native Google provisioning for non-Meet families requires "
+                f"resource targeting that is not yet available: {slug}",
+            )
+
         pubsub_topic = self._resolved_pubsub_topic()
         if not pubsub_topic:
             # Fail closed: without the shared Meet events topic no subscription
