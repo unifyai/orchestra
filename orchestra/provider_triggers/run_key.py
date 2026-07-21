@@ -21,9 +21,9 @@ def build_provider_event_run_key(
     assistant_id: str,
     task_id: int,
     binding_id: str,
-    activation_revision: str,
+    revision: str,
     event_identity_hmac: str,
-    execution_mode: Literal["live", "offline"] = "offline",
+    delivery: Literal["live", "offline"] = "offline",
 ) -> str:
     """Build the deterministic provider-event run key.
 
@@ -33,13 +33,13 @@ def build_provider_event_run_key(
     """
 
     revision_digest = hashlib.sha256(
-        str(activation_revision or "").encode("utf-8"),
+        str(revision or "").encode("utf-8"),
     ).hexdigest()[:12]
     binding_part = normalize_run_key_component(binding_id)
     identity = str(event_identity_hmac).strip()
     if not identity:
         raise ValueError("event_identity_hmac is required")
     return (
-        f"{execution_mode}:provider_event:{assistant_id}:{task_id}:"
+        f"{delivery}:provider_event:{assistant_id}:{task_id}:"
         f"{binding_part}:{revision_digest}:{identity}"
     )

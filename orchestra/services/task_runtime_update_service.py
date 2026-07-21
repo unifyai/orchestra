@@ -58,7 +58,7 @@ class TaskRuntimeUpdateService:
         revision = current_task_revision(merged)
         _replace_log_payload(log_event, merged)
         self.session.flush()
-        self._mutation_service._project_task_activation(
+        self._mutation_service._project_task_executions(
             project_id=project_id,
             tasks_context_name=tasks_context_name,
             task_ids={int(merged["task_id"])},

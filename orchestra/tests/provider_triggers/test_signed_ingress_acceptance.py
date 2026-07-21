@@ -184,9 +184,9 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
         assistant_id=str(assistant_id),
         task_id=task_id,
         binding_id=binding_id,
-        activation_revision=receipt.accepted_activation_revision,
+        revision=receipt.accepted_activation_revision,
         event_identity_hmac=receipt.provider_event_identity_hmac,
-        execution_mode="live",
+        delivery="live",
     )
     assert receipt.run_key == expected_run_key
     assert receipt.provider_event_identity_hmac == expected_run_key.split(":")[-1]
@@ -203,7 +203,9 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
     assert run_response.status_code == 200, run_response.text
     run = run_response.json()["run"]
     assert run is not None
-    assert run["source_type"] == "provider_event"
+    assert run["wake"] == "provider_event"
+    assert run["delivery"] == "live"
+    assert run["revision"] == receipt.accepted_activation_revision
     assert run["provider_event_receipt_id"] == receipt.receipt_id
     assert run["provider_event_binding_id"] == binding_id
     assert run["provider_event_backend_id"] == "composio"

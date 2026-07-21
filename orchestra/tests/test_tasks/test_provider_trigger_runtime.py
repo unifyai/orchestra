@@ -15,7 +15,7 @@ from orchestra.db.models.orchestra_models import Context, LogEvent, Project
 from orchestra.db.models.provider_trigger_models import EventTriggerBinding
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
-    build_task_activation_context_name,
+    build_task_executions_context_name,
 )
 from orchestra.services.task_mutation_contract import format_task_etag
 from orchestra.tests.provider_triggers.conftest import (
@@ -30,6 +30,27 @@ from orchestra.tests.utils import HEADERS
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[1] / "fixtures" / "task_trigger_contract"
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_assistant_infra_calls():
+    """Avoid hosted infra wake calls during assistant create in unit tests."""
+    from unittest.mock import AsyncMock, patch
+
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+    ):
+        mock_wake_up.return_value.status_code = 200
+        mock_reawaken.return_value.status_code = 200
+        mock_reawaken.return_value.json.return_value = {}
+        yield
 
 
 def _provider_event_trigger(*, state: str = "enabled") -> dict:
@@ -90,7 +111,7 @@ async def _create_provider_event_task(
 
 
 @pytest.mark.anyio
-async def test_create_persists_binding_and_projects_provider_event_activation(
+async def test_create_persists_binding_and_projects_provider_event_execution(
     client: AsyncClient,
     assistant_id: int,
     dbsession: Session,
@@ -113,31 +134,31 @@ async def test_create_persists_binding_and_projects_provider_event_activation(
     )
 
     user_id = _auth_user_id()
-    activations_context = build_task_activation_context_name(
+    executions_context = build_task_executions_context_name(
         f"{user_id}/{assistant_id}/Tasks",
     )
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": TASK_MACHINE_PROJECT_NAME,
-            "context": activations_context,
+            "context": executions_context,
         },
         headers=HEADERS,
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
-    activations = response.json()["logs"]
-    assert len(activations) == 1
-    activation = activations[0]["entries"]
-    assert activation["activation_kind"] == "provider_event"
+    executions = response.json()["logs"]
+    assert len(executions) == 1
+    execution = executions[0]["entries"]
+    assert execution["wake"] == "provider_event"
     assert (
-        activation["provider_event_binding_id"] == created["provider_event_binding_id"]
+        execution["provider_event_binding_id"] == created["provider_event_binding_id"]
     )
-    assert activation["activation_revision"] == binding.desired_activation_revision
-    assert activation["connection_id"] == created["trigger"]["connection_id"]
+    assert execution["revision"] == binding.desired_activation_revision
+    assert execution["connection_id"] == created["trigger"]["connection_id"]
 
 
 @pytest.mark.anyio
-async def test_paused_provider_event_task_projects_no_activation(
+async def test_paused_provider_event_task_projects_no_execution(
     client: AsyncClient,
     assistant_id: int,
 ) -> None:
@@ -147,14 +168,14 @@ async def test_paused_provider_event_task_projects_no_activation(
         state="paused",
     )
     user_id = _auth_user_id()
-    activations_context = build_task_activation_context_name(
+    executions_context = build_task_executions_context_name(
         f"{user_id}/{assistant_id}/Tasks",
     )
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": TASK_MACHINE_PROJECT_NAME,
-            "context": activations_context,
+            "context": executions_context,
         },
         headers=HEADERS,
     )
@@ -164,7 +185,7 @@ async def test_paused_provider_event_task_projects_no_activation(
 
 
 @pytest.mark.anyio
-async def test_pause_removes_activation_and_closes_acceptance(
+async def test_pause_removes_execution_and_closes_acceptance(
     client: AsyncClient,
     assistant_id: int,
     dbsession: Session,
@@ -185,14 +206,14 @@ async def test_pause_removes_activation_and_closes_acceptance(
     assert binding.local_acceptance_open is False
 
     user_id = _auth_user_id()
-    activations_context = build_task_activation_context_name(
+    executions_context = build_task_executions_context_name(
         f"{user_id}/{assistant_id}/Tasks",
     )
     response = await client.get(
         "/v0/logs",
         params={
             "project_name": TASK_MACHINE_PROJECT_NAME,
-            "context": activations_context,
+            "context": executions_context,
         },
         headers=HEADERS,
     )
@@ -218,7 +239,7 @@ async def test_trigger_health_and_retry_use_durable_binding_state(
     assert health.status_code == status.HTTP_200_OK, health.json()
     body = health.json()["info"]
     assert body["runtime_health"] == "provisioning"
-    assert body["desired_activation_revision"] is not None
+    assert body["desired_revision"] is not None
     assert body["local_acceptance_open"] is False
 
     retry = await client.post(
@@ -237,7 +258,7 @@ async def test_trigger_health_and_retry_use_durable_binding_state(
 
 
 @pytest.mark.anyio
-async def test_delete_tombstones_binding_and_removes_activation(
+async def test_delete_tombstones_binding_and_removes_execution(
     client: AsyncClient,
     assistant_id: int,
     dbsession: Session,

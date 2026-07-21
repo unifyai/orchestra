@@ -123,7 +123,7 @@ def _add_scheduled_activation(
     team_id: int,
     task_id: int,
 ) -> LogEvent:
-    context_name = task_machine_state_service.build_task_activation_context_name(
+    context_name = task_machine_state_service.build_task_executions_context_name(
         f"{owner_id}/{assistant_id}/Tasks",
     )
     context = (
@@ -139,13 +139,14 @@ def _add_scheduled_activation(
         owner_key="sys",
         project_id=project.id,
         data={
-            "activation_kind": "scheduled",
+            "wake": "scheduled",
+            "state": "scheduled",
             "assistant_id": str(assistant_id),
             "destination": f"team:{team_id}",
             "task_id": task_id,
-            "activation_revision": f"rev-{task_id}",
-            "next_due_at": "2026-04-10T09:00:00+00:00",
-            "execution_mode": "live",
+            "revision": f"rev-{task_id}",
+            "scheduled_for": "2026-04-10T09:00:00+00:00",
+            "delivery": "live",
         },
     )
     dbsession.add(log_event)

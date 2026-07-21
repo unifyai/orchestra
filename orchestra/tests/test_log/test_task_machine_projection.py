@@ -28,12 +28,7 @@ from orchestra.tests.utils import ADMIN_HEADERS
 
 TASKS_CONTEXT = "1/42/Tasks"
 TASK_MACHINE_PROJECT_NAME = task_machine_state_service.TASK_MACHINE_PROJECT_NAME
-TASK_ACTIVATIONS_CONTEXT = (
-    task_machine_state_service.build_task_activation_context_name(
-        TASKS_CONTEXT,
-    )
-)
-TASK_RUNS_CONTEXT = task_machine_state_service.build_task_runs_context_name(
+TASK_EXECUTIONS_CONTEXT = task_machine_state_service.build_task_executions_context_name(
     TASKS_CONTEXT,
 )
 TASK_OUTBOUND_OPERATIONS_CONTEXT = (
@@ -43,8 +38,8 @@ TASK_OUTBOUND_OPERATIONS_CONTEXT = (
 )
 PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 SECONDARY_USER_ID = "seconday_user"
-_ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION = (
-    task_machine_state_service._reconcile_scheduled_activation_materialization
+_ORIGINAL_RECONCILE_SCHEDULED_EXECUTION_MATERIALIZATION = (
+    task_machine_state_service._reconcile_scheduled_execution_materialization
 )
 
 
@@ -155,12 +150,12 @@ def materialization_calls(monkeypatch):
 
     calls: list[tuple[dict | None, dict | None]] = []
 
-    def _capture(*, previous_activation, current_activation):
-        calls.append((previous_activation, current_activation))
+    def _capture(*, previous_execution, current_execution):
+        calls.append((previous_execution, current_execution))
 
     monkeypatch.setattr(
         task_machine_state_service,
-        "_reconcile_scheduled_activation_materialization",
+        "_reconcile_scheduled_execution_materialization",
         _capture,
     )
     return calls
@@ -227,18 +222,18 @@ def _offline_task_entries(
     return entries
 
 
-def test_scheduled_activation_upsert_body_includes_wake_context():
+def test_scheduled_execution_upsert_body_includes_wake_context():
     """Scheduled activation sync should carry compact human-facing wake context."""
 
-    body = task_machine_state_service._scheduled_activation_upsert_body(
+    body = task_machine_state_service._scheduled_execution_upsert_body(
         {
             "assistant_id": "42",
             "task_id": 101,
             "source_task_log_id": 555,
-            "activation_kind": "scheduled",
-            "execution_mode": "live",
-            "activation_revision": "rev-1",
-            "next_due_at": "2026-04-10T09:00:00+00:00",
+            "wake": "scheduled",
+            "delivery": "live",
+            "revision": "rev-1",
+            "scheduled_for": "2026-04-10T09:00:00+00:00",
             "task_name": "Morning briefing",
             "task_description": (
                 "Prepare the morning update before the user checks in."
@@ -256,21 +251,21 @@ def test_scheduled_activation_upsert_body_includes_wake_context():
     assert body["recurrence_hint"] == "recurring"
 
 
-def _scheduled_activation_payload(
+def _scheduled_execution_payload(
     *,
     revision: str = "rev-1",
     next_due_at: str = "2026-04-10T09:00:00+00:00",
-    execution_mode: str = "offline",
+    delivery: str = "offline",
     source_task_log_id: int = 555,
 ) -> dict:
     return {
         "assistant_id": "42",
         "task_id": 101,
         "source_task_log_id": source_task_log_id,
-        "activation_kind": "scheduled",
-        "execution_mode": execution_mode,
-        "activation_revision": revision,
-        "next_due_at": next_due_at,
+        "wake": "scheduled",
+        "delivery": delivery,
+        "revision": revision,
+        "scheduled_for": next_due_at,
         "task_name": "Morning briefing",
         "task_description": "Prepare the morning update before the user checks in.",
     }
@@ -282,22 +277,22 @@ def test_reconcile_skips_unchanged_scheduled_delivery_identity(monkeypatch):
     posts = []
     monkeypatch.setattr(
         task_machine_state_service,
-        "_reconcile_scheduled_activation_materialization",
-        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+        "_reconcile_scheduled_execution_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_EXECUTION_MATERIALIZATION,
     )
     monkeypatch.setattr(
         task_machine_state_service,
-        "_post_task_activation_request",
+        "_post_task_execution_request",
         lambda **kwargs: posts.append(kwargs),
     )
 
-    previous = _scheduled_activation_payload(source_task_log_id=555)
-    current = {**_scheduled_activation_payload(source_task_log_id=555)}
+    previous = _scheduled_execution_payload(source_task_log_id=555)
+    current = {**_scheduled_execution_payload(source_task_log_id=555)}
     current["last_materialized_at"] = "2026-04-10T08:00:00+00:00"
 
-    task_machine_state_service._reconcile_scheduled_activation_materialization(
-        previous_activation=previous,
-        current_activation=current,
+    task_machine_state_service._reconcile_scheduled_execution_materialization(
+        previous_execution=previous,
+        current_execution=current,
     )
 
     assert posts == []
@@ -309,31 +304,31 @@ def test_reconcile_upserts_changed_scheduled_delivery_identity(monkeypatch):
     posts = []
     monkeypatch.setattr(
         task_machine_state_service,
-        "_reconcile_scheduled_activation_materialization",
-        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+        "_reconcile_scheduled_execution_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_EXECUTION_MATERIALIZATION,
     )
     monkeypatch.setattr(
         task_machine_state_service,
-        "_post_task_activation_request",
+        "_post_task_execution_request",
         lambda **kwargs: posts.append(kwargs),
     )
 
-    task_machine_state_service._reconcile_scheduled_activation_materialization(
-        previous_activation=_scheduled_activation_payload(
+    task_machine_state_service._reconcile_scheduled_execution_materialization(
+        previous_execution=_scheduled_execution_payload(
             next_due_at="2026-04-10T09:00:00+00:00",
         ),
-        current_activation=_scheduled_activation_payload(
+        current_execution=_scheduled_execution_payload(
             revision="rev-2",
             next_due_at="2026-04-10T09:30:00+00:00",
         ),
     )
 
     assert len(posts) == 1
-    assert posts[0]["path"] == task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH
+    assert posts[0]["path"] == task_machine_state_service._TASK_EXECUTION_UPSERT_PATH
     body = posts[0]["body"]
-    assert body["activation_revision"] == "rev-2"
+    assert body["revision"] == "rev-2"
     assert body["scheduled_for"] == "2026-04-10T09:30:00+00:00"
-    assert body["previous_activation_revision"] == "rev-1"
+    assert body["previous_revision"] == "rev-1"
     assert body["previous_scheduled_for"] == "2026-04-10T09:00:00+00:00"
 
 
@@ -343,26 +338,26 @@ def test_reconcile_deletes_unarmed_scheduled_delivery(monkeypatch):
     posts = []
     monkeypatch.setattr(
         task_machine_state_service,
-        "_reconcile_scheduled_activation_materialization",
-        _ORIGINAL_RECONCILE_SCHEDULED_ACTIVATION_MATERIALIZATION,
+        "_reconcile_scheduled_execution_materialization",
+        _ORIGINAL_RECONCILE_SCHEDULED_EXECUTION_MATERIALIZATION,
     )
     monkeypatch.setattr(
         task_machine_state_service,
-        "_post_task_activation_request",
+        "_post_task_execution_request",
         lambda **kwargs: posts.append(kwargs),
     )
 
-    task_machine_state_service._reconcile_scheduled_activation_materialization(
-        previous_activation=_scheduled_activation_payload(),
-        current_activation=None,
+    task_machine_state_service._reconcile_scheduled_execution_materialization(
+        previous_execution=_scheduled_execution_payload(),
+        current_execution=None,
     )
 
     assert len(posts) == 1
-    assert posts[0]["path"] == task_machine_state_service._TASK_ACTIVATION_DELETE_PATH
-    assert posts[0]["body"]["activation_revision"] == "rev-1"
+    assert posts[0]["path"] == task_machine_state_service._TASK_EXECUTION_DELETE_PATH
+    assert posts[0]["body"]["revision"] == "rev-1"
 
 
-def test_post_task_activation_request_skips_in_self_host_mode(monkeypatch):
+def test_post_task_execution_request_skips_in_self_host_mode(monkeypatch):
     """Self-host uses Unity's LocalActivationScheduler instead of Communication."""
 
     posts: list[tuple] = []
@@ -382,15 +377,15 @@ def test_post_task_activation_request_skips_in_self_host_mode(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
 
-    task_machine_state_service._post_task_activation_request(
-        path=task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH,
+    task_machine_state_service._post_task_execution_request(
+        path=task_machine_state_service._TASK_EXECUTION_UPSERT_PATH,
         body={"assistant_id": "42", "task_id": 101},
     )
 
     assert posts == []
 
 
-def test_post_task_activation_request_posts_when_not_self_host(monkeypatch):
+def test_post_task_execution_request_posts_when_not_self_host(monkeypatch):
     """Hosted deployments still mirror scheduled activations into Communication."""
 
     posts: list[tuple] = []
@@ -415,20 +410,20 @@ def test_post_task_activation_request_posts_when_not_self_host(monkeypatch):
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
 
-    task_machine_state_service._post_task_activation_request(
-        path=task_machine_state_service._TASK_ACTIVATION_UPSERT_PATH,
+    task_machine_state_service._post_task_execution_request(
+        path=task_machine_state_service._TASK_EXECUTION_UPSERT_PATH,
         body={"assistant_id": "42", "task_id": 101},
     )
 
     assert len(posts) == 1
     url, kwargs = posts[0]
-    assert url == "http://comms.test/infra/task-activation/upsert"
+    assert url == "http://comms.test/infra/task-execution/upsert"
     assert kwargs["json"] == {"assistant_id": "42", "task_id": 101}
     assert kwargs["headers"]["Authorization"] == "Bearer test-admin-key"
 
 
 @pytest.mark.anyio
-async def test_task_create_projects_scheduled_activation(
+async def test_task_create_projects_scheduled_execution(
     client: AsyncClient,
     materialization_calls,
 ):
@@ -444,24 +439,23 @@ async def test_task_create_projects_scheduled_activation(
     assert response.status_code == 200, response.json()
     created_task_log_id = response.json()["log_event_ids"][0]
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert len(activations) == 1
-    activation = activations[0]["entries"]
-    assert activation["assistant_id"] == "42"
-    assert activation["activation_key"] == "42:101"
-    assert activation["task_id"] == 101
-    assert activation["source_task_log_id"] == created_task_log_id
-    assert activation["activation_kind"] == "scheduled"
-    assert activation["execution_mode"] == "live"
-    assert activation["entrypoint"] is None
-    assert activation["next_due_at"] == "2026-04-10T09:00:00+00:00"
-    assert activation["repeat"] == [{"unit": "day", "count": 1}]
-    assert activation["activation_revision"]
-    assert materialization_calls == [(None, activation)]
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert len(executions) == 1
+    execution = executions[0]["entries"]
+    assert execution["assistant_id"] == "42"
+    assert execution["task_id"] == 101
+    assert execution["source_task_log_id"] == created_task_log_id
+    assert execution["wake"] == "scheduled"
+    assert execution["delivery"] == "live"
+    assert execution["entrypoint"] is None
+    assert execution["scheduled_for"] == "2026-04-10T09:00:00+00:00"
+    assert execution["repeat"] == [{"unit": "day", "count": 1}]
+    assert execution["revision"]
+    assert materialization_calls == [(None, execution)]
 
 
 @pytest.mark.anyio
-async def test_team_task_projects_activation_into_executor_context(
+async def test_team_task_projects_execution_into_executor_context(
     client: AsyncClient,
     dbsession,
     materialization_calls,
@@ -472,8 +466,8 @@ async def test_team_task_projects_activation_into_executor_context(
     assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
     team = _make_team_member(dbsession, assistant=assistant)
     team_tasks_context = f"Teams/{team.id}/Tasks"
-    executor_activation_context = (
-        task_machine_state_service.build_task_activation_context_name(
+    executor_execution_context = (
+        task_machine_state_service.build_task_executions_context_name(
             _assistant_tasks_context(
                 user_id=PRIMARY_USER_ID,
                 assistant_id=assistant.agent_id,
@@ -495,38 +489,37 @@ async def test_team_task_projects_activation_into_executor_context(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(
+    executions = await _get_context_logs(
         client,
-        context_name=executor_activation_context,
+        context_name=executor_execution_context,
     )
     matching = [
-        log["entries"] for log in activations if log["entries"]["task_id"] == 111
+        log["entries"] for log in executions if log["entries"]["task_id"] == 111
     ]
     assert len(matching) == 1
-    activation = matching[0]
-    assert activation["assistant_id"] == str(assistant.agent_id)
-    assert activation["destination"] == f"team:{team.id}"
-    assert activation["activation_key"] == f"{assistant.agent_id}:team:{team.id}:111"
-    assert materialization_calls == [(None, activation)]
+    execution = matching[0]
+    assert execution["assistant_id"] == str(assistant.agent_id)
+    assert execution["destination"] == f"team:{team.id}"
+    assert materialization_calls == [(None, execution)]
 
-    shared_activation_context = f"Teams/{team.id}/Tasks/Activations"
+    shared_execution_context = f"Teams/{team.id}/Tasks/Executions"
     assert (
         dbsession.query(Context)
-        .filter(Context.name == shared_activation_context)
+        .filter(Context.name == shared_execution_context)
         .one_or_none()
         is None
     )
 
 
 @pytest.mark.anyio
-async def test_deleting_team_task_removes_executor_activation_by_destination(
+async def test_deleting_team_task_removes_executor_execution_by_destination(
     client: AsyncClient,
     dbsession,
     materialization_calls,
 ):
     """Deleting a shared team task removes its executor-owned activation rows.
 
-    Drives ``_delete_activation_rows_by_task_destination`` (the team-surface
+    Drives ``_delete_open_executions_by_task_destination`` (the team-surface
     resync-delete path), so the partition-prune guard verifies its log_event
     scan stays pruned to the owning project.
     """
@@ -535,8 +528,8 @@ async def test_deleting_team_task_removes_executor_activation_by_destination(
     assistant = _make_assistant(dbsession, user_id=PRIMARY_USER_ID)
     team = _make_team_member(dbsession, assistant=assistant)
     team_tasks_context = f"Teams/{team.id}/Tasks"
-    executor_activation_context = (
-        task_machine_state_service.build_task_activation_context_name(
+    executor_execution_context = (
+        task_machine_state_service.build_task_executions_context_name(
             _assistant_tasks_context(
                 user_id=PRIMARY_USER_ID,
                 assistant_id=assistant.agent_id,
@@ -559,11 +552,11 @@ async def test_deleting_team_task_removes_executor_activation_by_destination(
     assert create.status_code == 200, create.json()
     team_task_log_id = create.json()["log_event_ids"][0]
 
-    activations = await _get_context_logs(
+    executions = await _get_context_logs(
         client,
-        context_name=executor_activation_context,
+        context_name=executor_execution_context,
     )
-    assert any(log["entries"]["task_id"] == 131 for log in activations)
+    assert any(log["entries"]["task_id"] == 131 for log in executions)
 
     delete = await _delete_logs(
         client,
@@ -573,15 +566,15 @@ async def test_deleting_team_task_removes_executor_activation_by_destination(
     )
     assert delete.status_code == 200, delete.json()
 
-    activations_after = await _get_context_logs(
+    executions_after = await _get_context_logs(
         client,
-        context_name=executor_activation_context,
+        context_name=executor_execution_context,
     )
-    assert all(log["entries"]["task_id"] != 131 for log in activations_after)
+    assert all(log["entries"]["task_id"] != 131 for log in executions_after)
 
 
 @pytest.mark.anyio
-async def test_team_task_membership_mismatch_does_not_project_activation(
+async def test_team_task_membership_mismatch_does_not_project_execution(
     client: AsyncClient,
     dbsession,
     materialization_calls,
@@ -614,24 +607,24 @@ async def test_team_task_membership_mismatch_does_not_project_activation(
     )
     assert response.status_code == 200, response.json()
 
-    executor_activation_context = (
-        task_machine_state_service.build_task_activation_context_name(
+    executor_execution_context = (
+        task_machine_state_service.build_task_executions_context_name(
             _assistant_tasks_context(
                 user_id=PRIMARY_USER_ID,
                 assistant_id=assistant.agent_id,
             ),
         )
     )
-    activations = await _get_context_logs(
+    executions = await _get_context_logs(
         client,
-        context_name=executor_activation_context,
+        context_name=executor_execution_context,
     )
-    assert all(log["entries"]["task_id"] != 112 for log in activations)
+    assert all(log["entries"]["task_id"] != 112 for log in executions)
     assert materialization_calls == []
 
 
 @pytest.mark.anyio
-async def test_deleting_team_does_not_project_activation(
+async def test_deleting_team_does_not_project_execution(
     client: AsyncClient,
     dbsession,
     materialization_calls,
@@ -658,19 +651,19 @@ async def test_deleting_team_does_not_project_activation(
     )
     assert response.status_code == 200, response.json()
 
-    executor_activation_context = (
-        task_machine_state_service.build_task_activation_context_name(
+    executor_execution_context = (
+        task_machine_state_service.build_task_executions_context_name(
             _assistant_tasks_context(
                 user_id=PRIMARY_USER_ID,
                 assistant_id=assistant.agent_id,
             ),
         )
     )
-    activations = await _get_context_logs(
+    executions = await _get_context_logs(
         client,
-        context_name=executor_activation_context,
+        context_name=executor_execution_context,
     )
-    assert all(log["entries"]["task_id"] != 113 for log in activations)
+    assert all(log["entries"]["task_id"] != 113 for log in executions)
     assert materialization_calls == []
 
 
@@ -704,14 +697,13 @@ async def test_task_update_reconciles_new_schedule_head(
     )
     assert response.status_code == 200, response.json()
     assert len(materialization_calls) == 1
-    previous_activation, current_activation = materialization_calls[0]
-    assert previous_activation["next_due_at"] == "2026-04-10T09:00:00+00:00"
-    assert current_activation["next_due_at"] == "2026-04-10T11:30:00+00:00"
-    assert current_activation["activation_key"] == "42:151"
+    previous_execution, current_execution = materialization_calls[0]
+    assert previous_execution["scheduled_for"] == "2026-04-10T09:00:00+00:00"
+    assert current_execution["scheduled_for"] == "2026-04-10T11:30:00+00:00"
 
 
 @pytest.mark.anyio
-async def test_task_update_clears_activation_when_row_stops_being_armed(
+async def test_task_update_clears_execution_when_row_stops_being_armed(
     client: AsyncClient,
 ):
     """Updating a task into a non-activatable status should clear the activation."""
@@ -735,15 +727,15 @@ async def test_task_update_clears_activation_when_row_stops_being_armed(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert all(log["entries"]["task_id"] != 202 for log in activations)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 202 for log in executions)
 
 
 @pytest.mark.anyio
-async def test_disabled_scheduled_task_does_not_project_activation(
+async def test_disabled_scheduled_task_does_not_project_execution(
     client: AsyncClient,
 ):
-    """enabled=False scheduled tasks must not arm Tasks/Activations."""
+    """enabled=False scheduled tasks must not arm Tasks/Executions."""
 
     await _ensure_task_machine_project(client)
     entries = _scheduled_task_entries(task_id=260)
@@ -756,15 +748,15 @@ async def test_disabled_scheduled_task_does_not_project_activation(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert all(log["entries"]["task_id"] != 260 for log in activations)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 260 for log in executions)
 
 
 @pytest.mark.anyio
-async def test_disabled_trigger_task_does_not_project_activation(
+async def test_disabled_trigger_task_does_not_project_execution(
     client: AsyncClient,
 ):
-    """enabled=False triggerable tasks must not arm Tasks/Activations."""
+    """enabled=False triggerable tasks must not arm Tasks/Executions."""
 
     await _ensure_task_machine_project(client)
     entries = _trigger_task_entries(task_id=261)
@@ -777,12 +769,12 @@ async def test_disabled_trigger_task_does_not_project_activation(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert all(log["entries"]["task_id"] != 261 for log in activations)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 261 for log in executions)
 
 
 @pytest.mark.anyio
-async def test_disabling_scheduled_task_clears_activation(
+async def test_disabling_scheduled_task_clears_execution(
     client: AsyncClient,
 ):
     """Toggling enabled=False on an armed scheduled task clears its activation."""
@@ -797,8 +789,8 @@ async def test_disabling_scheduled_task_clears_activation(
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert any(log["entries"]["task_id"] == 262 for log in activations)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert any(log["entries"]["task_id"] == 262 for log in executions)
 
     response = await _update_logs(
         client,
@@ -809,8 +801,8 @@ async def test_disabling_scheduled_task_clears_activation(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert all(log["entries"]["task_id"] != 262 for log in activations)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 262 for log in executions)
 
 
 def test_is_task_enabled_defaults_missing_to_true():
@@ -821,7 +813,7 @@ def test_is_task_enabled_defaults_missing_to_true():
     assert task_machine_state_service._is_task_enabled({"enabled": False}) is False
     assert task_machine_state_service._is_task_enabled({"enabled": "false"}) is False
     assert (
-        task_machine_state_service._is_scheduled_activation_candidate(
+        task_machine_state_service._is_scheduled_execution_candidate(
             {
                 "status": "scheduled",
                 "schedule": {"start_at": "2026-04-10T09:00:00+00:00"},
@@ -831,7 +823,7 @@ def test_is_task_enabled_defaults_missing_to_true():
         is False
     )
     assert (
-        task_machine_state_service._is_trigger_activation_candidate(
+        task_machine_state_service._is_trigger_execution_candidate(
             {
                 "status": "triggerable",
                 "trigger": {"medium": "email"},
@@ -843,7 +835,7 @@ def test_is_task_enabled_defaults_missing_to_true():
 
 
 @pytest.mark.anyio
-async def test_task_create_projects_offline_agentic_activation(
+async def test_task_create_projects_offline_agentic_execution(
     client: AsyncClient,
     materialization_calls,
 ):
@@ -858,19 +850,19 @@ async def test_task_create_projects_offline_agentic_activation(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
     matching = [
-        log["entries"] for log in activations if log["entries"]["task_id"] == 250
+        log["entries"] for log in executions if log["entries"]["task_id"] == 250
     ]
     assert len(matching) == 1
-    activation = matching[0]
-    assert activation["execution_mode"] == "offline"
-    assert activation["entrypoint"] is None
-    assert materialization_calls == [(None, activation)]
+    execution = matching[0]
+    assert execution["delivery"] == "offline"
+    assert execution["entrypoint"] is None
+    assert materialization_calls == [(None, execution)]
 
 
 @pytest.mark.anyio
-async def test_task_delete_clears_activation(client: AsyncClient):
+async def test_task_delete_clears_execution(client: AsyncClient):
     """Deleting a task row should remove its activation row."""
 
     await _ensure_task_machine_project(client)
@@ -891,12 +883,12 @@ async def test_task_delete_clears_activation(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    assert all(log["entries"]["task_id"] != 303 for log in activations)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    assert all(log["entries"]["task_id"] != 303 for log in executions)
 
 
 @pytest.mark.anyio
-async def test_admin_reproject_restores_missing_scheduled_activation(
+async def test_admin_reproject_restores_missing_scheduled_execution(
     client: AsyncClient,
     materialization_calls,
 ):
@@ -911,21 +903,19 @@ async def test_admin_reproject_restores_missing_scheduled_activation(
     )
     assert response.status_code == 200, response.json()
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
-    activation_log = next(
-        log for log in activations if log["entries"]["task_id"] == 350
-    )
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    execution_log = next(log for log in executions if log["entries"]["task_id"] == 350)
     delete_response = await _delete_logs(
         client,
-        [(activation_log["id"], None)],
+        [(execution_log["id"], None)],
         project_name=TASK_MACHINE_PROJECT_NAME,
-        context=TASK_ACTIVATIONS_CONTEXT,
+        context=TASK_EXECUTIONS_CONTEXT,
     )
     assert delete_response.status_code == 200, delete_response.json()
     materialization_calls.clear()
 
     reproject_response = await client.post(
-        "/v0/admin/task-activation/reproject",
+        "/v0/admin/task-execution/reproject",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -938,12 +928,12 @@ async def test_admin_reproject_restores_missing_scheduled_activation(
     body = reproject_response.json()
     assert body["upserted"] == 1
     assert body["deleted"] == 0
-    assert body["activation"]["task_id"] == 350
-    assert body["activation"]["activation_kind"] == "scheduled"
-    assert materialization_calls == [(None, body["activation"])]
+    assert body["execution"]["task_id"] == 350
+    assert body["execution"]["wake"] == "scheduled"
+    assert materialization_calls == [(None, body["execution"])]
 
     second_response = await client.post(
-        "/v0/admin/task-activation/reproject",
+        "/v0/admin/task-execution/reproject",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": "42",
@@ -952,12 +942,12 @@ async def test_admin_reproject_restores_missing_scheduled_activation(
         headers=ADMIN_HEADERS,
     )
     assert second_response.status_code == 200, second_response.json()
-    activations_after_second = await _get_context_logs(
+    executions_after_second = await _get_context_logs(
         client,
-        context_name=TASK_ACTIVATIONS_CONTEXT,
+        context_name=TASK_EXECUTIONS_CONTEXT,
     )
     matching = [
-        log for log in activations_after_second if log["entries"]["task_id"] == 350
+        log for log in executions_after_second if log["entries"]["task_id"] == 350
     ]
     assert len(matching) == 1
 
@@ -986,21 +976,19 @@ async def test_task_projection_chooses_latest_armed_triggerable_instance(
     assert second.status_code == 200, second.json()
     second_log_id = second.json()["log_event_ids"][0]
 
-    activations = await _get_context_logs(client, context_name=TASK_ACTIVATIONS_CONTEXT)
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
     matching = [
-        log["entries"] for log in activations if log["entries"]["task_id"] == 404
+        log["entries"] for log in executions if log["entries"]["task_id"] == 404
     ]
     assert len(matching) == 1
-    activation = matching[0]
-    assert activation["assistant_id"] == "42"
-    assert activation["activation_key"] == "42:404"
-    assert activation["source_task_log_id"] == second_log_id
-    assert activation["instance_id"] == 1
-    assert activation["activation_kind"] == "triggered"
-    assert activation["trigger_medium"] == "email"
-    assert activation["trigger_from_contact_ids"] == [17]
-    assert activation["interrupt"] is True
-    assert activation["trigger_recurring"] is True
+    execution = matching[0]
+    assert execution["assistant_id"] == "42"
+    assert execution["source_task_log_id"] == second_log_id
+    assert execution["wake"] == "triggered"
+    assert execution["trigger_medium"] == "email"
+    assert execution["trigger_from_contact_ids"] == [17]
+    assert execution["interrupt"] is True
+    assert execution["trigger_recurring"] is True
 
 
 @pytest.mark.anyio
@@ -1019,7 +1007,7 @@ async def test_delete_context_blocks_internal_task_machine_context(
     assert response.status_code == 200, response.json()
 
     response = await client.delete(
-        f"/v0/project/{TASK_MACHINE_PROJECT_NAME}/contexts/{TASK_ACTIVATIONS_CONTEXT}",
+        f"/v0/project/{TASK_MACHINE_PROJECT_NAME}/contexts/{TASK_EXECUTIONS_CONTEXT}",
         headers=HEADERS,
     )
     assert response.status_code == 403
@@ -1045,9 +1033,9 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
         "assistant_id": "42",
         "task_id": 101,
         "source_task_log_id": source_task_log_id,
-        "source_type": "scheduled",
-        "execution_mode": "offline",
-        "activation_revision": "rev-1",
+        "wake": "scheduled",
+        "delivery": "offline",
+        "revision": "rev-1",
         "scheduled_for": "2026-04-10T09:00:00+00:00",
         "source_medium": "email",
         "source_ref": "message-101",
@@ -1055,7 +1043,7 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
         "source_contact_display_name": "Alice Owner",
         "task_name": "Morning briefing",
         "task_description": "Prepare the team's daily summary.",
-        "state": "pending",
+        "state": "scheduled",
     }
 
     first = await client.post(
@@ -1069,7 +1057,7 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     first_run = first_body["run"]
     assert first_run["run_key"] == payload["run_key"]
     assert first_run["run_id"]
-    assert first_run["execution_mode"] == "offline"
+    assert first_run["delivery"] == "offline"
     assert first_run["source_medium"] == "email"
     assert first_run["source_ref"] == "message-101"
     assert first_run["source_contact_id"] == "17"
@@ -1118,10 +1106,10 @@ async def test_task_run_get_returns_precreated_run_or_none(
             "assistant_id": str(assistant.agent_id),
             "task_id": 101,
             "source_task_log_id": source_task_log_id,
-            "source_type": "provider_event",
-            "execution_mode": "offline",
-            "activation_revision": "rev-123",
-            "state": "pending",
+            "wake": "provider_event",
+            "delivery": "offline",
+            "revision": "rev-123",
+            "state": "scheduled",
         },
         headers=ADMIN_HEADERS,
     )
@@ -1161,9 +1149,9 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
     client: AsyncClient,
     dbsession,
 ):
-    """Team-task runs are created AND updated under ``Teams/{id}/Tasks/Runs``.
+    """Team-task executions are created AND updated under ``Teams/{id}/Tasks/Executions``.
 
-    Creation resolves the runs context from the task's own surface via
+    Creation resolves the Executions context from the task's own surface via
     ``source_task_log_id``; updates must resolve the same row whether or not
     they carry ``source_task_log_id`` (older runtimes omit it — the
     key-based team-surface fallback covers them).
@@ -1197,8 +1185,8 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
             "assistant_id": str(assistant.agent_id),
             "task_id": 321,
             "source_task_log_id": source_task_log_id,
-            "source_type": "scheduled",
-            "execution_mode": "offline",
+            "wake": "scheduled",
+            "delivery": "offline",
             "destination": f"team:{team.id}",
             "state": "running",
         },
@@ -1206,11 +1194,11 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
     )
     assert create_response.status_code == 200, create_response.json()
 
-    # The run row lives on the team surface, where Console's team Activity
+    # The execution row lives on the team surface, where Console's team Activity
     # view reads it — not in the executor's personal root.
     team_runs = await _get_context_logs(
         client,
-        context_name=f"{team_tasks_context}/Runs",
+        context_name=f"{team_tasks_context}/Executions",
     )
     assert [log["entries"]["run_key"] for log in team_runs] == [run_key]
 
@@ -1250,7 +1238,7 @@ async def test_team_task_run_lifecycle_stays_on_team_surface(
     # Both updates mutated the single team-surface row in place.
     team_runs_after = await _get_context_logs(
         client,
-        context_name=f"{team_tasks_context}/Runs",
+        context_name=f"{team_tasks_context}/Executions",
     )
     assert len(team_runs_after) == 1
     final_run = team_runs_after[0]["entries"]
@@ -1280,8 +1268,8 @@ async def test_task_run_update_mutates_existing_row(client: AsyncClient):
             "assistant_id": "42",
             "task_id": 202,
             "source_task_log_id": source_task_log_id,
-            "source_type": "triggered",
-            "execution_mode": "offline",
+            "wake": "triggered",
+            "delivery": "offline",
             "state": "running",
         },
         headers=ADMIN_HEADERS,
@@ -1333,9 +1321,9 @@ async def test_task_run_latest_returns_most_recent_task_run(client: AsyncClient)
                 "assistant_id": "42",
                 "task_id": 303,
                 "source_task_log_id": source_task_log_id,
-                "source_type": "scheduled",
-                "execution_mode": "live",
-                "state": "pending",
+                "wake": "scheduled",
+                "delivery": "live",
+                "state": "scheduled",
             },
             headers=ADMIN_HEADERS,
         )
@@ -1411,9 +1399,9 @@ async def test_task_run_latest_filters_by_source_task_log_id(client: AsyncClient
                 "assistant_id": "42",
                 "task_id": 313,
                 "source_task_log_id": source_task_log_id,
-                "source_type": "scheduled",
-                "execution_mode": "live",
-                "state": "pending",
+                "wake": "scheduled",
+                "delivery": "live",
+                "state": "scheduled",
             },
             headers=ADMIN_HEADERS,
         )
@@ -1589,15 +1577,18 @@ def test_task_outbound_operation_create_or_adopt_reports_adoption_after_upsert_r
     assert created is False
 
 
-def test_get_task_activation_is_read_only(monkeypatch):
-    """Activation lookup must not create contexts or upsert field types."""
+def test_get_open_task_execution_is_read_only(monkeypatch):
+    """Open-execution lookup must not create contexts or upsert field types."""
 
     fake_session = SimpleNamespace()
     ensure_calls: list[dict] = []
-    migrate_calls: list[dict] = []
-    activation_row = SimpleNamespace(
+    execution_row = SimpleNamespace(
         id=11,
-        data={"activation_key": "42:7", "activation_revision": "rev-1"},
+        data={
+            "run_key": "offline:scheduled:42:7:rev",
+            "revision": "rev-1",
+            "state": "scheduled",
+        },
     )
 
     monkeypatch.setattr(
@@ -1610,39 +1601,43 @@ def test_get_task_activation_is_read_only(monkeypatch):
         "ensure_task_machine_contexts",
         lambda **kwargs: ensure_calls.append(kwargs)
         or SimpleNamespace(
-            activations_context_id=99,
+            executions_context_id=99,
         ),
     )
     monkeypatch.setattr(
         task_machine_state_service,
-        "_migrate_legacy_machine_row_if_present",
-        lambda **kwargs: migrate_calls.append(kwargs) or None,
-    )
-    monkeypatch.setattr(
-        task_machine_state_service,
-        "lookup_task_machine_activation_context_id",
+        "lookup_task_machine_executions_context_id",
         lambda **kwargs: 55,
     )
-    monkeypatch.setattr(
-        task_machine_state_service,
-        "_get_machine_row_by_unique_field",
-        lambda **kwargs: activation_row,
-    )
 
-    activation = task_machine_state_service.get_task_activation(
+    class _Query:
+        def join(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [execution_row]
+
+    fake_session.query = lambda *args, **kwargs: _Query()
+
+    execution = task_machine_state_service.get_open_task_execution(
         session=fake_session,
         project_id=1,
         assistant_id="42",
         task_id=7,
     )
 
-    assert activation is activation_row
+    assert execution is execution_row
     assert ensure_calls == []
-    assert migrate_calls == []
 
 
-def test_get_task_activation_returns_none_without_creating_contexts(monkeypatch):
-    """Missing activation contexts should yield None without schema writes."""
+def test_get_open_task_execution_returns_none_without_creating_contexts(monkeypatch):
+    """Missing execution contexts should yield None without schema writes."""
 
     fake_session = SimpleNamespace()
     ensure_calls: list[dict] = []
@@ -1657,12 +1652,12 @@ def test_get_task_activation_returns_none_without_creating_contexts(monkeypatch)
         "ensure_task_machine_contexts",
         lambda **kwargs: ensure_calls.append(kwargs)
         or SimpleNamespace(
-            activations_context_id=99,
+            executions_context_id=99,
         ),
     )
     monkeypatch.setattr(
         task_machine_state_service,
-        "lookup_task_machine_activation_context_id",
+        "lookup_task_machine_executions_context_id",
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -1671,14 +1666,14 @@ def test_get_task_activation_returns_none_without_creating_contexts(monkeypatch)
         lambda **kwargs: None,
     )
 
-    activation = task_machine_state_service.get_task_activation(
+    execution = task_machine_state_service.get_open_task_execution(
         session=fake_session,
         project_id=1,
         assistant_id="42",
         task_id=7,
     )
 
-    assert activation is None
+    assert execution is None
     assert ensure_calls == []
 
 
@@ -1806,7 +1801,7 @@ async def test_task_outbound_operation_update_rejects_immutable_field_changes(
 
 
 @pytest.mark.anyio
-async def test_task_activation_lookup_resolves_assistant_scoped_project(
+async def test_task_execution_lookup_resolves_assistant_scoped_project(
     client: AsyncClient,
     dbsession,
 ):
@@ -1836,7 +1831,7 @@ async def test_task_activation_lookup_resolves_assistant_scoped_project(
     assert create_response.status_code == 200, create_response.json()
 
     lookup_response = await client.post(
-        "/v0/admin/task-activation/current",
+        "/v0/admin/task-execution/current",
         json={
             "project_name": TASK_MACHINE_PROJECT_NAME,
             "assistant_id": str(assistant.agent_id),
@@ -1845,10 +1840,10 @@ async def test_task_activation_lookup_resolves_assistant_scoped_project(
         headers=ADMIN_HEADERS,
     )
     assert lookup_response.status_code == 200, lookup_response.json()
-    activation = lookup_response.json()["activation"]
-    assert activation is not None
-    assert activation["assistant_id"] == str(assistant.agent_id)
-    assert activation["task_id"] == task_id
+    execution = lookup_response.json()["execution"]
+    assert execution is not None
+    assert execution["assistant_id"] == str(assistant.agent_id)
+    assert execution["task_id"] == task_id
 
 
 @pytest.mark.anyio
@@ -1891,8 +1886,8 @@ async def test_task_run_admin_mutations_resolve_assistant_scoped_project(
             "assistant_id": str(assistant.agent_id),
             "task_id": task_id,
             "source_task_log_id": source_task_log_id,
-            "source_type": "scheduled",
-            "execution_mode": "offline",
+            "wake": "scheduled",
+            "delivery": "offline",
             "state": "running",
         },
         headers=ADMIN_HEADERS,
@@ -1918,11 +1913,11 @@ async def test_task_run_admin_mutations_resolve_assistant_scoped_project(
 
     run_logs = await _get_context_logs(
         client,
-        context_name=task_machine_state_service.build_task_runs_context_name(
+        context_name=task_machine_state_service.build_task_executions_context_name(
             tasks_context,
         ),
         user=2,
     )
-    assert len(run_logs) == 1
-    assert run_logs[0]["entries"]["run_key"] == run_key
-    assert run_logs[0]["entries"]["state"] == "completed"
+    matching = [log for log in run_logs if log["entries"].get("run_key") == run_key]
+    assert len(matching) == 1
+    assert matching[0]["entries"]["state"] == "completed"

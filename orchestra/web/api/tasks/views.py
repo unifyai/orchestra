@@ -25,7 +25,7 @@ from orchestra.services.task_mutation_contract import (
 )
 from orchestra.services.task_mutation_service import TaskMutationService
 from orchestra.services.task_trigger_service import (
-    TaskTriggerInstanceNotRunnable,
+    TaskTriggerNotRunnable,
     TaskTriggerTarget,
     resolve_task_trigger_target,
 )
@@ -158,11 +158,11 @@ async def _dispatch_offline_task_to_comms(
 ) -> None:
     """Launch one hosted offline task via Communication (admin-authenticated)."""
 
-    if not target.activation_revision:
+    if not target.revision:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"Offline task {target.task_id} has no current activation revision; "
+                f"Offline task {target.task_id} has no current execution revision; "
                 "cannot dispatch headless execution."
             ),
         )
@@ -179,9 +179,9 @@ async def _dispatch_offline_task_to_comms(
         "assistant_id": str(target.assistant_id),
         "task_id": target.task_id,
         "source_task_log_id": target.source_task_log_id,
-        "activation_revision": target.activation_revision,
-        "execution_mode": "offline",
-        "source_type": "explicit",
+        "revision": target.revision,
+        "delivery": "offline",
+        "wake": "explicit",
         "source_ref": source_ref,
         "source_medium": "api",
         "task_name": target.task_name,
@@ -197,7 +197,7 @@ async def _dispatch_offline_task_to_comms(
         payload["max_runtime_seconds"] = target.max_runtime_seconds
     client = get_async_client()
     response = await client.post(
-        f"{comms_url}/infra/task-activation/offline-dispatch",
+        f"{comms_url}/infra/task-execution/offline-dispatch",
         headers={
             "Authorization": f"Bearer {ADMIN_KEY}",
             "Content-Type": "application/json",
@@ -736,8 +736,8 @@ def get_assistant_task_trigger_health(
             authored_trigger_state=authored_state,
             task_enabled=bool(row.data.get("enabled", True)),
             runtime_health=runtime_health,  # type: ignore[arg-type]
-            desired_activation_revision=desired_activation_revision,
-            observed_activation_revision=observed_activation_revision,
+            desired_revision=desired_activation_revision,
+            observed_revision=observed_activation_revision,
             acceptance_epoch=acceptance_epoch,
             local_acceptance_open=local_acceptance_open,
             active_generation_id=active_generation_id,
@@ -928,9 +928,8 @@ async def trigger_task(
                 organization_id=getattr(request.state, "organization_id", None),
                 task_id=task_id,
                 assistant_id=body.assistant_id,
-                instance_id=body.instance_id,
             )
-        except TaskTriggerInstanceNotRunnable as exc:
+        except TaskTriggerNotRunnable as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
@@ -938,14 +937,7 @@ async def trigger_task(
         if target is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=(
-                    "Task not found."
-                    if body.instance_id is None
-                    else (
-                        f"Task {task_id} instance {body.instance_id} not found "
-                        "for this assistant."
-                    )
-                ),
+                detail="Task not found.",
             )
 
     await _dispatch_task_trigger(target)
@@ -953,9 +945,7 @@ async def trigger_task(
         info=TaskTriggerStatus(
             task_id=target.task_id,
             assistant_id=target.assistant_id,
-            instance_id=target.instance_id,
             source_task_log_id=target.source_task_log_id,
-            forked=target.forked,
         ),
     )
 
@@ -968,8 +958,8 @@ async def trigger_task(
     summary="Cancel an assistant task",
     description=(
         "Gracefully cancel a task by logical task id for a specific assistant. "
-        "Marks the selected Tasks instance (preferring status=active) as "
-        "cancelled, marks any inflight Tasks/Runs row cancelled, and stops the "
+        "Marks the task definition cancelled, clears open Tasks/Executions "
+        "rows, marks any inflight Tasks/Executions row cancelled, and stops the "
         "associated offline Kubernetes job when one is recorded. The request "
         "body must include assistant_id."
     ),
@@ -1012,10 +1002,7 @@ async def cancel_task(
         if result.already_terminal:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Task {task_id} instance {target.instance_id} is already "
-                    f"{result.task_status_before}."
-                ),
+                detail=(f"Task {task_id} is already {result.task_status_before}."),
             )
         job_name = result.job_name
         cancel_target = result.target
@@ -1030,7 +1017,6 @@ async def cancel_task(
             assistant_id=cancel_target.assistant_id,
             task_id=cancel_target.task_id,
             source_task_log_id=cancel_target.source_task_log_id,
-            instance_id=cancel_target.instance_id,
             destination=cancel_target.destination,
             reason=body.reason,
         )
@@ -1039,7 +1025,6 @@ async def cancel_task(
         info=TaskCancelStatus(
             task_id=cancel_target.task_id,
             assistant_id=cancel_target.assistant_id,
-            instance_id=cancel_target.instance_id,
             status="cancelled",
             run_key=run_key,
             job_name=job_name,
@@ -1081,11 +1066,10 @@ async def _emit_task_cancel_system_event(
     assistant_id: int,
     task_id: int,
     source_task_log_id: int,
-    instance_id: int,
     destination: str | None,
     reason: str | None,
 ) -> None:
-    """Notify a live assistant runtime that a task instance was cancelled."""
+    """Notify a live assistant runtime that a task definition was cancelled."""
 
     adapters_url = ADAPTERS_URL
     if not adapters_url:
@@ -1095,7 +1079,6 @@ async def _emit_task_cancel_system_event(
         "type": "task_cancel",
         "task_id": task_id,
         "source_task_log_id": source_task_log_id,
-        "instance_id": instance_id,
         "reason": reason or "Cancelled via REST API.",
     }
     if destination:

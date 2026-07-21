@@ -1,4 +1,4 @@
-"""Cancel assistant tasks: mark Tasks/Runs terminal and return infra job refs."""
+"""Cancel assistant tasks: mark definition terminal and return infra job refs."""
 
 from __future__ import annotations
 
@@ -9,18 +9,16 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import LogEvent
 from orchestra.services.task_machine_state_service import (
-    _coerce_bool,
+    _delete_open_executions_for_task,
     _replace_log_payload,
     get_latest_task_run_for_task,
+    lookup_task_machine_executions_context_id,
+    resolve_tasks_context_name,
     update_task_run,
 )
 from orchestra.services.task_trigger_service import (
     TaskTriggerTarget,
-    _coerce_int,
-    _destination_from_context_name,
-    _offline_activation_for_task,
-    _requires_computer_from_row,
-    _requires_filesystem_from_row,
+    _build_target_from_row,
     _resolve_assistant_id,
     _task_project_for_owner,
     _task_rows_for_id,
@@ -32,7 +30,7 @@ _INFLIGHT_RUN_STATES = frozenset({"pending", "running"})
 
 @dataclass(frozen=True)
 class TaskCancelResult:
-    """Outcome of applying a cancel to one task instance."""
+    """Outcome of applying a cancel to one task definition."""
 
     target: TaskTriggerTarget
     task_status_before: str
@@ -52,12 +50,7 @@ def resolve_task_cancel_target(
     task_id: int,
     assistant_id: int,
 ) -> TaskTriggerTarget | None:
-    """Return the best cancel target for one assistant + logical task id.
-
-    Prefers an ``active`` instance (in-flight work). Otherwise picks the newest
-    non-terminal instance (scheduled/triggerable) so callers can disarm pending
-    work. Returns ``None`` when no matching assistant/task rows exist.
-    """
+    """Return the task definition to cancel for one assistant + logical task id."""
 
     project = _task_project_for_owner(
         session=session,
@@ -86,46 +79,15 @@ def resolve_task_cancel_target(
             continue
         if resolved_assistant_id != requested_assistant_id:
             continue
-        destination = _destination_from_context_name(context_name)
-        offline = _coerce_bool(data.get("offline"))
-        enabled = True if "enabled" not in data else _coerce_bool(data.get("enabled"))
-        activation_revision = None
-        entrypoint = None
-        max_runtime_seconds = None
-        requires_filesystem = _requires_filesystem_from_row(data)
-        requires_computer = _requires_computer_from_row(data)
-        if offline:
-            activation_snapshot = _offline_activation_for_task(
+        targets.append(
+            _build_target_from_row(
                 session=session,
                 project_id=project.id,
-                assistant_id=resolved_assistant_id,
                 task_id=task_id,
-                destination=destination,
-            )
-            if activation_snapshot is not None:
-                activation_revision = activation_snapshot.revision
-                entrypoint = activation_snapshot.entrypoint
-                max_runtime_seconds = activation_snapshot.max_runtime_seconds
-                requires_filesystem = activation_snapshot.requires_filesystem
-                requires_computer = activation_snapshot.requires_computer
-        targets.append(
-            TaskTriggerTarget(
-                assistant_id=resolved_assistant_id,
-                task_id=task_id,
-                source_task_log_id=int(row.id),
-                destination=destination,
-                task_name=str(data.get("name") or f"task {task_id}"),
-                task_description=str(data.get("description") or ""),
-                status=str(data.get("status") or ""),
-                instance_id=_coerce_int(data.get("instance_id")) or 0,
-                is_local=bool(assistant.is_local),
-                offline=offline,
-                enabled=enabled,
-                activation_revision=activation_revision,
-                entrypoint=entrypoint,
-                max_runtime_seconds=max_runtime_seconds,
-                requires_filesystem=requires_filesystem,
-                requires_computer=requires_computer,
+                row=row,
+                context_name=context_name,
+                assistant=assistant,
+                data=data,
             ),
         )
 
@@ -142,7 +104,7 @@ def apply_task_cancel(
     target: TaskTriggerTarget,
     reason: str | None = None,
 ) -> TaskCancelResult:
-    """Mark the Tasks instance (and any inflight Run) cancelled; return job_name."""
+    """Mark the task definition cancelled, clear open Executions, cancel inflight Runs."""
 
     project = _task_project_for_owner(
         session=session,
@@ -189,6 +151,25 @@ def apply_task_cancel(
     else:
         payload["info"] = {"cancel_reason": cancel_reason}
     _replace_log_payload(task_row, payload)
+
+    tasks_context_name = resolve_tasks_context_name(
+        session=session,
+        project_id=project.id,
+        assistant_id=str(target.assistant_id),
+    )
+    executions_context_id = lookup_task_machine_executions_context_id(
+        session=session,
+        project_id=project.id,
+        tasks_context_name=tasks_context_name,
+    )
+    if executions_context_id is not None:
+        _delete_open_executions_for_task(
+            session,
+            project_id=project.id,
+            context_id=executions_context_id,
+            task_id=int(target.task_id),
+            destination=target.destination,
+        )
 
     run_key: str | None = None
     run_state_before: str | None = None
@@ -240,14 +221,13 @@ def apply_task_cancel(
 
 
 def _select_cancel_target(targets: list[TaskTriggerTarget]) -> TaskTriggerTarget:
-    """Prefer active instances, then other non-terminal, newest instance first."""
+    """Prefer active definitions, then other non-terminal, newest log id first."""
 
     return sorted(
         targets,
         key=lambda target: (
             _cancel_status_rank(target.status),
             0 if target.destination else 1,
-            -target.instance_id,
             -target.source_task_log_id,
         ),
     )[0]

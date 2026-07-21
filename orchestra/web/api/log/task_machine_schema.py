@@ -6,8 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 
 
-class TaskActivationLookupRequest(BaseModel):
-    """Lookup one projected task activation row by assistant/task id."""
+class TaskExecutionLookupRequest(BaseModel):
+    """Lookup one projected open task execution row by assistant/task id."""
 
     project_name: str = Field(
         default=TASK_MACHINE_PROJECT_NAME,
@@ -21,17 +21,17 @@ class TaskActivationLookupRequest(BaseModel):
     )
 
 
-class TaskActivationLookupResponse(BaseModel):
-    """Internal activation lookup response."""
+class TaskExecutionLookupResponse(BaseModel):
+    """Internal open-execution lookup response."""
 
-    activation: Optional[Dict[str, Any]] = Field(
+    execution: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="The current activation row payload, or null when missing.",
+        description="The current open execution row payload, or null when missing.",
     )
 
 
-class TaskActivationReprojectRequest(BaseModel):
-    """Reproject one task row into its current machine activation state."""
+class TaskExecutionReprojectRequest(BaseModel):
+    """Reproject one task row into its current machine execution state."""
 
     project_name: str = Field(
         default=TASK_MACHINE_PROJECT_NAME,
@@ -41,14 +41,14 @@ class TaskActivationReprojectRequest(BaseModel):
     task_id: int = Field(description="Logical task identifier to reproject.")
 
 
-class TaskActivationReprojectResponse(BaseModel):
-    """Result of reprojecting one task's activation state."""
+class TaskExecutionReprojectResponse(BaseModel):
+    """Result of reprojecting one task's open execution state."""
 
-    upserted: int = Field(description="Number of activation rows upserted.")
-    deleted: int = Field(description="Number of activation rows deleted.")
-    activation: Optional[Dict[str, Any]] = Field(
+    upserted: int = Field(description="Number of execution rows upserted.")
+    deleted: int = Field(description="Number of execution rows deleted.")
+    execution: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="The activation payload after reprojection, or null when unarmed.",
+        description="The execution payload after reprojection, or null when unarmed.",
     )
 
 
@@ -64,21 +64,21 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
     task_id: int = Field(description="Logical task identifier.")
     source_task_log_id: Optional[int] = Field(
         default=None,
-        description="Owning Unity/Tasks row for the activation instance.",
+        description="Owning Unity/Tasks row for the execution instance.",
     )
-    source_type: str = Field(
+    wake: str = Field(
         description="Why the run exists: scheduled, triggered, explicit, provider_event, etc.",
     )
-    execution_mode: Literal["live", "offline"] = Field(
-        description="Which execution lane owns the run.",
+    delivery: Literal["live", "offline"] = Field(
+        description="Which delivery lane owns the run.",
     )
-    activation_revision: Optional[str] = Field(
+    revision: Optional[str] = Field(
         default=None,
-        description="Activation revision adopted when the run was created.",
+        description="Execution revision adopted when the run was created.",
     )
     scheduled_for: Optional[datetime] = Field(
         default=None,
-        description="Scheduled due time when the run came from a scheduled activation.",
+        description="Scheduled due time when the run came from a scheduled execution.",
     )
     source_medium: Optional[str] = Field(
         default=None,
@@ -109,7 +109,7 @@ class TaskRunCreateOrAdoptRequest(BaseModel):
         description="Optional explicit run start timestamp.",
     )
     state: str = Field(
-        default="pending",
+        default="scheduled",
         description="Initial machine state for the run lifecycle.",
     )
     result_summary: Optional[str] = Field(

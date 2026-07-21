@@ -79,8 +79,7 @@ META_SINGLETON_KEYS = ["meta_id"]
 # declared FK; a remap of the Tasks table must shift these contexts too.
 # source_task_log_id needs no rewrite because log ids are preserved.
 TASK_MACHINE_STATE_TABLES = (
-    "Tasks/Activations",
-    "Tasks/Runs",
+    "Tasks/Executions",
     "Tasks/OutboundOperations",
 )
 

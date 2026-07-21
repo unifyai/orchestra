@@ -87,7 +87,7 @@ def _seed_task_run(
         )
         .one()
     )
-    context_name = f"{user_id}/{assistant_id}/Tasks/Runs"
+    context_name = f"{user_id}/{assistant_id}/Tasks/Executions"
     context = (
         dbsession.query(Context)
         .filter(Context.project_id == project.id, Context.name == context_name)
@@ -108,7 +108,8 @@ def _seed_task_run(
         "task_id": task_id,
         "source_task_log_id": source_task_log_id,
         "state": state,
-        "execution_mode": "offline",
+        "delivery": "offline",
+        "wake": "scheduled",
     }
     if job_name is not None:
         data["job_name"] = job_name
@@ -166,7 +167,6 @@ async def test_cancel_task_marks_active_instance_cancelled(
     info = response.json()["info"]
     assert info["task_id"] == 91
     assert info["assistant_id"] == assistant_id
-    assert info["instance_id"] == 0
     assert info["status"] == "cancelled"
     assert info["run_key"] == "offline:test:run-1"
     assert info["job_name"] == "unity-task-run-cancel-me"

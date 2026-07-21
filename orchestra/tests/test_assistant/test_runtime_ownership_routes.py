@@ -51,17 +51,17 @@ def mock_assistant_infra_calls():
 
 @pytest.fixture(autouse=True)
 def materialization_calls(monkeypatch):
-    """Capture scheduled activation sync requests without hitting Communication."""
+    """Capture scheduled execution sync requests without hitting Communication."""
     from orchestra.services import task_machine_state_service
 
     calls: list[tuple[dict | None, dict | None]] = []
 
-    def _capture(*, previous_activation, current_activation):
-        calls.append((previous_activation, current_activation))
+    def _capture(*, previous_execution, current_execution):
+        calls.append((previous_execution, current_execution))
 
     monkeypatch.setattr(
         task_machine_state_service,
-        "_reconcile_scheduled_activation_materialization",
+        "_reconcile_scheduled_execution_materialization",
         _capture,
     )
     return calls
@@ -465,9 +465,9 @@ def _task_run_payload(agent_id: int, task_id: int, source_task_log_id: int) -> d
         "assistant_id": str(agent_id),
         "task_id": task_id,
         "source_task_log_id": source_task_log_id,
-        "source_type": "scheduled",
-        "execution_mode": "offline",
-        "activation_revision": "rev-1",
+        "wake": "scheduled",
+        "delivery": "offline",
+        "revision": "rev-1",
         "state": "pending",
     }
 

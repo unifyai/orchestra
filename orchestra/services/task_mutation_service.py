@@ -39,7 +39,7 @@ from orchestra.services.task_machine_state_service import (
     _replace_log_payload,
     _requires_computer_from_row,
     _requires_filesystem_from_row,
-    sync_task_activations_for_task_ids,
+    sync_task_executions_for_task_ids,
 )
 from orchestra.services.task_mutation_contract import (
     ProviderEventWriteRejected,
@@ -236,7 +236,7 @@ class TaskMutationService:
                 requires_computer=_requires_computer_from_row(data),
             )
 
-        self._project_task_activation(
+        self._project_task_executions(
             project_id=project_id,
             tasks_context_name=tasks_context_name,
             task_ids={task_id},
@@ -328,7 +328,7 @@ class TaskMutationService:
                 binding=binding,
             )
 
-        self._project_task_activation(
+        self._project_task_executions(
             project_id=project_id,
             tasks_context_name=tasks_context_name,
             task_ids={task_id},
@@ -470,7 +470,7 @@ class TaskMutationService:
             log_event_ids=[log_event.id],
         )
         self.session.flush()
-        self._project_task_activation(
+        self._project_task_executions(
             project_id=project_id,
             tasks_context_name=tasks_context_name,
             task_ids={task_id},
@@ -643,14 +643,14 @@ class TaskMutationService:
             requires_computer=_requires_computer_from_row(data),
         )
 
-    def _project_task_activation(
+    def _project_task_executions(
         self,
         *,
         project_id: int,
         tasks_context_name: str,
         task_ids: set[int],
     ) -> None:
-        sync_task_activations_for_task_ids(
+        sync_task_executions_for_task_ids(
             self.session,
             project_id,
             task_ids,

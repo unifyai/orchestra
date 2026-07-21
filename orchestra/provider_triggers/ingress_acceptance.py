@@ -438,7 +438,7 @@ def _accept_matched_delivery(
 
     authorization = {
         "classification": ReceiptClassificationReason.matched.value,
-        "accepted_activation_revision": locked_generation.desired_activation_revision,
+        "accepted_revision": locked_generation.desired_activation_revision,
         "acceptance_epoch": locked_generation.acceptance_epoch,
         "generation_id": locked_generation.generation_id,
         "provider_event_identity": delivery.provider_event_identity,
@@ -467,14 +467,14 @@ def _accept_matched_delivery(
         actor="provider-trigger-ingress",
     )
 
-    execution_mode = "offline" if locked_binding.execution_mode == "offline" else "live"
+    run_delivery = "offline" if locked_binding.execution_mode == "offline" else "live"
     run_key = build_provider_event_run_key(
         assistant_id=str(locked_binding.assistant_id),
         task_id=locked_binding.task_id,
         binding_id=locked_binding.binding_id,
-        activation_revision=receipt.accepted_activation_revision,
+        revision=receipt.accepted_activation_revision,
         event_identity_hmac=identity_hmac,
-        execution_mode=execution_mode,  # type: ignore[arg-type]
+        delivery=run_delivery,  # type: ignore[arg-type]
     )
     received_at = datetime.now(timezone.utc).isoformat()
     acceptance_started_at = datetime.now(timezone.utc)
@@ -483,10 +483,10 @@ def _accept_matched_delivery(
         "assistant_id": str(locked_binding.assistant_id),
         "task_id": locked_binding.task_id,
         "source_task_log_id": locked_binding.source_task_log_id,
-        "source_type": "provider_event",
-        "execution_mode": execution_mode,
+        "wake": "provider_event",
+        "delivery": run_delivery,
         "state": "pending",
-        "activation_revision": receipt.accepted_activation_revision,
+        "revision": receipt.accepted_activation_revision,
         "provider_event_binding_id": locked_binding.binding_id,
         "provider_event_receipt_id": receipt.receipt_id,
         "provider_event_backend_id": locked_binding.backend_id,
@@ -512,7 +512,7 @@ def _accept_matched_delivery(
     run_id = int(run_row.id)
     audience = (
         COMMUNICATION_DISPATCH_AUDIENCE
-        if execution_mode == "offline"
+        if run_delivery == "offline"
         else UNITY_DISPATCH_AUDIENCE
     )
     dispatch = dao.adopt_dispatch(

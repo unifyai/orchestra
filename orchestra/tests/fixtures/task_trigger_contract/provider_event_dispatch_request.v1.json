@@ -7,7 +7,7 @@
   "task_id": 3,
   "binding_id": "binding-a",
   "receipt_id": "receipt-b",
-  "accepted_activation_revision": "rev-fixture-1",
+  "accepted_revision": "rev-fixture-1",
   "source_type": "provider_event",
   "dispatch_mode": "live",
   "event_context_ref": "blob://binding-a/receipt-b",

@@ -7,7 +7,6 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
-    Assistant,
     Context,
     LogEvent,
     LogEventContext,
@@ -66,7 +65,6 @@ def _seed_task(
     name: str = "Review report",
     legacy_context_owner: bool = False,
     offline: bool = False,
-    instance_id: int = 0,
     with_schedule: bool = False,
 ) -> LogEvent:
     project = (
@@ -94,7 +92,6 @@ def _seed_task(
     data = {
         "assistant_id": str(assistant_id),
         "task_id": task_id,
-        "instance_id": instance_id,
         "status": status_value,
         "name": name,
         "description": "Review the weekly report.",
@@ -135,11 +132,10 @@ def _make_target(**overrides) -> TaskTriggerTarget:
         task_name="Review report",
         task_description="Review the weekly report.",
         status="scheduled",
-        instance_id=0,
         is_local=False,
         offline=False,
         enabled=True,
-        activation_revision=None,
+        revision=None,
         entrypoint=None,
     )
     base.update(overrides)
@@ -153,43 +149,39 @@ def test_select_current_target_prefers_enabled_team_with_revision():
         source_task_log_id=1,
         destination=None,
         enabled=False,
-        instance_id=0,
-        activation_revision=None,
+        revision=None,
         offline=True,
     )
     team = _make_target(
         source_task_log_id=2,
         destination="team:11",
         enabled=True,
-        instance_id=12,
-        activation_revision="rev-team",
+        revision="rev-team",
         offline=True,
     )
     assert _select_current_target([personal, team]) is team
 
 
-def test_select_current_target_prefers_newer_instance_when_tied():
+def test_select_current_target_prefers_newer_definition_when_tied():
     from orchestra.services.task_trigger_service import _select_current_target
 
     older = _make_target(
         source_task_log_id=10,
         destination="team:11",
-        instance_id=9,
-        activation_revision="rev-a",
+        revision="rev-a",
         offline=True,
     )
     newer = _make_target(
         source_task_log_id=20,
         destination="team:11",
-        instance_id=12,
-        activation_revision="rev-b",
+        revision="rev-b",
         offline=True,
     )
     assert _select_current_target([older, newer]) is newer
 
 
 @pytest.mark.anyio
-async def test_trigger_task_forks_new_instance_by_default(
+async def test_trigger_task_dispatches_definition_row(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
@@ -211,175 +203,79 @@ async def test_trigger_task_forks_new_instance_by_default(
 
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     info = response.json()["info"]
-    assert info["task_id"] == 17
-    assert info["assistant_id"] == assistant_id
-    assert info["status"] == "accepted"
-    assert info["forked"] is True
-    assert info["instance_id"] == 1
-    assert info["source_task_log_id"] != task_row.id
+    assert info == {
+        "task_id": 17,
+        "assistant_id": assistant_id,
+        "source_task_log_id": task_row.id,
+        "status": "accepted",
+    }
     mock_task_trigger_dispatch.assert_awaited_once()
     target = mock_task_trigger_dispatch.await_args.args[0]
     assert target.assistant_id == assistant_id
     assert target.task_id == 17
-    assert target.source_task_log_id == info["source_task_log_id"]
-    assert target.instance_id == 1
-    assert target.forked is True
+    assert target.source_task_log_id == task_row.id
     assert target.task_name == "Review report"
     assert target.offline is False
 
-    fork_row = (
-        dbsession.query(LogEvent)
-        .filter(LogEvent.id == info["source_task_log_id"])
-        .one()
-    )
-    assert fork_row.data["instance_id"] == 1
-    assert fork_row.data["status"] == "scheduled"
-    assert "schedule" not in fork_row.data
-    assert "repeat" not in fork_row.data
     original = dbsession.query(LogEvent).filter(LogEvent.id == task_row.id).one()
-    assert original.data["instance_id"] == 0
     assert original.data["schedule"]["start_at"] == "2026-07-20T09:00:00+00:00"
+    # Trigger must not fork a second Tasks definition row (no instance clone).
+    tasks_context = f"{_auth_user_id()}/{assistant_id}/Tasks"
+    definition_count = (
+        dbsession.query(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .filter(
+            LogEvent.project_id == task_row.project_id,
+            Context.name == tasks_context,
+            LogEvent.data.op("->>")("task_id") == "17",
+        )
+        .count()
+    )
+    assert definition_count == 1
 
 
 @pytest.mark.anyio
-async def test_trigger_task_fork_instance_ids_do_not_collide_with_counter(
+async def test_trigger_task_repeated_calls_use_same_definition(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
     mock_task_trigger_dispatch: AsyncMock,
 ):
-    """Forks must advance context_counter so a later clone cannot reuse the id.
-
-    Regression: forks used max(instance_id)+1 without bumping the counter, so a
-    concurrent TaskScheduler clone (auto_counting) could insert the same
-    (task_id, instance_id) and break lifecycle updates.
-    """
-    from orchestra.db.dao.log_event_dao import LogEventDAO
-    from orchestra.services.task_trigger_service import _allocate_next_instance_id
-
     task_row = _seed_task(
         dbsession,
         assistant_id=assistant_id,
         user_id=_auth_user_id(),
-        task_id=27,
+        task_id=28,
         with_schedule=True,
     )
-    project = dbsession.query(Project).filter(Project.id == task_row.project_id).one()
-    context = (
-        dbsession.query(Context)
-        .filter(
-            Context.project_id == project.id,
-            Context.name == f"{_auth_user_id()}/{assistant_id}/Tasks",
-        )
-        .one()
-    )
-    context.auto_counting = {"task_id": None, "instance_id": "task_id"}
-    context.unique_key_names = ["task_id", "instance_id"]
-    context.unique_key_types = ["int", "int"]
-    dbsession.commit()
-
-    response = await client.post(
-        "/v0/tasks/27/trigger",
+    first = await client.post(
+        "/v0/tasks/28/trigger",
         headers=HEADERS,
         json={"assistant_id": assistant_id},
     )
-    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
-    fork_iid = int(response.json()["info"]["instance_id"])
-    assert fork_iid == 1
-
-    # Next counter reservation (what _clone_task_instance / create_logs would
-    # get) must not reuse the forked instance_id.
-    next_ids = LogEventDAO(dbsession).get_next_composite_ids(
-        project_id=project.id,
-        context_id=context.id,
-        unique_keys={"task_id": "int", "instance_id": "int"},
-        provided_values=[{"task_id": 27}],
-    )
-    assert int(next_ids[0]["instance_id"]) == fork_iid + 1
-
-    assistant = dbsession.query(Assistant).filter_by(agent_id=assistant_id).one()
-    bound = [(task_row, context.name, assistant, dict(task_row.data))]
-    context = dbsession.query(Context).filter(Context.id == context.id).one()
-    allocated = [
-        _allocate_next_instance_id(
-            dbsession,
-            project_id=project.id,
-            context=context,
-            task_id=27,
-            bound_rows=bound,
-        )
-        for _ in range(3)
-    ]
-    assert allocated == [fork_iid + 2, fork_iid + 3, fork_iid + 4]
-
-
-@pytest.mark.anyio
-async def test_trigger_task_fork_heals_stale_counter_past_existing_ids(
-    client: AsyncClient,
-    dbsession: Session,
-    assistant_id: int,
-    mock_task_trigger_dispatch: AsyncMock,
-):
-    """Stale context_counter must not reissue an instance_id that already exists."""
-    from orchestra.db.models.core_models import ContextCounter
-
-    task_row = _seed_task(
-        dbsession,
-        assistant_id=assistant_id,
-        user_id=_auth_user_id(),
-        task_id=31,
-        with_schedule=True,
-    )
-    # Prior explicit-id row (simulates a pre-fix fork that never bumped the counter).
-    _seed_task(
-        dbsession,
-        assistant_id=assistant_id,
-        user_id=_auth_user_id(),
-        task_id=31,
-        instance_id=3,
-        status_value="failed",
-    )
-    project = dbsession.query(Project).filter(Project.id == task_row.project_id).one()
-    context = (
-        dbsession.query(Context)
-        .filter(
-            Context.project_id == project.id,
-            Context.name == f"{_auth_user_id()}/{assistant_id}/Tasks",
-        )
-        .one()
-    )
-    context.auto_counting = {"task_id": None, "instance_id": "task_id"}
-    context.unique_key_names = ["task_id", "instance_id"]
-    context.unique_key_types = ["int", "int"]
-    parent = {"task_id": 31}
-    parent_json = __import__("json").dumps(parent, sort_keys=True)
-    parent_hash = (
-        __import__("hashlib")
-        .md5(
-            parent_json.encode(),
-            usedforsecurity=False,
-        )
-        .hexdigest()
-    )
-    dbsession.add(
-        ContextCounter(
-            context_id=context.id,
-            column_name="instance_id",
-            parent_values_hash=parent_hash,
-            parent_values=parent,
-            next_value=3,
-        ),
-    )
-    dbsession.commit()
-
-    response = await client.post(
-        "/v0/tasks/31/trigger",
+    second = await client.post(
+        "/v0/tasks/28/trigger",
         headers=HEADERS,
         json={"assistant_id": assistant_id},
     )
-    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
-    fork_iid = int(response.json()["info"]["instance_id"])
-    assert fork_iid == 4
+    assert first.status_code == status.HTTP_202_ACCEPTED, first.json()
+    assert second.status_code == status.HTTP_202_ACCEPTED, second.json()
+    assert first.json()["info"]["source_task_log_id"] == task_row.id
+    assert second.json()["info"]["source_task_log_id"] == task_row.id
+    tasks_context = f"{_auth_user_id()}/{assistant_id}/Tasks"
+    definition_count = (
+        dbsession.query(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .filter(
+            LogEvent.project_id == task_row.project_id,
+            Context.name == tasks_context,
+            LogEvent.data.op("->>")("task_id") == "28",
+        )
+        .count()
+    )
+    assert definition_count == 1
 
 
 @pytest.mark.anyio
@@ -421,106 +317,14 @@ async def test_update_logs_refuses_instance_id_mutation_on_tasks_context(
     assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
     assert "instance_id" in str(response.json().get("detail", "")).lower()
     dbsession.refresh(task_row)
-    assert task_row.data["instance_id"] == 0
+    assert "instance_id" not in task_row.data or task_row.data.get("instance_id") in (
+        None,
+        0,
+    )
 
 
 @pytest.mark.anyio
-async def test_trigger_task_second_fork_gets_distinct_instance_id(
-    client: AsyncClient,
-    dbsession: Session,
-    assistant_id: int,
-    mock_task_trigger_dispatch: AsyncMock,
-):
-    _seed_task(
-        dbsession,
-        assistant_id=assistant_id,
-        user_id=_auth_user_id(),
-        task_id=28,
-        with_schedule=True,
-    )
-    first = await client.post(
-        "/v0/tasks/28/trigger",
-        headers=HEADERS,
-        json={"assistant_id": assistant_id},
-    )
-    second = await client.post(
-        "/v0/tasks/28/trigger",
-        headers=HEADERS,
-        json={"assistant_id": assistant_id},
-    )
-    assert first.status_code == status.HTTP_202_ACCEPTED, first.json()
-    assert second.status_code == status.HTTP_202_ACCEPTED, second.json()
-    assert first.json()["info"]["instance_id"] != second.json()["info"]["instance_id"]
-    assert {
-        first.json()["info"]["instance_id"],
-        second.json()["info"]["instance_id"],
-    } == {1, 2}
-
-
-@pytest.mark.anyio
-async def test_trigger_task_with_explicit_instance_id_uses_existing_row(
-    client: AsyncClient,
-    dbsession: Session,
-    assistant_id: int,
-    mock_task_trigger_dispatch: AsyncMock,
-):
-    task_row = _seed_task(
-        dbsession,
-        assistant_id=assistant_id,
-        user_id=_auth_user_id(),
-        task_id=18,
-        with_schedule=True,
-    )
-
-    response = await client.post(
-        "/v0/tasks/18/trigger",
-        headers=HEADERS,
-        json={"assistant_id": assistant_id, "instance_id": 0},
-    )
-
-    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
-    info = response.json()["info"]
-    assert info == {
-        "task_id": 18,
-        "assistant_id": assistant_id,
-        "instance_id": 0,
-        "source_task_log_id": task_row.id,
-        "forked": False,
-        "status": "accepted",
-    }
-    mock_task_trigger_dispatch.assert_awaited_once()
-    target = mock_task_trigger_dispatch.await_args.args[0]
-    assert target.source_task_log_id == task_row.id
-    assert target.instance_id == 0
-    assert target.forked is False
-
-
-@pytest.mark.anyio
-async def test_trigger_task_explicit_instance_404_when_missing(
-    client: AsyncClient,
-    dbsession: Session,
-    assistant_id: int,
-    mock_task_trigger_dispatch: AsyncMock,
-):
-    _seed_task(
-        dbsession,
-        assistant_id=assistant_id,
-        user_id=_auth_user_id(),
-        task_id=20,
-    )
-
-    response = await client.post(
-        "/v0/tasks/20/trigger",
-        headers=HEADERS,
-        json={"assistant_id": assistant_id, "instance_id": 99},
-    )
-
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    mock_task_trigger_dispatch.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_trigger_task_explicit_terminal_instance_returns_409(
+async def test_trigger_task_terminal_definition_returns_409(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
@@ -537,7 +341,7 @@ async def test_trigger_task_explicit_terminal_instance_returns_409(
     response = await client.post(
         "/v0/tasks/21/trigger",
         headers=HEADERS,
-        json={"assistant_id": assistant_id, "instance_id": 0},
+        json={"assistant_id": assistant_id},
     )
 
     assert response.status_code == status.HTTP_409_CONFLICT
@@ -590,9 +394,7 @@ async def test_trigger_task_accepts_legacy_assistant_context_without_owner_metad
     assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
     mock_task_trigger_dispatch.assert_awaited_once()
     target = mock_task_trigger_dispatch.await_args.args[0]
-    assert target.forked is True
-    assert target.instance_id == 1
-    assert target.source_task_log_id != task_row.id
+    assert target.source_task_log_id == task_row.id
 
 
 @pytest.mark.anyio
@@ -635,9 +437,7 @@ async def test_trigger_task_selects_requested_assistant_when_task_id_shared(
     mock_task_trigger_dispatch.assert_awaited_once()
     target = mock_task_trigger_dispatch.await_args.args[0]
     assert target.assistant_id == assistant_id
-    assert target.forked is True
-    assert target.instance_id == 1
-    assert target.source_task_log_id != first_row.id
+    assert target.source_task_log_id == first_row.id
     assert target.task_name == "First task"
 
 
@@ -667,7 +467,7 @@ async def test_trigger_task_returns_404_for_wrong_assistant_id(
 
 @pytest.mark.anyio
 async def test_dispatch_hosted_offline_posts_comms_explicit(monkeypatch):
-    target = _make_target(offline=True, activation_revision="rev-abc", entrypoint=27)
+    target = _make_target(offline=True, revision="rev-abc", entrypoint=27)
     posted = {}
 
     class _FakeResponse:
@@ -694,12 +494,10 @@ async def test_dispatch_hosted_offline_posts_comms_explicit(monkeypatch):
 
     assert request_id
     emit_event.assert_not_awaited()
-    assert posted["url"] == (
-        "https://comms.test/infra/task-activation/offline-dispatch"
-    )
-    assert posted["json"]["source_type"] == "explicit"
-    assert posted["json"]["execution_mode"] == "offline"
-    assert posted["json"]["activation_revision"] == "rev-abc"
+    assert posted["url"] == ("https://comms.test/infra/task-execution/offline-dispatch")
+    assert posted["json"]["wake"] == "explicit"
+    assert posted["json"]["delivery"] == "offline"
+    assert posted["json"]["revision"] == "rev-abc"
     assert posted["json"]["entrypoint"] == 27
     assert posted["json"]["source_ref"] == request_id
     assert posted["headers"]["Authorization"] == "Bearer admin-key"
@@ -729,7 +527,7 @@ async def test_dispatch_hosted_live_emits_system_event_only():
 
 @pytest.mark.anyio
 async def test_dispatch_local_offline_emits_system_event():
-    target = _make_target(offline=True, is_local=True, activation_revision="rev-local")
+    target = _make_target(offline=True, is_local=True, revision="rev-local")
 
     with (
         patch.object(
@@ -751,7 +549,7 @@ async def test_dispatch_local_offline_emits_system_event():
 
 @pytest.mark.anyio
 async def test_dispatch_hosted_offline_without_revision_raises():
-    target = _make_target(offline=True, activation_revision=None)
+    target = _make_target(offline=True, revision=None)
 
     with pytest.raises(Exception) as exc_info:
         await task_views._dispatch_task_trigger(target)
