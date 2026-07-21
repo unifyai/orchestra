@@ -23,12 +23,12 @@ from orchestra.provider_triggers.runtime_types import (
     DispatchProcessingState,
     DownstreamAdoptionStatus,
 )
-from orchestra.services.task_machine_state_service import get_task_run_by_run_id
+from orchestra.services.task_machine_state_service import get_task_execution_by_run_id
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
 
-COMM_PROVIDER_EVENT_DISPATCH_PATH = "/infra/task-activation/provider-event-dispatch"
+COMM_PROVIDER_EVENT_DISPATCH_PATH = "/infra/task-execution/provider-event-dispatch"
 ADAPTERS_SYSTEM_EVENT_PATH = "/unity/system-event"
 
 TERMINAL_RUN_STATES = {"completed", "succeeded", "failed", "cancelled"}
@@ -317,7 +317,7 @@ class ProviderEventDispatchDeliveryService:
             self._schedule_next_poll(dispatch)
             return "dispatches_still_in_flight"
 
-        run_row = get_task_run_by_run_id(
+        run_row = get_task_execution_by_run_id(
             self._session,
             binding.project_id,
             run_id=dispatch.run_id,
@@ -431,7 +431,7 @@ class ProviderEventDispatchDeliveryService:
             task_id=dispatch.task_id,
             binding_id=dispatch.binding_id,
             receipt_id=dispatch.receipt_id,
-            accepted_activation_revision=dispatch.accepted_activation_revision,
+            accepted_revision=dispatch.accepted_revision,
             dispatch_mode=dispatch.dispatch_mode,  # type: ignore[arg-type]
             event_context_ref=dispatch.event_context_ref or "",
             issued_at=datetime.now(timezone.utc),

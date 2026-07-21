@@ -472,6 +472,148 @@ async def test_dm_call_create(
 
 
 @pytest.mark.anyio
+async def test_thread_calls_lists_ended_call_as_duration_pill(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    """A completed human DM call surfaces as a duration-only pill.
+
+    Session-derived: only ``ended`` sessions are listed, the summary carries
+    duration and participants, and it exposes no transcript/utterance data.
+    """
+    owner, member, org = await _create_org_with_member(client, "thread-calls")
+
+    thread = await _resolve_thread(
+        client,
+        org["headers"],
+        kind="dm",
+        organization_id=org["id"],
+        peer_user_id=member["id"],
+    )
+    thread_id = thread["thread_id"]
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={
+            "kind": "dm",
+            "organization_id": org["id"],
+            "peer_user_id": member["id"],
+        },
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    call_id = create_response.json()["call_id"]
+
+    # While the call is still ringing/active it is not a pill yet.
+    ringing = await client.get(
+        f"/v0/chat/threads/{thread_id}/calls",
+        headers=org["headers"],
+    )
+    assert ringing.status_code == status.HTTP_200_OK
+    assert ringing.json()["calls"] == []
+
+    answer_response = await client.post(
+        f"/v0/calls/{call_id}/answer",
+        headers=member["headers"],
+    )
+    assert answer_response.status_code == status.HTTP_200_OK, answer_response.json()
+    end_response = await client.post(
+        f"/v0/calls/{call_id}/end",
+        headers=org["headers"],
+    )
+    assert end_response.status_code == status.HTTP_200_OK, end_response.json()
+
+    calls_response = await client.get(
+        f"/v0/chat/threads/{thread_id}/calls",
+        headers=org["headers"],
+    )
+    assert calls_response.status_code == status.HTTP_200_OK, calls_response.json()
+    body = calls_response.json()
+    assert body["thread_id"] == thread_id
+    assert len(body["calls"]) == 1
+    summary = body["calls"][0]
+    assert summary["call_id"] == call_id
+    assert summary["scope"] == "dm"
+    assert summary["missed"] is False
+    assert summary["duration_seconds"] >= 0
+    assert summary["started_at"] is not None
+    assert summary["ended_at"] is not None
+    assert set(summary["participant_user_ids"]) == {owner["id"], member["id"]}
+    assert summary["assistant_ids"] == []
+    # Duration-only: no transcript surface leaks into the pill.
+    assert "utterance_count" not in summary
+    assert "transcript" not in summary
+    assert "utterances" not in summary
+
+    # The peer sees the same pill from their side of the thread.
+    peer_calls = await client.get(
+        f"/v0/chat/threads/{thread_id}/calls",
+        headers=member["headers"],
+    )
+    assert peer_calls.status_code == status.HTTP_200_OK
+    assert [c["call_id"] for c in peer_calls.json()["calls"]] == [call_id]
+
+
+@pytest.mark.anyio
+async def test_thread_calls_reports_missed_and_enforces_membership(
+    client: AsyncClient,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    """An unanswered call is a zero-duration missed pill; outsiders are 403."""
+    owner, member, org = await _create_org_with_member(client, "thread-miss")
+
+    thread = await _resolve_thread(
+        client,
+        org["headers"],
+        kind="dm",
+        organization_id=org["id"],
+        peer_user_id=member["id"],
+    )
+    thread_id = thread["thread_id"]
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={
+            "kind": "dm",
+            "organization_id": org["id"],
+            "peer_user_id": member["id"],
+        },
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    call_id = create_response.json()["call_id"]
+
+    # End the call before it is ever answered.
+    end_response = await client.post(
+        f"/v0/calls/{call_id}/end",
+        headers=org["headers"],
+    )
+    assert end_response.status_code == status.HTTP_200_OK, end_response.json()
+
+    calls_response = await client.get(
+        f"/v0/chat/threads/{thread_id}/calls",
+        headers=org["headers"],
+    )
+    assert calls_response.status_code == status.HTTP_200_OK
+    summary = calls_response.json()["calls"][0]
+    assert summary["missed"] is True
+    assert summary["duration_seconds"] == 0
+
+    # A non-member of the thread cannot list its calls.
+    outsider = await create_test_user(client, "thread-miss-outsider@test.com")
+    outsider_response = await client.get(
+        f"/v0/chat/threads/{thread_id}/calls",
+        headers=outsider["headers"],
+    )
+    assert outsider_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
 async def test_team_call_create_rings_members(
     client: AsyncClient,
     dbsession,

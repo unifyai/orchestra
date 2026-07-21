@@ -34,7 +34,7 @@ class ProviderEventDispatchClaimRequest(BaseModel):
     task_id: int
     binding_id: str
     receipt_id: str
-    accepted_activation_revision: str
+    accepted_revision: str
     dispatch_mode: Literal["live", "offline"]
     audience: str
     claimant_id: str = Field(
@@ -100,7 +100,7 @@ def _authorization_snapshot(
         task_id=request.task_id,
         binding_id=request.binding_id,
         receipt_id=request.receipt_id,
-        accepted_activation_revision=request.accepted_activation_revision,
+        accepted_revision=request.accepted_revision,
         dispatch_mode=request.dispatch_mode,
         audience=request.audience,
     )

@@ -31,8 +31,8 @@ from orchestra.services.team_membership_refresh_service import (
 from orchestra.web.api.utils.assistant_infra import ADMIN_KEY, _comms_url
 from orchestra.web.api.utils.http_client import get_async_client
 
-TASK_ACTIVATION_DELETE_PATH = "/infra/task-activation/delete"
-TASK_ACTIVATION_DELETE_TIMEOUT_SECONDS = 20.0
+TASK_EXECUTION_DELETE_PATH = "/infra/task-execution/delete"
+TASK_EXECUTION_DELETE_TIMEOUT_SECONDS = 20.0
 POSTGRES_LOCK_NOT_AVAILABLE = "55P03"
 
 
@@ -131,13 +131,13 @@ def _assistants_project_ids(session: Session) -> list[int]:
     ]
 
 
-def _scheduled_activations_for_team(
+def _scheduled_executions_for_team(
     session: Session,
     *,
     team_id: int,
     assistant_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return projected scheduled activations targeting a team."""
+    """Return projected scheduled executions targeting a team."""
 
     project_ids = _assistants_project_ids(session)
     if not project_ids:
@@ -155,7 +155,7 @@ def _scheduled_activations_for_team(
             LogEventContext.project_id.in_(project_ids),
             Context.project_id.in_(project_ids),
             Context.name.like(
-                f"%/{task_machine_state_service.TASK_ACTIVATIONS_CONTEXT_NAME}",
+                f"%/{task_machine_state_service.TASK_EXECUTIONS_CONTEXT_NAME}",
             ),
             LogEvent.data["destination"].astext == destination,
         )
@@ -167,10 +167,10 @@ def _scheduled_activations_for_team(
     return [dict(data or {}) for (data,) in session.execute(query).all()]
 
 
-async def _delete_scheduled_activation(activation: Mapping[str, Any]) -> None:
-    """Delete one scheduled activation through the Communication admin API."""
+async def _delete_scheduled_execution(execution: Mapping[str, Any]) -> None:
+    """Delete one scheduled execution through the Communication admin API."""
 
-    body = task_machine_state_service._scheduled_activation_delete_body(activation)
+    body = task_machine_state_service._scheduled_execution_delete_body(execution)
     if body is None:
         return
 
@@ -181,28 +181,28 @@ async def _delete_scheduled_activation(activation: Mapping[str, Any]) -> None:
     client = get_async_client()
     response = await client.request(
         "POST",
-        f"{comms_url}{TASK_ACTIVATION_DELETE_PATH}",
+        f"{comms_url}{TASK_EXECUTION_DELETE_PATH}",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json=body,
-        timeout=TASK_ACTIVATION_DELETE_TIMEOUT_SECONDS,
+        timeout=TASK_EXECUTION_DELETE_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
 
 
-async def _revoke_team_activations(
+async def _revoke_team_executions(
     session: Session,
     *,
     team_id: int,
     assistant_id: int | None = None,
 ) -> None:
-    """Revoke every scheduled activation targeting a team or member pair."""
+    """Revoke every scheduled execution targeting a team or member pair."""
 
-    for activation in _scheduled_activations_for_team(
+    for execution in _scheduled_executions_for_team(
         session,
         team_id=team_id,
         assistant_id=assistant_id,
     ):
-        await _delete_scheduled_activation(activation)
+        await _delete_scheduled_execution(execution)
 
 
 def _shared_team_contexts(session: Session, *, team_id: int) -> list[Context]:
@@ -392,7 +392,7 @@ async def delete_team(
     session.commit()
 
     try:
-        await _revoke_team_activations(session, team_id=team_id)
+        await _revoke_team_executions(session, team_id=team_id)
     except Exception as exc:
         raise TeamCleanupFailure(phase=2, reason=str(exc)) from exc
 
@@ -443,7 +443,7 @@ async def purge_assistant_overlay(
 
     if revoke_activations:
         try:
-            await _revoke_team_activations(
+            await _revoke_team_executions(
                 session,
                 team_id=team_id,
                 assistant_id=assistant_id,

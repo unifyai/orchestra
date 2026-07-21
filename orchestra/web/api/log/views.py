@@ -62,7 +62,7 @@ from orchestra.services.task_machine_state_service import (
     is_internal_task_machine_context_name,
     is_protected_task_surface_context_name,
     is_task_surface_context_name,
-    sync_task_activations_for_task_ids,
+    sync_task_executions_for_task_ids,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.python2SQL import (
@@ -314,7 +314,7 @@ def _recompute_derived_for_logs(
         )
 
 
-def _sync_task_activations_if_needed(
+def _sync_task_executions_if_needed(
     *,
     session,
     project_name: str | None,
@@ -331,7 +331,7 @@ def _sync_task_activations_if_needed(
         or not is_task_surface_context_name(tasks_context_name)
     ):
         return
-    sync_task_activations_for_task_ids(
+    sync_task_executions_for_task_ids(
         session=session,
         project_id=project_id,
         task_ids=task_ids,
@@ -541,7 +541,7 @@ def create_logs(
                 context_name=context_obj.name,
                 log_event_ids=result["log_event_ids"],
             )
-            _sync_task_activations_if_needed(
+            _sync_task_executions_if_needed(
                 session=session,
                 project_name=project.name,
                 project_id=project_id,
@@ -2783,7 +2783,7 @@ def _update_logs(
             context_name=ctx_obj_cache.name,
             log_event_ids=successful_update_ids,
         )
-        _sync_task_activations_if_needed(
+        _sync_task_executions_if_needed(
             session=session,
             project_name=project_name,
             project_id=project_id,
@@ -3484,7 +3484,7 @@ def _delete_logs(
                         detail=f"Error deleting field type {field}: {str(e)}",
                     )
 
-        _sync_task_activations_if_needed(
+        _sync_task_executions_if_needed(
             session=session,
             project_name=body.project_name,
             project_id=project_id,

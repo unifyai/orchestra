@@ -1131,6 +1131,11 @@ class CallSession(Base):
             "group_id",
             "status",
         ),
+        Index(
+            "ix_call_session_thread_status",
+            "thread_id",
+            "status",
+        ),
     )
 
 

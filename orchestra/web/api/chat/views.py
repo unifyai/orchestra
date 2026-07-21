@@ -59,6 +59,8 @@ from orchestra.web.api.chat.schema import (
     ChatReactionUpdate,
     ChatThreadResolve,
     ChatThreadResponse,
+    ThreadCallsPage,
+    ThreadCallSummary,
 )
 from orchestra.web.api.org_chat.schema import OrgChatAttachment
 from orchestra.web.api.utils.assistant_infra import dispatch_chat_best_effort
@@ -203,6 +205,31 @@ def _thread_response(thread: ChatThread) -> ChatThreadResponse:
     summary = thread_summary(thread)
     summary["user_ids"] = [uid for uid in summary["user_ids"] if uid]
     return ChatThreadResponse(**summary)
+
+
+def _thread_call_summary(call_session: CallSession) -> ThreadCallSummary:
+    """Duration-only pill summary from an ended call session.
+
+    Talk time is ``answered_at`` → ``ended_at``; a session that was never
+    answered is reported as ``missed`` with zero duration.
+    """
+    answered_at = call_session.answered_at
+    ended_at = call_session.ended_at
+    duration = 0
+    if answered_at is not None and ended_at is not None:
+        duration = max(0, int((ended_at - answered_at).total_seconds()))
+    return ThreadCallSummary(
+        call_id=call_session.id,
+        scope=call_session.scope,
+        started_at=answered_at or call_session.created_at,
+        ended_at=ended_at,
+        duration_seconds=duration,
+        missed=answered_at is None,
+        participant_user_ids=[
+            participant.user_id for participant in (call_session.participants or [])
+        ],
+        assistant_ids=[int(a) for a in (call_session.assistant_ids or [])],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +380,35 @@ def get_chat_messages(
         messages=[
             _message_response(message_payload(message, thread)) for message in messages
         ],
+    )
+
+
+@router.get(
+    "/chat/threads/{thread_id}/calls",
+    response_model=ThreadCallsPage,
+)
+def list_thread_calls(
+    request_fastapi: Request,
+    thread_id: int,
+    limit: int = Query(100, ge=1, le=200),
+    session: Session = Depends(get_db_session),
+) -> ThreadCallsPage:
+    """Ended call sessions for one thread, as duration-only call pills.
+
+    Session-derived (``call_session``): carries no transcript access, so
+    human-to-human calls surface only a pill and its duration. Membership
+    is enforced exactly like message history.
+    """
+    user_id = request_fastapi.state.user_id
+    thread = _require_thread(session, thread_id)
+    _require_human_thread_access(session, thread=thread, user_id=user_id)
+    sessions = ChatDAO(session).list_ended_calls_for_thread(
+        thread_id=thread.id,
+        limit=limit,
+    )
+    return ThreadCallsPage(
+        thread_id=thread.id,
+        calls=[_thread_call_summary(call_session) for call_session in sessions],
     )
 
 

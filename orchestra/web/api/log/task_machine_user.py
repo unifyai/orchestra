@@ -1,6 +1,6 @@
 """Ownership-scoped task-machine routes for the assistant runtime.
 
-User-API-key equivalents of the ``/admin/task-run/*`` and
+User-API-key equivalents of the ``/admin/task-execution/*`` and
 ``/admin/task-outbound-operation/*`` routes: identical request/response
 shapes, but the caller must own the ``assistant_id`` referenced in the
 payload (system/admin keys bypass the check via ``require_owned_assistant``).
@@ -23,26 +23,26 @@ from orchestra.services.provider_event_context_service import (
 from orchestra.services.task_machine_state_service import TASK_MACHINE_PROJECT_NAME
 from orchestra.web.api.log.task_machine_admin import (
     _get_internal_project_or_404,
+    create_or_adopt_task_execution_core,
     create_or_adopt_task_outbound_operation_core,
-    create_or_adopt_task_run_core,
-    get_latest_task_run_core,
-    get_task_run_core,
+    get_latest_task_execution_core,
+    get_task_execution_core,
+    patch_task_execution_core,
     patch_task_outbound_operation_core,
-    patch_task_run_core,
 )
 from orchestra.web.api.log.task_machine_schema import (
     ProviderEventContextRequest,
     ProviderEventContextResponse,
+    TaskExecutionCreateOrAdoptRequest,
+    TaskExecutionGetRequest,
+    TaskExecutionGetResponse,
+    TaskExecutionLatestRequest,
+    TaskExecutionLatestResponse,
+    TaskExecutionMutationResponse,
+    TaskExecutionUpdateRequest,
     TaskOutboundOperationCreateOrAdoptRequest,
     TaskOutboundOperationMutationResponse,
     TaskOutboundOperationUpdateRequest,
-    TaskRunCreateOrAdoptRequest,
-    TaskRunGetRequest,
-    TaskRunGetResponse,
-    TaskRunLatestRequest,
-    TaskRunLatestResponse,
-    TaskRunMutationResponse,
-    TaskRunUpdateRequest,
 )
 from orchestra.web.api.utils.assistant_ownership import require_owned_assistant
 
@@ -92,59 +92,59 @@ def _require_owned_task_assistant(
 
 
 @router.post(
-    "/task-run/create-or-adopt",
-    response_model=TaskRunMutationResponse,
+    "/task-execution/create-or-adopt",
+    response_model=TaskExecutionMutationResponse,
     include_in_schema=False,
 )
-def create_or_adopt_task_run(
-    request: TaskRunCreateOrAdoptRequest,
+def create_or_adopt_task_execution(
+    request: TaskExecutionCreateOrAdoptRequest,
     request_fastapi: Request,
     session=Depends(get_db_session),
 ):
     """Create a task run by run_key if absent, otherwise return the existing row."""
 
     _require_owned_task_assistant(request_fastapi, request.assistant_id, session)
-    return create_or_adopt_task_run_core(session, request)
+    return create_or_adopt_task_execution_core(session, request)
 
 
 @router.post(
-    "/task-run/update",
-    response_model=TaskRunMutationResponse,
+    "/task-execution/update",
+    response_model=TaskExecutionMutationResponse,
     include_in_schema=False,
 )
-def patch_task_run(
-    request: TaskRunUpdateRequest,
+def patch_task_execution(
+    request: TaskExecutionUpdateRequest,
     request_fastapi: Request,
     session=Depends(get_db_session),
 ):
     """Apply a partial payload update to an existing task run row."""
 
     _require_owned_task_assistant(request_fastapi, request.assistant_id, session)
-    return patch_task_run_core(session, request)
+    return patch_task_execution_core(session, request)
 
 
 @router.post(
-    "/task-run/latest",
-    response_model=TaskRunLatestResponse,
+    "/task-execution/latest",
+    response_model=TaskExecutionLatestResponse,
     include_in_schema=False,
 )
-def get_latest_task_run(
-    request: TaskRunLatestRequest,
+def get_latest_task_execution(
+    request: TaskExecutionLatestRequest,
     request_fastapi: Request,
     session=Depends(get_db_session),
 ):
     """Return the most recently updated task run for one assistant/task pair."""
 
     _require_owned_task_assistant(request_fastapi, request.assistant_id, session)
-    return get_latest_task_run_core(session, request)
+    return get_latest_task_execution_core(session, request)
 
 
 @router.get(
-    "/task-run/latest",
-    response_model=TaskRunLatestResponse,
+    "/task-execution/latest",
+    response_model=TaskExecutionLatestResponse,
     include_in_schema=False,
 )
-def get_latest_task_run_by_params(
+def get_latest_task_execution_by_params(
     request_fastapi: Request,
     assistant_id: str = Query(..., description="Assistant that owns the run."),
     task_id: int = Query(..., description="Logical task identifier."),
@@ -161,29 +161,29 @@ def get_latest_task_run_by_params(
     """Query-parameter variant of the latest-task-run lookup."""
 
     _require_owned_task_assistant(request_fastapi, assistant_id, session)
-    request = TaskRunLatestRequest(
+    request = TaskExecutionLatestRequest(
         project_name=project_name,
         assistant_id=assistant_id,
         task_id=task_id,
         source_task_log_id=source_task_log_id,
     )
-    return get_latest_task_run_core(session, request)
+    return get_latest_task_execution_core(session, request)
 
 
 @router.post(
-    "/task-run/get",
-    response_model=TaskRunGetResponse,
+    "/task-execution/get",
+    response_model=TaskExecutionGetResponse,
     include_in_schema=False,
 )
-def get_task_run_by_key(
-    request: TaskRunGetRequest,
+def get_task_execution_by_key(
+    request: TaskExecutionGetRequest,
     request_fastapi: Request,
     session=Depends(get_db_session),
 ):
     """Return one task run row by run_key without creating or adopting."""
 
     _require_owned_task_assistant(request_fastapi, request.assistant_id, session)
-    return get_task_run_core(session, request)
+    return get_task_execution_core(session, request)
 
 
 @router.post(

@@ -1,4 +1,4 @@
-"""Ownership-scoped POST /v0/task-run/get for Unity live provider-event dispatch."""
+"""Ownership-scoped POST /v0/task-execution/get for Unity live provider-event dispatch."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from orchestra.services.task_machine_state_service import (
 from orchestra.tests.test_log import HEADERS
 
 PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
-TASK_RUN_GET_PATH = "/v0/task-run/get"
+TASK_RUN_GET_PATH = "/v0/task-execution/get"
 
 
 def _seed_provider_event_run(dbsession: Session) -> tuple[Assistant, dict]:
@@ -41,8 +41,8 @@ def _seed_provider_event_run(dbsession: Session) -> tuple[Assistant, dict]:
             "run_key": run_key,
             "assistant_id": str(assistant.agent_id),
             "task_id": task_id,
-            "source_type": "provider_event",
-            "execution_mode": "live",
+            "wake": "provider_event",
+            "delivery": "live",
             "state": "pending",
         },
     )
@@ -72,8 +72,8 @@ async def test_task_run_get_returns_owned_provider_event_run(
     assert run is not None
     assert run["run_key"] == seeded["run_key"]
     assert int(run["task_id"]) == 5151
-    assert run["source_type"] == "provider_event"
-    assert run["execution_mode"] == "live"
+    assert run["wake"] == "provider_event"
+    assert run["delivery"] == "live"
     assert int(run["run_id"]) == int(seeded["run_id"])
 
 

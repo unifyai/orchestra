@@ -38,7 +38,7 @@ class EventTriggerBinding(Base):
 
     task_revision = Column(Integer, nullable=False, server_default="1")
     desired_trigger_state = Column(String(32), nullable=False, server_default="draft")
-    desired_activation_revision = Column(String(64), nullable=False)
+    desired_revision = Column(String(64), nullable=False)
     acceptance_epoch = Column(Integer, nullable=False, server_default="1")
 
     connection_id = Column(String, nullable=False)
@@ -57,7 +57,7 @@ class EventTriggerBinding(Base):
     provider_account_subject_hmac = Column(String(128), nullable=True)
     provider_account_display_label = Column(String, nullable=True)
 
-    observed_activation_revision = Column(String(64), nullable=True)
+    observed_revision = Column(String(64), nullable=True)
     active_generation_id = Column(String(64), nullable=True, index=True)
     runtime_health = Column(
         String(32),
@@ -124,7 +124,7 @@ class EventTriggerSubscriptionGeneration(Base):
         nullable=False,
         index=True,
     )
-    desired_activation_revision = Column(String(64), nullable=False)
+    desired_revision = Column(String(64), nullable=False)
     acceptance_epoch = Column(Integer, nullable=False)
 
     provider_create_idempotency_key = Column(String(128), nullable=False)
@@ -204,7 +204,7 @@ class ProviderEventReceipt(Base):
     )
     provider_event_identity_hmac = Column(String(128), nullable=False)
 
-    accepted_activation_revision = Column(String(64), nullable=False)
+    accepted_revision = Column(String(64), nullable=False)
     acceptance_epoch = Column(Integer, nullable=False)
     schema_version = Column(String, nullable=False)
 
@@ -291,7 +291,7 @@ class ProviderEventDispatch(Base):
     run_key = Column(String(128), nullable=False, unique=True)
 
     dispatch_mode = Column(String(16), nullable=False)
-    accepted_activation_revision = Column(String(64), nullable=False)
+    accepted_revision = Column(String(64), nullable=False)
     event_context_ref = Column(String, nullable=True)
     audience = Column(String, nullable=False)
 

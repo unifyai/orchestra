@@ -32,7 +32,7 @@ class ProviderEventDispatchRequest(BaseModel):
     task_id: int
     binding_id: str
     receipt_id: str
-    accepted_activation_revision: str
+    accepted_revision: str
     source_type: Literal["provider_event"] = "provider_event"
     dispatch_mode: Literal["live", "offline"]
     event_context_ref: str

@@ -52,7 +52,7 @@ def _serialize_dispatch(dispatch) -> dict:
         "run_id": dispatch.run_id,
         "run_key": dispatch.run_key,
         "dispatch_mode": dispatch.dispatch_mode,
-        "accepted_activation_revision": dispatch.accepted_activation_revision,
+        "accepted_revision": dispatch.accepted_revision,
         "event_context_ref": dispatch.event_context_ref,
         "audience": dispatch.audience,
         "processing_state": dispatch.processing_state,

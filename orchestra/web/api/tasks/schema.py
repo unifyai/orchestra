@@ -82,8 +82,8 @@ class TriggerHealthResponse(BaseModel):
         "needs_attention",
         "removing",
     ] = "absent"
-    desired_activation_revision: str | None = None
-    observed_activation_revision: str | None = None
+    desired_revision: str | None = None
+    observed_revision: str | None = None
     acceptance_epoch: int | None = None
     local_acceptance_open: bool = False
     active_generation_id: str | None = None
@@ -119,32 +119,13 @@ class TaskTriggerRequest(BaseModel):
         description="The assistant that owns the task to trigger.",
         examples=[1406],
     )
-    instance_id: int | None = Field(
-        default=None,
-        description=(
-            "Optional existing Tasks instance_id to start early. When omitted, "
-            "Orchestra forks a new instance decoupled from recurrence "
-            "(no schedule/repeat) and triggers that fork."
-        ),
-        examples=[3],
-    )
 
 
 class TaskTriggerStatus(BaseModel):
     task_id: int = Field(description="The logical task id requested by the caller.")
     assistant_id: int = Field(description="The assistant that owns the triggered task.")
-    instance_id: int = Field(
-        description=(
-            "Tasks instance_id that was dispatched (newly forked when "
-            "instance_id was omitted from the request)."
-        ),
-    )
     source_task_log_id: int = Field(
-        description="Orchestra log id of the Tasks row that was dispatched.",
-    )
-    forked: bool = Field(
-        default=False,
-        description="True when this trigger created a new Tasks instance.",
+        description="Orchestra log id of the Tasks definition row that was dispatched.",
     )
     status: str = Field(
         default="accepted",
@@ -166,14 +147,13 @@ class TaskCancelRequest(BaseModel):
 class TaskCancelStatus(BaseModel):
     task_id: int = Field(description="The logical task id requested by the caller.")
     assistant_id: int = Field(description="The assistant that owns the cancelled task.")
-    instance_id: int = Field(description="The Tasks instance_id that was cancelled.")
     status: str = Field(
         default="cancelled",
-        description="Tasks row status after cancel.",
+        description="Tasks definition status after cancel.",
     )
     run_key: str | None = Field(
         default=None,
-        description="Inflight Tasks/Runs run_key that was cancelled, if any.",
+        description="Inflight Tasks/Executions run_key that was cancelled, if any.",
     )
     job_name: str | None = Field(
         default=None,

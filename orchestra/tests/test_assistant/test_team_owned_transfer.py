@@ -1021,12 +1021,12 @@ async def test_merge_dedupes_equivalent_recurring_tasks(
         ],
     )
     # Machine-state rows referencing the personal task ids (no declared FK).
-    personal_activations = f"{personal_prefix}/Tasks/Activations"
-    _seed_table(dbsession, project_id, personal_activations)
+    personal_executions = f"{personal_prefix}/Tasks/Executions"
+    _seed_table(dbsession, project_id, personal_executions)
     await _post_rows(
         client,
         org_headers,
-        personal_activations,
+        personal_executions,
         [
             {"task_id": 0, "marker": "weekly-activation"},
             {"task_id": 1, "marker": "daily-activation"},
@@ -1052,7 +1052,7 @@ async def test_merge_dedupes_equivalent_recurring_tasks(
     activation_rows = _table_rows(
         dbsession,
         project_id,
-        f"Teams/{team_id}/Tasks/Activations",
+        f"Teams/{team_id}/Tasks/Executions",
     )
     by_marker = {row["marker"]: row["task_id"] for row in activation_rows}
     assert by_marker == {"weekly-activation": 1, "daily-activation": 0}

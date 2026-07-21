@@ -28,7 +28,7 @@ from orchestra.provider_triggers.runtime_types import (
 )
 from orchestra.services.provider_event_blob_service import ProviderEventBlobService
 from orchestra.services.task_machine_state_service import (
-    get_task_run_by_run_id,
+    get_task_execution_by_run_id,
     update_task_run,
 )
 from orchestra.settings import settings
@@ -512,7 +512,7 @@ class ProviderEventContextService:
         task_id: int,
         run_id: int,
     ):
-        run = get_task_run_by_run_id(self._session, project_id, run_id=run_id)
+        run = get_task_execution_by_run_id(self._session, project_id, run_id=run_id)
         if run is None:
             raise EventContextAccessError(EventContextErrorReason.unavailable)
         run_data = dict(run.data or {})

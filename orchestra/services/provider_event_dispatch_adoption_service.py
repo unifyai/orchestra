@@ -45,7 +45,7 @@ class DispatchAuthorizationSnapshot:
     task_id: int
     binding_id: str
     receipt_id: str
-    accepted_activation_revision: str
+    accepted_revision: str
     dispatch_mode: str
     audience: str
 
@@ -294,9 +294,9 @@ class ProviderEventDispatchAdoptionService:
             ("binding_id", str(dispatch.binding_id), str(authorization.binding_id)),
             ("receipt_id", str(dispatch.receipt_id), str(authorization.receipt_id)),
             (
-                "accepted_activation_revision",
-                str(dispatch.accepted_activation_revision),
-                str(authorization.accepted_activation_revision),
+                "accepted_revision",
+                str(dispatch.accepted_revision),
+                str(authorization.accepted_revision),
             ),
             (
                 "dispatch_mode",

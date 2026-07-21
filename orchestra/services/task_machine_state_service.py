@@ -1,10 +1,10 @@
-"""Internal machine-state helpers for assistant task activations and runs.
+"""Internal machine-state helpers for assistant task executions.
 
 This module keeps scheduled and triggerable task machine state inside the
 existing Orchestra log/context system. The public assistant-scoped `.../Tasks`
-table in the `Assistants` project remains the user-authored surface;
-`Tasks/Activations`, `Tasks/Runs`, and `Tasks/OutboundOperations` are internal contexts derived from or
-driven by that surface.
+table in the `Assistants` project remains the definition surface;
+`Tasks/Executions` (wake + attempt ledger) and `Tasks/OutboundOperations`
+are the internal machine contexts.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from orchestra.db.models.orchestra_models import (
     TeamAssistantMembership,
 )
 from orchestra.db.scope import single_owner_key_for_context
-from orchestra.provider_triggers.activation_revision import (
-    compute_provider_event_activation_revision,
+from orchestra.provider_triggers.revision import (
+    compute_provider_event_revision,
     normalize_trigger_config,
 )
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
@@ -47,28 +47,28 @@ from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
 TASKS_CONTEXT_NAME = "Tasks"
-TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
+TASK_EXECUTIONS_CONTEXT_NAME = "Tasks/Executions"
 TASK_RUNS_CONTEXT_NAME = "Tasks/Runs"
 TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME = "Tasks/OutboundOperations"
 _ALL_CONTEXT_SEGMENT = "All"
-_TASK_ACTIVATIONS_CONTEXT_LEAF = "Activations"
+_TASK_EXECUTIONS_CONTEXT_LEAF = "Executions"
 _TASK_RUNS_CONTEXT_LEAF = "Runs"
 _TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
-_TASK_ACTIVATION_UNIQUE_FIELD = "activation_key"
 _TASK_RUN_UNIQUE_FIELD = "run_key"
 _TASK_OUTBOUND_OPERATION_UNIQUE_FIELD = "operation_key"
-_TASK_ACTIVATION_UPSERT_PATH = "/infra/task-activation/upsert"
-_TASK_ACTIVATION_DELETE_PATH = "/infra/task-activation/delete"
-_TASK_ACTIVATION_SYNC_TIMEOUT_SECONDS = 15.0
+_TASK_EXECUTION_UPSERT_PATH = "/infra/task-execution/upsert"
+_TASK_EXECUTION_DELETE_PATH = "/infra/task-execution/delete"
+_TASK_EXECUTION_SYNC_TIMEOUT_SECONDS = 15.0
 _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
     {
-        TASK_ACTIVATIONS_CONTEXT_NAME,
-        TASK_RUNS_CONTEXT_NAME,
+        TASK_EXECUTIONS_CONTEXT_NAME,
         TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME,
+        TASK_RUNS_CONTEXT_NAME,
     },
 )
 
-_SCHEDULED_ACTIVATION_STATUSES = {"scheduled"}
+_SCHEDULED_EXECUTION_STATUSES = {"scheduled"}
+_OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
 _TRIGGERABLE_STATUS = "triggerable"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
@@ -82,9 +82,12 @@ logger = logging.getLogger(__name__)
 class TaskMachineContextIds:
     """Resolved context identifiers for task machine state."""
 
-    activations_context_id: int
-    runs_context_id: int
+    executions_context_id: int
     outbound_operations_context_id: int
+
+    @property
+    def runs_context_id(self) -> int:
+        return self.executions_context_id
 
 
 @dataclass(frozen=True)
@@ -92,9 +95,12 @@ class TaskMachineContextNames:
     """Resolved assistant-scoped context names for task machine state."""
 
     tasks_context_name: str
-    activations_context_name: str
-    runs_context_name: str
+    executions_context_name: str
     outbound_operations_context_name: str
+
+    @property
+    def runs_context_name(self) -> str:
+        return self.executions_context_name
 
 
 @dataclass(frozen=True)
@@ -117,7 +123,7 @@ class _TaskRow:
 
 @dataclass(frozen=True)
 class _TaskProjectionGroup:
-    """Rows that project into one executor-owned task activation."""
+    """Rows that project into one executor-owned open execution."""
 
     assistant_id: str | None
     task_id: int
@@ -165,21 +171,12 @@ def _destination_from_context_name(context_name: str | None) -> str | None:
     return f"team:{team_id}"
 
 
-def build_task_activation_context_name(tasks_context_name: str) -> str:
-    """Return the assistant-scoped activations context for one Tasks table."""
+def build_task_executions_context_name(tasks_context_name: str) -> str:
+    """Return the assistant-scoped executions context for one Tasks table."""
 
     return _build_task_machine_context_name(
         tasks_context_name=tasks_context_name,
-        leaf_name=_TASK_ACTIVATIONS_CONTEXT_LEAF,
-    )
-
-
-def build_task_runs_context_name(tasks_context_name: str) -> str:
-    """Return the assistant-scoped runs context for one Tasks table."""
-
-    return _build_task_machine_context_name(
-        tasks_context_name=tasks_context_name,
-        leaf_name=_TASK_RUNS_CONTEXT_LEAF,
+        leaf_name=_TASK_EXECUTIONS_CONTEXT_LEAF,
     )
 
 
@@ -211,10 +208,7 @@ def _resolve_task_machine_context_names(
     normalized_tasks_context_name = (tasks_context_name or "").strip("/")
     return TaskMachineContextNames(
         tasks_context_name=normalized_tasks_context_name,
-        activations_context_name=build_task_activation_context_name(
-            normalized_tasks_context_name,
-        ),
-        runs_context_name=build_task_runs_context_name(
+        executions_context_name=build_task_executions_context_name(
             normalized_tasks_context_name,
         ),
         outbound_operations_context_name=build_task_outbound_operations_context_name(
@@ -242,22 +236,36 @@ def _resolve_assistant_id(
     return _assistant_id_from_context_name(tasks_context_name)
 
 
-def _build_activation_key(
+def _build_open_execution_run_key(
     *,
-    assistant_id: str | None,
+    delivery: str,
+    wake: str,
+    assistant_id: str,
+    destination: str | None,
     task_id: int,
-    destination: str | None = None,
+    revision: str,
+    due_at: str | None = None,
 ) -> str:
-    """Return the executor-scoped activation key used for uniqueness."""
+    """Build the idempotency key for an open (scheduled/triggerable) Execution.
 
-    destination_label = _coerce_optional_str(destination)
-    if assistant_id:
-        if destination_label:
-            return f"{assistant_id}:{destination_label}:{task_id}"
-        return f"{assistant_id}:{task_id}"
-    if destination_label:
-        return f"{destination_label}:{task_id}"
-    return str(task_id)
+    Matches Unify ``build_task_run_key`` so due-fire create-or-adopt adopts the
+    same row projected here.
+    """
+
+    revision_digest = hashlib.sha256(
+        str(revision or "").encode("utf-8"),
+    ).hexdigest()[:12]
+    destination_part = f"{_coerce_optional_str(destination)}:" if destination else ""
+    if due_at:
+        tail = str(due_at).replace(" ", "T")
+    elif wake == "triggered":
+        tail = "arm"
+    else:
+        tail = "once"
+    return (
+        f"{delivery}:{wake}:{assistant_id}:{destination_part}{task_id}:"
+        f"{revision_digest}:{tail}"
+    )
 
 
 def is_task_surface_context_name(context_name: str | None) -> bool:
@@ -371,7 +379,7 @@ def _derive_tasks_context_name_from_assistant(
 ) -> str | None:
     """Return the canonical `.../Tasks` context for one assistant when resolvable.
 
-    Team-owned assistants have no personal root: machine state (Activations /
+    Team-owned assistants have no personal root: machine state (Executions /
     Runs / OutboundOperations) lives under ``Teams/{owner_team_id}/Tasks``,
     matching the shared authored Tasks surface.
     """
@@ -485,82 +493,37 @@ def _build_assistant_tasks_context_name(*, user_id: str, assistant_id: str) -> s
     )
 
 
-_ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
+_RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "assistant_id": {
         "field_type": "str",
         "mutable": False,
-        "description": "Assistant identifier mirrored from the source task row.",
+        "description": "Assistant identifier that owns this execution.",
     },
-    "destination": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Team destination for the source task definition.",
+    "run_id": {
+        "field_type": "int",
+        "mutable": False,
+        "description": "Stable internal run identifier (matches the log_event id).",
     },
-    "activation_key": {
+    "run_key": {
         "field_type": "str",
         "mutable": False,
         "unique": True,
-        "description": "Assistant-scoped unique key for the activation row.",
+        "description": "Idempotency key for one wake/attempt (Execution unique key).",
     },
-    "task_id": {
-        "field_type": "int",
-        "mutable": False,
-        "description": "Logical task identifier mirrored from the source task row.",
-    },
-    "source_task_log_id": {
-        "field_type": "int",
-        "mutable": True,
-        "description": "Current task row that owns this activation.",
-    },
-    "instance_id": {
-        "field_type": "int",
-        "mutable": True,
-        "description": "Current task instance reflected into the activation row.",
-    },
-    "activation_kind": {
+    "wake": {
         "field_type": "str",
         "mutable": True,
-        "description": "How the task wakes: scheduled, triggered, or provider_event.",
+        "description": "Why this execution exists: scheduled, triggered, explicit, provider_event.",
     },
-    "execution_mode": {
+    "delivery": {
         "field_type": "str",
         "mutable": True,
-        "description": "Execution lane for the task: live or offline.",
-    },
-    "requires_filesystem": {
-        "field_type": "bool",
-        "mutable": True,
-        "description": "Whether the task needs a mounted assistant filesystem.",
-    },
-    "requires_computer": {
-        "field_type": "bool",
-        "mutable": True,
-        "description": "Whether the task needs the assistant desktop computer.",
-    },
-    "status": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Source task status at the time this activation was projected.",
-    },
-    "task_name": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Current task title mirrored from the source task row.",
-    },
-    "task_description": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Current task description mirrored from the source task row.",
-    },
-    "next_due_at": {
-        "field_type": "datetime",
-        "mutable": True,
-        "description": "Queue-head due timestamp for scheduled activations.",
+        "description": "Delivery lane: live or offline.",
     },
     "trigger_medium": {
         "field_type": "str",
         "mutable": True,
-        "description": "Inbound medium required for trigger activations.",
+        "description": "Inbound medium for triggerable executions.",
     },
     "trigger_from_contact_ids": {
         "field_type": "list",
@@ -575,104 +538,52 @@ _ACTIVATION_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "interrupt": {
         "field_type": "bool",
         "mutable": True,
-        "description": "Whether a trigger activation interrupts the assistant.",
+        "description": "Whether a trigger interrupts the assistant.",
     },
     "trigger_recurring": {
         "field_type": "bool",
         "mutable": True,
         "description": "Whether the trigger re-arms after completion.",
     },
+    "requires_filesystem": {
+        "field_type": "bool",
+        "mutable": True,
+        "description": "Whether the task needs a mounted assistant filesystem.",
+    },
+    "requires_computer": {
+        "field_type": "bool",
+        "mutable": True,
+        "description": "Whether the task needs the assistant desktop computer.",
+    },
     "entrypoint": {
         "field_type": "int",
         "mutable": True,
-        "description": "Offline function_id when execution_mode=offline.",
+        "description": "Offline function_id when delivery=offline.",
     },
     "max_runtime_seconds": {
         "field_type": "int",
         "mutable": True,
-        "description": (
-            "Optional per-task execution bound mirrored from the source task "
-            "row; null means the run is unbounded."
-        ),
+        "description": "Optional per-task execution bound.",
     },
     "repeat": {
         "field_type": "list",
         "mutable": True,
-        "description": "Recurring cadence metadata mirrored from the task row.",
+        "description": "Repeat patterns mirrored from the task definition.",
     },
-    "activation_revision": {
+    "status": {
         "field_type": "str",
         "mutable": True,
-        "description": "Stable hash of the machine-facing activation contract.",
+        "description": "Legacy mirrored Tasks.status at projection time.",
     },
     "source_task_updated_at": {
         "field_type": "datetime",
         "mutable": True,
-        "description": "Updated timestamp from the source task row.",
+        "description": "Source task row update timestamp at projection time.",
     },
     "last_materialized_at": {
         "field_type": "datetime",
         "mutable": True,
-        "description": "When Orchestra last projected this activation row.",
-    },
-    "provider_event_binding_id": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Stable binding identifier for provider-event activations.",
-    },
-    "acceptance_epoch": {
-        "field_type": "int",
-        "mutable": True,
-        "description": "Lifecycle fence for provider-event acceptance ordering.",
-    },
-    "connection_id": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Pinned integration connection for provider-event matching.",
-    },
-    "backend_id": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Provider backend for provider-event triggers.",
-    },
-    "canonical_app_slug": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Canonical app slug for provider-event triggers.",
-    },
-    "provider_trigger_slug": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Provider-declared trigger slug for provider-event triggers.",
-    },
-    "provider_event_trigger_config": {
-        "field_type": "dict",
-        "mutable": True,
-        "description": "Passthrough trigger config for provider-event triggers.",
-    },
-    "provider_account_subject_hmac": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Pinned provider account subject digest when known.",
-    },
-}
-
-_RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
-    "assistant_id": {
-        "field_type": "str",
-        "mutable": False,
-        "description": "Assistant identifier that owns this run.",
-    },
-    "run_id": {
-        "field_type": "int",
-        "mutable": False,
-        "description": "Stable internal run identifier (matches the log_event id).",
-    },
-    "run_key": {
-        "field_type": "str",
-        "mutable": False,
-        "unique": True,
-        "description": "Idempotency key for a task execution attempt.",
+        "description": "When Communication last upserted a Cloud Task for this row.",
     },
     "task_id": {
         "field_type": "int",
@@ -687,27 +598,17 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
     "source_task_log_id": {
         "field_type": "int",
         "mutable": True,
-        "description": "Task row that originated this run.",
-    },
-    "source_type": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Why the run exists: scheduled, triggered, or offline dispatch.",
-    },
-    "execution_mode": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Execution lane for the run: live or offline.",
+        "description": "Task row that originated this execution.",
     },
     "state": {
         "field_type": "str",
         "mutable": True,
-        "description": "Current machine state for the run lifecycle.",
+        "description": "Current machine state for the execution lifecycle.",
     },
-    "activation_revision": {
+    "revision": {
         "field_type": "str",
         "mutable": True,
-        "description": "Activation revision adopted when this run was created.",
+        "description": "Stable hash of the machine-facing execution contract.",
     },
     "scheduled_for": {
         "field_type": "datetime",
@@ -938,23 +839,15 @@ def ensure_task_machine_contexts(
     *,
     tasks_context_name: str,
 ) -> TaskMachineContextIds:
-    """Ensure the assistant-scoped task machine contexts and schemas exist."""
+    """Ensure Executions + OutboundOperations contexts exist (no Activations)."""
 
     context_names = _resolve_task_machine_context_names(tasks_context_name)
 
-    activations_context_id = _upsert_context(
+    executions_context_id = _upsert_context(
         session=session,
         project_id=project_id,
-        name=context_names.activations_context_name,
-        description="Internal machine-facing activation state for assistant tasks.",
-        allow_duplicates=False,
-        unique_keys={_TASK_ACTIVATION_UNIQUE_FIELD: "str"},
-    )
-    runs_context_id = _upsert_context(
-        session=session,
-        project_id=project_id,
-        name=context_names.runs_context_name,
-        description="Internal idempotent execution history for assistant tasks.",
+        name=context_names.executions_context_name,
+        description="Internal wake/attempt ledger for assistant tasks (Executions).",
         allow_duplicates=False,
         unique_keys={_TASK_RUN_UNIQUE_FIELD: "str"},
     )
@@ -969,13 +862,7 @@ def ensure_task_machine_contexts(
     _upsert_field_types(
         session=session,
         project_id=project_id,
-        context_id=activations_context_id,
-        field_definitions=_ACTIVATION_FIELD_DEFINITIONS,
-    )
-    _upsert_field_types(
-        session=session,
-        project_id=project_id,
-        context_id=runs_context_id,
+        context_id=executions_context_id,
         field_definitions=_RUN_FIELD_DEFINITIONS,
     )
     _upsert_field_types(
@@ -986,20 +873,19 @@ def ensure_task_machine_contexts(
     )
     session.flush()
     return TaskMachineContextIds(
-        activations_context_id=activations_context_id,
-        runs_context_id=runs_context_id,
+        executions_context_id=executions_context_id,
         outbound_operations_context_id=outbound_operations_context_id,
     )
 
 
-def sync_task_activations_for_task_ids(
+def sync_task_executions_for_task_ids(
     session: Session,
     project_id: int,
     task_ids: Iterable[int],
     *,
     tasks_context_name: str = TASKS_CONTEXT_NAME,
 ) -> dict[str, int]:
-    """Project one assistant-scoped tasks table into `Tasks/Activations`."""
+    """Project task definitions into open `Tasks/Executions` rows (wake ledger)."""
 
     unique_task_ids = sorted({int(task_id) for task_id in task_ids})
     if not unique_task_ids or not is_task_surface_context_name(tasks_context_name):
@@ -1037,7 +923,7 @@ def sync_task_activations_for_task_ids(
         if task_id in handled_task_ids:
             continue
         if source_destination is not None:
-            deleted_rows = _delete_activation_rows_by_task_destination(
+            deleted_rows = _delete_open_executions_by_task_destination(
                 session=session,
                 project_id=project_id,
                 task_id=task_id,
@@ -1064,7 +950,7 @@ def sync_task_activations_for_task_ids(
         )
         if executor_tasks_context_name is None:
             if source_destination is not None:
-                deleted_rows = _delete_activation_rows_by_task_destination(
+                deleted_rows = _delete_open_executions_by_task_destination(
                     session=session,
                     project_id=project_id,
                     task_id=group.task_id,
@@ -1078,84 +964,154 @@ def sync_task_activations_for_task_ids(
             project_id=project_id,
             tasks_context_name=executor_tasks_context_name,
         )
-        activation_key = _build_activation_key(
-            assistant_id=group.assistant_id,
-            task_id=group.task_id,
-            destination=source_destination,
-        )
-        existing_activation = _get_machine_row_by_unique_field(
-            session=session,
-            context_id=context_ids.activations_context_id,
-            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-            unique_field_value=activation_key,
-        )
-        previous_activation = (
-            dict(existing_activation.data or {})
-            if existing_activation is not None
-            else None
-        )
         if source_destination is not None and not _assistant_is_team_member(
             session=session,
             assistant_id=group.assistant_id,
             team_id=source_team_id,
         ):
-            activation_payload = None
+            execution_payload = None
         else:
-            activation_payload = _build_activation_payload(
+            execution_payload = _build_execution_payload(
                 rows=group.rows,
                 tasks_context_name=normalized_tasks_context_name,
                 destination=source_destination,
             )
-        if activation_payload is None:
-            was_deleted = _delete_machine_row_by_unique_field(
+        if execution_payload is None:
+            # Drop any prior open execution for this task/destination.
+            deleted_rows = _delete_open_executions_for_task(
                 session=session,
                 project_id=project_id,
-                context_id=context_ids.activations_context_id,
-                unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-                unique_field_value=activation_key,
+                context_id=context_ids.executions_context_id,
+                task_id=group.task_id,
+                destination=source_destination,
             )
-            deleted += int(was_deleted)
-            if previous_activation is not None and was_deleted:
-                materialization_pairs.append((previous_activation, None))
+            deleted += len(deleted_rows)
+            materialization_pairs.extend((row, None) for row in deleted_rows)
             continue
 
+        run_key = str(execution_payload["run_key"])
+        existing_execution = _get_machine_row_by_unique_field(
+            session=session,
+            context_id=context_ids.executions_context_id,
+            unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+            unique_field_value=run_key,
+        )
+        previous_execution: dict[str, Any] | None = None
+        if existing_execution is not None:
+            previous_execution = dict(existing_execution.data or {})
+        else:
+            # Schedule/revision edits mint a new run_key. Carry the prior open
+            # Execution into the upsert so Communication gets one replace
+            # (previous_revision + new head), not a delete followed by create.
+            stale_deleted = _delete_open_executions_for_task(
+                session=session,
+                project_id=project_id,
+                context_id=context_ids.executions_context_id,
+                task_id=group.task_id,
+                destination=source_destination,
+            )
+            deleted += len(stale_deleted)
+            if stale_deleted:
+                previous_execution = stale_deleted[0]
+                materialization_pairs.extend((row, None) for row in stale_deleted[1:])
         _upsert_machine_row(
             session=session,
             project_id=project_id,
-            context_id=context_ids.activations_context_id,
-            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-            unique_field_value=activation_key,
-            payload=activation_payload,
+            context_id=context_ids.executions_context_id,
+            unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+            unique_field_value=run_key,
+            payload=execution_payload,
         )
-        materialization_pairs.append((previous_activation, activation_payload))
+        materialization_pairs.append((previous_execution, execution_payload))
         upserted += 1
 
     session.flush()
-    for previous_activation, current_activation in materialization_pairs:
-        _reconcile_scheduled_activation_materialization(
-            previous_activation=previous_activation,
-            current_activation=current_activation,
+    for previous_execution, current_execution in materialization_pairs:
+        _reconcile_scheduled_execution_materialization(
+            previous_execution=previous_execution,
+            current_execution=current_execution,
         )
     return {"upserted": upserted, "deleted": deleted}
 
 
-def lookup_task_machine_activation_context_id(
+def lookup_task_machine_executions_context_id(
     session: Session,
     project_id: int,
     *,
     tasks_context_name: str,
 ) -> int | None:
-    """Return the activations context id when it already exists (read-only)."""
+    """Return the executions context id when it already exists (read-only)."""
 
     context_names = _resolve_task_machine_context_names(tasks_context_name)
     return _get_context_id(
         session=session,
         project_id=project_id,
-        name=context_names.activations_context_name,
+        name=context_names.executions_context_name,
     )
 
 
-def get_task_activation(
+def _delete_open_executions_for_task(
+    session: Session,
+    *,
+    project_id: int,
+    context_id: int,
+    task_id: int,
+    destination: str | None,
+) -> list[dict[str, Any]]:
+    """Delete open Executions for one task (scheduled/triggerable arms)."""
+
+    query = (
+        session.query(LogEvent)
+        .join(LogEventContext, log_event_context_join())
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
+            LogEventContext.context_id == context_id,
+            LogEvent.data.has_key("task_id"),
+            LogEvent.data.op("->>")("task_id") == str(task_id),
+        )
+    )
+    if destination:
+        query = query.filter(
+            LogEvent.data.has_key("destination"),
+            LogEvent.data.op("->>")("destination") == destination,
+        )
+    deleted_payloads: list[dict[str, Any]] = []
+    log_ids: list[int] = []
+    for log_event in query.all():
+        payload = dict(log_event.data or {})
+        state = str(payload.get("state") or "").lower()
+        if state not in {"scheduled", "triggerable", ""}:
+            continue
+        log_ids.append(int(log_event.id))
+        deleted_payloads.append(payload)
+    if not log_ids:
+        return []
+    session.execute(
+        delete(LogUniqueConstraint).where(
+            LogUniqueConstraint.project_id == project_id,
+            LogUniqueConstraint.context_id == context_id,
+            LogUniqueConstraint.log_event_id.in_(log_ids),
+        ),
+    )
+    session.execute(
+        delete(LogEventContext).where(
+            LogEventContext.project_id == project_id,
+            LogEventContext.context_id == context_id,
+            LogEventContext.log_event_id.in_(log_ids),
+        ),
+    )
+    delete_orphaned_log_events(
+        session=session,
+        project_id=project_id,
+        skip_embedding_cleanup=True,
+        log_event_ids=log_ids,
+    )
+    session.flush()
+    return deleted_payloads
+
+
+def get_open_task_execution(
     session: Session,
     project_id: int,
     *,
@@ -1163,7 +1119,7 @@ def get_task_activation(
     task_id: int,
     destination: str | None = None,
 ) -> LogEvent | None:
-    """Return the current activation row for one assistant/task pair, if present.
+    """Return the open Execution row for one assistant/task (wake ledger).
 
     Lookup is read-only: it never creates machine contexts or upserts field
     types. Schema materialization belongs on write/projection paths via
@@ -1175,40 +1131,47 @@ def get_task_activation(
         project_id=project_id,
         assistant_id=assistant_id,
     )
-    activation_key = _build_activation_key(
-        assistant_id=assistant_id,
-        task_id=task_id,
-        destination=destination,
-    )
-    activations_context_id = lookup_task_machine_activation_context_id(
+    executions_context_id = lookup_task_machine_executions_context_id(
         session=session,
         project_id=project_id,
         tasks_context_name=tasks_context_name,
     )
-    if activations_context_id is not None:
-        activation = _get_machine_row_by_unique_field(
-            session=session,
-            context_id=activations_context_id,
-            unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-            unique_field_value=activation_key,
-        )
-        if activation is not None:
-            return activation
-
-    # Read-only legacy fallback — do not migrate on lookup.
-    legacy_context_id = _get_context_id(
-        session=session,
-        project_id=project_id,
-        name=TASK_ACTIVATIONS_CONTEXT_NAME,
-    )
-    if legacy_context_id is None:
+    if executions_context_id is None:
         return None
-    return _get_machine_row_by_unique_field(
-        session=session,
-        context_id=legacy_context_id,
-        unique_field_name=_TASK_ACTIVATION_UNIQUE_FIELD,
-        unique_field_value=activation_key,
+    query = (
+        session.query(LogEvent)
+        .join(LogEventContext, log_event_context_join())
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
+            LogEventContext.context_id == executions_context_id,
+            LogEvent.data.has_key("task_id"),
+            LogEvent.data.op("->>")("task_id") == str(task_id),
+        )
     )
+    if assistant_id:
+        query = query.filter(
+            LogEvent.data.has_key("assistant_id"),
+            LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
+        )
+    if destination:
+        query = query.filter(
+            LogEvent.data.has_key("destination"),
+            LogEvent.data.op("->>")("destination") == destination,
+        )
+    else:
+        query = query.filter(
+            ~LogEvent.data.has_key("destination")
+            | LogEvent.data.op("->>")("destination").is_(None)
+            | (LogEvent.data.op("->>")("destination") == ""),
+        )
+    candidates = query.order_by(LogEvent.id.desc()).all()
+    for row in candidates:
+        payload = row.data if isinstance(row.data, dict) else {}
+        state = str(payload.get("state") or "").lower()
+        if state in _OPEN_EXECUTION_STATES or not state:
+            return row
+    return None
 
 
 def create_task_run_if_absent(
@@ -1235,7 +1198,7 @@ def create_task_run_if_absent(
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
-        context_id=context_ids.runs_context_id,
+        context_id=context_ids.executions_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
@@ -1245,19 +1208,18 @@ def create_task_run_if_absent(
         session=session,
         project_id=project_id,
         legacy_context_name=TASK_RUNS_CONTEXT_NAME,
-        nested_context_id=context_ids.runs_context_id,
+        nested_context_id=context_ids.executions_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
     if migrated is not None:
         return migrated, False
 
-    materialized_payload = dict(payload)
-    materialized_payload.setdefault("state", "pending")
+    materialized_payload = _normalize_execution_payload(dict(payload))
     created = _upsert_machine_row(
         session=session,
         project_id=project_id,
-        context_id=context_ids.runs_context_id,
+        context_id=context_ids.executions_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
         payload=materialized_payload,
@@ -1366,8 +1328,8 @@ def update_task_run(
     """Apply a partial update to an existing task run row.
 
     Resolution mirrors :func:`create_task_run_if_absent`: the run row lives
-    under its task's own surface (a team task's runs live in
-    ``Teams/{id}/Tasks/Runs``), so ``source_task_log_id`` takes precedence
+    under its task's own surface (a team task's executions live in
+    ``Teams/{id}/Tasks/Executions``), so ``source_task_log_id`` takes precedence
     over assistant derivation. Updates that arrive without it (older
     runtimes) fall back to locating the row by its globally-unique
     ``run_key`` across team task surfaces.
@@ -1386,7 +1348,7 @@ def update_task_run(
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
-        context_id=context_ids.runs_context_id,
+        context_id=context_ids.executions_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
@@ -1395,7 +1357,15 @@ def update_task_run(
             session=session,
             project_id=project_id,
             legacy_context_name=TASK_RUNS_CONTEXT_NAME,
-            nested_context_id=context_ids.runs_context_id,
+            nested_context_id=context_ids.executions_context_id,
+            unique_field_name=_TASK_RUN_UNIQUE_FIELD,
+            unique_field_value=run_key,
+        )
+    if existing is None:
+        existing = _find_machine_row_in_team_surfaces(
+            session=session,
+            project_id=project_id,
+            leaf_name=_TASK_EXECUTIONS_CONTEXT_LEAF,
             unique_field_name=_TASK_RUN_UNIQUE_FIELD,
             unique_field_value=run_key,
         )
@@ -1418,7 +1388,7 @@ def update_task_run(
     return existing
 
 
-def get_task_run(
+def get_task_execution(
     session: Session,
     project_id: int,
     run_key: str,
@@ -1443,7 +1413,7 @@ def get_task_run(
     )
     existing = _get_machine_row_by_unique_field(
         session=session,
-        context_id=context_ids.runs_context_id,
+        context_id=context_ids.executions_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
@@ -1453,13 +1423,13 @@ def get_task_run(
         session=session,
         project_id=project_id,
         legacy_context_name=TASK_RUNS_CONTEXT_NAME,
-        nested_context_id=context_ids.runs_context_id,
+        nested_context_id=context_ids.executions_context_id,
         unique_field_name=_TASK_RUN_UNIQUE_FIELD,
         unique_field_value=run_key,
     )
 
 
-def get_task_run_by_run_id(
+def get_task_execution_by_run_id(
     session: Session,
     project_id: int,
     *,
@@ -1467,10 +1437,11 @@ def get_task_run_by_run_id(
 ) -> LogEvent | None:
     """Return one task run row by its stable ``run_id`` (the run's log_event id).
 
-    Runs live under an assistant-scoped ``.../Tasks/Runs`` context and their
-    ``run_id`` equals the backing ``LogEvent.id``. Callers pass the run id
-    received out-of-band (for example on a provider-event dispatch) and get the
-    row back only when it is genuinely a task-run row in the given project.
+    Executions live under an assistant-scoped ``.../Tasks/Executions`` context
+    (legacy ``.../Tasks/Runs`` rows are still readable) and their ``run_id``
+    equals the backing ``LogEvent.id``. Callers pass the run id received
+    out-of-band (for example on a provider-event dispatch) and get the row back
+    only when it is genuinely a task execution row in the given project.
     """
 
     return (
@@ -1482,13 +1453,14 @@ def get_task_run_by_run_id(
             LogEventContext.project_id == project_id,
             Context.project_id == project_id,
             LogEvent.id == run_id,
-            Context.name.like(f"%{TASK_RUNS_CONTEXT_NAME}"),
+            Context.name.like(f"%{TASK_EXECUTIONS_CONTEXT_NAME}")
+            | Context.name.like(f"%{TASK_RUNS_CONTEXT_NAME}"),
         )
         .first()
     )
 
 
-def get_latest_task_run_for_task(
+def get_latest_task_execution_for_task(
     session: Session,
     project_id: int,
     *,
@@ -1513,14 +1485,14 @@ def get_latest_task_run_for_task(
     )
     owner_key_filter = single_owner_key_for_context(
         session,
-        context_ids.runs_context_id,
+        context_ids.executions_context_id,
     )
     filters = [
         LogEvent.project_id == project_id,
         LogEventContext.project_id == project_id,
         owner_scope_clause(LogEvent, owner_key_filter),
         owner_scope_clause(LogEventContext, owner_key_filter),
-        LogEventContext.context_id == context_ids.runs_context_id,
+        LogEventContext.context_id == context_ids.executions_context_id,
         LogEvent.data.has_key("assistant_id"),
         LogEvent.data.has_key("task_id"),
         LogEvent.data.op("->>")("assistant_id") == str(assistant_id),
@@ -1722,7 +1694,7 @@ def get_task_ids_for_log_ids(
     return task_ids
 
 
-def _build_activation_payload(
+def _build_execution_payload(
     rows: Sequence[_TaskRow],
     *,
     tasks_context_name: str,
@@ -1745,21 +1717,21 @@ def _build_activation_payload(
         reverse=True,
     )
     scheduled_candidates = [
-        row for row in ordered_rows if _is_scheduled_activation_candidate(row.data)
+        row for row in ordered_rows if _is_scheduled_execution_candidate(row.data)
     ]
     if scheduled_candidates:
-        return _project_activation_payload(
+        return _project_execution_payload(
             row=scheduled_candidates[0],
-            activation_kind="scheduled",
+            wake="scheduled",
             tasks_context_name=tasks_context_name,
             destination=destination,
         )
 
     provider_candidates = [
-        row for row in ordered_rows if _is_provider_event_activation_candidate(row.data)
+        row for row in ordered_rows if _is_provider_event_execution_candidate(row.data)
     ]
     if provider_candidates:
-        return _project_provider_event_activation_payload(
+        return _project_provider_event_execution_payload(
             row=provider_candidates[0],
             tasks_context_name=tasks_context_name,
             destination=destination,
@@ -1768,12 +1740,12 @@ def _build_activation_payload(
     trigger_candidates = [
         row
         for row in ordered_rows
-        if _is_communication_trigger_activation_candidate(row.data)
+        if _is_communication_trigger_execution_candidate(row.data)
     ]
     if trigger_candidates:
-        return _project_activation_payload(
+        return _project_execution_payload(
             row=trigger_candidates[0],
-            activation_kind="triggered",
+            wake="triggered",
             tasks_context_name=tasks_context_name,
             destination=destination,
         )
@@ -1781,18 +1753,18 @@ def _build_activation_payload(
     return None
 
 
-def _project_activation_payload(
+def _project_execution_payload(
     row: _TaskRow,
     *,
-    activation_kind: str,
+    wake: str,
     tasks_context_name: str,
     destination: str | None,
 ) -> dict[str, Any]:
-    """Flatten the chosen source task row into an activation payload."""
+    """Flatten the chosen source task row into an open execution payload."""
 
     task_id = _coerce_int(row.data.get("task_id"))
     if task_id is None:
-        raise ValueError("Activations require task rows with an integer task_id.")
+        raise ValueError("Executions require task rows with an integer task_id.")
 
     assistant_id = _resolve_assistant_id(
         task_row=row,
@@ -1804,29 +1776,25 @@ def _project_activation_payload(
     trigger = (
         row.data.get("trigger") if isinstance(row.data.get("trigger"), dict) else {}
     )
-    execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
+    delivery = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
     requires_filesystem = _requires_filesystem_from_row(row.data)
     requires_computer = _requires_computer_from_row(row.data)
+    scheduled_for = _coerce_datetime_string(schedule.get("start_at"))
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
-        "activation_key": _build_activation_key(
-            assistant_id=assistant_id,
-            task_id=task_id,
-            destination=destination,
-        ),
         "task_id": task_id,
         "source_task_log_id": row.log_event_id,
-        "instance_id": _coerce_int(row.data.get("instance_id")),
-        "activation_kind": activation_kind,
-        "execution_mode": execution_mode,
+        "wake": wake,
+        "delivery": delivery,
+        "state": ("scheduled" if wake == "scheduled" else "triggerable"),
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
-        "next_due_at": _coerce_datetime_string(schedule.get("start_at")),
+        "scheduled_for": scheduled_for,
         "trigger_medium": _coerce_optional_str(trigger.get("medium")),
         "trigger_from_contact_ids": _coerce_optional_list(
             trigger.get("from_contact_ids"),
@@ -1843,50 +1811,59 @@ def _project_activation_payload(
             row.updated_at or row.created_at,
         ),
     }
-    payload["activation_revision"] = _stable_hash(payload)
+    payload["revision"] = _stable_hash(payload)
+    payload["run_key"] = _build_open_execution_run_key(
+        delivery=delivery,
+        wake=wake,
+        assistant_id=assistant_id or "",
+        destination=destination,
+        task_id=task_id,
+        revision=payload["revision"],
+        due_at=scheduled_for,
+    )
     payload["last_materialized_at"] = _coerce_datetime_string(
         datetime.now(timezone.utc),
     )
     return payload
 
 
-def _project_provider_event_activation_payload(
+def _project_provider_event_execution_payload(
     row: _TaskRow,
     *,
     tasks_context_name: str,
     destination: str | None,
 ) -> dict[str, Any]:
-    """Flatten one provider-event task row into an activation payload."""
+    """Flatten one provider-event task row into an open execution payload."""
 
     task_id = _coerce_int(row.data.get("task_id"))
     if task_id is None:
-        raise ValueError("Activations require task rows with an integer task_id.")
+        raise ValueError("Executions require task rows with an integer task_id.")
 
     trigger = parse_task_trigger(row.data.get("trigger"))
     if trigger is None or trigger.kind != "provider_event":
-        raise ValueError("Provider-event activations require a provider_event trigger.")
+        raise ValueError("Provider-event executions require a provider_event trigger.")
 
     binding_id = _coerce_optional_str(
         row.data.get("provider_event_binding_id"),
     )
     if not binding_id:
         raise ValueError(
-            "Provider-event activations require provider_event_binding_id.",
+            "Provider-event executions require provider_event_binding_id.",
         )
 
     assistant_id = _resolve_assistant_id(
         task_row=row,
         tasks_context_name=tasks_context_name,
     )
-    execution_mode = "offline" if _coerce_bool(row.data.get("offline")) else "live"
+    delivery = "offline" if _coerce_bool(row.data.get("offline")) else "live"
     entrypoint = _coerce_int(row.data.get("entrypoint"))
     requires_filesystem = _requires_filesystem_from_row(row.data)
     requires_computer = _requires_computer_from_row(row.data)
     normalized_trigger_config = normalize_trigger_config(trigger.trigger_config)
-    activation_revision = compute_provider_event_activation_revision(
+    revision = compute_provider_event_revision(
         trigger=trigger,
         binding_id=binding_id,
-        execution_mode=execution_mode,
+        execution_mode=delivery,
         entrypoint=entrypoint,
         requires_filesystem=requires_filesystem,
         requires_computer=requires_computer,
@@ -1894,16 +1871,11 @@ def _project_provider_event_activation_payload(
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
-        "activation_key": _build_activation_key(
-            assistant_id=assistant_id,
-            task_id=task_id,
-            destination=destination,
-        ),
         "task_id": task_id,
         "source_task_log_id": row.log_event_id,
-        "instance_id": _coerce_int(row.data.get("instance_id")),
-        "activation_kind": "provider_event",
-        "execution_mode": execution_mode,
+        "wake": "provider_event",
+        "delivery": delivery,
+        "state": "triggerable",
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "status": row.data.get("status"),
@@ -1920,100 +1892,114 @@ def _project_provider_event_activation_payload(
         "canonical_app_slug": trigger.canonical_app_slug,
         "provider_trigger_slug": trigger.provider_trigger_slug,
         "provider_event_trigger_config": normalized_trigger_config,
-        "activation_revision": activation_revision,
+        "revision": revision,
     }
+    payload["run_key"] = _build_open_execution_run_key(
+        delivery=delivery,
+        wake="provider_event",
+        assistant_id=assistant_id or "",
+        destination=destination,
+        task_id=task_id,
+        revision=revision,
+    )
     payload["last_materialized_at"] = _coerce_datetime_string(
         datetime.now(timezone.utc),
     )
     return payload
 
 
-def _reconcile_scheduled_activation_materialization(
-    *,
-    previous_activation: Mapping[str, Any] | None,
-    current_activation: Mapping[str, Any] | None,
-) -> None:
-    """Mirror scheduled activation changes into Communication's delayed queue."""
+def _normalize_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize execution field contract; strip obsolete identity keys."""
 
-    current_upsert_body = _scheduled_activation_upsert_body(current_activation)
-    previous_delete_body = _scheduled_activation_delete_body(previous_activation)
+    normalized = dict(payload)
+    for obsolete_key in (
+        "source_type",
+        "execution_mode",
+        "activation_revision",
+        "activation_key",
+        "activation_kind",
+        "next_due_at",
+        "instance_id",
+    ):
+        normalized.pop(obsolete_key, None)
+    state = str(normalized.get("state") or "").lower()
+    if state in {"", "pending"}:
+        wake = str(normalized.get("wake") or "").lower()
+        normalized["state"] = "scheduled" if wake == "scheduled" else "running"
+    return normalized
+
+
+def _reconcile_scheduled_execution_materialization(
+    *,
+    previous_execution: Mapping[str, Any] | None,
+    current_execution: Mapping[str, Any] | None,
+) -> None:
+    """Mirror scheduled execution changes into Communication's delayed queue."""
+
+    current_upsert_body = _scheduled_execution_upsert_body(current_execution)
+    previous_delete_body = _scheduled_execution_delete_body(previous_execution)
     if current_upsert_body is not None:
-        if previous_delete_body is not None and _scheduled_activation_delivery_identity(
+        if previous_delete_body is not None and _scheduled_execution_delivery_identity(
             previous_delete_body,
-        ) == _scheduled_activation_delivery_identity(current_upsert_body):
+        ) == _scheduled_execution_delivery_identity(current_upsert_body):
             return
         if previous_delete_body is not None:
-            current_upsert_body["previous_activation_revision"] = previous_delete_body[
-                "activation_revision"
-            ]
+            current_upsert_body["previous_revision"] = previous_delete_body["revision"]
             current_upsert_body["previous_scheduled_for"] = previous_delete_body[
                 "scheduled_for"
             ]
-            current_upsert_body["previous_execution_mode"] = previous_delete_body[
-                "execution_mode"
-            ]
-        _post_task_activation_request(
-            path=_TASK_ACTIVATION_UPSERT_PATH,
+            current_upsert_body["previous_delivery"] = previous_delete_body["delivery"]
+        _post_task_execution_request(
+            path=_TASK_EXECUTION_UPSERT_PATH,
             body=current_upsert_body,
         )
         return
     if previous_delete_body is not None:
-        _post_task_activation_request(
-            path=_TASK_ACTIVATION_DELETE_PATH,
+        _post_task_execution_request(
+            path=_TASK_EXECUTION_DELETE_PATH,
             body=previous_delete_body,
         )
 
 
-def _scheduled_activation_delivery_identity(
+def _scheduled_execution_delivery_identity(
     body: Mapping[str, Any] | None,
 ) -> tuple[str, int, str, str, str] | None:
-    """Return the external delivery identity for one scheduled activation body."""
+    """Return the external delivery identity for one scheduled execution body."""
 
     if not isinstance(body, Mapping):
         return None
     assistant_id = _coerce_optional_str(body.get("assistant_id"))
     task_id = _coerce_int(body.get("task_id"))
-    activation_revision = _coerce_optional_str(body.get("activation_revision"))
+    revision = _coerce_optional_str(body.get("revision"))
     scheduled_for = _coerce_datetime_string(body.get("scheduled_for"))
-    execution_mode = _coerce_optional_str(body.get("execution_mode")) or "live"
-    if (
-        not assistant_id
-        or task_id is None
-        or not activation_revision
-        or not scheduled_for
-    ):
+    delivery = _coerce_optional_str(body.get("delivery")) or "live"
+    if not assistant_id or task_id is None or not revision or not scheduled_for:
         return None
-    return (assistant_id, task_id, activation_revision, scheduled_for, execution_mode)
+    return (assistant_id, task_id, revision, scheduled_for, delivery)
 
 
-def _scheduled_activation_snapshot(
-    activation: Mapping[str, Any] | None,
+def _scheduled_execution_snapshot(
+    execution: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Return the shared scheduled-activation fields Communication expects."""
+    """Return the shared scheduled-execution fields Communication expects."""
 
-    if not _is_scheduled_activation_payload(activation):
+    if not _is_scheduled_execution_payload(execution):
         return None
-    assistant_id = _coerce_optional_str(activation.get("assistant_id"))
-    task_id = _coerce_int(activation.get("task_id"))
-    activation_revision = _coerce_optional_str(activation.get("activation_revision"))
-    scheduled_for = _coerce_datetime_string(activation.get("next_due_at"))
-    if (
-        not assistant_id
-        or task_id is None
-        or not activation_revision
-        or not scheduled_for
-    ):
+    assistant_id = _coerce_optional_str(execution.get("assistant_id"))
+    task_id = _coerce_int(execution.get("task_id"))
+    revision = _coerce_optional_str(execution.get("revision"))
+    scheduled_for = _coerce_datetime_string(execution.get("scheduled_for"))
+    if not assistant_id or task_id is None or not revision or not scheduled_for:
         return None
     return {
         "assistant_id": assistant_id,
-        "destination": _coerce_optional_str(activation.get("destination")),
+        "destination": _coerce_optional_str(execution.get("destination")),
         "task_id": task_id,
-        "activation_revision": activation_revision,
+        "revision": revision,
         "scheduled_for": scheduled_for,
-        "execution_mode": _coerce_optional_str(activation.get("execution_mode"))
-        or "live",
-        "requires_filesystem": _requires_filesystem_from_row(activation),
-        "requires_computer": _requires_computer_from_row(activation),
+        "delivery": _coerce_optional_str(execution.get("delivery")) or "live",
+        "requires_filesystem": _requires_filesystem_from_row(execution),
+        "requires_computer": _requires_computer_from_row(execution),
     }
 
 
@@ -2029,21 +2015,21 @@ def _compact_task_summary(text: Any, *, fallback: str) -> str:
     return f"{truncated}..."
 
 
-def _scheduled_activation_wake_context(
-    activation: Mapping[str, Any],
+def _scheduled_execution_wake_context(
+    execution: Mapping[str, Any],
 ) -> dict[str, str]:
-    """Return the compact human-facing wake context for one scheduled activation."""
+    """Return the compact human-facing wake context for one scheduled execution."""
 
-    task_id = _coerce_int(activation.get("task_id"))
-    task_label = _coerce_optional_str(activation.get("task_name")) or (
+    task_id = _coerce_int(execution.get("task_id"))
+    task_label = _coerce_optional_str(execution.get("task_name")) or (
         f"task {task_id}" if task_id is not None else "scheduled task"
     )
-    repeat = _coerce_optional_list(activation.get("repeat")) or []
+    repeat = _coerce_optional_list(execution.get("repeat")) or []
     recurrence_hint = _RECURRING_WAKE_HINT if repeat else _ONE_OFF_WAKE_HINT
     return {
         "task_label": task_label,
         "task_summary": _compact_task_summary(
-            activation.get("task_description"),
+            execution.get("task_description"),
             fallback=task_label,
         ),
         "visibility_policy": _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY,
@@ -2051,52 +2037,52 @@ def _scheduled_activation_wake_context(
     }
 
 
-def _scheduled_activation_upsert_body(
-    activation: Mapping[str, Any] | None,
+def _scheduled_execution_upsert_body(
+    execution: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Build the Communication upsert payload for one scheduled activation."""
+    """Build the Communication upsert payload for one scheduled execution."""
 
-    snapshot = _scheduled_activation_snapshot(activation)
+    snapshot = _scheduled_execution_snapshot(execution)
     if snapshot is None:
         return None
-    source_task_log_id = _coerce_int(activation.get("source_task_log_id"))
+    source_task_log_id = _coerce_int(execution.get("source_task_log_id"))
     if source_task_log_id is None:
         return None
     return {
         **snapshot,
         "source_task_log_id": source_task_log_id,
-        "source_type": "scheduled",
-        **_scheduled_activation_wake_context(activation),
+        "wake": "scheduled",
+        **_scheduled_execution_wake_context(execution),
     }
 
 
-def _scheduled_activation_delete_body(
-    activation: Mapping[str, Any] | None,
+def _scheduled_execution_delete_body(
+    execution: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Build the Communication delete payload for one scheduled activation."""
+    """Build the Communication delete payload for one scheduled execution."""
 
-    return _scheduled_activation_snapshot(activation)
+    return _scheduled_execution_snapshot(execution)
 
 
-def _is_scheduled_activation_payload(activation: Mapping[str, Any] | None) -> bool:
-    """Return True when the payload represents a scheduled activation snapshot."""
+def _is_scheduled_execution_payload(execution: Mapping[str, Any] | None) -> bool:
+    """Return True when the payload represents a scheduled execution snapshot."""
 
-    if not isinstance(activation, Mapping):
+    if not isinstance(execution, Mapping):
         return False
-    return _coerce_optional_str(activation.get("activation_kind")) == "scheduled"
+    return _coerce_optional_str(execution.get("wake")) == "scheduled"
 
 
-def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None:
-    """Send one activation sync request to Communication when configured.
+def _post_task_execution_request(*, path: str, body: Mapping[str, Any]) -> None:
+    """Send one execution sync request to Communication when configured.
 
-    Self-host deployments skip this sync: scheduled activations are projected
+    Self-host deployments skip this sync: scheduled executions are projected
     into Orchestra and fired in-process by Unity's LocalActivationScheduler
     instead of Communication's Cloud Tasks queues.
     """
 
     if settings.is_self_host:
         logger.info(
-            "Skipping task activation sync in self-host mode; "
+            "Skipping task execution sync in self-host mode; "
             "Unity LocalActivationScheduler owns scheduled delivery.",
         )
         return
@@ -2105,7 +2091,7 @@ def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     if not comms_url or not admin_key:
         logger.info(
-            "Skipping task activation sync because UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY is missing.",
+            "Skipping task execution sync because UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY is missing.",
         )
         return
     with httpx.Client() as client:
@@ -2113,13 +2099,13 @@ def _post_task_activation_request(*, path: str, body: Mapping[str, Any]) -> None
             f"{comms_url}{path}",
             headers={"Authorization": f"Bearer {admin_key}"},
             json=dict(body),
-            timeout=_TASK_ACTIVATION_SYNC_TIMEOUT_SECONDS,
+            timeout=_TASK_EXECUTION_SYNC_TIMEOUT_SECONDS,
         )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise RuntimeError(
-                "Task activation materialization failed via Communication "
+                "Task execution materialization failed via Communication "
                 f"{path}: HTTP {response.status_code} {response.text}",
             ) from exc
 
@@ -2136,8 +2122,8 @@ def _is_task_enabled(data: Mapping[str, Any]) -> bool:
     return _coerce_bool(data.get("enabled"))
 
 
-def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
-    """Return True when a task row is the current armed scheduled activation."""
+def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row is the current armed scheduled execution."""
 
     if not _is_task_enabled(data):
         return False
@@ -2150,11 +2136,11 @@ def _is_scheduled_activation_candidate(data: Mapping[str, Any]) -> bool:
     if schedule.get("start_at") is None:
         return False
     status = _coerce_optional_str(data.get("status"))
-    return status in _SCHEDULED_ACTIVATION_STATUSES
+    return status in _SCHEDULED_EXECUTION_STATUSES
 
 
-def _is_provider_event_activation_candidate(data: Mapping[str, Any]) -> bool:
-    """Return True when a task row arms a provider-event activation."""
+def _is_provider_event_execution_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row arms a provider-event execution."""
 
     if not _is_task_enabled(data):
         return False
@@ -2170,8 +2156,8 @@ def _is_provider_event_activation_candidate(data: Mapping[str, Any]) -> bool:
     return status == _TRIGGERABLE_STATUS
 
 
-def _is_communication_trigger_activation_candidate(data: Mapping[str, Any]) -> bool:
-    """Return True when a task row arms a communication trigger activation."""
+def _is_communication_trigger_execution_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row arms a communication trigger execution."""
 
     if not _is_task_enabled(data):
         return False
@@ -2187,12 +2173,12 @@ def _is_communication_trigger_activation_candidate(data: Mapping[str, Any]) -> b
     return status == _TRIGGERABLE_STATUS
 
 
-def _is_trigger_activation_candidate(data: Mapping[str, Any]) -> bool:
-    """Return True when a task row is the current armed trigger activation."""
+def _is_trigger_execution_candidate(data: Mapping[str, Any]) -> bool:
+    """Return True when a task row is the current armed trigger execution."""
 
-    return _is_communication_trigger_activation_candidate(
+    return _is_communication_trigger_execution_candidate(
         data,
-    ) or _is_provider_event_activation_candidate(
+    ) or _is_provider_event_execution_candidate(
         data,
     )
 
@@ -2244,7 +2230,7 @@ def _projection_groups_for_task_rows(
     task_ids: Sequence[int],
     tasks_context_name: str,
 ) -> list[_TaskProjectionGroup]:
-    """Group task rows by the executor activation they materialize."""
+    """Group task rows by the executor open execution they materialize."""
 
     requested_task_ids = set(task_ids)
     rows_by_group: dict[tuple[str | None, int], list[_TaskRow]] = {}
@@ -2267,14 +2253,14 @@ def _projection_groups_for_task_rows(
     ]
 
 
-def _delete_activation_rows_by_task_destination(
+def _delete_open_executions_by_task_destination(
     session: Session,
     *,
     project_id: int,
     task_id: int,
     destination: str,
 ) -> list[dict[str, Any]]:
-    """Delete stale executor activation rows for one shared task definition."""
+    """Delete stale executor execution rows for one shared task definition."""
 
     rows = (
         session.query(LogEvent, LogEventContext.context_id)
@@ -2284,7 +2270,7 @@ def _delete_activation_rows_by_task_destination(
             LogEvent.project_id == project_id,
             LogEventContext.project_id == project_id,
             Context.project_id == project_id,
-            Context.name.like(f"%/{TASK_ACTIVATIONS_CONTEXT_NAME}"),
+            Context.name.like(f"%/{TASK_EXECUTIONS_CONTEXT_NAME}"),
             LogEvent.data.has_key("task_id"),
             LogEvent.data.op("->>")("task_id") == str(task_id),
             LogEvent.data.has_key("destination"),
@@ -2296,10 +2282,8 @@ def _delete_activation_rows_by_task_destination(
     log_ids_by_context: dict[int, list[int]] = {}
     for log_event, context_id in rows:
         payload = dict(log_event.data or {})
-        activation_key = _coerce_optional_str(
-            payload.get(_TASK_ACTIVATION_UNIQUE_FIELD),
-        )
-        if not activation_key:
+        state = str(payload.get("state") or "").lower()
+        if state not in _OPEN_EXECUTION_STATES and state:
             continue
         log_ids_by_context.setdefault(int(context_id), []).append(int(log_event.id))
         deleted_payloads.append(payload)

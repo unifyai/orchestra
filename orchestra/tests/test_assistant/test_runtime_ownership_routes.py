@@ -51,17 +51,17 @@ def mock_assistant_infra_calls():
 
 @pytest.fixture(autouse=True)
 def materialization_calls(monkeypatch):
-    """Capture scheduled activation sync requests without hitting Communication."""
+    """Capture scheduled execution sync requests without hitting Communication."""
     from orchestra.services import task_machine_state_service
 
     calls: list[tuple[dict | None, dict | None]] = []
 
-    def _capture(*, previous_activation, current_activation):
-        calls.append((previous_activation, current_activation))
+    def _capture(*, previous_execution, current_execution):
+        calls.append((previous_execution, current_execution))
 
     monkeypatch.setattr(
         task_machine_state_service,
-        "_reconcile_scheduled_activation_materialization",
+        "_reconcile_scheduled_execution_materialization",
         _capture,
     )
     return calls
@@ -465,9 +465,9 @@ def _task_run_payload(agent_id: int, task_id: int, source_task_log_id: int) -> d
         "assistant_id": str(agent_id),
         "task_id": task_id,
         "source_task_log_id": source_task_log_id,
-        "source_type": "scheduled",
-        "execution_mode": "offline",
-        "activation_revision": "rev-1",
+        "wake": "scheduled",
+        "delivery": "offline",
+        "revision": "rev-1",
         "state": "pending",
     }
 
@@ -487,7 +487,7 @@ async def test_task_machine_user_routes_full_lifecycle(client: AsyncClient):
     payload = _task_run_payload(agent_id, 101, source_task_log_id)
 
     create_resp = await client.post(
-        "/v0/task-run/create-or-adopt",
+        "/v0/task-execution/create-or-adopt",
         json=payload,
         headers=HEADERS,
     )
@@ -497,7 +497,7 @@ async def test_task_machine_user_routes_full_lifecycle(client: AsyncClient):
     assert run["run_key"] == payload["run_key"]
 
     update_resp = await client.post(
-        "/v0/task-run/update",
+        "/v0/task-execution/update",
         json={
             "project_name": "Assistants",
             "assistant_id": str(agent_id),
@@ -511,7 +511,7 @@ async def test_task_machine_user_routes_full_lifecycle(client: AsyncClient):
     assert update_resp.json()["run"]["state"] == "running"
 
     latest_post_resp = await client.post(
-        "/v0/task-run/latest",
+        "/v0/task-execution/latest",
         json={
             "project_name": "Assistants",
             "assistant_id": str(agent_id),
@@ -524,7 +524,7 @@ async def test_task_machine_user_routes_full_lifecycle(client: AsyncClient):
     assert latest_post_resp.json()["run"]["run_key"] == payload["run_key"]
 
     latest_get_resp = await client.get(
-        "/v0/task-run/latest",
+        "/v0/task-execution/latest",
         params={
             "project_name": "Assistants",
             "assistant_id": str(agent_id),
@@ -587,7 +587,7 @@ async def test_task_machine_user_routes_reject_non_owner(client: AsyncClient):
     payload = _task_run_payload(agent_id, 202, source_task_log_id)
 
     other_resp = await client.post(
-        "/v0/task-run/create-or-adopt",
+        "/v0/task-execution/create-or-adopt",
         json=payload,
         headers=other["headers"],
     )
@@ -595,7 +595,7 @@ async def test_task_machine_user_routes_reject_non_owner(client: AsyncClient):
 
     # Admin key bypasses ownership on the user route.
     admin_resp = await client.post(
-        "/v0/task-run/create-or-adopt",
+        "/v0/task-execution/create-or-adopt",
         json=payload,
         headers=ADMIN_HEADERS,
     )
@@ -603,7 +603,7 @@ async def test_task_machine_user_routes_reject_non_owner(client: AsyncClient):
 
     # The admin route is untouched and adopts the same row.
     legacy_resp = await client.post(
-        "/v0/admin/task-run/create-or-adopt",
+        "/v0/admin/task-execution/create-or-adopt",
         json=payload,
         headers=ADMIN_HEADERS,
     )

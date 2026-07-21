@@ -57,7 +57,7 @@ class _DispatchFixture:
         binding_id: str,
         receipt_id: str,
         operation_id: str,
-        accepted_activation_revision: str,
+        accepted_revision: str,
         dispatch_mode: str,
         audience: str,
         project_id: int,
@@ -69,7 +69,7 @@ class _DispatchFixture:
         self.binding_id = binding_id
         self.receipt_id = receipt_id
         self.operation_id = operation_id
-        self.accepted_activation_revision = accepted_activation_revision
+        self.accepted_revision = accepted_revision
         self.dispatch_mode = dispatch_mode
         self.audience = audience
         self.project_id = project_id
@@ -109,8 +109,8 @@ def _seed_dispatch(
             "run_key": run_key,
             "assistant_id": str(assistant.agent_id),
             "task_id": task_id,
-            "source_type": "provider_event",
-            "execution_mode": dispatch_mode,
+            "wake": "provider_event",
+            "delivery": dispatch_mode,
             "state": "pending",
             "provider_event_receipt_id": receipt_id,
         },
@@ -147,7 +147,7 @@ def _seed_dispatch(
     receipt.run_id = run.id
     receipt.run_key = run_key
     receipt.event_context_ref = f"blob://{binding.binding_id}/{receipt_id}"
-    receipt.accepted_activation_revision = binding.desired_activation_revision
+    receipt.accepted_revision = binding.desired_revision
     dispatch = dao.adopt_dispatch(
         receipt=receipt,
         binding=binding,
@@ -165,7 +165,7 @@ def _seed_dispatch(
         binding_id=binding.binding_id,
         receipt_id=receipt.receipt_id,
         operation_id=dispatch.operation_id,
-        accepted_activation_revision=dispatch.accepted_activation_revision,
+        accepted_revision=dispatch.accepted_revision,
         dispatch_mode=dispatch_mode,
         audience=audience,
         project_id=project.id,
@@ -181,7 +181,7 @@ def _authorization(fixture: _DispatchFixture) -> DispatchAuthorizationSnapshot:
         task_id=fixture.task_id,
         binding_id=fixture.binding_id,
         receipt_id=fixture.receipt_id,
-        accepted_activation_revision=fixture.accepted_activation_revision,
+        accepted_revision=fixture.accepted_revision,
         dispatch_mode=fixture.dispatch_mode,
         audience=fixture.audience,
     )
@@ -196,7 +196,7 @@ def _claim_payload(fixture: _DispatchFixture, *, claimant_id: str) -> dict:
         "task_id": fixture.task_id,
         "binding_id": fixture.binding_id,
         "receipt_id": fixture.receipt_id,
-        "accepted_activation_revision": fixture.accepted_activation_revision,
+        "accepted_revision": fixture.accepted_revision,
         "dispatch_mode": fixture.dispatch_mode,
         "audience": fixture.audience,
         "claimant_id": claimant_id,
@@ -495,12 +495,11 @@ def test_started_and_terminal_adoption_are_durable_and_idempotent(
             ),
         ),
         (
-            "accepted_activation_revision",
+            "accepted_revision",
             lambda auth: DispatchAuthorizationSnapshot(
                 **{
                     **auth.__dict__,
-                    "accepted_activation_revision": auth.accepted_activation_revision
-                    + "-x",
+                    "accepted_revision": auth.accepted_revision + "-x",
                 },
             ),
         ),
@@ -599,12 +598,12 @@ async def test_worker_converges_from_orchestra_adoption_and_run_state_without_ra
     claimed = service.claim(
         authorization=_authorization(fixture),
         claimant_id="communication-1",
-        launch_identity=f"unity-task-run-{fixture.operation_id}",
+        launch_identity=f"unity-task-execution-{fixture.operation_id}",
     )
     service.report_started(
         operation_id=fixture.operation_id,
         fencing_token=claimed.fencing_token,
-        launch_identity=f"unity-task-run-{fixture.operation_id}",
+        launch_identity=f"unity-task-execution-{fixture.operation_id}",
     )
     dispatch = (
         dbsession.query(ProviderEventDispatch)

@@ -22,13 +22,16 @@ from orchestra.services.assistant_bootstrap import (
     CONTACTS_CONTEXT_SUFFIX,
     CONTACTS_UNIQUE_KEYS,
     _assistant_context_name,
+    _clear_stale_contact_unique_constraint,
     _create_log_entry,
     _find_contact_log_by_contact_id,
     _is_duplicate_contact_key_error,
     _lock_assistant_context,
     _resolve_assistants_project,
     ensure_context,
+    ensure_owner_contact_row,
 )
+from orchestra.services.contact_membership_service import PERSONAL_BOSS_CONTACT_ID
 from orchestra.web.api.calls.schema import CallRosterMember
 
 # Metadata keys stored on Contacts rows for stable org-call attribution.
@@ -73,6 +76,33 @@ def _find_contact_by_meta(
         .where(
             LogEventContext.context_id == context.id,
             LogEvent.data.op("->>")(key) == value,
+        )
+        .order_by(LogEvent.id.asc())
+        .limit(1),
+    ).first()
+
+
+def _find_contact_log_any_owner(
+    session: Session,
+    *,
+    context,
+    contact_id: int,
+) -> LogEvent | None:
+    """Find a Contacts row by ``contact_id`` **without** owner sub-partition
+    pruning.
+
+    The composite ``contact_id`` uniqueness is enforced context-scoped (not
+    owner-scoped), so a row may exist under a different ``owner_key`` than the
+    context currently resolves to and be invisible to the owner-pruned reads.
+    This lookup sees it regardless, so a colliding insert can reuse it instead
+    of failing.
+    """
+    return session.scalars(
+        project_scoped_log_events(context.project_id)
+        .where(
+            LogEventContext.context_id == context.id,
+            LogEvent.data.has_key("contact_id"),
+            cast(LogEvent.data.op("->>")("contact_id"), Numeric) == contact_id,
         )
         .order_by(LogEvent.id.asc())
         .limit(1),
@@ -136,15 +166,45 @@ def _upsert_contact(
     except Exception as exc:
         from fastapi import HTTPException
 
-        if isinstance(exc, HTTPException) and _is_duplicate_contact_key_error(exc):
-            raced = _find_contact_log_by_contact_id(
-                session,
-                context=context,
-                contact_id=contact_id,
-            )
-            if raced is not None:
-                return int(raced.data.get("contact_id"))
-        raise
+        if not (
+            isinstance(exc, HTTPException) and _is_duplicate_contact_key_error(exc)
+        ):
+            raise
+        # A row with this contact_id already exists. Reuse it: first via the
+        # owner-scoped read (correctly-scoped rows), then via a non-owner-pruned
+        # lookup for rows stuck under a mismatched owner_key (the composite
+        # uniqueness is context-scoped, so those block the insert while staying
+        # invisible to owner-pruned reads).
+        raced = _find_contact_log_by_contact_id(
+            session,
+            context=context,
+            contact_id=contact_id,
+        ) or _find_contact_log_any_owner(
+            session,
+            context=context,
+            contact_id=contact_id,
+        )
+        if raced is not None:
+            merged = {**raced.data, **entries}
+            if merged != raced.data:
+                raced.data = merged
+                flag_modified(raced, "data")
+                session.flush()
+            return int(raced.data.get("contact_id"))
+        # No live row backs the constraint: the lookup entry is stale. Drop it
+        # and retry once (mirrors the owner-contact seeding self-heal).
+        _clear_stale_contact_unique_constraint(
+            session,
+            context_id=context.id,
+            contact_id=contact_id,
+        )
+        _create_log_entry(
+            session,
+            project=project,
+            context=context,
+            context_name=context_name,
+            entries=entries,
+        )
     session.flush()
     return contact_id
 
@@ -180,6 +240,50 @@ def _peer_assistant_entries(peer: Assistant) -> dict[str, Any]:
     }
 
 
+def _ensure_owner_boss_contact(
+    session: Session,
+    *,
+    assistant: Assistant,
+    entries: dict[str, Any],
+) -> int:
+    """Map the assistant's own owner onto the reserved personal boss contact.
+
+    The owner is already represented by ``PERSONAL_BOSS_CONTACT_ID``; minting a
+    parallel ``org_user_id``-keyed human would duplicate them (and, since the
+    boss row carries no ``org_user_id``, the org-keyed lookup would re-mint on
+    every call). Ensure the boss row exists, then stamp the org-call metadata
+    and latest human fields onto it so future org-keyed lookups resolve here.
+    """
+    # Seed/refresh the boss row (returns its LogEvent id, not the contact_id).
+    ensure_owner_contact_row(session, assistant=assistant)
+    contact_id = PERSONAL_BOSS_CONTACT_ID
+    project = _resolve_assistants_project(session, assistant=assistant)
+    context_name = _assistant_context_name(assistant, CONTACTS_CONTEXT_SUFFIX)
+    context = ensure_context(
+        session,
+        project_id=project.id,
+        context_name=context_name,
+        unique_keys=CONTACTS_UNIQUE_KEYS,
+        auto_counting=CONTACTS_AUTO_COUNTING,
+    )
+    boss = _find_contact_log_by_contact_id(
+        session,
+        context=context,
+        contact_id=contact_id,
+    ) or _find_contact_log_any_owner(
+        session,
+        context=context,
+        contact_id=contact_id,
+    )
+    if boss is not None:
+        merged = {**boss.data, **entries, "contact_id": contact_id}
+        if merged != boss.data:
+            boss.data = merged
+            flag_modified(boss, "data")
+            session.flush()
+    return contact_id
+
+
 def _ensure_humans_for_assistant(
     session: Session,
     *,
@@ -198,13 +302,20 @@ def _ensure_humans_for_assistant(
         user = users.get(user_id)
         if user is None:
             continue
-        contact_id = _upsert_contact(
-            session,
-            assistant=assistant,
-            entries=_human_entries(user),
-            lookup_key=ORG_CALL_USER_ID_KEY,
-            lookup_value=user.id,
-        )
+        if user.id == assistant.user_id:
+            contact_id = _ensure_owner_boss_contact(
+                session,
+                assistant=assistant,
+                entries=_human_entries(user),
+            )
+        else:
+            contact_id = _upsert_contact(
+                session,
+                assistant=assistant,
+                entries=_human_entries(user),
+                lookup_key=ORG_CALL_USER_ID_KEY,
+                lookup_value=user.id,
+            )
         display = " ".join(
             part for part in [user.name or "", user.last_name or ""] if part
         ).strip() or (user.email or user.id)

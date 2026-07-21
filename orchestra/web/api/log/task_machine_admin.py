@@ -7,31 +7,31 @@ from orchestra.db.models.orchestra_models import Assistant, Project
 from orchestra.services.task_machine_state_service import (
     create_task_outbound_operation_if_absent,
     create_task_run_if_absent,
-    get_latest_task_run_for_task,
-    get_task_activation,
-    get_task_run,
+    get_latest_task_execution_for_task,
+    get_open_task_execution,
+    get_task_execution,
     release_active_task_source,
     resolve_tasks_context_name,
-    sync_task_activations_for_task_ids,
+    sync_task_executions_for_task_ids,
     update_task_outbound_operation,
     update_task_run,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.task_machine_schema import (
-    TaskActivationLookupRequest,
-    TaskActivationLookupResponse,
-    TaskActivationReprojectRequest,
-    TaskActivationReprojectResponse,
+    TaskExecutionCreateOrAdoptRequest,
+    TaskExecutionGetRequest,
+    TaskExecutionGetResponse,
+    TaskExecutionLatestRequest,
+    TaskExecutionLatestResponse,
+    TaskExecutionLookupRequest,
+    TaskExecutionLookupResponse,
+    TaskExecutionMutationResponse,
+    TaskExecutionReprojectRequest,
+    TaskExecutionReprojectResponse,
+    TaskExecutionUpdateRequest,
     TaskOutboundOperationCreateOrAdoptRequest,
     TaskOutboundOperationMutationResponse,
     TaskOutboundOperationUpdateRequest,
-    TaskRunCreateOrAdoptRequest,
-    TaskRunGetRequest,
-    TaskRunGetResponse,
-    TaskRunLatestRequest,
-    TaskRunLatestResponse,
-    TaskRunMutationResponse,
-    TaskRunUpdateRequest,
     TaskSourceReleaseRequest,
     TaskSourceReleaseResponse,
 )
@@ -130,22 +130,22 @@ def _get_internal_project_or_404(
 
 
 @router.post(
-    "/task-activation/current",
-    response_model=TaskActivationLookupResponse,
+    "/task-execution/current",
+    response_model=TaskExecutionLookupResponse,
 )
-def get_current_task_activation(
-    request: TaskActivationLookupRequest,
+def get_current_task_execution(
+    request: TaskExecutionLookupRequest,
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
-    """Return the current projected activation row for one assistant/task pair."""
+    """Return the current open execution row for one assistant/task pair."""
 
     project = _get_internal_project_or_404(
         session,
         project_name=request.project_name,
         assistant_id=request.assistant_id,
     )
-    activation = get_task_activation(
+    execution = get_open_task_execution(
         session=session,
         project_id=project.id,
         assistant_id=request.assistant_id,
@@ -153,20 +153,20 @@ def get_current_task_activation(
         destination=request.destination,
     )
     return {
-        "activation": dict(activation.data or {}) if activation is not None else None,
+        "execution": dict(execution.data or {}) if execution is not None else None,
     }
 
 
 @router.post(
-    "/task-activation/reproject",
-    response_model=TaskActivationReprojectResponse,
+    "/task-execution/reproject",
+    response_model=TaskExecutionReprojectResponse,
 )
-def reproject_task_activation(
-    request: TaskActivationReprojectRequest,
+def reproject_task_execution(
+    request: TaskExecutionReprojectRequest,
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
-    """Recompute one task's projected activation row from the current Tasks table."""
+    """Recompute one task's projected open execution row from the current Tasks table."""
 
     project = _get_internal_project_or_404(
         session,
@@ -179,7 +179,7 @@ def reproject_task_activation(
             project_id=project.id,
             assistant_id=request.assistant_id,
         )
-        result = sync_task_activations_for_task_ids(
+        result = sync_task_executions_for_task_ids(
             session=session,
             project_id=project.id,
             task_ids=[request.task_id],
@@ -188,7 +188,7 @@ def reproject_task_activation(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    activation = get_task_activation(
+    execution = get_open_task_execution(
         session=session,
         project_id=project.id,
         assistant_id=request.assistant_id,
@@ -196,13 +196,13 @@ def reproject_task_activation(
     )
     return {
         **result,
-        "activation": dict(activation.data or {}) if activation is not None else None,
+        "execution": dict(execution.data or {}) if execution is not None else None,
     }
 
 
-def create_or_adopt_task_run_core(
+def create_or_adopt_task_execution_core(
     session,
-    request: TaskRunCreateOrAdoptRequest,
+    request: TaskExecutionCreateOrAdoptRequest,
 ) -> dict:
     """Create a task run by run_key if absent, otherwise return the existing row."""
 
@@ -224,7 +224,7 @@ def create_or_adopt_task_run_core(
     return {"run": dict(run.data or {}), "created": created}
 
 
-def patch_task_run_core(session, request: TaskRunUpdateRequest) -> dict:
+def patch_task_execution_core(session, request: TaskExecutionUpdateRequest) -> dict:
     """Apply a partial payload update to an existing task run row."""
 
     project = _get_internal_project_or_404(
@@ -266,7 +266,10 @@ def release_active_task_source_core(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def get_latest_task_run_core(session, request: TaskRunLatestRequest) -> dict:
+def get_latest_task_execution_core(
+    session,
+    request: TaskExecutionLatestRequest,
+) -> dict:
     """Return the most recently updated task run for one assistant/task pair."""
 
     project = _get_internal_project_or_404(
@@ -274,7 +277,7 @@ def get_latest_task_run_core(session, request: TaskRunLatestRequest) -> dict:
         project_name=request.project_name,
         assistant_id=request.assistant_id,
     )
-    run = get_latest_task_run_for_task(
+    run = get_latest_task_execution_for_task(
         session=session,
         project_id=project.id,
         assistant_id=request.assistant_id,
@@ -284,7 +287,7 @@ def get_latest_task_run_core(session, request: TaskRunLatestRequest) -> dict:
     return {"run": dict(run.data or {}) if run is not None else None}
 
 
-def get_task_run_core(session, request: TaskRunGetRequest) -> dict:
+def get_task_execution_core(session, request: TaskExecutionGetRequest) -> dict:
     """Return one task run row by run_key without creating or adopting."""
 
     project = _get_internal_project_or_404(
@@ -292,7 +295,7 @@ def get_task_run_core(session, request: TaskRunGetRequest) -> dict:
         project_name=request.project_name,
         assistant_id=request.assistant_id,
     )
-    run = get_task_run(
+    run = get_task_execution(
         session=session,
         project_id=project.id,
         run_key=request.run_key,
@@ -352,31 +355,31 @@ def patch_task_outbound_operation_core(
 
 
 @router.post(
-    "/task-run/create-or-adopt",
-    response_model=TaskRunMutationResponse,
+    "/task-execution/create-or-adopt",
+    response_model=TaskExecutionMutationResponse,
 )
-def create_or_adopt_task_run(
-    request: TaskRunCreateOrAdoptRequest,
+def create_or_adopt_task_execution(
+    request: TaskExecutionCreateOrAdoptRequest,
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """Create a task run by run_key if absent, otherwise return the existing row."""
 
-    return create_or_adopt_task_run_core(session, request)
+    return create_or_adopt_task_execution_core(session, request)
 
 
 @router.post(
-    "/task-run/update",
-    response_model=TaskRunMutationResponse,
+    "/task-execution/update",
+    response_model=TaskExecutionMutationResponse,
 )
-def patch_task_run(
-    request: TaskRunUpdateRequest,
+def patch_task_execution(
+    request: TaskExecutionUpdateRequest,
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """Apply a partial payload update to an existing task run row."""
 
-    return patch_task_run_core(session, request)
+    return patch_task_execution_core(session, request)
 
 
 @router.post(
@@ -394,31 +397,31 @@ def release_active_task_source_route(
 
 
 @router.post(
-    "/task-run/latest",
-    response_model=TaskRunLatestResponse,
+    "/task-execution/latest",
+    response_model=TaskExecutionLatestResponse,
 )
-def get_latest_task_run(
-    request: TaskRunLatestRequest,
+def get_latest_task_execution(
+    request: TaskExecutionLatestRequest,
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """Return the most recently updated task run for one assistant/task pair."""
 
-    return get_latest_task_run_core(session, request)
+    return get_latest_task_execution_core(session, request)
 
 
 @router.post(
-    "/task-run/get",
-    response_model=TaskRunGetResponse,
+    "/task-execution/get",
+    response_model=TaskExecutionGetResponse,
 )
-def get_task_run_by_key(
-    request: TaskRunGetRequest,
+def get_task_execution_by_key(
+    request: TaskExecutionGetRequest,
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
     """Return one task run row by run_key without creating or adopting."""
 
-    return get_task_run_core(session, request)
+    return get_task_execution_core(session, request)
 
 
 @router.post(
