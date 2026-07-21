@@ -469,3 +469,92 @@ def test_deliver_write_failure(monkeypatch):
     out = write_mod.deliver_intent(_Session(), 3)
     assert out["status"] == "failed"
     assert "forced failure" in (out["last_error"] or "")
+
+
+def test_http_generic_query_auth_appends_api_key(monkeypatch):
+    from orchestra.external_bindings.http_generic import HttpGenericConnector
+    from orchestra.external_bindings.types import BindingItem, ConnectorAuth
+
+    seen: dict[str, Any] = {}
+
+    class _Resp:
+        headers = {"Content-Type": "application/json"}
+
+        def read(self):
+            return b'{"status":"ACTIVE"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _urlopen(req, timeout=30):
+        seen["url"] = req.full_url
+        seen["headers"] = dict(req.headers)
+        return _Resp()
+
+    monkeypatch.setattr(
+        "orchestra.external_bindings.http_generic.urlopen",
+        _urlopen,
+    )
+    connector = HttpGenericConnector()
+    results = connector.batch_fetch(
+        binding={
+            "auth": {"placement": "query", "param": "api_key"},
+            "http": {
+                "method": "GET",
+                "url_template": "https://server.smartlead.ai/api/v1/campaigns/{id}/analytics",
+                "response_jsonpath": "$.status",
+            },
+        },
+        items=[BindingItem(log_event_id=1, inputs={"id": "3637897"})],
+        auth=ConnectorAuth(secret_value="secret-key"),
+    )
+    assert results[0].error is None
+    assert results[0].value == "ACTIVE"
+    assert "api_key=secret-key" in seen["url"]
+    assert "Authorization" not in seen["headers"]
+
+
+def test_http_generic_bearer_auth_default(monkeypatch):
+    from orchestra.external_bindings.http_generic import HttpGenericConnector
+    from orchestra.external_bindings.types import BindingItem, ConnectorAuth
+
+    seen: dict[str, Any] = {}
+
+    class _Resp:
+        headers = {"Content-Type": "application/json"}
+
+        def read(self):
+            return b'{"ok":true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _urlopen(req, timeout=30):
+        seen["url"] = req.full_url
+        seen["headers"] = dict(req.headers)
+        return _Resp()
+
+    monkeypatch.setattr(
+        "orchestra.external_bindings.http_generic.urlopen",
+        _urlopen,
+    )
+    connector = HttpGenericConnector()
+    results = connector.batch_fetch(
+        binding={
+            "http": {
+                "method": "GET",
+                "url_template": "https://api.example.com/items/{id}",
+            },
+        },
+        items=[BindingItem(log_event_id=1, inputs={"id": "x"})],
+        auth=ConnectorAuth(secret_value="tok"),
+    )
+    assert results[0].error is None
+    assert "api_key=" not in seen["url"]
+    assert seen["headers"].get("Authorization") == "Bearer tok"

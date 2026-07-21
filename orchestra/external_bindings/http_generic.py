@@ -5,7 +5,9 @@ Supports:
 - Optional true batch POST via ``batch_url`` + ``batch_items_key`` when the
   remote API accepts an array of items in one request
 
-Auth: ``Authorization: Bearer <secret>`` when ``auth.secret_value`` is set,
+Auth (from ``binding.auth`` + ``auth_secret_ref``):
+- ``placement: bearer`` (default) → ``Authorization: Bearer <secret>``
+- ``placement: query`` → append ``?{param}=<secret>`` (default param ``api_key``)
 plus any static headers from the binding (non-secret).
 """
 
@@ -15,6 +17,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from orchestra.external_bindings.types import (
@@ -26,6 +29,32 @@ from orchestra.external_bindings.types import (
 
 DEFAULT_CONCURRENCY = 8
 DEFAULT_TIMEOUT_S = 30
+
+
+def _auth_cfg(binding: dict[str, Any] | None) -> dict[str, Any]:
+    raw = (binding or {}).get("auth") or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _auth_placement(binding: dict[str, Any] | None) -> str:
+    return str(_auth_cfg(binding).get("placement") or "bearer").strip().lower()
+
+
+def _with_query_auth(
+    url: str,
+    auth: ConnectorAuth,
+    binding: dict[str, Any] | None,
+) -> str:
+    """Append ``auth.param`` (default ``api_key``) when placement is ``query``."""
+    if _auth_placement(binding) != "query" or not auth.secret_value:
+        return url
+    param = str(_auth_cfg(binding).get("param") or "api_key")
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if param in query:
+        return url
+    query[param] = [auth.secret_value]
+    return urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
 
 
 class HttpGenericConnector:
@@ -42,10 +71,16 @@ class HttpGenericConnector:
             return []
         http = binding.get("http") or {}
         if http.get("batch_url"):
-            return self._batch_post(http=http, items=items, auth=auth)
+            return self._batch_post(http=http, items=items, auth=auth, binding=binding)
         return self._per_item(http=http, items=items, auth=auth, binding=binding)
 
-    def _headers(self, auth: ConnectorAuth, http: dict[str, Any]) -> dict[str, str]:
+    def _headers(
+        self,
+        auth: ConnectorAuth,
+        http: dict[str, Any],
+        *,
+        binding: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
             "User-Agent": "orchestra-external-bindings/1",
@@ -56,7 +91,11 @@ class HttpGenericConnector:
                 if isinstance(v, str) and "${SECRET:" not in v:
                     headers[str(k)] = str(v)
         headers.update(auth.headers or {})
-        if auth.secret_value and "Authorization" not in headers:
+        if (
+            auth.secret_value
+            and _auth_placement(binding) == "bearer"
+            and "Authorization" not in headers
+        ):
             headers["Authorization"] = f"Bearer {auth.secret_value}"
         return headers
 
@@ -82,14 +121,18 @@ class HttpGenericConnector:
             binding.get("batch", {}).get("concurrency") or DEFAULT_CONCURRENCY,
         )
         timeout = float(http.get("timeout_seconds") or DEFAULT_TIMEOUT_S)
-        headers = self._headers(auth, http)
+        headers = self._headers(auth, http, binding=binding)
         json_path = http.get("response_jsonpath")
 
         results: dict[int, BindingResult] = {}
 
         def _one(item: BindingItem) -> BindingResult:
             try:
-                url = _format_template(str(url_template), item.inputs)
+                url = _with_query_auth(
+                    _format_template(str(url_template), item.inputs),
+                    auth,
+                    binding,
+                )
                 body = None
                 if (
                     method in {"POST", "PUT", "PATCH"}
@@ -138,12 +181,13 @@ class HttpGenericConnector:
         http: dict[str, Any],
         items: list[BindingItem],
         auth: ConnectorAuth,
+        binding: dict[str, Any],
     ) -> list[BindingResult]:
-        url = str(http["batch_url"])
+        url = _with_query_auth(str(http["batch_url"]), auth, binding)
         items_key = str(http.get("batch_items_key") or "items")
         id_key = str(http.get("batch_id_key") or "id")
         timeout = float(http.get("timeout_seconds") or DEFAULT_TIMEOUT_S)
-        headers = self._headers(auth, http)
+        headers = self._headers(auth, http, binding=binding)
         headers.setdefault("Content-Type", "application/json")
         payload_items = []
         for item in items:
@@ -221,11 +265,15 @@ class HttpGenericConnector:
         if not url_template:
             return WriteResult(ok=False, error="write.url_template required")
         timeout = float(write.get("timeout_seconds") or DEFAULT_TIMEOUT_S)
-        headers = self._headers(auth, write)
+        headers = self._headers(auth, write, binding=binding)
         headers.setdefault("Content-Type", "application/json")
         headers.setdefault("Idempotency-Key", idempotency_key)
         try:
-            url = _format_template(str(url_template), payload)
+            url = _with_query_auth(
+                _format_template(str(url_template), payload),
+                auth,
+                binding,
+            )
             body_template = write.get("body_template", payload)
             if isinstance(body_template, str):
                 body = _format_template(body_template, payload).encode()

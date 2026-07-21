@@ -37,6 +37,10 @@ remain purely in-Orchestra expressions.
 
 - `auth_secret_ref` is resolved from the Orchestra process environment only.
   It is never returned by `GET /logs/fields`.
+- Auth placement (optional `auth` object on the binding):
+  - default / `"placement": "bearer"` → `Authorization: Bearer <secret>`
+  - `"placement": "query", "param": "api_key"` → append `?api_key=<secret>`
+    (SmartLead and similar query-param APIs)
 - Prefer `http.batch_url` when the remote API accepts arrays; otherwise the
   planner still issues **one** `batch_fetch` per group and the connector applies
   bounded concurrency.
