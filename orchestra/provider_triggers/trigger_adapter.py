@@ -55,6 +55,7 @@ class TriggerDeleteRequest:
     idempotency_key: str
     provider_connection_id: str | None = None
     provider_user_id: str | None = None
+    connection_id: str | None = None
 
 
 @dataclass(frozen=True)

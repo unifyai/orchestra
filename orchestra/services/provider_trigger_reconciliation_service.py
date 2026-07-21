@@ -55,7 +55,12 @@ class ProviderTriggerReconciliationService:
         self._dao = ProviderTriggerDAO(session)
         self._integration_dao = IntegrationProviderDAO(session)
         self._lease_owner = lease_owner or f"trigger-worker-{uuid.uuid4().hex[:8]}"
-        self._adapter_resolver = adapter_resolver or get_trigger_provider_adapter
+        self._adapter_resolver = adapter_resolver or (
+            lambda backend_id: get_trigger_provider_adapter(
+                backend_id,
+                session=self._session,
+            )
+        )
 
     @property
     def lease_owner(self) -> str:
@@ -521,6 +526,7 @@ class ProviderTriggerReconciliationService:
                 connection.provider_connection_id if connection else None
             ),
             provider_user_id=connection.provider_user_id if connection else None,
+            connection_id=binding.connection_id,
         )
         try:
             adapter.delete(request)
