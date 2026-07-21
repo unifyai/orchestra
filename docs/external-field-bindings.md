@@ -35,8 +35,13 @@ remain purely in-Orchestra expressions.
 }
 ```
 
-- `auth_secret_ref` is resolved from the Orchestra process environment only.
-  It is never returned by `GET /logs/fields`.
+- ``auth_secret_ref`` is resolved from the **tenant Secrets vault** owned by
+  the bound table's context:
+  - ``Teams/{team_id}/…`` → ``Teams/{team_id}/Secrets``
+  - ``{user_id}/{agent_id}/…`` → ``{user_id}/{agent_id}/Secrets``
+  Process environment is a **local/dev fallback only**. Production bindings
+  must plant the named secret in the vault (e.g. via SecretManager /
+  ``primitives.secrets``). The name is never returned by ``GET /logs/fields``.
 - Auth placement (optional `auth` object on the binding):
   - default / `"placement": "bearer"` → `Authorization: Bearer <secret>`
   - `"placement": "query", "param": "api_key"` → append `?api_key=<secret>`
@@ -44,6 +49,9 @@ remain purely in-Orchestra expressions.
 - Prefer `http.batch_url` when the remote API accepts arrays; otherwise the
   planner still issues **one** `batch_fetch` per group and the connector applies
   bounded concurrency.
+- **SSRF baseline:** `http.generic` refuses non-`http(s)` schemes and
+  private / link-local / metadata targets (including `169.254.169.254` and
+  `metadata.google.internal`).
 
 ## Create a bound field
 
@@ -155,5 +163,14 @@ Do not encode side-effect sends inside hydrate `batch_fetch`.
 - UniSDK merges `external_entries` into `Log` objects like derived entries.
 - UniSDK: `get_logs(hydrate=…)`, `hydrate_logs`, `update_external_field_binding`,
   `request_external_write`.
-- DataManager: `create_external_column`, `filter(..., hydrate=...)`,
-  `request_external_write`.
+- DataManager / `primitives.data`: `create_external_column`,
+  `filter(..., hydrate=...)`, `request_external_write`.
+- Auth: plant named secrets in the owning `Secrets` context before hydrate or
+  write. Orchestra does not need vendor API keys on Cloud Run.
+
+## Catalog convention (user data)
+
+Optional reusable REST target rows (e.g. `Data/ExternalApiTargets`) can store
+base URLs, auth placement, and binding templates. CodeAct / operators plant
+domain tables and `external_entry` columns from those rows. Orchestra stays
+connector-generic (`http.generic` only).

@@ -9,11 +9,16 @@ Auth (from ``binding.auth`` + ``auth_secret_ref``):
 - ``placement: bearer`` (default) → ``Authorization: Bearer <secret>``
 - ``placement: query`` → append ``?{param}=<secret>`` (default param ``api_key``)
 plus any static headers from the binding (non-secret).
+
+SSRF baseline: only ``http``/``https`` to non-private, non-link-local,
+non-metadata hosts (see ``assert_safe_outbound_url``).
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
@@ -29,6 +34,64 @@ from orchestra.external_bindings.types import (
 
 DEFAULT_CONCURRENCY = 8
 DEFAULT_TIMEOUT_S = 30
+
+_BLOCKED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "metadata.google.internal",
+        "metadata.goog",
+    },
+)
+
+
+def assert_safe_outbound_url(url: str) -> str:
+    """Reject non-http(s) schemes and private/link-local/metadata targets."""
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"Refusing non-http(s) URL scheme: {scheme!r}")
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        raise ValueError("Refusing URL with empty host")
+    if host in _BLOCKED_HOSTNAMES or host.endswith(".localhost"):
+        raise ValueError(f"Refusing blocked host: {host}")
+    if host == "metadata" or host.startswith("metadata."):
+        raise ValueError(f"Refusing metadata host: {host}")
+
+    candidates: list[str] = [host]
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+            candidates = sorted(
+                {info[4][0] for info in infos if info and info[4]},
+            )
+        except socket.gaierror:
+            # Hostname not resolvable in this environment; hostname blocklist
+            # above still applies. Literal private IPs are checked when DNS
+            # succeeds or when the host itself is an IP literal.
+            return url
+
+    for addr in candidates:
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError(
+                f"Refusing private/link-local/reserved address {addr} for host {host}",
+            )
+        if str(ip) == "169.254.169.254":
+            raise ValueError("Refusing cloud metadata address")
+    return url
 
 
 def _auth_cfg(binding: dict[str, Any] | None) -> dict[str, Any]:
@@ -324,6 +387,7 @@ def _http_request(
     body: Optional[bytes],
     timeout: float,
 ) -> Any:
+    assert_safe_outbound_url(url)
     req = Request(url, data=body, headers=headers, method=method)
     try:
         with urlopen(req, timeout=timeout) as resp:

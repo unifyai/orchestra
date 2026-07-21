@@ -438,6 +438,8 @@ def test_deliver_write_failure(monkeypatch):
             self.result = None
             self.created_at = None
             self.confirmed_at = None
+            self.project_id = 1
+            self.context_id = 2
 
     intent = _Intent()
 
@@ -558,3 +560,83 @@ def test_http_generic_bearer_auth_default(monkeypatch):
     assert results[0].error is None
     assert "api_key=" not in seen["url"]
     assert seen["headers"].get("Authorization") == "Bearer tok"
+
+
+def test_secrets_context_name_for_team_and_assistant():
+    from orchestra.external_bindings.auth import secrets_context_name_for_data_context
+
+    assert (
+        secrets_context_name_for_data_context("Teams/11/Data/GTM/Campaigns")
+        == "Teams/11/Secrets"
+    )
+    assert (
+        secrets_context_name_for_data_context("abc-user/1406/Data/things")
+        == "abc-user/1406/Secrets"
+    )
+    assert secrets_context_name_for_data_context("Data/system") is None
+
+
+def test_resolve_auth_env_fallback(monkeypatch):
+    from orchestra.external_bindings.auth import resolve_auth
+
+    monkeypatch.setenv("MY_TOKEN", "from-env")
+    auth = resolve_auth({"auth_secret_ref": "MY_TOKEN"})
+    assert auth.secret_value == "from-env"
+
+
+def test_resolve_auth_require_missing_raises(monkeypatch):
+    from orchestra.external_bindings.auth import resolve_auth
+
+    monkeypatch.delenv("MISSING_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="MISSING_TOKEN"):
+        resolve_auth({"auth_secret_ref": "MISSING_TOKEN"}, require=True)
+
+
+def test_http_generic_ssrf_blocks_localhost(monkeypatch):
+    from orchestra.external_bindings.http_generic import HttpGenericConnector
+    from orchestra.external_bindings.types import BindingItem, ConnectorAuth
+
+    def _urlopen(req, timeout=30):
+        raise AssertionError("should not fetch")
+
+    monkeypatch.setattr(
+        "orchestra.external_bindings.http_generic.urlopen",
+        _urlopen,
+    )
+    connector = HttpGenericConnector()
+    results = connector.batch_fetch(
+        binding={
+            "http": {
+                "method": "GET",
+                "url_template": "http://127.0.0.1/secret",
+            },
+        },
+        items=[BindingItem(log_event_id=1, inputs={})],
+        auth=ConnectorAuth(),
+    )
+    assert results[0].error is not None
+    assert "Refusing" in results[0].error or "private" in results[0].error.lower()
+
+
+def test_http_generic_ssrf_blocks_metadata(monkeypatch):
+    from orchestra.external_bindings.http_generic import assert_safe_outbound_url
+
+    with pytest.raises(ValueError, match="metadata|Refusing"):
+        assert_safe_outbound_url("http://metadata.google.internal/computeMetadata/v1/")
+
+
+def test_public_binding_summary_strips_auth_secret_ref():
+    from orchestra.external_bindings.planner import public_binding_summary
+
+    summary = public_binding_summary(
+        {
+            "connector_id": "http.generic",
+            "binding_version": 1,
+            "is_active": True,
+            "binding": {
+                "auth_secret_ref": "SMARTLEAD_API_KEY",
+                "http": {"url_template": "https://example.com/{id}"},
+            },
+        },
+    )
+    assert "auth_secret_ref" not in summary["binding"]

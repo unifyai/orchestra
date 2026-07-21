@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
+from orchestra.external_bindings.auth import resolve_auth
 from orchestra.external_bindings.registry import get_connector
-from orchestra.external_bindings.types import BindingItem, ConnectorAuth
+from orchestra.external_bindings.types import BindingItem
+
+# Re-export for callers that historically imported resolve_auth from planner.
+__all__ = [
+    "HydrateMode",
+    "compute_input_hash",
+    "hydrate_logs",
+    "public_binding_summary",
+    "resolve_auth",
+    "sidecar_key",
+]
 
 EXT_SIDECAR_PREFIX = "__ext__"
 DEFAULT_MAX_ROWS = 500
@@ -112,19 +122,6 @@ def _needs_hydrate(
     return age > ttl_seconds
 
 
-def resolve_auth(binding: dict[str, Any]) -> ConnectorAuth:
-    """Resolve auth_secret_ref from process env (Orchestra secret hydrate layer).
-
-    Production deployments inject secrets into the process environment before
-    request handling. Binding metadata only stores the *name*.
-    """
-    ref = binding.get("auth_secret_ref")
-    secret_value = None
-    if isinstance(ref, str) and ref:
-        secret_value = os.environ.get(ref)
-    return ConnectorAuth(secret_value=secret_value)
-
-
 def hydrate_logs(
     logs: list[dict[str, Any]],
     *,
@@ -134,6 +131,9 @@ def hydrate_logs(
     materialize: bool = True,
     max_rows: int = DEFAULT_MAX_ROWS,
     raw_data_by_id: Optional[dict[int, dict[str, Any]]] = None,
+    session=None,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Hydrate external_entry fields on formatted log dicts.
 
@@ -146,6 +146,9 @@ def hydrate_logs(
     raw_data_by_id:
         Optional ``log_event_id -> full LogEvent.data`` for reading sidecars and
         input columns (preferred). Falls back to merging entries/external_entries.
+    session / project_id / context_id:
+        When set, ``auth_secret_ref`` resolves from the tenant Secrets vault
+        owned by ``context_id`` (see ``external_bindings.auth``).
 
     Returns
     -------
@@ -176,6 +179,7 @@ def hydrate_logs(
 
     now = datetime.now(timezone.utc)
     materialize_ops: list[dict[str, Any]] = []
+    auth_cache: dict[tuple[Any, ...], Optional[str]] = {}
 
     # Ensure external_entries bucket exists
     for log in logs:
@@ -240,7 +244,14 @@ def hydrate_logs(
             continue
 
         connector = get_connector(connector_id)
-        auth = resolve_auth(binding)
+        auth = resolve_auth(
+            binding,
+            session=session,
+            project_id=project_id,
+            context_id=context_id,
+            cache=auth_cache,
+            require=bool(binding.get("auth_secret_ref")),
+        )
 
         # Group by batch group_key, respect max batch size
         max_batch = int((binding.get("batch") or {}).get("max") or 100)

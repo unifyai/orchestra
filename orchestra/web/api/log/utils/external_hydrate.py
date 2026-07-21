@@ -68,6 +68,9 @@ def apply_external_hydrate(
         hydrate_fields=hydrate_fields,
         materialize=materialize,
         raw_data_by_id=raw_data_by_id or None,
+        session=session,
+        project_id=project_id,
+        context_id=context_id,
     )
     if materialize and ops:
         LogEventDAO(session).bulk_merge_data(ops, project_id=project_id)

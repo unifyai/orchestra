@@ -10,7 +10,8 @@ from typing import Any, Optional, Protocol, runtime_checkable
 class ConnectorAuth:
     """Resolved auth material for a connector call.
 
-    Secrets are resolved server-side from ``auth_secret_ref`` (or env) and never
+    Secrets are resolved server-side from the tenant ``Secrets`` vault via
+    ``auth_secret_ref`` (process env is a local/dev fallback) and never
     returned on ``get_fields``.
     """
 

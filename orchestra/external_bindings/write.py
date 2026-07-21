@@ -7,7 +7,8 @@ from typing import Any, Optional
 from orchestra.db.dao.external_field_binding_dao import ExternalFieldBindingDAO
 from orchestra.db.dao.external_write_intent_dao import ExternalWriteIntentDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.external_bindings.planner import resolve_auth, sidecar_key
+from orchestra.external_bindings.auth import resolve_auth
+from orchestra.external_bindings.planner import sidecar_key
 from orchestra.external_bindings.registry import get_connector
 
 
@@ -96,14 +97,26 @@ def deliver_intent(session, intent_id: int) -> dict[str, Any]:
     session.commit()
 
     connector = get_connector(intent.connector_id)
-    auth = resolve_auth(dict(intent.binding or {}))
+    binding_body = dict(intent.binding or {})
+    try:
+        auth = resolve_auth(
+            binding_body,
+            session=session,
+            project_id=intent.project_id,
+            context_id=intent.context_id,
+            require=bool(binding_body.get("auth_secret_ref")),
+        )
+    except ValueError as exc:
+        dao.mark_failed(intent, str(exc))
+        session.commit()
+        return _intent_public(intent)
     if not hasattr(connector, "execute_write"):
         dao.mark_failed(intent, "connector does not support execute_write")
         session.commit()
         return _intent_public(intent)
 
     result = connector.execute_write(
-        binding=dict(intent.binding or {}),
+        binding=binding_body,
         payload=dict(intent.payload or {}),
         idempotency_key=intent.idempotency_key,
         auth=auth,

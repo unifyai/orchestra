@@ -492,7 +492,8 @@ class ExternalFieldBinding(Base):
     field_name = Column(String, nullable=False)
     connector_id = Column(String, nullable=False)
     # Declarative binding: inputs, batch, cache, on_error, connector config.
-    # Secret material must be referenced by name (auth_secret_ref), never inlined.
+    # Secret material must be referenced by name (auth_secret_ref → tenant
+    # Secrets vault), never inlined.
     binding = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     # Bumped on binding updates to invalidate per-row cache sidecars.
     binding_version = Column(Integer, nullable=False, server_default="1")
