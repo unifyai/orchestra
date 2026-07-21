@@ -191,7 +191,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -220,7 +220,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -249,7 +249,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -278,7 +278,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -307,7 +307,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -336,7 +336,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -365,7 +365,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -394,7 +394,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -423,7 +423,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -452,7 +452,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -481,7 +481,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -510,7 +510,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -539,7 +539,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -568,7 +568,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -597,7 +597,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -626,7 +626,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -655,7 +655,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -684,7 +684,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -713,7 +713,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -742,7 +742,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -771,7 +771,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -800,7 +800,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -829,7 +829,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -858,7 +858,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -887,7 +887,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -916,7 +916,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_drive_resource",
       "raw_metadata": {
@@ -938,7 +938,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -960,7 +960,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -982,7 +982,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1004,7 +1004,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1026,7 +1026,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1048,7 +1048,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1070,7 +1070,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1092,7 +1092,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1114,7 +1114,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1136,7 +1136,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1158,7 +1158,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1180,7 +1180,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {
@@ -1202,7 +1202,7 @@
         },
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "google_chat_space",
       "raw_metadata": {

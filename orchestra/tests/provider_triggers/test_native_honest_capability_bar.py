@@ -51,7 +51,6 @@ from orchestra.services.provider_trigger_reconciliation_service import (
 )
 from orchestra.services.staged_trigger_catalog_service import (
     list_staged_triggers_for_assistant,
-    missing_required_config,
     resolve_trigger_capability,
     validate_provider_event_trigger_for_assistant,
 )
@@ -194,18 +193,26 @@ def test_capability_resolver_encodes_families(dbsession: Session) -> None:
     assert meet.config_schema == {}
     assert meet.target_resource_family == "google_meet_user"
 
-    # Build-out honesty: Drive keeps its target-resource schema/family but is not
-    # live_ready until ticket 26 resource targeting lands, so it is not provisionable.
     drive = resolve_trigger_capability(
         dbsession,
         backend_id=NATIVE_GOOGLE_BACKEND_ID,
         provider_trigger_slug=DRIVE_FILE_CREATED_SLUG,
     )
     assert drive is not None
-    assert drive.live_ready is False
-    assert drive.provisionable is False
+    assert drive.live_ready is True
+    assert drive.provisionable is True
     assert drive.target_resource_family == "google_drive_resource"
     assert drive.config_schema.get("required") == ["target_resource"]
+
+    chat = resolve_trigger_capability(
+        dbsession,
+        backend_id=NATIVE_GOOGLE_BACKEND_ID,
+        provider_trigger_slug="google.workspace.chat.message.v1.created",
+    )
+    assert chat is not None
+    assert chat.live_ready is True
+    assert chat.provisionable is True
+    assert chat.target_resource_family == "google_chat_space"
 
     batch = resolve_trigger_capability(
         dbsession,
@@ -248,15 +255,18 @@ def test_catalog_listing_exposes_capability(dbsession: Session) -> None:
         backend_id=NATIVE_GOOGLE_BACKEND_ID,
     )
     rows = {row["provider_trigger_slug"]: row for row in catalog["triggers"]}
-    # Discovery still lists the full curated set, but only Meet is provisionable.
+    # Discovery lists the full curated set; Meet/Drive/Chat space are provisionable.
     assert rows[MEET_SLUG]["provisionable"] is True
     assert rows[CHAT_BATCH_SLUG]["delivery_only"] is True
     assert rows[CHAT_BATCH_SLUG]["provisionable"] is False
-    assert rows[DRIVE_FILE_CREATED_SLUG]["live_ready"] is False
-    assert rows[DRIVE_FILE_CREATED_SLUG]["provisionable"] is False
+    assert rows[DRIVE_FILE_CREATED_SLUG]["live_ready"] is True
+    assert rows[DRIVE_FILE_CREATED_SLUG]["provisionable"] is True
     assert rows[DRIVE_FILE_CREATED_SLUG]["target_resource_family"] == (
         "google_drive_resource"
     )
+    chat_slug = "google.workspace.chat.message.v1.created"
+    assert rows[chat_slug]["live_ready"] is True
+    assert rows[chat_slug]["provisionable"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -321,9 +331,8 @@ def test_validate_rejects_not_live_ready_microsoft_enable(dbsession: Session) ->
         )
 
 
-def test_validate_rejects_drive_not_live_ready(dbsession: Session) -> None:
-    """Drive is not live_ready during build-out; enable fails closed regardless
-    of whether the required target-resource config is supplied (ticket 26)."""
+def test_validate_rejects_drive_missing_required_config(dbsession: Session) -> None:
+    """Live Drive enable fails closed when target_resource is absent."""
     _import_google(dbsession)
     assistant, apps = _seed_google_assistant(dbsession)
     trigger = ProviderEventTrigger(
@@ -332,9 +341,9 @@ def test_validate_rejects_drive_not_live_ready(dbsession: Session) -> None:
         backend_id=NATIVE_GOOGLE_BACKEND_ID,
         canonical_app_slug=NATIVE_GOOGLE_DRIVE_APP_SLUG,
         provider_trigger_slug=DRIVE_FILE_CREATED_SLUG,
-        trigger_config={"target_resource": "items/abc123"},
+        trigger_config={},
     )
-    with pytest.raises(ValueError, match="provider_event_trigger_not_live_ready"):
+    with pytest.raises(ValueError, match="provider_event_trigger_config_required"):
         validate_provider_event_trigger_for_assistant(
             dbsession,
             assistant_id=assistant.agent_id,
@@ -362,38 +371,32 @@ def test_validate_rejects_delegated_microsoft_enable(dbsession: Session) -> None
         )
 
 
-def test_missing_required_config_helper() -> None:
-    """The config-required chokepoint helper still flags absent required fields.
-
-    No live_ready native slug currently declares required config (only Meet is
-    live_ready, and its schema is empty), so exercise the helper directly to keep
-    the config-required path covered for when live families gain required config.
-    """
-    schema = {
-        "type": "object",
-        "properties": {"target_resource": {"type": "string"}},
-        "required": ["target_resource"],
-    }
-    assert missing_required_config(schema, {}) == ["target_resource"]
-    assert missing_required_config(schema, {"target_resource": "items/abc"}) == []
-    assert missing_required_config({}, {}) == []
-
-
-def test_validate_accepts_meet_user_level_enable(dbsession: Session) -> None:
+def test_validate_accepts_meet_and_configured_drive_enable(dbsession: Session) -> None:
     _import_google(dbsession)
     assistant, apps = _seed_google_assistant(dbsession)
-    trigger = ProviderEventTrigger(
-        state="enabled",
-        connection_id=apps[NATIVE_GOOGLE_MEET_APP_SLUG],
-        backend_id=NATIVE_GOOGLE_BACKEND_ID,
-        canonical_app_slug=NATIVE_GOOGLE_MEET_APP_SLUG,
-        provider_trigger_slug=MEET_SLUG,
-        trigger_config={},
+    validate_provider_event_trigger_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        trigger=ProviderEventTrigger(
+            state="enabled",
+            connection_id=apps[NATIVE_GOOGLE_MEET_APP_SLUG],
+            backend_id=NATIVE_GOOGLE_BACKEND_ID,
+            canonical_app_slug=NATIVE_GOOGLE_MEET_APP_SLUG,
+            provider_trigger_slug=MEET_SLUG,
+            trigger_config={},
+        ),
     )
     validate_provider_event_trigger_for_assistant(
         dbsession,
         assistant_id=assistant.agent_id,
-        trigger=trigger,
+        trigger=ProviderEventTrigger(
+            state="enabled",
+            connection_id=apps[NATIVE_GOOGLE_DRIVE_APP_SLUG],
+            backend_id=NATIVE_GOOGLE_BACKEND_ID,
+            canonical_app_slug=NATIVE_GOOGLE_DRIVE_APP_SLUG,
+            provider_trigger_slug=DRIVE_FILE_CREATED_SLUG,
+            trigger_config={"target_resource": "files/1aaabbbAAABBB111222-_"},
+        ),
     )
 
 
@@ -462,19 +465,13 @@ class _StubGoogleAccountAdapter(TriggerProviderAdapter):
         return TriggerHealthResult(status="ok")
 
 
-def test_reconcile_delivery_only_binding_needs_attention(dbsession: Session) -> None:
-    _import_google(dbsession)
-    assistant, apps = _seed_google_assistant(dbsession)
-
+def _create_enabled_binding(
+    dbsession: Session,
+    *,
+    assistant: Assistant,
+    trigger: ProviderEventTrigger,
+) -> EventTriggerBinding:
     dao = ProviderTriggerDAO(dbsession)
-    trigger = ProviderEventTrigger(
-        state="enabled",
-        connection_id=apps[NATIVE_GOOGLE_CHAT_APP_SLUG],
-        backend_id=NATIVE_GOOGLE_BACKEND_ID,
-        canonical_app_slug=NATIVE_GOOGLE_CHAT_APP_SLUG,
-        provider_trigger_slug=CHAT_BATCH_SLUG,
-        trigger_config={},
-    )
     binding_id = f"binding-{uuid.uuid4().hex[:12]}"
     binding = dao.create_binding(
         binding_id=binding_id,
@@ -490,6 +487,24 @@ def test_reconcile_delivery_only_binding_needs_attention(dbsession: Session) -> 
     )
     binding.reconcile_next_retry_at = datetime.now(timezone.utc)
     dbsession.flush()
+    return binding
+
+
+def test_reconcile_delivery_only_binding_needs_attention(dbsession: Session) -> None:
+    _import_google(dbsession)
+    assistant, apps = _seed_google_assistant(dbsession)
+    binding = _create_enabled_binding(
+        dbsession,
+        assistant=assistant,
+        trigger=ProviderEventTrigger(
+            state="enabled",
+            connection_id=apps[NATIVE_GOOGLE_CHAT_APP_SLUG],
+            backend_id=NATIVE_GOOGLE_BACKEND_ID,
+            canonical_app_slug=NATIVE_GOOGLE_CHAT_APP_SLUG,
+            provider_trigger_slug=CHAT_BATCH_SLUG,
+            trigger_config={},
+        ),
+    )
     binding_pk = binding.id
 
     service = ProviderTriggerReconciliationService(
@@ -505,6 +520,40 @@ def test_reconcile_delivery_only_binding_needs_attention(dbsession: Session) -> 
     assert refreshed.runtime_health == BindingRuntimeHealth.needs_attention.value
     assert refreshed.last_stable_error_code == (
         ReconcileErrorCode.trigger_delivery_only.value
+    )
+    assert refreshed.active_generation_id is None
+
+
+def test_reconcile_drive_missing_config_needs_attention(dbsession: Session) -> None:
+    _import_google(dbsession)
+    assistant, apps = _seed_google_assistant(dbsession)
+    binding = _create_enabled_binding(
+        dbsession,
+        assistant=assistant,
+        trigger=ProviderEventTrigger(
+            state="enabled",
+            connection_id=apps[NATIVE_GOOGLE_DRIVE_APP_SLUG],
+            backend_id=NATIVE_GOOGLE_BACKEND_ID,
+            canonical_app_slug=NATIVE_GOOGLE_DRIVE_APP_SLUG,
+            provider_trigger_slug=DRIVE_FILE_CREATED_SLUG,
+            trigger_config={},
+        ),
+    )
+    binding_pk = binding.id
+
+    service = ProviderTriggerReconciliationService(
+        dbsession,
+        lease_owner="cap-bar-worker",
+        adapter_resolver=lambda _backend_id: _StubGoogleAccountAdapter(),
+    )
+    service.process_reconcile_batch()
+    dbsession.commit()
+
+    refreshed = dbsession.get(EventTriggerBinding, binding_pk)
+    assert refreshed is not None
+    assert refreshed.runtime_health == BindingRuntimeHealth.needs_attention.value
+    assert refreshed.last_stable_error_code == (
+        ReconcileErrorCode.required_config_missing.value
     )
     assert refreshed.active_generation_id is None
 
@@ -563,7 +612,7 @@ def test_microsoft_adapter_provision_fails_closed_with_session() -> None:
         )
 
 
-def test_google_adapter_provision_fails_closed_for_non_meet() -> None:
+def test_google_adapter_provision_fails_closed_for_chat_batch() -> None:
     from orchestra.provider_triggers.native_google_trigger_adapter import (
         NativeGoogleTriggerAdapter,
     )
@@ -574,10 +623,10 @@ def test_google_adapter_provision_fails_closed_for_non_meet() -> None:
         account_subject_pepper="pepper",
         pubsub_topic="projects/p/topics/t",
     )
-    with pytest.raises(RuntimeError, match="resource targeting"):
+    with pytest.raises(RuntimeError, match="delivery-only"):
         adapter.provision(
             _provision_request(
-                DRIVE_FILE_CREATED_SLUG,
-                app_slug=NATIVE_GOOGLE_DRIVE_APP_SLUG,
+                CHAT_BATCH_SLUG,
+                app_slug=NATIVE_GOOGLE_CHAT_APP_SLUG,
             ),
         )
