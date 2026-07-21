@@ -35,6 +35,18 @@ GOOGLE_SCOPE_BUNDLES: dict[str, list[str]] = {
     "meet": [
         "https://www.googleapis.com/auth/meetings.space.readonly",
     ],
+    # Google Chat Workspace Events — least-privilege readonly scopes covering
+    # the independently subscribable Chat families (messages/reactions,
+    # memberships, spaces, read state, availability). Reactions accept
+    # chat.messages.readonly, so a separate reactions scope is not required.
+    # See GOOGLE_CHAT_EVENT_SCOPES for the facade gate.
+    "chat": [
+        "https://www.googleapis.com/auth/chat.messages.readonly",
+        "https://www.googleapis.com/auth/chat.memberships.readonly",
+        "https://www.googleapis.com/auth/chat.spaces.readonly",
+        "https://www.googleapis.com/auth/chat.users.readstate.readonly",
+        "https://www.googleapis.com/auth/chat.users.availability.readonly",
+    ],
 }
 
 GOOGLE_BASE_SCOPES = [
@@ -50,6 +62,24 @@ GOOGLE_MEET_EVENT_SCOPES = frozenset(
         "https://www.googleapis.com/auth/meetings.space.created",
     },
 )
+
+# Scopes Google accepts for Drive Workspace Events. The connect ``drive``
+# bundle already grants ``drive``; the facade accepts any of these so a
+# readonly-only grant still unlocks the Drive trigger app.
+GOOGLE_DRIVE_EVENT_SCOPES = frozenset(
+    {
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.metadata",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+    },
+)
+
+# Chat Workspace Events need one matching scope per event family. The facade
+# treats the Chat app as connected only when the full requested readonly set
+# is present (same set as the ``chat`` feature bundle).
+GOOGLE_CHAT_EVENT_SCOPES = frozenset(GOOGLE_SCOPE_BUNDLES["chat"])
 
 MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
     "email": ["Mail.Read", "Mail.Send", "Mail.ReadWrite"],
@@ -83,14 +113,14 @@ _BASE = {
     "microsoft": MICROSOFT_BASE_SCOPES,
 }
 
-# ``meet`` is required for Google so that every workspace connect grants the
-# Meet Workspace Events scope. The connect UX only ever sends a fixed feature
-# set (email/teams defaults + these required features) and has no per-feature
-# Meet toggle, so Meet would otherwise never be granted. Requiring it makes a
-# fresh Google connect Meet-capable; existing assistants must re-consent after
-# deploy for the added scope to take effect.
+# Meet + Drive + Chat Workspace Events scopes are required together so a
+# single Google re-consent unlocks the native turn-on set. The connect UX
+# only ever sends a fixed feature set (email/teams defaults + these required
+# features) and has no per-feature Meet/Chat toggle. Existing assistants must
+# re-consent once after deploy; until then native facades stay disconnected
+# and bindings must not appear healthy.
 REQUIRED_FEATURES: dict[str, list[str]] = {
-    "google": ["email", "drive", "meet"],
+    "google": ["email", "drive", "meet", "chat"],
     "microsoft": ["email", "teams", "drive", "sharepoint"],
 }
 

@@ -18,6 +18,8 @@ from orchestra.provider_triggers.backend_ids import (
     ASSISTANT_WORKSPACE_SECRETS_STORAGE,
     COMPOSIO_BACKEND_ID,
     NATIVE_GOOGLE_BACKEND_ID,
+    NATIVE_GOOGLE_CHAT_APP_SLUG,
+    NATIVE_GOOGLE_DRIVE_APP_SLUG,
     NATIVE_GOOGLE_MEET_APP_SLUG,
     NATIVE_GOOGLE_MEET_TRANSCRIPT_SLUG,
     NATIVE_MICROSOFT_BACKEND_ID,
@@ -51,6 +53,19 @@ from orchestra.tests.provider_triggers.native_delivery import (
 WEBHOOK_SECRET = "native-google-ingress-test-secret"
 PRIMARY_USER_ID = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 
+_GOOGLE_CHAT_SCOPES = (
+    "https://www.googleapis.com/auth/chat.messages.readonly "
+    "https://www.googleapis.com/auth/chat.memberships.readonly "
+    "https://www.googleapis.com/auth/chat.spaces.readonly "
+    "https://www.googleapis.com/auth/chat.users.readstate.readonly "
+    "https://www.googleapis.com/auth/chat.users.availability.readonly"
+)
+_GOOGLE_WORKSPACE_EVENT_SCOPES = (
+    "https://www.googleapis.com/auth/drive.readonly "
+    "https://www.googleapis.com/auth/meetings.space.readonly "
+    f"{_GOOGLE_CHAT_SCOPES}"
+)
+
 
 @pytest.fixture(autouse=True)
 def _native_catalog_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,12 +73,20 @@ def _native_catalog_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
     monkeypatch.setenv("NATIVE_GOOGLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
     reset_ingress_rate_limiter_for_tests()
+    # Facade app gate set is cached at first call; clear so scope-constant
+    # edits in this module always take effect under pytest reloads.
+    from orchestra.provider_triggers.workspace_connection_facade import (
+        _workspace_facade_apps,
+    )
+
+    _workspace_facade_apps.cache_clear()
 
 
 def _seed_workspace_google_assistant(
     dbsession: Session,
     *,
     email: str = "meet.user@example.com",
+    granted_scopes: str = _GOOGLE_WORKSPACE_EVENT_SCOPES,
 ) -> tuple[Assistant, IntegrationConnection]:
     assistant = Assistant(user_id=PRIMARY_USER_ID, first_name="Meet", surname="User")
     dbsession.add(assistant)
@@ -74,10 +97,7 @@ def _seed_workspace_google_assistant(
         PRIMARY_USER_ID,
         assistant.agent_id,
         "GOOGLE_GRANTED_SCOPES",
-        (
-            "https://www.googleapis.com/auth/drive.readonly "
-            "https://www.googleapis.com/auth/meetings.space.readonly"
-        ),
+        granted_scopes,
     )
     secret_dao.upsert(
         PRIMARY_USER_ID,
@@ -97,7 +117,8 @@ def _seed_workspace_google_assistant(
         dbsession,
         assistant_id=assistant.agent_id,
     )
-    assert len(connections) == 3
+    connected = [c for c in connections if c.status == "connected"]
+    assert len(connected) == 3
     connection = next(
         row
         for row in connections
@@ -165,6 +186,95 @@ def test_meet_facade_disconnects_when_meet_scope_revoked(dbsession: Session) -> 
     ensure_workspace_trigger_connections(dbsession, assistant_id=assistant.agent_id)
     dbsession.refresh(connection)
     assert connection.status == "disconnected"
+
+
+def test_drive_facade_connects_with_readonly_drive_event_scope(
+    dbsession: Session,
+) -> None:
+    """Least-privilege drive.readonly unlocks google_drive; dropping it disconnects."""
+    assistant = Assistant(user_id=PRIMARY_USER_ID, first_name="Drive", surname="Gate")
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    secret_dao = AssistantSecretDAO(dbsession)
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/drive.readonly",
+    )
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "GOOGLE_ACCOUNT_EMAIL",
+        "drive.gate@example.com",
+    )
+    dbsession.flush()
+
+    connections = ensure_workspace_trigger_connections(
+        dbsession,
+        assistant_id=assistant.agent_id,
+    )
+    drive = next(
+        c for c in connections if c.canonical_app_slug == NATIVE_GOOGLE_DRIVE_APP_SLUG
+    )
+    assert drive.status == "connected"
+
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        "https://www.googleapis.com/auth/meetings.space.readonly",
+    )
+    dbsession.flush()
+    ensure_workspace_trigger_connections(dbsession, assistant_id=assistant.agent_id)
+    dbsession.refresh(drive)
+    assert drive.status == "disconnected"
+
+
+def test_chat_facade_requires_full_chat_event_scope_set(dbsession: Session) -> None:
+    """google_chat connects only with the full Chat Workspace Events scope set."""
+    assistant = Assistant(user_id=PRIMARY_USER_ID, first_name="Chat", surname="Gate")
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    secret_dao = AssistantSecretDAO(dbsession)
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "GOOGLE_ACCOUNT_EMAIL",
+        "chat.gate@example.com",
+    )
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        _GOOGLE_CHAT_SCOPES,
+    )
+    dbsession.flush()
+
+    connections = ensure_workspace_trigger_connections(
+        dbsession,
+        assistant_id=assistant.agent_id,
+    )
+    chat = next(
+        c for c in connections if c.canonical_app_slug == NATIVE_GOOGLE_CHAT_APP_SLUG
+    )
+    assert chat.status == "connected"
+
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "GOOGLE_GRANTED_SCOPES",
+        (
+            "https://www.googleapis.com/auth/chat.messages.readonly "
+            "https://www.googleapis.com/auth/chat.spaces.readonly"
+        ),
+    )
+    dbsession.flush()
+    ensure_workspace_trigger_connections(dbsession, assistant_id=assistant.agent_id)
+    dbsession.refresh(chat)
+    assert chat.status == "disconnected"
 
 
 def test_native_catalog_import_is_idempotent(dbsession: Session) -> None:

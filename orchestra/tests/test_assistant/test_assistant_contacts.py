@@ -3957,6 +3957,8 @@ class TestConnectEndpoint:
         assert "test-google-client-id" in oauth_url
         assert "gmail.send" in oauth_url
         assert "gmail.readonly" in oauth_url
+        assert "meetings.space.readonly" in oauth_url
+        assert "chat.messages.readonly" in oauth_url
         assert "include_granted_scopes=true" in oauth_url
 
         import base64
@@ -3969,7 +3971,7 @@ class TestConnectEndpoint:
         assert "_sig" not in state
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
-        assert state["features"] == ["email", "drive", "meet"]
+        assert state["features"] == ["email", "drive", "meet", "chat"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4163,7 +4165,7 @@ class TestConnectEndpoint:
         assert len(sig) == 64
         assert state["assistant_id"] == agent_id
         assert state["provider"] == "google"
-        assert state["features"] == ["email", "drive", "meet"]
+        assert state["features"] == ["email", "drive", "meet", "chat"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4435,7 +4437,7 @@ class TestConnectEndpointEdgeCases:
         parsed = urlparse(oauth_url)
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
-        assert state["features"] == ["email", "drive", "meet"]
+        assert state["features"] == ["email", "drive", "meet", "chat"]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4444,6 +4446,8 @@ class TestConnectEndpointEdgeCases:
 
         assert "gmail.send" in oauth_url
         assert "drive" in oauth_url
+        assert "meetings.space.readonly" in oauth_url
+        assert "chat.messages.readonly" in oauth_url
         assert "Chat.Read" not in oauth_url
         assert "calendar" not in oauth_url
 
@@ -4692,7 +4696,7 @@ class TestConnectScopeReduction:
         )
         agent_id = int(create_resp.json()["info"]["agent_id"])
 
-        stored_scopes = build_scope_string("google", ["email", "drive"])
+        stored_scopes = build_scope_string("google", ["email", "drive", "meet", "chat"])
 
         http_calls: list[tuple[str, str, dict | None]] = []
         mock_http = _build_mock_async_client(http_calls)
@@ -4903,7 +4907,7 @@ class TestGrantedFeaturesRequiredField:
 
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()["info"]
-        assert sorted(data["required_features"]) == ["drive", "email", "meet"]
+        assert sorted(data["required_features"]) == ["chat", "drive", "email", "meet"]
 
     @pytest.mark.anyio
     async def test_microsoft_required_features(
@@ -5694,7 +5698,7 @@ class TestConnectEndpointOrg:
                 parse_qs(urlparse(oauth_url).query)["state"][0],
             ),
         )
-        assert state["features"] == ["email", "drive", "meet"]
+        assert state["features"] == ["email", "drive", "meet", "chat"]
         assert state["actions"] == {
             "register_email_contact": False,
             "setup_email_watch": False,
@@ -6230,7 +6234,7 @@ class TestGrantedFeaturesEndpointOrg:
         data = resp.json()["info"]
         assert data["provider"] == "google"
         assert "email" in data["features"]
-        assert sorted(data["required_features"]) == ["drive", "email", "meet"]
+        assert sorted(data["required_features"]) == ["chat", "drive", "email", "meet"]
 
     @pytest.mark.anyio
     async def test_org_member_with_read_can_read(

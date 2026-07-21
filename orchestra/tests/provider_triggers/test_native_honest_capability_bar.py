@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
-from orchestra.db.models.integration_provider_models import IntegrationConnection
 from orchestra.db.models.orchestra_models import Assistant
 from orchestra.db.models.provider_trigger_models import EventTriggerBinding
 from orchestra.provider_triggers.backend_ids import (
@@ -76,6 +75,11 @@ MS_DELEGATED_SLUG = "microsoft.graph.mailMessage.created"
 def _native_env(monkeypatch: pytest.MonkeyPatch) -> None:
     stub_healthy_provider_trigger_topology(monkeypatch)
     monkeypatch.setenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost")
+    from orchestra.provider_triggers.workspace_connection_facade import (
+        _workspace_facade_apps,
+    )
+
+    _workspace_facade_apps.cache_clear()
 
 
 def _seed_google_assistant(dbsession: Session) -> tuple[Assistant, dict[str, str]]:
@@ -90,7 +94,12 @@ def _seed_google_assistant(dbsession: Session) -> tuple[Assistant, dict[str, str
         "GOOGLE_GRANTED_SCOPES",
         (
             "https://www.googleapis.com/auth/drive.readonly "
-            "https://www.googleapis.com/auth/meetings.space.readonly"
+            "https://www.googleapis.com/auth/meetings.space.readonly "
+            "https://www.googleapis.com/auth/chat.messages.readonly "
+            "https://www.googleapis.com/auth/chat.memberships.readonly "
+            "https://www.googleapis.com/auth/chat.spaces.readonly "
+            "https://www.googleapis.com/auth/chat.users.readstate.readonly "
+            "https://www.googleapis.com/auth/chat.users.availability.readonly"
         ),
     )
     secret_dao.upsert(
