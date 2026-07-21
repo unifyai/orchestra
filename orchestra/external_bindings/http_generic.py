@@ -17,7 +17,12 @@ from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from orchestra.external_bindings.types import BindingItem, BindingResult, ConnectorAuth
+from orchestra.external_bindings.types import (
+    BindingItem,
+    BindingResult,
+    ConnectorAuth,
+    WriteResult,
+)
 
 DEFAULT_CONCURRENCY = 8
 DEFAULT_TIMEOUT_S = 30
@@ -199,6 +204,48 @@ class HttpGenericConnector:
                     ),
                 )
         return out
+
+    def execute_write(
+        self,
+        *,
+        binding: dict[str, Any],
+        payload: dict[str, Any],
+        idempotency_key: str,
+        auth: ConnectorAuth,
+    ) -> WriteResult:
+        write = binding.get("write") or binding.get("http") or {}
+        if not isinstance(write, dict):
+            return WriteResult(ok=False, error="binding.write or binding.http required")
+        method = str(write.get("method") or "POST").upper()
+        url_template = write.get("url_template") or write.get("write_url_template")
+        if not url_template:
+            return WriteResult(ok=False, error="write.url_template required")
+        timeout = float(write.get("timeout_seconds") or DEFAULT_TIMEOUT_S)
+        headers = self._headers(auth, write)
+        headers.setdefault("Content-Type", "application/json")
+        headers.setdefault("Idempotency-Key", idempotency_key)
+        try:
+            url = _format_template(str(url_template), payload)
+            body_template = write.get("body_template", payload)
+            if isinstance(body_template, str):
+                body = _format_template(body_template, payload).encode()
+            else:
+                body = json.dumps(_deep_format(body_template, payload)).encode()
+            raw = _http_request(
+                method,
+                url,
+                headers=headers,
+                body=body,
+                timeout=timeout,
+            )
+            token = None
+            if isinstance(raw, dict):
+                token = raw.get("etag") or raw.get("id") or raw.get("revision")
+                if token is not None:
+                    token = str(token)
+            return WriteResult(ok=True, response=raw, external_token=token)
+        except Exception as e:
+            return WriteResult(ok=False, error=repr(e))
 
 
 def _format_template(template: str, inputs: dict[str, Any]) -> str:

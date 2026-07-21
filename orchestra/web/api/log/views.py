@@ -80,6 +80,8 @@ from orchestra.web.api.log.schema import (
     CreateLogConfig,
     DeleteFieldsRequest,
     DeleteLogEntryRequest,
+    DrainExternalWritesRequest,
+    ExternalWriteRequest,
     GetLogsMetricRequest,
     HydrateLogsRequest,
     JoinLogsRequest,
@@ -4072,6 +4074,9 @@ def get_logs(
                 value_limit=value_limit,
                 groups_only=groups_only,
                 return_timestamps=return_timestamps,
+                hydrate=hydrate,
+                hydrate_fields=hydrate_fields,
+                materialize=materialize,
             )
 
             final_result = {
@@ -4108,6 +4113,37 @@ def get_logs(
                 value_limit,
                 field_order_map,
             )
+
+            if (
+                not groups_only
+                and hydrate
+                and hydrate != "none"
+                and context_id is not None
+            ):
+                from orchestra.web.api.log.utils.external_hydrate import (
+                    apply_external_hydrate,
+                )
+
+                hydrate_field_list = (
+                    [f for f in hydrate_fields.split("&") if f]
+                    if hydrate_fields
+                    else None
+                )
+                try:
+                    logs_out = apply_external_hydrate(
+                        session=session,
+                        project_id=project_id,
+                        context_id=context_id,
+                        logs_out=logs_out,
+                        hydrate=hydrate,
+                        hydrate_fields=hydrate_field_list,
+                        materialize=materialize,
+                        rows=None,
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                except RuntimeError as e:
+                    raise HTTPException(status_code=502, detail=str(e))
 
             groups = {}
 
@@ -4346,6 +4382,32 @@ def query_logs_post(
             exclude_fields=body.exclude_fields,
         )
 
+        if body.hydrate != "none" and context_id is not None:
+            from orchestra.web.api.log.utils.external_hydrate import (
+                apply_external_hydrate,
+            )
+
+            hydrate_field_list = (
+                [f for f in body.hydrate_fields.split("&") if f]
+                if body.hydrate_fields
+                else None
+            )
+            try:
+                logs_out = apply_external_hydrate(
+                    session=session,
+                    project_id=project_id,
+                    context_id=context_id,
+                    logs_out=logs_out,
+                    hydrate=body.hydrate,
+                    hydrate_fields=hydrate_field_list,
+                    materialize=body.materialize,
+                    rows=rows,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=502, detail=str(e))
+
         # Apply group threshold if needed
         if body.group_threshold:
             logs_out = apply_group_threshold(logs_out, body.group_threshold)
@@ -4417,6 +4479,9 @@ def query_logs_post(
             value_limit=body.value_limit,
             groups_only=body.groups_only or False,
             return_timestamps=body.return_timestamps or False,
+            hydrate=body.hydrate,
+            hydrate_fields=body.hydrate_fields,
+            materialize=body.materialize,
         )
         return {
             "logs": grouped_result,
@@ -6074,6 +6139,80 @@ def hydrate_logs_endpoint(
         raise HTTPException(status_code=502, detail=str(e))
 
     return {"logs": logs_out, "count": len(logs_out)}
+
+
+@router.post("/logs/external_write")
+def external_write_endpoint(
+    request_fastapi: Request,
+    request: ExternalWriteRequest,
+    session=Depends(get_db_session),
+):
+    """Enqueue (and optionally sync-deliver) an external through-write intent."""
+    from orchestra.external_bindings.write import enqueue_external_write
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    try:
+        user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=request.project_name,
+            organization_id=organization_id,
+        )
+        project_id = project.id
+    except (IndexError, AttributeError):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{request.project_name}' not found.",
+        )
+    _check_project_write_permission(session, user_id, organization_id, project_id)
+
+    context_name = request.context if request.context else ""
+    context_rows = context_dao.filter(project_id=project_id, name=context_name)
+    if not context_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Context '{context_name}' not found",
+        )
+    context_id = context_rows[0][0].id
+
+    connector_id = request.connector_id
+    if not connector_id and not request.field_name:
+        raise HTTPException(
+            status_code=400,
+            detail="field_name or connector_id is required",
+        )
+    try:
+        return enqueue_external_write(
+            session,
+            project_id=project_id,
+            context_id=context_id,
+            connector_id=connector_id or "",
+            payload=dict(request.payload or {}),
+            idempotency_key=request.idempotency_key,
+            binding=request.binding,
+            field_name=request.field_name,
+            log_event_ids=request.log_event_ids,
+            deliver=request.deliver,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@admin_router.post("/external_writes/drain")
+def drain_external_writes_endpoint(
+    request: DrainExternalWritesRequest,
+    session=Depends(get_db_session),
+):
+    """Deliver pending external write intents (cron / worker)."""
+    from orchestra.external_bindings.write import drain_external_writes
+
+    return drain_external_writes(session, limit=request.limit)
 
 
 @router.patch(

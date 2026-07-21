@@ -41,6 +41,16 @@ class BindingResult:
         return self.error is None
 
 
+@dataclass(frozen=True)
+class WriteResult:
+    """Outcome of delivering one external write intent."""
+
+    ok: bool
+    response: Any = None
+    error: Optional[str] = None
+    external_token: Optional[str] = None
+
+
 @runtime_checkable
 class ExternalConnector(Protocol):
     """Batch-capable external data source for bound columns."""
@@ -60,4 +70,15 @@ class ExternalConnector(Protocol):
         batching; otherwise apply bounded concurrency. Never require the
         planner to call this once per cell.
         """
+        ...
+
+    def execute_write(
+        self,
+        *,
+        binding: dict[str, Any],
+        payload: dict[str, Any],
+        idempotency_key: str,
+        auth: ConnectorAuth,
+    ) -> WriteResult:
+        """Deliver a through-write against the external system."""
         ...

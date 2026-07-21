@@ -81,13 +81,52 @@ external values are stored under the field name and can participate in later
 filters. Virtual-only (never materialized) external columns are not
 pushdown-filterable.
 
-## Write-through (Phase 4 — not in this release)
+## Hydrate on grouped and federated reads
 
-External columns **observe** remote state. Mutations that must not diverge
-belong on a future outbox / through-write intent API. Do not encode side-effect
-writes inside hydrate connectors.
+`hydrate` / `hydrate_fields` / `materialize` apply on:
+
+| Surface | Behavior |
+|---|---|
+| `GET /logs` (flat) | After `_format_logs` |
+| `GET /logs` (grouped / nested) | Per leaf fetch in `_build_grouped_data` |
+| `GET /logs` (flat groups) | After `_format_flat_logs` (no sidecar reload) |
+| `POST /logs/query` | Same as GET for grouped and non-grouped |
+| Federated `POST /logs/federated` | **Per context branch** after that branch formats |
+
+`groups_only` / ids-only responses skip hydrate (no row payloads).
+
+## Write-through / outbox (Phase 4)
+
+External columns **observe** remote state. Mutations go through an outbox:
+
+1. `POST /logs/external_write` enqueues an `external_write_intent`
+   (`deliver=async` default, or `deliver=sync` for in-request delivery).
+2. Admin `POST /admin/external_writes/drain` delivers pending intents
+   (Cloud Scheduler / worker loop).
+3. On confirm, hydrate sidecars for `log_event_ids` are invalidated so the
+   next read re-fetches.
+
+Idempotency is unique on `(project_id, idempotency_key)`. Connectors implement
+`execute_write` (see `http.generic` with `binding.write.url_template`).
+
+```json
+{
+  "project_name": "demo",
+  "context": "Data/things",
+  "field_name": "remote_status",
+  "idempotency_key": "reply-job-42",
+  "payload": {"thread_id": "…", "body": "…"},
+  "log_event_ids": [123],
+  "deliver": "async"
+}
+```
+
+Do not encode side-effect sends inside hydrate `batch_fetch`.
 
 ## UniSDK / Unify
 
 - UniSDK merges `external_entries` into `Log` objects like derived entries.
-- DataManager exposes `create_external_column` and `filter(..., hydrate=...)`.
+- UniSDK: `get_logs(hydrate=…)`, `hydrate_logs`, `update_external_field_binding`,
+  `request_external_write`.
+- DataManager: `create_external_column`, `filter(..., hydrate=...)`,
+  `request_external_write`.

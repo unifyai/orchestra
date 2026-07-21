@@ -1784,6 +1784,9 @@ def _build_grouped_data(
     groups_only: bool = False,
     return_timestamps: bool = False,
     parent_group_key: Optional[str] = "",
+    hydrate: str = "stale_ok",
+    hydrate_fields: Optional[str] = None,
+    materialize: bool = True,
 ) -> Dict[str, Any]:
     """
     SQL-first multi-level grouping using JSONB operators.
@@ -1874,6 +1877,9 @@ def _build_grouped_data(
             value_limit=value_limit,
             field_order_map=field_order_map,
             field_types=field_types,
+            hydrate=hydrate,
+            hydrate_fields=hydrate_fields,
+            materialize=materialize,
         )
 
     # Handle group_depth limit
@@ -2108,6 +2114,9 @@ def _build_grouped_data(
             parent_group_key=(
                 "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
             ),
+            hydrate=hydrate,
+            hydrate_fields=hydrate_fields,
+            materialize=materialize,
         )
 
         group_list.append({"key": str(group_val), "value": substructure})
@@ -2152,6 +2161,9 @@ def _build_grouped_data(
             parent_group_key=(
                 "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
             ),
+            hydrate=hydrate,
+            hydrate_fields=hydrate_fields,
+            materialize=materialize,
         )
         group_list.append({"key": "null", "value": null_sub})
 
@@ -2214,10 +2226,14 @@ def _fetch_leaf_logs(
     value_limit: Optional[int],
     field_order_map: Dict[str, int],
     field_types: Dict[str, str],
+    hydrate: str = "stale_ok",
+    hydrate_fields: Optional[str] = None,
+    materialize: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Fetch leaf logs for grouped data using direct data queries.
     """
+    from .external_hydrate import apply_external_hydrate
     from .logging_utils import _format_logs
 
     # Build query for LogEvent with JSONB data
@@ -2272,5 +2288,20 @@ def _fetch_leaf_logs(
         column_context=column_context,
         field_order_map=field_order_map,
     )
+
+    if hydrate and hydrate != "none" and context_id is not None:
+        hydrate_field_list = (
+            [f for f in hydrate_fields.split("&") if f] if hydrate_fields else None
+        )
+        logs_out = apply_external_hydrate(
+            session=session,
+            project_id=project_id,
+            context_id=context_id,
+            logs_out=logs_out,
+            hydrate=hydrate,
+            hydrate_fields=hydrate_field_list,
+            materialize=materialize,
+            rows=rows,
+        )
 
     return logs_out

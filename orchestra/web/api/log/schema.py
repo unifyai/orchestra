@@ -645,6 +645,55 @@ class HydrateLogsRequest(BaseModel):
     limit: int = Field(default=500, ge=1, le=500)
 
 
+class ExternalWriteRequest(BaseModel):
+    project_name: str = Field(description="Project name.")
+    context: Optional[str] = Field(default="", description="Context path.")
+    idempotency_key: str = Field(
+        description="Client-supplied idempotency key (unique per project).",
+        min_length=1,
+        max_length=512,
+    )
+    payload: Dict[str, Any] = Field(
+        description="Template inputs for the connector write (url/body slots).",
+    )
+    field_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bound external_entry field whose write config to use. "
+            "When set, connector_id/binding are loaded from the field binding."
+        ),
+    )
+    connector_id: Optional[str] = Field(
+        default=None,
+        description="Connector id when not resolving via field_name.",
+    )
+    binding: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Inline binding override (must include write/http url_template).",
+    )
+    log_event_ids: Optional[List[int]] = Field(
+        default=None,
+        description=(
+            "Rows whose hydrate sidecars should be invalidated after confirm."
+        ),
+    )
+    deliver: Literal["async", "sync"] = Field(
+        default="async",
+        description=(
+            "async: enqueue pending for drain; sync: deliver in this request."
+        ),
+    )
+
+
+class DrainExternalWritesRequest(BaseModel):
+    limit: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Max pending intents to deliver in this drain pass.",
+    )
+
+
 class JoinLogsRequest(BaseModel):
     pair_of_args: List[Dict[str, Any]] = Field(
         ...,
@@ -951,6 +1000,18 @@ class QueryLogsPostBody(BaseModel):
     group_threshold: Optional[int] = Field(
         None,
         description="When set, entries that appear in at least this many logs will be grouped together",
+    )
+    hydrate: Literal["none", "stale_ok", "force"] = Field(
+        default="stale_ok",
+        description="External field hydrate mode",
+    )
+    hydrate_fields: Optional[str] = Field(
+        default=None,
+        description="Ampersand-separated external fields to hydrate",
+    )
+    materialize: bool = Field(
+        default=True,
+        description="Persist hydrated external values and cache sidecars",
     )
 
 

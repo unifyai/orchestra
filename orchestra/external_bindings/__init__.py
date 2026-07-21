@@ -21,6 +21,7 @@ from orchestra.external_bindings.types import (
     BindingResult,
     ConnectorAuth,
     ExternalConnector,
+    WriteResult,
 )
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "ConnectorAuth",
     "ExternalConnector",
     "HydrateMode",
+    "WriteResult",
     "get_connector",
     "hydrate_logs",
     "list_connectors",
