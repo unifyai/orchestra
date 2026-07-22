@@ -84,7 +84,7 @@ GOOGLE_CHAT_EVENT_SCOPES = frozenset(GOOGLE_SCOPE_BUNDLES["chat"])
 MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
     "email": ["Mail.Read", "Mail.Send", "Mail.ReadWrite"],
     "calendar": ["Calendars.Read", "Calendars.ReadWrite"],
-    "drive": ["Files.Read", "Files.ReadWrite"],
+    "drive": ["Files.Read", "Files.ReadWrite", "Files.Read.All"],
     "contacts": ["Contacts.Read"],
     "teams": [
         "Chat.Read",
@@ -97,12 +97,43 @@ MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
         "Channel.Create",
         "TeamMember.Read.All",
         "OnlineMeetings.ReadWrite",
+        "OnlineMeetingTranscript.Read.All",
     ],
     "sharepoint": ["Sites.Read.All", "Sites.ReadWrite.All"],
     "tasks": ["Tasks.Read", "Tasks.ReadWrite"],
 }
 
 MICROSOFT_BASE_SCOPES = ["User.Read", "offline_access"]
+
+# Delegated Graph change-notification families. The facade treats each native
+# Microsoft app as connected when at least one of these scopes is present.
+MICROSOFT_OUTLOOK_EVENT_SCOPES = frozenset(
+    {
+        "Mail.Read",
+        "Mail.ReadWrite",
+        "Calendars.Read",
+        "Calendars.ReadWrite",
+        "Contacts.Read",
+    },
+)
+MICROSOFT_ONEDRIVE_EVENT_SCOPES = frozenset(
+    {
+        "Files.Read",
+        "Files.ReadWrite",
+        "Files.Read.All",
+        "Files.ReadWrite.All",
+    },
+)
+MICROSOFT_TEAMS_EVENT_SCOPES = frozenset(
+    {
+        "OnlineMeetingTranscript.Read.All",
+    },
+)
+MICROSOFT_TODO_EVENT_SCOPES = frozenset(
+    {
+        "Tasks.ReadWrite",
+    },
+)
 
 _BUNDLES = {
     "google": GOOGLE_SCOPE_BUNDLES,
@@ -119,9 +150,21 @@ _BASE = {
 # features) and has no per-feature Meet/Chat toggle. Existing assistants must
 # re-consent once after deploy; until then native facades stay disconnected
 # and bindings must not appear healthy.
+#
+# Microsoft delegated Graph triggers need calendar/contacts/tasks in addition
+# to the existing email/teams/drive defaults so one re-consent unlocks the
+# live_ready Microsoft subset.
 REQUIRED_FEATURES: dict[str, list[str]] = {
     "google": ["email", "drive", "meet", "chat"],
-    "microsoft": ["email", "teams", "drive", "sharepoint"],
+    "microsoft": [
+        "email",
+        "calendar",
+        "contacts",
+        "teams",
+        "drive",
+        "tasks",
+        "sharepoint",
+    ],
 }
 
 

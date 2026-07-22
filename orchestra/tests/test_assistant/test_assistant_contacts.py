@@ -4492,7 +4492,15 @@ class TestConnectEndpointEdgeCases:
         parsed = urlparse(oauth_url)
         qs = parse_qs(parsed.query)
         state = json.loads(base64.urlsafe_b64decode(qs["state"][0]))
-        assert sorted(state["features"]) == ["drive", "email", "sharepoint", "teams"]
+        assert sorted(state["features"]) == [
+            "calendar",
+            "contacts",
+            "drive",
+            "email",
+            "sharepoint",
+            "tasks",
+            "teams",
+        ]
         assert state["actions"] == {
             "register_email_contact": True,
             "setup_email_watch": True,
@@ -4851,9 +4859,11 @@ class TestCompulsoryFeatures:
         )
         assert sorted(state["features"]) == [
             "calendar",
+            "contacts",
             "drive",
             "email",
             "sharepoint",
+            "tasks",
             "teams",
         ]
         assert state["actions"] == {
@@ -4952,9 +4962,12 @@ class TestGrantedFeaturesRequiredField:
         assert resp.status_code == status.HTTP_200_OK
         data = resp.json()["info"]
         assert sorted(data["required_features"]) == [
+            "calendar",
+            "contacts",
             "drive",
             "email",
             "sharepoint",
+            "tasks",
             "teams",
         ]
 
@@ -5913,9 +5926,11 @@ class TestConnectEndpointOrg:
         )
         assert sorted(state["features"]) == [
             "calendar",
+            "contacts",
             "drive",
             "email",
             "sharepoint",
+            "tasks",
             "teams",
         ]
         assert state["actions"] == {
@@ -6279,9 +6294,12 @@ class TestGrantedFeaturesEndpointOrg:
         assert data["provider"] == "microsoft"
         assert "email" in data["features"]
         assert sorted(data["required_features"]) == [
+            "calendar",
+            "contacts",
             "drive",
             "email",
             "sharepoint",
+            "tasks",
             "teams",
         ]
 
@@ -6413,8 +6431,11 @@ class TestGrantedFeaturesEndpointOrg:
         assert data["provider"] == "microsoft"
         assert sorted(data["features"]) == ["email", "teams"]
         assert sorted(data["required_features"]) == [
+            "calendar",
+            "contacts",
             "drive",
             "email",
             "sharepoint",
+            "tasks",
             "teams",
         ]
