@@ -22,7 +22,7 @@ from orchestra.provider_triggers.workspace_trigger_credentials import (
 )
 
 MEET_EVENT_TYPE = "google.workspace.meet.transcript.v2.fileGenerated"
-PUBSUB_TOPIC = "projects/test-proj/topics/meet-workspace-events-staging"
+PUBSUB_TOPIC = "projects/test-proj/topics/workspace-events-staging"
 SUBSCRIPTION_NAME = "subscriptions/AbCdEf123456"
 
 
@@ -166,6 +166,49 @@ def test_native_google_provision_fails_closed_without_pubsub_topic() -> None:
     adapter = _adapter(request_fn=request_fn, pubsub_topic="")
     with pytest.raises(RuntimeError, match="pubsub topic is not configured"):
         adapter.provision(_provision_request())
+
+
+def test_native_google_provision_reads_workspace_events_topic_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Constructor topic=None resolves NATIVE_GOOGLE_WORKSPACE_EVENTS_PUBSUB_TOPIC."""
+
+    from orchestra.settings import settings
+
+    monkeypatch.setattr(
+        settings,
+        "native_google_workspace_events_pubsub_topic",
+        PUBSUB_TOPIC,
+    )
+
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        calls.append((method, url, kwargs))
+        if url.endswith("/userinfo"):
+            return _FakeResponse(payload={"sub": "108234567890123456789"})
+        if method == "POST" and url.endswith("/subscriptions"):
+            return _FakeResponse(
+                payload={
+                    "done": True,
+                    "response": {
+                        "@type": (
+                            "type.googleapis.com/google.apps.events."
+                            "subscriptions.v1.Subscription"
+                        ),
+                        "name": SUBSCRIPTION_NAME,
+                        "state": "ACTIVE",
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    adapter = _adapter(request_fn=request_fn, pubsub_topic=None)
+    result = adapter.provision(_provision_request())
+
+    create_call = next(c for c in calls if c[1].endswith("/subscriptions"))
+    assert create_call[2]["json"]["notificationEndpoint"]["pubsubTopic"] == PUBSUB_TOPIC
+    assert result.external_trigger_id == SUBSCRIPTION_NAME
 
 
 DRIVE_EVENT_TYPE = "google.workspace.drive.file.v3.created"
