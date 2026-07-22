@@ -626,6 +626,7 @@ class ProviderTriggerReconciliationService:
                     generation.external_trigger_id if generation else None
                 ),
                 provider_connection_id=connection.provider_connection_id,
+                connection_id=binding.connection_id,
             )
         except Exception:
             logger.exception(

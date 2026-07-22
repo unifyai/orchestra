@@ -265,8 +265,9 @@ class LocalComposioTriggerAdapter(TriggerProviderAdapter):
         *,
         external_trigger_id: str | None,
         provider_connection_id: str | None,
+        connection_id: str | None = None,
     ) -> TriggerHealthResult:
-        _ = external_trigger_id
+        _ = external_trigger_id, connection_id
         if not provider_connection_id:
             return TriggerHealthResult(
                 status="error",

@@ -242,6 +242,7 @@ class LocalNativeMicrosoftTriggerAdapter(TriggerProviderAdapter):
         *,
         external_trigger_id: str | None,
         provider_connection_id: str | None,
+        connection_id: str | None = None,
     ) -> TriggerHealthResult:
-        _ = external_trigger_id, provider_connection_id
+        _ = external_trigger_id, provider_connection_id, connection_id
         return TriggerHealthResult(status=self._scenario.health_status)

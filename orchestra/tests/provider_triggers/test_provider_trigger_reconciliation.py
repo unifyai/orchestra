@@ -128,8 +128,9 @@ class FakeTriggerAdapter(TriggerProviderAdapter):
         *,
         external_trigger_id: str | None,
         provider_connection_id: str | None,
+        connection_id: str | None = None,
     ) -> TriggerHealthResult:
-        _ = external_trigger_id, provider_connection_id
+        _ = external_trigger_id, provider_connection_id, connection_id
         if self.health_status == "ok":
             return TriggerHealthResult(status="ok")
         return TriggerHealthResult(

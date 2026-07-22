@@ -470,7 +470,9 @@ class _StubGoogleAccountAdapter(TriggerProviderAdapter):
         *,
         external_trigger_id: str | None,
         provider_connection_id: str | None,
+        connection_id: str | None = None,
     ) -> TriggerHealthResult:  # pragma: no cover
+        _ = external_trigger_id, provider_connection_id, connection_id
         return TriggerHealthResult(status="ok")
 
 

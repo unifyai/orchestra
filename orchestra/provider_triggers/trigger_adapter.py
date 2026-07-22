@@ -163,8 +163,14 @@ class TriggerProviderAdapter(ABC):
         *,
         external_trigger_id: str | None,
         provider_connection_id: str | None,
+        connection_id: str | None = None,
     ) -> TriggerHealthResult:
-        """Probe provider-side health for one generation or connection."""
+        """Observe provider-side subscription health for one generation.
+
+        Providers with bounded subscription TTL may renew as part of this call.
+        ``connection_id`` is the Orchestra integration connection id when the
+        adapter needs to load credentials (native workspace facades).
+        """
 
     def authorize_delivery(
         self,
