@@ -485,3 +485,118 @@ async def test_pause_before_signed_delivery_ignores_matched_event(
         .all()
     )
     assert dispatches == []
+
+
+@pytest.mark.anyio
+async def test_signed_native_microsoft_lifecycle_delivery_is_ignored_without_dispatch(
+    dbsession: Session,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Graph lifecycle notifications must not create provider_event runs."""
+
+    ms_secret = "native-microsoft-lifecycle-secret"
+    monkeypatch.setenv("NATIVE_MICROSOFT_WEBHOOK_SECRET", ms_secret)
+
+    assistant = Assistant(
+        user_id=PRIMARY_USER_ID,
+        first_name="MS",
+        surname="Lifecycle",
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    project = Project(name=TASK_MACHINE_PROJECT_NAME, user_id=PRIMARY_USER_ID)
+    dbsession.add(project)
+    dbsession.flush()
+
+    connection_id = f"conn-{uuid.uuid4().hex[:10]}"
+    dbsession.add(
+        IntegrationConnection(
+            connection_id=connection_id,
+            owner_scope="assistant",
+            assistant_id=assistant.agent_id,
+            canonical_app_slug="microsoft_outlook",
+            backend_id="native_microsoft",
+            provider_app_id="MICROSOFT_OUTLOOK",
+            provider_connection_id="microsoft:lifecycle@example.com",
+            provider_user_id="lifecycle@example.com",
+            status="connected",
+            credential_storage="assistant_workspace_secrets",
+        ),
+    )
+    dbsession.flush()
+
+    task_id = int(uuid.uuid4().int % 1_000_000) + 1
+    binding_id = f"binding-{uuid.uuid4().hex[:12]}"
+    dao = ProviderTriggerDAO(dbsession)
+    trigger = ProviderEventTrigger(
+        state="enabled",
+        connection_id=connection_id,
+        backend_id="native_microsoft",
+        canonical_app_slug="microsoft_outlook",
+        provider_trigger_slug="microsoft.graph.mailMessage.created",
+        trigger_config={},
+    )
+    binding = dao.create_binding(
+        binding_id=binding_id,
+        project_id=project.id,
+        tasks_context_id=0,
+        source_task_log_id=task_id,
+        task_id=task_id,
+        assistant_id=assistant.agent_id,
+        task_revision=1,
+        trigger=trigger,
+        execution_mode="live",
+        entrypoint=None,
+    )
+    generation = dao.create_generation(binding=binding)
+    generation.external_trigger_id = "7f105c7d-2dc5-4530-97cd-4e7ae6534c07"
+    generation.signing_secret_ref = "env:NATIVE_MICROSOFT_WEBHOOK_SECRET"
+    generation.signing_secret_version = "project"
+    dao.promote_generation(binding=binding, generation=generation)
+    dbsession.flush()
+
+    from orchestra.tests.provider_triggers.native_delivery import (
+        deliver_signed_native_webhook,
+    )
+
+    payload = {
+        "event_id": (
+            "lifecycle:7f105c7d-2dc5-4530-97cd-4e7ae6534c07:reauthorizationRequired"
+        ),
+        "provider_trigger_slug": "microsoft.graph.lifecycle",
+        "external_trigger_id": "7f105c7d-2dc5-4530-97cd-4e7ae6534c07",
+        "lifecycle_event": "reauthorizationRequired",
+        "data": {
+            "lifecycle_event": "reauthorizationRequired",
+            "subscription_id": "7f105c7d-2dc5-4530-97cd-4e7ae6534c07",
+            "event_id": (
+                "lifecycle:7f105c7d-2dc5-4530-97cd-4e7ae6534c07:"
+                "reauthorizationRequired"
+            ),
+        },
+    }
+    response = await deliver_signed_native_webhook(
+        client,
+        backend_id="native_microsoft",
+        ingress_key=generation.ingress_key,
+        payload=payload,
+        signing_secret=ms_secret,
+        webhook_id="ms-lifecycle-1",
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ignored"
+    assert body["classification_reason"] == "unsupported"
+
+    dispatches = (
+        dbsession.execute(
+            select(ProviderEventDispatch).where(
+                ProviderEventDispatch.binding_id == binding_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    assert dispatches == []
