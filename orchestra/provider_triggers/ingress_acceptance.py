@@ -267,6 +267,16 @@ def _classify_delivery(
     if auth_error is not None:
         return ReceiptClassificationReason.unauthorized
 
+    # Graph lifecycle notifications (subscriptionRemoved, missed,
+    # reauthorizationRequired) share the Adapters ingress path but must not
+    # create provider_event runs.
+    source = delivery.source_body or {}
+    nested = source.get("data") if isinstance(source.get("data"), Mapping) else {}
+    if source.get("lifecycle_event") or (
+        isinstance(nested, Mapping) and nested.get("lifecycle_event")
+    ):
+        return ReceiptClassificationReason.unsupported
+
     return ReceiptClassificationReason.matched
 
 

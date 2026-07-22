@@ -936,7 +936,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -958,7 +961,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -980,7 +986,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1002,7 +1011,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1024,7 +1036,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1046,7 +1061,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1068,7 +1086,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1090,7 +1111,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1112,7 +1136,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1134,7 +1161,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1156,7 +1186,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1178,7 +1211,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,
@@ -1200,7 +1236,10 @@
             "description": "Google Chat space name (e.g. spaces/AAAA) or spaces/- for user-level delivery where Google permits it."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "target_resource"
+        ]
       },
       "live_ready": true,
       "delivery_only": false,

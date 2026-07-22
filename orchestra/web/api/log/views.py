@@ -75,6 +75,8 @@ from orchestra.web.api.log.python2SQL import (
 from orchestra.web.api.log.schema import (
     AtomicFieldUpdateRequest,
     AtomicFieldUpdateResponse,
+    ClaimLogsRequest,
+    ClaimLogsResponse,
     CreateDerivedEntriesConfig,
     CreateFieldsRequest,
     CreateLogConfig,
@@ -1665,6 +1667,158 @@ def atomic_field_upsert(
         body=body,
         session=session,
     )
+
+
+_CLAIM_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9_./\- ]+$")
+
+
+@router.post(
+    "/logs/claim",
+    response_model=ClaimLogsResponse,
+    responses={
+        200: {
+            "description": "Claim applied (count may be 0 when nothing matched)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "claimed": [
+                            {
+                                "id": 123,
+                                "data": {"job_id": "abc", "status": "processing"},
+                            },
+                        ],
+                        "count": 1,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Project not found."},
+                },
+            },
+        },
+    },
+)
+def claim_logs(
+    request_fastapi: Request,
+    body: ClaimLogsRequest = Body(...),
+    session=Depends(get_db_session),
+):
+    """
+    Atomically claim log rows via compare-and-set.
+
+    Rows in the given context whose data fields equal every ``expect`` entry
+    are locked with ``FOR UPDATE SKIP LOCKED`` and updated with ``updates``
+    in a single statement. Concurrent claimers never receive the same row,
+    so a claim of e.g. ``expect={"status": "queued"}`` /
+    ``updates={"status": "processing"}`` has exactly one winner per row.
+    """
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    if not body.expect:
+        raise HTTPException(status_code=400, detail="expect must not be empty.")
+    if not body.updates:
+        raise HTTPException(status_code=400, detail="updates must not be empty.")
+    for key in [*body.expect, *body.updates]:
+        if not _CLAIM_FIELD_NAME_RE.match(key):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid field name {key!r}.",
+            )
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    try:
+        project_obj = project_dao.get_by_user_and_name(
+            name=body.project,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
+        project_id = project_obj.id
+    except (IndexError, AttributeError):
+        raise HTTPException(status_code=404, detail="Project not found.")
+    _check_project_write_permission(
+        session,
+        user_id,
+        organization_id,
+        project_id,
+    )
+
+    context_id = context_dao.get_or_create(project_id, name=body.context)
+
+    from orchestra.services.auto_counting_guards import protected_auto_counting_fields
+
+    context_obj = session.query(Context).filter(Context.id == context_id).first()
+    protected = protected_auto_counting_fields(context_obj)
+    colliding = protected.intersection(body.updates.keys())
+    if colliding:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Fields {sorted(colliding)} are auto-counted unique identities "
+                "on this context and cannot be modified after create."
+            ),
+        )
+
+    def _expect_text(value: Any) -> str:
+        # Match jsonb ->> textual rendering for scalars.
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, str):
+            return value
+        return json.dumps(value)
+
+    conditions = []
+    params: Dict[str, Any] = {
+        "project_id": project_id,
+        "context_id": context_id,
+        "limit": body.limit,
+        "updates": json.dumps(body.updates, cls=CustomEncoder),
+        "now": datetime.now(timezone.utc),
+    }
+    for index, (key, value) in enumerate(body.expect.items()):
+        params[f"ek{index}"] = key
+        if value is None:
+            conditions.append(f"le.data->>(:ek{index}) IS NULL")
+        else:
+            conditions.append(f"le.data->>(:ek{index}) = :ev{index}")
+            params[f"ev{index}"] = _expect_text(value)
+    conditions_sql = " AND ".join(conditions)
+
+    sql = text(
+        f"""
+        WITH claimable AS (
+            SELECT le.id
+            FROM log_event le
+            JOIN log_event_context lec
+              ON lec.log_event_id = le.id
+             AND lec.project_id = le.project_id
+            WHERE le.project_id = :project_id
+              AND lec.context_id = :context_id
+              AND {conditions_sql}
+            ORDER BY le.id
+            LIMIT :limit
+            FOR UPDATE OF le SKIP LOCKED
+        )
+        UPDATE log_event le
+        SET data = COALESCE(le.data, '{{}}'::jsonb) || CAST(:updates AS jsonb),
+            updated_at = :now
+        FROM claimable c
+        WHERE le.id = c.id
+          AND le.project_id = :project_id
+        RETURNING le.id, le.data
+        """,
+    )
+    rows = session.execute(sql, params).fetchall()
+    session.commit()
+
+    claimed = [{"id": row.id, "data": row.data} for row in rows]
+    return ClaimLogsResponse(claimed=claimed, count=len(claimed))
 
 
 def _atomic_field_update_impl(

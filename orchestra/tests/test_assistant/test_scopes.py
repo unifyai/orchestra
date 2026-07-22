@@ -228,11 +228,16 @@ class TestRequiredFeatures:
             "meet",
         ]
 
-    def test_microsoft_requires_email_teams_and_drive_options(self):
+    def test_microsoft_requires_email_calendar_contacts_tasks_teams_drive_sharepoint(
+        self,
+    ):
         assert sorted(REQUIRED_FEATURES["microsoft"]) == [
+            "calendar",
+            "contacts",
             "drive",
             "email",
             "sharepoint",
+            "tasks",
             "teams",
         ]
 

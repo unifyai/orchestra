@@ -110,24 +110,28 @@ def signing_secrets_configured() -> bool:
 def native_google_signing_configured() -> bool:
     """Return True when the native Google webhook signing secret resolves.
 
-    Adapters signs Meet bridge deliveries and Orchestra verifies them with the
-    same ``NATIVE_GOOGLE_WEBHOOK_SECRET``; without it no native Google delivery
-    can authenticate.
+    Adapters signs Workspace Events bridge deliveries and Orchestra verifies
+    them with the same ``NATIVE_GOOGLE_WEBHOOK_SECRET``; without it no native
+    Google delivery can authenticate.
     """
 
     return bool(resolve_signing_secret_ref(NATIVE_GOOGLE_WEBHOOK_SECRET_REF))
 
 
-def native_google_meet_events_topic_configured() -> bool:
-    """Return True when the shared Meet Workspace Events topic is configured."""
+def native_google_workspace_events_topic_configured() -> bool:
+    """Return True when the shared Workspace Events Pub/Sub topic is configured."""
 
-    return bool((settings.native_google_meet_events_pubsub_topic or "").strip())
+    return bool(
+        (settings.native_google_workspace_events_pubsub_topic or "").strip(),
+    )
 
 
-def native_google_meet_prerequisites_reason() -> TopologyUnavailableReason | None:
-    """Return the first missing native Google Meet prerequisite, or None.
+def native_google_workspace_events_prerequisites_reason() -> (
+    TopologyUnavailableReason | None
+):
+    """Return the first missing native Google Workspace Events prerequisite.
 
-    Native Google Meet transcript triggers need a resolvable webhook signing
+    Native Google Meet/Drive/Chat triggers need a resolvable webhook signing
     secret and a configured Workspace Events Pub/Sub topic for
     ``notificationEndpoint.pubsubTopic``. Native provision uses this to fail
     closed rather than registering a subscription that can never deliver. It is
@@ -139,7 +143,7 @@ def native_google_meet_prerequisites_reason() -> TopologyUnavailableReason | Non
         return None
     if not native_google_signing_configured():
         return TopologyUnavailableReason.native_google_signing_unconfigured
-    if not native_google_meet_events_topic_configured():
+    if not native_google_workspace_events_topic_configured():
         return TopologyUnavailableReason.native_google_topic_unconfigured
     return None
 

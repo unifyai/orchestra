@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -22,7 +23,7 @@ from orchestra.provider_triggers.workspace_trigger_credentials import (
 )
 
 MEET_EVENT_TYPE = "google.workspace.meet.transcript.v2.fileGenerated"
-PUBSUB_TOPIC = "projects/test-proj/topics/meet-workspace-events-staging"
+PUBSUB_TOPIC = "projects/test-proj/topics/workspace-events-staging"
 SUBSCRIPTION_NAME = "subscriptions/AbCdEf123456"
 
 
@@ -166,6 +167,49 @@ def test_native_google_provision_fails_closed_without_pubsub_topic() -> None:
     adapter = _adapter(request_fn=request_fn, pubsub_topic="")
     with pytest.raises(RuntimeError, match="pubsub topic is not configured"):
         adapter.provision(_provision_request())
+
+
+def test_native_google_provision_reads_workspace_events_topic_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Constructor topic=None resolves NATIVE_GOOGLE_WORKSPACE_EVENTS_PUBSUB_TOPIC."""
+
+    from orchestra.settings import settings
+
+    monkeypatch.setattr(
+        settings,
+        "native_google_workspace_events_pubsub_topic",
+        PUBSUB_TOPIC,
+    )
+
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        calls.append((method, url, kwargs))
+        if url.endswith("/userinfo"):
+            return _FakeResponse(payload={"sub": "108234567890123456789"})
+        if method == "POST" and url.endswith("/subscriptions"):
+            return _FakeResponse(
+                payload={
+                    "done": True,
+                    "response": {
+                        "@type": (
+                            "type.googleapis.com/google.apps.events."
+                            "subscriptions.v1.Subscription"
+                        ),
+                        "name": SUBSCRIPTION_NAME,
+                        "state": "ACTIVE",
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    adapter = _adapter(request_fn=request_fn, pubsub_topic=None)
+    result = adapter.provision(_provision_request())
+
+    create_call = next(c for c in calls if c[1].endswith("/subscriptions"))
+    assert create_call[2]["json"]["notificationEndpoint"]["pubsubTopic"] == PUBSUB_TOPIC
+    assert result.external_trigger_id == SUBSCRIPTION_NAME
 
 
 DRIVE_EVENT_TYPE = "google.workspace.drive.file.v3.created"
@@ -401,3 +445,94 @@ def test_local_native_google_normalize_rejects_missing_event_identity() -> None:
             headers={},
             raw_body=json.dumps(payload).encode("utf-8"),
         )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "payload", "error_code"),
+    [
+        (404, {}, "provider_subscription_missing"),
+        (410, {}, "provider_subscription_missing"),
+        (
+            200,
+            {
+                "name": SUBSCRIPTION_NAME,
+                "state": "ACTIVE",
+                "expireTime": (
+                    datetime.now(timezone.utc) - timedelta(minutes=5)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+            "provider_subscription_missing",
+        ),
+        (
+            200,
+            {
+                "name": SUBSCRIPTION_NAME,
+                "state": "SUSPENDED",
+                "suspensionReason": "USER_SCOPE_REVOKED",
+                "expireTime": (datetime.now(timezone.utc) + timedelta(days=2)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ",
+                ),
+            },
+            "provider_subscription_inactive",
+        ),
+        (
+            200,
+            {
+                "name": SUBSCRIPTION_NAME,
+                "state": "DELETED",
+                "expireTime": (datetime.now(timezone.utc) + timedelta(days=2)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ",
+                ),
+            },
+            "provider_subscription_inactive",
+        ),
+    ],
+)
+def test_native_google_health_maps_dead_subscription_states(
+    status_code: int,
+    payload: dict[str, Any],
+    error_code: str,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        calls.append((method, url))
+        return _FakeResponse(status_code=status_code, payload=payload)
+
+    loader = _FakeCredentialLoader(_credentials())
+    adapter = NativeGoogleTriggerAdapter(
+        credential_loader=loader,  # type: ignore[arg-type]
+        webhook_secret="native-google-secret",
+        pubsub_topic=PUBSUB_TOPIC,
+        request_fn=request_fn,
+    )
+    result = adapter.health(
+        external_trigger_id=SUBSCRIPTION_NAME,
+        provider_connection_id="google:meet.user@example.com",
+        connection_id="ic_ws_native_google_google_meet_1",
+    )
+
+    assert result.status == "error"
+    assert result.error_code == error_code
+    assert loader.calls == ["ic_ws_native_google_google_meet_1"]
+    assert calls == [
+        (
+            "GET",
+            f"https://workspaceevents.googleapis.com/v1/{SUBSCRIPTION_NAME}",
+        ),
+    ]
+    assert not any(method == "PATCH" for method, _url in calls)
+
+
+def test_native_google_health_rejects_connection_only_ok() -> None:
+    def request_fn(method: str, url: str, **kwargs: Any) -> _FakeResponse:
+        raise AssertionError("no HTTP when subscription id is missing")
+
+    adapter = _adapter(request_fn=request_fn)
+    result = adapter.health(
+        external_trigger_id=None,
+        provider_connection_id="google:meet.user@example.com",
+        connection_id="ic_ws_native_google_google_meet_1",
+    )
+    assert result.status == "error"
+    assert result.error_code == "provider_subscription_missing"

@@ -1015,6 +1015,55 @@ class QueryLogsPostBody(BaseModel):
     )
 
 
+class ClaimLogsRequest(BaseModel):
+    """Request model for atomically claiming log rows (compare-and-set).
+
+    Selects up to ``limit`` rows in ``project``/``context`` whose data fields
+    equal every entry in ``expect``, locks them with ``FOR UPDATE SKIP
+    LOCKED``, merges ``updates`` into their data, and returns the claimed
+    rows. Concurrent claimers never receive the same row, which makes this
+    the race-safe primitive for work-queue transitions (e.g. ``status:
+    queued -> processing``).
+    """
+
+    project: str = Field(description="Name of the project.", example="Assistants")
+    context: str = Field(
+        description="Context path holding the rows.",
+        example="Teams/11/Data/GTM/SmartLeadReplyJobs",
+    )
+    expect: Dict[str, Any] = Field(
+        description=(
+            "Equality conditions on data fields a row must satisfy to be "
+            "claimable. Values may be str, int, float, bool, or None "
+            "(None matches a missing/null field)."
+        ),
+        example={"job_id": "abc", "status": "queued"},
+    )
+    updates: Dict[str, Any] = Field(
+        description="Fields merged into the data of each claimed row.",
+        example={"status": "processing"},
+    )
+    limit: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Maximum number of rows to claim.",
+    )
+
+
+class ClaimLogsResponse(BaseModel):
+    """Response from an atomic claim operation."""
+
+    claimed: List[Dict[str, Any]] = Field(
+        description=(
+            "Claimed rows, each as {'id': <log id>, 'data': <post-update "
+            "data>}. Empty when no row matched (already claimed or expect "
+            "conditions unmet)."
+        ),
+    )
+    count: int = Field(description="Number of rows claimed.")
+
+
 class AtomicFieldUpdateRequest(BaseModel):
     """Request model for atomic field operations that are race-safe under concurrent updates.
 

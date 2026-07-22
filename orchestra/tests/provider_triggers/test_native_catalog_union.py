@@ -23,6 +23,10 @@ from orchestra.provider_triggers.backend_ids import (
     NATIVE_GOOGLE_MEET_APP_SLUG,
     NATIVE_GOOGLE_MEET_TRANSCRIPT_SLUG,
     NATIVE_MICROSOFT_BACKEND_ID,
+    NATIVE_MICROSOFT_ONEDRIVE_APP_SLUG,
+    NATIVE_MICROSOFT_OUTLOOK_APP_SLUG,
+    NATIVE_MICROSOFT_TEAMS_APP_SLUG,
+    NATIVE_MICROSOFT_TODO_APP_SLUG,
 )
 from orchestra.provider_triggers.catalog_import.native_manifest import (
     load_native_catalog_entries,
@@ -469,3 +473,58 @@ async def test_native_meet_transcript_delivery_accepts_once(
     second_body = second.json()
     assert first_body["status"] == "accepted"
     assert second_body["receipt_id"] == first_body["receipt_id"]
+
+
+@pytest.mark.parametrize(
+    ("required_scope", "app_slug"),
+    [
+        ("https://graph.microsoft.com/Mail.Read", NATIVE_MICROSOFT_OUTLOOK_APP_SLUG),
+        ("https://graph.microsoft.com/Files.Read", NATIVE_MICROSOFT_ONEDRIVE_APP_SLUG),
+        (
+            "https://graph.microsoft.com/OnlineMeetingTranscript.Read.All",
+            NATIVE_MICROSOFT_TEAMS_APP_SLUG,
+        ),
+        ("https://graph.microsoft.com/Tasks.ReadWrite", NATIVE_MICROSOFT_TODO_APP_SLUG),
+    ],
+)
+def test_microsoft_workspace_facades_follow_event_scope_gates(
+    dbsession: Session,
+    required_scope: str,
+    app_slug: str,
+) -> None:
+    assistant = Assistant(user_id=PRIMARY_USER_ID, first_name="MS", surname="Gate")
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    secret_dao = AssistantSecretDAO(dbsession)
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "MICROSOFT_ACCOUNT_EMAIL",
+        "ms.gate@example.com",
+    )
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "MICROSOFT_GRANTED_SCOPES",
+        required_scope,
+    )
+    dbsession.flush()
+
+    connections = ensure_workspace_trigger_connections(
+        dbsession,
+        assistant_id=assistant.agent_id,
+    )
+    target = next(c for c in connections if c.canonical_app_slug == app_slug)
+    assert target.status == "connected"
+
+    secret_dao.upsert(
+        PRIMARY_USER_ID,
+        assistant.agent_id,
+        "MICROSOFT_GRANTED_SCOPES",
+        "https://graph.microsoft.com/User.Read",
+    )
+    dbsession.flush()
+    ensure_workspace_trigger_connections(dbsession, assistant_id=assistant.agent_id)
+    dbsession.refresh(target)
+    assert target.status == "disconnected"

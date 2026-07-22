@@ -33,7 +33,7 @@
         ],
         "additionalProperties": false
       },
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -93,7 +93,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_outlook",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -108,7 +108,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_outlook",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -123,7 +123,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_outlook",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -138,7 +138,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_outlook",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -153,7 +153,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_outlook",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -168,7 +168,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_onedrive",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -183,7 +183,7 @@
       "provider_version": "1",
       "canonical_app_hint": "microsoft_outlook",
       "config_schema": {},
-      "live_ready": false,
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
@@ -227,8 +227,20 @@
       "provider_trigger_slug": "microsoft.graph.todoTask.created",
       "provider_version": "1",
       "canonical_app_hint": "microsoft_todo",
-      "config_schema": {},
-      "live_ready": false,
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "todo_task_list_id": {
+            "type": "string",
+            "description": "Microsoft Graph todoTaskList id whose tasks to watch."
+          }
+        },
+        "required": [
+          "todo_task_list_id"
+        ],
+        "additionalProperties": false
+      },
+      "live_ready": true,
       "delivery_only": false,
       "target_resource_family": "microsoft_graph_delegated",
       "raw_metadata": {
