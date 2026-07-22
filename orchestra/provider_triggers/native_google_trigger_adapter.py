@@ -9,10 +9,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
 
-from orchestra.provider_triggers.backend_ids import (
-    NATIVE_GOOGLE_BACKEND_ID,
-    NATIVE_GOOGLE_MEET_TRANSCRIPT_SLUG,
-)
+from orchestra.provider_triggers.backend_ids import NATIVE_GOOGLE_BACKEND_ID
 from orchestra.provider_triggers.local_native_google_trigger_adapter import (
     NATIVE_GOOGLE_WEBHOOK_SECRET_REF,
     LocalNativeGoogleTriggerAdapter,
@@ -127,7 +124,7 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
     def _resolved_pubsub_topic(self) -> str:
         topic = self._pubsub_topic
         if topic is None:
-            topic = settings.native_google_meet_events_pubsub_topic or ""
+            topic = settings.native_google_workspace_events_pubsub_topic or ""
         return topic.strip()
 
     def _auth_headers(self, access_token: str) -> dict[str, str]:
@@ -150,7 +147,7 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
             )
         return ProviderAccountIdentity(
             subject=email,
-            display_label=f"google_meet:{email}",
+            display_label=f"google_workspace:{email}",
             subject_hmac=subject_hmac,
             connected_account_id=provider_connection_id,
             provider_user_id=email,
@@ -184,10 +181,9 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
         if not credentials.access_token:
             raise PermissionError("workspace access token missing for native Google")
 
-        slug = (
-            str(request.provider_trigger_slug).strip()
-            or NATIVE_GOOGLE_MEET_TRANSCRIPT_SLUG
-        )
+        slug = str(request.provider_trigger_slug or "").strip()
+        if not slug:
+            raise RuntimeError("native Google provider_trigger_slug is required")
         pubsub_topic = self._resolved_pubsub_topic()
         if not pubsub_topic:
             # Fail closed: without the shared events topic no subscription can

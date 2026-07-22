@@ -359,8 +359,8 @@ class Settings(BaseSettings):
     orchestra_trigger_callback_base_url: Optional[str] = os.environ.get(
         "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL",
     )
-    native_google_meet_events_pubsub_topic: Optional[str] = os.environ.get(
-        "NATIVE_GOOGLE_MEET_EVENTS_PUBSUB_TOPIC",
+    native_google_workspace_events_pubsub_topic: Optional[str] = os.environ.get(
+        "NATIVE_GOOGLE_WORKSPACE_EVENTS_PUBSUB_TOPIC",
     )
     provider_trigger_reconcile_interval_seconds: int = int(
         os.environ.get("PROVIDER_TRIGGER_RECONCILE_INTERVAL_SECONDS", "60"),
