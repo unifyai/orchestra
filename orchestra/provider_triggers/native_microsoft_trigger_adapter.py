@@ -159,10 +159,23 @@ class NativeMicrosoftTriggerAdapter(TriggerProviderAdapter):
         provider_connection_id: str | None,
         connection_id: str | None = None,
     ) -> TriggerHealthResult:
-        _ = external_trigger_id, connection_id
+        _ = connection_id
         if not provider_connection_id:
             return TriggerHealthResult(
                 status="error",
                 error_code="provider_connection_missing",
             )
-        return TriggerHealthResult(status="ok")
+        if not (external_trigger_id or "").strip():
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_subscription_missing",
+            )
+        # Graph subscription GET/renew is not implemented on this adapter; never
+        # report healthy from connection presence alone.
+        return TriggerHealthResult(
+            status="error",
+            error_code="provider_health_check_failed",
+            detail={
+                "message": ("native Microsoft Graph subscription probe is unavailable"),
+            },
+        )
