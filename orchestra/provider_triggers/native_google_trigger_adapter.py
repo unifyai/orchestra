@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
@@ -49,10 +50,11 @@ WORKSPACE_EVENTS_BASE_URL = "https://workspaceevents.googleapis.com/v1"
 # form the user-level ``targetResource`` for Meet subscriptions. ``userinfo.email``
 # (granted on every Google connect) is sufficient for this field.
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
-# subscriptions.create returns an LRO; poll it a few times when it is not
-# immediately marked done before failing closed.
+# subscriptions.create/patch return an LRO; poll a few times when not done.
 _OPERATION_POLL_ATTEMPTS = 5
 _OPERATION_POLL_INTERVAL_SECONDS = 1.0
+# Renew when remaining TTL drops below Google's first expiry reminder window.
+_RENEW_BEFORE = timedelta(hours=12)
 
 
 class _HttpResponse(Protocol):
@@ -80,6 +82,23 @@ def _subscription_name_from_operation(payload: Mapping[str, Any]) -> str | None:
     if isinstance(name, str) and name.strip().startswith("subscriptions/"):
         return name.strip()
     return None
+
+
+def _parse_expire_time(value: Any) -> datetime | None:
+    """Parse a Workspace Events ``expireTime`` timestamp into aware UTC."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
@@ -372,10 +391,194 @@ class NativeGoogleTriggerAdapter(TriggerProviderAdapter):
         provider_connection_id: str | None,
         connection_id: str | None = None,
     ) -> TriggerHealthResult:
-        _ = external_trigger_id, connection_id
         if not provider_connection_id:
             return TriggerHealthResult(
                 status="error",
                 error_code="provider_connection_missing",
             )
-        return TriggerHealthResult(status="ok")
+        subscription_name = (external_trigger_id or "").strip()
+        if not subscription_name.startswith("subscriptions/"):
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_subscription_missing",
+                detail={"external_trigger_id": external_trigger_id},
+            )
+        if not connection_id:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_connection_missing",
+            )
+        try:
+            credentials = self._credential_loader.load_for_connection_id(connection_id)
+        except (LookupError, ValueError) as exc:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_connection_missing",
+                detail={"message": str(exc)},
+            )
+        if not credentials.access_token:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_connection_not_active",
+            )
+
+        try:
+            response = self._request(
+                "GET",
+                f"{WORKSPACE_EVENTS_BASE_URL}/{subscription_name}",
+                headers=self._auth_headers(credentials.access_token),
+            )
+        except Exception as exc:
+            logger.exception(
+                "native_google health get failed external_trigger_id=%s",
+                subscription_name,
+            )
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+                detail={"message": str(exc)},
+            )
+
+        if response.status_code in {404, 410}:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_subscription_missing",
+                detail={"external_trigger_id": subscription_name},
+            )
+        if response.status_code >= 400:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+                detail={
+                    "status_code": response.status_code,
+                    "external_trigger_id": subscription_name,
+                },
+            )
+
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+            )
+        subscription = payload
+        state = str(subscription.get("state") or "").upper()
+        if state != "ACTIVE":
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_subscription_inactive",
+                detail={
+                    "external_trigger_id": subscription_name,
+                    "state": state or "STATE_UNSPECIFIED",
+                    "suspension_reason": subscription.get("suspensionReason"),
+                },
+            )
+
+        expire_time = _parse_expire_time(subscription.get("expireTime"))
+        if expire_time is None:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+                detail={
+                    "external_trigger_id": subscription_name,
+                    "reason": "expire_time_missing",
+                },
+            )
+        remaining = expire_time - datetime.now(timezone.utc)
+        if remaining <= timedelta(0):
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_subscription_missing",
+                detail={
+                    "external_trigger_id": subscription_name,
+                    "expire_time": subscription.get("expireTime"),
+                    "state": "expired",
+                },
+            )
+        renewed = False
+        if remaining <= _RENEW_BEFORE:
+            renew_error = self._renew_subscription(
+                subscription_name,
+                credentials=credentials,
+            )
+            if renew_error is not None:
+                return renew_error
+            renewed = True
+
+        return TriggerHealthResult(
+            status="ok",
+            detail={
+                "external_trigger_id": subscription_name,
+                "connected_account_id": provider_connection_id,
+                "state": state,
+                "expire_time": subscription.get("expireTime"),
+                "renewed": renewed,
+            },
+        )
+
+    def _renew_subscription(
+        self,
+        subscription_name: str,
+        *,
+        credentials: WorkspaceTriggerCredentials,
+    ) -> TriggerHealthResult | None:
+        """Extend subscription TTL to the provider maximum. None means success."""
+
+        try:
+            response = self._request(
+                "PATCH",
+                (f"{WORKSPACE_EVENTS_BASE_URL}/{subscription_name}" "?updateMask=ttl"),
+                headers=self._auth_headers(credentials.access_token),
+                json={"ttl": "0s"},
+            )
+        except Exception as exc:
+            logger.exception(
+                "native_google renew failed external_trigger_id=%s",
+                subscription_name,
+            )
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+                detail={"message": str(exc), "renewal": "failed"},
+            )
+        if response.status_code in {404, 410}:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_subscription_missing",
+                detail={"external_trigger_id": subscription_name, "renewal": "failed"},
+            )
+        if response.status_code >= 400:
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+                detail={
+                    "status_code": response.status_code,
+                    "external_trigger_id": subscription_name,
+                    "renewal": "failed",
+                },
+            )
+        operation = response.json()
+        if not isinstance(operation, Mapping):
+            return TriggerHealthResult(
+                status="error",
+                error_code="provider_health_check_failed",
+                detail={"renewal": "failed"},
+            )
+        # Adopt completed LRO response or poll until done / subscription name.
+        if operation.get("done") is False:
+            renewed_name = self._await_subscription_name(
+                operation,
+                credentials=credentials,
+            )
+            if not renewed_name:
+                return TriggerHealthResult(
+                    status="error",
+                    error_code="provider_health_check_failed",
+                    detail={"renewal": "failed", "reason": "operation_not_done"},
+                )
+        logger.info(
+            "native_google renewed external_trigger_id=%s account=%s",
+            subscription_name,
+            credentials.account_email,
+        )
+        return None
