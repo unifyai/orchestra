@@ -213,6 +213,7 @@ def test_capability_resolver_encodes_families(dbsession: Session) -> None:
     assert chat.live_ready is True
     assert chat.provisionable is True
     assert chat.target_resource_family == "google_chat_space"
+    assert chat.config_schema.get("required") == ["target_resource"]
 
     batch = resolve_trigger_capability(
         dbsession,
@@ -267,6 +268,14 @@ def test_catalog_listing_exposes_capability(dbsession: Session) -> None:
     chat_slug = "google.workspace.chat.message.v1.created"
     assert rows[chat_slug]["live_ready"] is True
     assert rows[chat_slug]["provisionable"] is True
+    assert rows[chat_slug]["target_resource_family"] == "google_chat_space"
+    assert rows[chat_slug]["config_schema"].get("required") == ["target_resource"]
+    for slug, row in rows.items():
+        if row.get("target_resource_family") != "google_chat_space":
+            continue
+        assert row["config_schema"].get("required") == [
+            "target_resource",
+        ], slug
 
 
 # --------------------------------------------------------------------------- #
