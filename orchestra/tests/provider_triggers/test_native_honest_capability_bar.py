@@ -133,7 +133,16 @@ def _seed_microsoft_assistant(dbsession: Session) -> tuple[Assistant, dict[str, 
         PRIMARY_USER_ID,
         assistant.agent_id,
         "MICROSOFT_GRANTED_SCOPES",
-        "https://graph.microsoft.com/User.Read",
+        (
+            "https://graph.microsoft.com/Mail.Read "
+            "https://graph.microsoft.com/Calendars.Read "
+            "https://graph.microsoft.com/Contacts.Read "
+            "https://graph.microsoft.com/Files.Read "
+            "https://graph.microsoft.com/OnlineMeetingTranscript.Read.All "
+            "https://graph.microsoft.com/Tasks.ReadWrite "
+            "https://graph.microsoft.com/User.Read "
+            "offline_access"
+        ),
     )
     secret_dao.upsert(
         PRIMARY_USER_ID,
@@ -233,17 +242,24 @@ def test_capability_resolver_encodes_families(dbsession: Session) -> None:
     assert ms_app_only.live_ready is False
     assert ms_app_only.target_resource_family == "microsoft_graph_app_only"
 
-    # All Microsoft shapes — including delegated — are not live_ready until the
-    # Graph transport lands (ticket 31).
     ms_delegated = resolve_trigger_capability(
         dbsession,
         backend_id=NATIVE_MICROSOFT_BACKEND_ID,
         provider_trigger_slug=MS_DELEGATED_SLUG,
     )
     assert ms_delegated is not None
-    assert ms_delegated.live_ready is False
-    assert ms_delegated.provisionable is False
+    assert ms_delegated.live_ready is True
+    assert ms_delegated.provisionable is True
     assert ms_delegated.target_resource_family == "microsoft_graph_delegated"
+
+    ms_todo = resolve_trigger_capability(
+        dbsession,
+        backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+        provider_trigger_slug="microsoft.graph.todoTask.created",
+    )
+    assert ms_todo is not None
+    assert ms_todo.live_ready is True
+    assert ms_todo.config_schema.get("required") == ["todo_task_list_id"]
 
 
 def test_catalog_listing_exposes_capability(dbsession: Session) -> None:
@@ -360,24 +376,22 @@ def test_validate_rejects_drive_missing_required_config(dbsession: Session) -> N
         )
 
 
-def test_validate_rejects_delegated_microsoft_enable(dbsession: Session) -> None:
-    """All Microsoft shapes (delegated included) fail closed until Graph (31)."""
+def test_validate_accepts_delegated_microsoft_enable(dbsession: Session) -> None:
+    """Delegated live_ready Microsoft shapes may enable once Graph transport lands."""
     _import_microsoft(dbsession)
     assistant, apps = _seed_microsoft_assistant(dbsession)
-    trigger = ProviderEventTrigger(
-        state="enabled",
-        connection_id=apps[NATIVE_MICROSOFT_OUTLOOK_APP_SLUG],
-        backend_id=NATIVE_MICROSOFT_BACKEND_ID,
-        canonical_app_slug=NATIVE_MICROSOFT_OUTLOOK_APP_SLUG,
-        provider_trigger_slug=MS_DELEGATED_SLUG,
-        trigger_config={},
+    validate_provider_event_trigger_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        trigger=ProviderEventTrigger(
+            state="enabled",
+            connection_id=apps[NATIVE_MICROSOFT_OUTLOOK_APP_SLUG],
+            backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+            canonical_app_slug=NATIVE_MICROSOFT_OUTLOOK_APP_SLUG,
+            provider_trigger_slug=MS_DELEGATED_SLUG,
+            trigger_config={},
+        ),
     )
-    with pytest.raises(ValueError, match="provider_event_trigger_not_live_ready"):
-        validate_provider_event_trigger_for_assistant(
-            dbsession,
-            assistant_id=assistant.agent_id,
-            trigger=trigger,
-        )
 
 
 def test_validate_accepts_meet_and_configured_drive_enable(dbsession: Session) -> None:
@@ -604,7 +618,7 @@ def _provision_request(slug: str, *, app_slug: str) -> TriggerProvisionRequest:
     )
 
 
-def test_microsoft_adapter_provision_fails_closed_with_session() -> None:
+def test_microsoft_adapter_provision_fails_closed_for_app_only() -> None:
     from orchestra.provider_triggers.native_microsoft_trigger_adapter import (
         NativeMicrosoftTriggerAdapter,
     )
@@ -613,12 +627,13 @@ def test_microsoft_adapter_provision_fails_closed_with_session() -> None:
         credential_loader=_FakeCredentialLoader(),
         webhook_secret="secret",
         account_subject_pepper="pepper",
+        adapters_base_url="https://adapters.example.test",
     )
-    with pytest.raises(RuntimeError, match="not yet available"):
+    with pytest.raises(RuntimeError, match="app-only"):
         adapter.provision(
             _provision_request(
-                "microsoft.graph.mailMessage.created",
-                app_slug="microsoft_outlook",
+                "microsoft.graph.user.updated",
+                app_slug="microsoft_directory",
             ),
         )
 
@@ -627,7 +642,7 @@ def test_microsoft_adapter_provision_fails_closed_with_session() -> None:
     ("external_trigger_id", "error_code"),
     [
         (None, "provider_subscription_missing"),
-        ("nm_stub_or_future_graph_id", "provider_health_check_failed"),
+        ("nm_stub_or_future_graph_id", "provider_subscription_missing"),
     ],
 )
 def test_microsoft_adapter_health_never_ok_on_connection_alone(
@@ -642,6 +657,7 @@ def test_microsoft_adapter_health_never_ok_on_connection_alone(
         credential_loader=_FakeCredentialLoader(),
         webhook_secret="secret",
         account_subject_pepper="pepper",
+        adapters_base_url="https://adapters.example.test",
     )
     result = adapter.health(
         external_trigger_id=external_trigger_id,

@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from orchestra.provider_triggers.backend_ids import (
-    NATIVE_MICROSOFT_BACKEND_ID,
-    NATIVE_MICROSOFT_TEAMS_TRANSCRIPT_SLUG,
-)
+from orchestra.provider_triggers.backend_ids import NATIVE_MICROSOFT_BACKEND_ID
 from orchestra.provider_triggers.native_webhook import verify_native_delivery
 from orchestra.provider_triggers.provider_identity import (
     native_event_identity,
@@ -197,11 +193,16 @@ class LocalNativeMicrosoftTriggerAdapter(TriggerProviderAdapter):
         if not isinstance(payload, dict):
             raise ValueError("Native Microsoft delivery payload must be a JSON object")
 
-        event_id = native_event_identity(payload) or secrets.token_hex(8)
-        provider_trigger_slug = str(
-            payload.get("provider_trigger_slug")
-            or NATIVE_MICROSOFT_TEAMS_TRANSCRIPT_SLUG,
-        )
+        event_id = native_event_identity(payload)
+        if not event_id:
+            raise ValueError(
+                "Native Microsoft delivery is missing retry-stable event identity",
+            )
+        provider_trigger_slug = str(payload.get("provider_trigger_slug") or "").strip()
+        if not provider_trigger_slug:
+            raise ValueError(
+                "Native Microsoft delivery is missing provider_trigger_slug",
+            )
         external_trigger_id = payload.get("external_trigger_id")
         if isinstance(external_trigger_id, str):
             external_trigger_id = external_trigger_id.strip() or None
