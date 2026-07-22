@@ -666,6 +666,7 @@ def admin_get_dashboard_action(
         "label": entries.get("label", ""),
         "icon": entries.get("icon"),
         "scope": entries.get("scope", "dashboard"),
+        "result_mode": entries.get("result_mode", "fire_and_forget"),
     }
 
 

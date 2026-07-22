@@ -448,6 +448,7 @@ async def _seed_dashboard_action(
     request: str = "Send this dashboard as a report",
     label: str = "Send Report",
     icon: str = "mail",
+    result_mode: str = "fire_and_forget",
 ):
     resp = await client.post(
         "/v0/logs",
@@ -462,6 +463,7 @@ async def _seed_dashboard_action(
                 "label": label,
                 "icon": icon,
                 "scope": "dashboard",
+                "result_mode": result_mode,
             },
         },
         headers=user["headers"],
@@ -529,6 +531,7 @@ async def test_admin_list_dashboard_actions_success(
     assert actions["send_report"]["label"] == "Send Report"
     assert actions["send_report"]["icon"] == "mail"
     assert actions["send_report"]["scope"] == "dashboard"
+    assert actions["send_report"]["result_mode"] == "fire_and_forget"
     assert actions["send_alert"]["function_id"] == 988
 
 
@@ -564,6 +567,7 @@ async def test_admin_get_dashboard_action_success(
         tile_token="act_get_001",
         action_name="send_report",
         function_id=654,
+        result_mode="show_result",
     )
 
     resp = await client.get(
@@ -580,6 +584,7 @@ async def test_admin_get_dashboard_action_success(
         "label": "Send Report",
         "icon": "mail",
         "scope": "dashboard",
+        "result_mode": "show_result",
     }
 
 

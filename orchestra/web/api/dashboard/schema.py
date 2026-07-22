@@ -1,6 +1,6 @@
 """Pydantic schemas for dashboard token endpoints."""
 
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -275,6 +275,7 @@ class DashboardActionRecord(BaseModel):
     label: OptionalSafeLabel = ""
     icon: Optional[str] = None
     scope: str = "dashboard"
+    result_mode: Literal["fire_and_forget", "show_result"] = "fire_and_forget"
 
 
 class UpsertDashboardActionsRequest(BaseModel):
