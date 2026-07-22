@@ -102,25 +102,73 @@ def _google_facade_apps(
     )
 
 
-def _microsoft_facade_apps() -> tuple[_WorkspaceFacadeApp, ...]:
-    return tuple(
+def _microsoft_facade_apps(
+    outlook_event_scopes: frozenset[str],
+    onedrive_event_scopes: frozenset[str],
+    teams_event_scopes: frozenset[str],
+    todo_event_scopes: frozenset[str],
+) -> tuple[_WorkspaceFacadeApp, ...]:
+    return (
         _WorkspaceFacadeApp(
             backend_id=NATIVE_MICROSOFT_BACKEND_ID,
-            canonical_app_slug=slug,
-            provider_app_id=provider_app_id,
+            canonical_app_slug=NATIVE_MICROSOFT_TEAMS_APP_SLUG,
+            provider_app_id="MICROSOFT_TEAMS",
             scopes_secret="MICROSOFT_GRANTED_SCOPES",
             account_email_secret="MICROSOFT_ACCOUNT_EMAIL",
             secret_refs=dict(_MICROSOFT_SECRET_REFS),
             provider_connection_prefix="microsoft",
-        )
-        for slug, provider_app_id in (
-            (NATIVE_MICROSOFT_TEAMS_APP_SLUG, "MICROSOFT_TEAMS"),
-            (NATIVE_MICROSOFT_OUTLOOK_APP_SLUG, "MICROSOFT_OUTLOOK"),
-            (NATIVE_MICROSOFT_ONEDRIVE_APP_SLUG, "MICROSOFT_ONEDRIVE"),
-            (NATIVE_MICROSOFT_GROUPS_APP_SLUG, "MICROSOFT_GROUPS"),
-            (NATIVE_MICROSOFT_DIRECTORY_APP_SLUG, "MICROSOFT_DIRECTORY"),
-            (NATIVE_MICROSOFT_TODO_APP_SLUG, "MICROSOFT_TODO"),
-        )
+            required_any_scopes=teams_event_scopes,
+        ),
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+            canonical_app_slug=NATIVE_MICROSOFT_OUTLOOK_APP_SLUG,
+            provider_app_id="MICROSOFT_OUTLOOK",
+            scopes_secret="MICROSOFT_GRANTED_SCOPES",
+            account_email_secret="MICROSOFT_ACCOUNT_EMAIL",
+            secret_refs=dict(_MICROSOFT_SECRET_REFS),
+            provider_connection_prefix="microsoft",
+            required_any_scopes=outlook_event_scopes,
+        ),
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+            canonical_app_slug=NATIVE_MICROSOFT_ONEDRIVE_APP_SLUG,
+            provider_app_id="MICROSOFT_ONEDRIVE",
+            scopes_secret="MICROSOFT_GRANTED_SCOPES",
+            account_email_secret="MICROSOFT_ACCOUNT_EMAIL",
+            secret_refs=dict(_MICROSOFT_SECRET_REFS),
+            provider_connection_prefix="microsoft",
+            required_any_scopes=onedrive_event_scopes,
+        ),
+        # App-only catalog apps remain discoverable once any Microsoft workspace
+        # OAuth is present; enable still fails closed via live_ready.
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+            canonical_app_slug=NATIVE_MICROSOFT_GROUPS_APP_SLUG,
+            provider_app_id="MICROSOFT_GROUPS",
+            scopes_secret="MICROSOFT_GRANTED_SCOPES",
+            account_email_secret="MICROSOFT_ACCOUNT_EMAIL",
+            secret_refs=dict(_MICROSOFT_SECRET_REFS),
+            provider_connection_prefix="microsoft",
+        ),
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+            canonical_app_slug=NATIVE_MICROSOFT_DIRECTORY_APP_SLUG,
+            provider_app_id="MICROSOFT_DIRECTORY",
+            scopes_secret="MICROSOFT_GRANTED_SCOPES",
+            account_email_secret="MICROSOFT_ACCOUNT_EMAIL",
+            secret_refs=dict(_MICROSOFT_SECRET_REFS),
+            provider_connection_prefix="microsoft",
+        ),
+        _WorkspaceFacadeApp(
+            backend_id=NATIVE_MICROSOFT_BACKEND_ID,
+            canonical_app_slug=NATIVE_MICROSOFT_TODO_APP_SLUG,
+            provider_app_id="MICROSOFT_TODO",
+            scopes_secret="MICROSOFT_GRANTED_SCOPES",
+            account_email_secret="MICROSOFT_ACCOUNT_EMAIL",
+            secret_refs=dict(_MICROSOFT_SECRET_REFS),
+            provider_connection_prefix="microsoft",
+            required_any_scopes=todo_event_scopes,
+        ),
     )
 
 
@@ -133,6 +181,10 @@ def _workspace_facade_apps() -> tuple[_WorkspaceFacadeApp, ...]:
         GOOGLE_CHAT_EVENT_SCOPES,
         GOOGLE_DRIVE_EVENT_SCOPES,
         GOOGLE_MEET_EVENT_SCOPES,
+        MICROSOFT_ONEDRIVE_EVENT_SCOPES,
+        MICROSOFT_OUTLOOK_EVENT_SCOPES,
+        MICROSOFT_TEAMS_EVENT_SCOPES,
+        MICROSOFT_TODO_EVENT_SCOPES,
     )
 
     return (
@@ -141,8 +193,33 @@ def _workspace_facade_apps() -> tuple[_WorkspaceFacadeApp, ...]:
             GOOGLE_DRIVE_EVENT_SCOPES,
             GOOGLE_CHAT_EVENT_SCOPES,
         ),
-        *_microsoft_facade_apps(),
+        *_microsoft_facade_apps(
+            MICROSOFT_OUTLOOK_EVENT_SCOPES,
+            MICROSOFT_ONEDRIVE_EVENT_SCOPES,
+            MICROSOFT_TEAMS_EVENT_SCOPES,
+            MICROSOFT_TODO_EVENT_SCOPES,
+        ),
     )
+
+
+def _normalize_granted_scopes(
+    *,
+    backend_id: str,
+    scopes: str,
+) -> set[str]:
+    """Return the granted scope set, normalizing Microsoft Graph URL forms."""
+
+    granted = {scope for scope in scopes.split() if scope}
+    if backend_id != NATIVE_MICROSOFT_BACKEND_ID:
+        return granted
+    prefix = "https://graph.microsoft.com/"
+    normalized: set[str] = set()
+    for scope in granted:
+        if scope.startswith(prefix):
+            normalized.add(scope[len(prefix) :])
+        else:
+            normalized.add(scope)
+    return normalized
 
 
 def ensure_workspace_trigger_connections(
@@ -166,7 +243,10 @@ def ensure_workspace_trigger_connections(
         )
         scopes = (secrets.get(app.scopes_secret) or "").strip()
         account_email = (secrets.get(app.account_email_secret) or "").strip().lower()
-        granted_scope_set = set(scopes.split())
+        granted_scope_set = _normalize_granted_scopes(
+            backend_id=app.backend_id,
+            scopes=scopes,
+        )
         has_required_scopes = True
         if app.required_any_scopes:
             has_required_scopes = bool(
