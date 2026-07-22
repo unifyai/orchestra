@@ -623,6 +623,35 @@ def test_microsoft_adapter_provision_fails_closed_with_session() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("external_trigger_id", "error_code"),
+    [
+        (None, "provider_subscription_missing"),
+        ("nm_stub_or_future_graph_id", "provider_health_check_failed"),
+    ],
+)
+def test_microsoft_adapter_health_never_ok_on_connection_alone(
+    external_trigger_id: str | None,
+    error_code: str,
+) -> None:
+    from orchestra.provider_triggers.native_microsoft_trigger_adapter import (
+        NativeMicrosoftTriggerAdapter,
+    )
+
+    adapter = NativeMicrosoftTriggerAdapter(
+        credential_loader=_FakeCredentialLoader(),
+        webhook_secret="secret",
+        account_subject_pepper="pepper",
+    )
+    result = adapter.health(
+        external_trigger_id=external_trigger_id,
+        provider_connection_id="microsoft:user@example.com",
+        connection_id="conn-1",
+    )
+    assert result.status == "error"
+    assert result.error_code == error_code
+
+
 def test_google_adapter_provision_fails_closed_for_chat_batch() -> None:
     from orchestra.provider_triggers.native_google_trigger_adapter import (
         NativeGoogleTriggerAdapter,

@@ -316,6 +316,166 @@ def test_reconcile_paused_binding_enqueues_and_executes_generation_delete(
     assert len(adapter.delete_calls) == 1
 
 
+def test_health_batch_probes_and_renews_native_google_subscription(
+    dbsession: Session,
+) -> None:
+    """Real NativeGoogle adapter through process_health_batch renews near expiry."""
+
+    from orchestra.provider_triggers.native_google_trigger_adapter import (
+        NativeGoogleTriggerAdapter,
+    )
+    from orchestra.provider_triggers.workspace_trigger_credentials import (
+        WorkspaceTriggerCredentials,
+    )
+
+    connection_id = _connection_id()
+    binding_id = _binding_id()
+    subscription_name = "subscriptions/healthRenewAbcd"
+    expire_soon = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+    )
+    http_calls: list[tuple[str, str, dict[str, Any]]] = []
+    credential_calls: list[str] = []
+
+    class _Loader:
+        def load_for_connection_id(
+            self,
+            requested_connection_id: str,
+        ) -> WorkspaceTriggerCredentials:
+            credential_calls.append(requested_connection_id)
+            return WorkspaceTriggerCredentials(
+                connection_id=requested_connection_id,
+                provider_connection_id="google:meet.user@example.com",
+                account_email="meet.user@example.com",
+                access_token="ya29.health-token",
+                refresh_token="refresh",
+                granted_scopes=(),
+                secret_values={},
+            )
+
+    def request_fn(method: str, url: str, **kwargs: Any) -> Any:
+        http_calls.append((method, url, kwargs))
+
+        class _Response:
+            status_code = 200
+            text = "{}"
+
+            def json(self) -> dict[str, Any]:
+                if method == "GET":
+                    return {
+                        "name": subscription_name,
+                        "state": "ACTIVE",
+                        "expireTime": expire_soon,
+                    }
+                return {
+                    "done": True,
+                    "response": {
+                        "name": subscription_name,
+                        "state": "ACTIVE",
+                        "expireTime": (
+                            datetime.now(timezone.utc) + timedelta(days=6)
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                }
+
+            def raise_for_status(self) -> None:
+                return None
+
+        return _Response()
+
+    _seed_connection(
+        dbsession,
+        connection_id=connection_id,
+        provider_connection_id="google:meet.user@example.com",
+    )
+    binding = _seed_enabled_binding(
+        dbsession,
+        binding_id=binding_id,
+        connection_id=connection_id,
+    )
+    dao = ProviderTriggerDAO(dbsession)
+    generation = dao.create_generation(binding=binding)
+    dao.journal_generation_create(
+        generation=generation,
+        external_trigger_id=subscription_name,
+    )
+    dao.promote_generation(binding=binding, generation=generation)
+    binding.runtime_health = BindingRuntimeHealth.healthy.value
+    binding.last_health_check_at = None
+    dbsession.flush()
+
+    adapter = NativeGoogleTriggerAdapter(
+        credential_loader=_Loader(),  # type: ignore[arg-type]
+        webhook_secret="native-google-secret",
+        pubsub_topic="projects/test/topics/workspace-events",
+        request_fn=request_fn,
+    )
+    service = ProviderTriggerReconciliationService(
+        dbsession,
+        lease_owner="test-worker",
+        adapter_resolver=lambda _backend_id: adapter,
+    )
+    service.process_health_batch()
+    dbsession.commit()
+
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    assert binding.runtime_health == BindingRuntimeHealth.healthy.value
+    assert binding.consecutive_health_failures == 0
+    assert credential_calls == [connection_id]
+    assert http_calls[0][0] == "GET"
+    assert http_calls[0][1].endswith(f"/{subscription_name}")
+    patch_calls = [call for call in http_calls if call[0] == "PATCH"]
+    assert len(patch_calls) == 1
+    assert "updateMask=ttl" in patch_calls[0][1]
+    assert patch_calls[0][2]["json"] == {"ttl": "0s"}
+
+
+def test_reconcile_does_not_clear_needs_attention_for_active_generation(
+    dbsession: Session,
+) -> None:
+    """A dead remote subscription must stay Needs attention until reprovision."""
+
+    connection_id = _connection_id()
+    binding_id = _binding_id()
+    _seed_connection(dbsession, connection_id=connection_id)
+    binding = _seed_enabled_binding(
+        dbsession,
+        binding_id=binding_id,
+        connection_id=connection_id,
+    )
+    dao = ProviderTriggerDAO(dbsession)
+    generation = dao.create_generation(binding=binding)
+    dao.journal_generation_create(
+        generation=generation,
+        external_trigger_id="subscriptions/deadRemoteSub",
+    )
+    dao.promote_generation(binding=binding, generation=generation)
+    binding.runtime_health = BindingRuntimeHealth.needs_attention.value
+    binding.last_stable_error_code = "provider_subscription_missing"
+    binding.consecutive_health_failures = 3
+    binding.local_acceptance_open = False
+    binding.reconcile_next_retry_at = datetime.now(timezone.utc)
+    dbsession.flush()
+
+    adapter = FakeTriggerAdapter(health_status="ok")
+    service = _service(dbsession, adapter)
+    service.process_reconcile_batch()
+    dbsession.commit()
+
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    assert binding.runtime_health == BindingRuntimeHealth.needs_attention.value
+    assert binding.last_stable_error_code == "provider_subscription_missing"
+    assert binding.local_acceptance_open is False
+
+
 def test_health_failures_increment_counter_and_trip_threshold(
     dbsession: Session,
     monkeypatch: pytest.MonkeyPatch,
