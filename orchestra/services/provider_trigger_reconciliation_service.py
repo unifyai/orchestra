@@ -218,9 +218,14 @@ class ProviderTriggerReconciliationService:
             and binding.active_generation_id == generation.generation_id
             and binding.observed_revision == binding.desired_revision
         ):
-            binding.runtime_health = BindingRuntimeHealth.healthy.value
-            binding.last_stable_error_code = None
-            binding.consecutive_health_failures = 0
+            # Health may have closed acceptance into needs_attention because the
+            # remote subscription is gone/expired while the local generation row
+            # is still active. Do not clear that attention from this fast path —
+            # retry-trigger / a new generation must advance the binding.
+            if binding.runtime_health != BindingRuntimeHealth.needs_attention.value:
+                binding.runtime_health = BindingRuntimeHealth.healthy.value
+                binding.last_stable_error_code = None
+                binding.consecutive_health_failures = 0
             self._dao.release_binding_reconcile_lease(binding=binding)
             binding.reconcile_next_retry_at = None
             return
