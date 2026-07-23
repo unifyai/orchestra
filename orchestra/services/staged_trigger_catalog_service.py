@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dao.trigger_catalog_dao import TriggerCatalogDAO
+from orchestra.integrations.provider_resolution import slug_variants
 from orchestra.provider_triggers.backend_ids import (
     NATIVE_GOOGLE_BACKEND_ID,
     NATIVE_MICROSOFT_BACKEND_ID,
@@ -26,6 +27,33 @@ from orchestra.web.api.integrations.operations import OwnerContext
 
 _ACTIVE_CONNECTION_STATUSES = frozenset({"connected", "active"})
 _NATIVE_BACKENDS = frozenset({NATIVE_GOOGLE_BACKEND_ID, NATIVE_MICROSOFT_BACKEND_ID})
+
+
+def _connected_app_slug_index(
+    connected_apps: set[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    """Map ``(backend_id, slug_variant)`` → preferred connected canonical slug.
+
+    Composio connections store humanized slugs (``google_calendar``) while the
+    staged trigger import keeps raw toolkit hints (``googlecalendar``). Reuse
+    integration ``slug_variants`` so catalog gating treats those as one app and
+    still reports the connection's preferred slug to callers.
+    """
+
+    index: dict[tuple[str, str], str] = {}
+    for backend_id, canonical_app_slug in connected_apps:
+        preferred = canonical_app_slug.casefold()
+        if not preferred:
+            continue
+        for variant in slug_variants(preferred):
+            index[(backend_id, variant.casefold())] = preferred
+    return index
+
+
+def _app_slugs_compatible(left: str, right: str) -> bool:
+    """Whether two app slugs refer to the same logical integration app."""
+
+    return bool(slug_variants(left) & slug_variants(right))
 
 
 @dataclass(frozen=True)
@@ -184,17 +212,19 @@ def list_staged_triggers_for_assistant(
     ensure_workspace_trigger_connections(session, assistant_id=assistant_id)
 
     topology = evaluate_provider_trigger_topology(session, require_worker=False)
-    connected_apps = list_connected_app_slugs(
-        session,
-        assistant_id=assistant_id,
-        backend_id=backend_id,
-    )
     if not topology.available:
         return {
             "available": False,
             "unavailable_reason": topology.unavailable_reason,
             "triggers": [],
         }
+
+    connected_apps = list_connected_app_slugs(
+        session,
+        assistant_id=assistant_id,
+        backend_id=backend_id,
+    )
+    connected_slug_index = _connected_app_slug_index(connected_apps)
 
     catalog_dao = TriggerCatalogDAO(session)
     environment = _catalog_environment()
@@ -222,9 +252,10 @@ def list_staged_triggers_for_assistant(
             app_hint = (candidate.canonical_app_hint or "").strip().casefold()
             if not app_hint:
                 continue
-            if (resolved_backend, app_hint) not in {
-                (backend, slug.casefold()) for backend, slug in connected_apps
-            }:
+            preferred_app_slug = connected_slug_index.get(
+                (resolved_backend, app_hint),
+            )
+            if preferred_app_slug is None:
                 continue
             candidate_json = dict(candidate.candidate_json or {})
             raw_metadata = dict(candidate_json.get("raw_metadata") or {})
@@ -232,7 +263,7 @@ def list_staged_triggers_for_assistant(
             triggers.append(
                 {
                     "backend_id": resolved_backend,
-                    "canonical_app_slug": app_hint,
+                    "canonical_app_slug": preferred_app_slug,
                     "provider_trigger_slug": candidate.provider_trigger_slug,
                     "provider_version": candidate.provider_version,
                     "display_name": raw_metadata.get("name"),
@@ -291,8 +322,12 @@ def validate_provider_event_trigger_for_assistant(
     if connection.backend_id != trigger.backend_id:
         raise ValueError("provider_event_backend_mismatch")
     app_slug = (connection.canonical_app_slug or "").casefold()
-    if app_slug != trigger.canonical_app_slug.casefold():
+    if not _app_slugs_compatible(app_slug, trigger.canonical_app_slug):
         raise ValueError("provider_event_app_mismatch")
+    # Persist the connection's preferred slug so reconcile/ingress exact-match
+    # checks stay valid when the authored payload used a toolkit alias.
+    if connection.canonical_app_slug:
+        trigger.canonical_app_slug = connection.canonical_app_slug
 
     catalog = list_staged_triggers_for_assistant(
         session,
@@ -304,7 +339,10 @@ def validate_provider_event_trigger_for_assistant(
     allowed_rows = {
         row["provider_trigger_slug"]: row
         for row in catalog.get("triggers") or []
-        if str(row.get("canonical_app_slug", "")).casefold() == app_slug
+        if _app_slugs_compatible(
+            str(row.get("canonical_app_slug", "")),
+            app_slug,
+        )
     }
     matched_row = allowed_rows.get(trigger.provider_trigger_slug)
     if matched_row is None:
