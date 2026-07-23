@@ -81,7 +81,7 @@ class BucketService:
         # -----------------------------------------------------------------
         self.call_recordings_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
-            f"assistant-call-recordings-{'staging' if settings.is_staging else 'production'}",
+            "unity-call-recordings",
         )
         self.call_recordings_bucket = self.storage_client.bucket(
             self.call_recordings_bucket_name,
