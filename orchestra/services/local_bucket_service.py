@@ -197,7 +197,7 @@ class LocalBucketService:
         )
         self.call_recordings_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME",
-            f"assistant-call-recordings-{env_suffix}",
+            "unity-call-recordings",
         )
         self.account_photo_bucket_name = os.getenv(
             "ORCHESTRA_GCP_ACCOUNT_PHOTO_BUCKET_NAME",
