@@ -4804,3 +4804,42 @@ class MsTeamsBotConversationRoute(Base):
         ),
         Index("ix_ms_teams_bot_conversation_routes_expires", "expires_at"),
     )
+
+
+class MsTeamsBotWelcome(Base):
+    """One-shot record that a Microsoft Teams conversation has been welcomed.
+
+    The install welcome must be sent exactly once per conversation. Teams and
+    the Bot Connector's at-least-once retries can redeliver the bot-add
+    ``conversationUpdate`` for the same conversation, and each personal chat or
+    team channel is its own conversation that legitimately warrants its own
+    greeting. Keying the welcome on ``(install_id, conversation_id)`` and
+    claiming it with an idempotent insert lets the adapter greet a brand-new
+    conversation once and stay silent on every redelivery — satisfying the
+    Store-certification "does not spam users with repeating welcome messages"
+    rule without suppressing the legitimate per-scope greeting.
+
+    Rows cascade-delete with the install, so a genuine reinstall re-welcomes.
+    """
+
+    __tablename__ = "ms_teams_bot_welcomes"
+
+    id = Column(Integer, primary_key=True)
+    install_id = Column(
+        Integer,
+        ForeignKey("ms_teams_bot_installs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    conversation_id = Column(String, nullable=False)
+    welcomed_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    install = relationship("MsTeamsBotInstall")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "install_id",
+            "conversation_id",
+            name="uq_ms_teams_bot_welcome",
+        ),
+    )

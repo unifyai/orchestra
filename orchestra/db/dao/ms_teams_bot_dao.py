@@ -29,6 +29,7 @@ from orchestra.db.models.orchestra_models import (
     MsTeamsBotChannelBinding,
     MsTeamsBotConversationRoute,
     MsTeamsBotInstall,
+    MsTeamsBotWelcome,
 )
 
 logger = logging.getLogger(__name__)
@@ -360,8 +361,40 @@ class MsTeamsBotDAO:
         self.session.query(MsTeamsBotConversationRoute).filter(
             MsTeamsBotConversationRoute.install_id == install_id,
         ).delete(synchronize_session=False)
+        # Drop welcome claims so a genuine reinstall greets each conversation
+        # afresh rather than staying silent behind a stale claim.
+        self.session.query(MsTeamsBotWelcome).filter(
+            MsTeamsBotWelcome.install_id == install_id,
+        ).delete(synchronize_session=False)
         self.session.flush()
         return install
+
+    # ------------------------------------------------------------------
+    # Welcome claims (one-shot install greeting per conversation)
+    # ------------------------------------------------------------------
+
+    def claim_welcome(self, install_id: int, conversation_id: str) -> bool:
+        """Atomically claim the one-shot install welcome for a conversation.
+
+        Returns ``True`` only when this call recorded the claim — the caller
+        should then send the welcome. Returns ``False`` when the conversation
+        was already welcomed (a redelivered bot-add), so the adapter stays
+        silent instead of repeating the greeting. The insert is race-safe via
+        ``ON CONFLICT DO NOTHING`` on the ``(install_id, conversation_id)``
+        unique constraint: two concurrent bot-add deliveries yield exactly one
+        winner without raising an IntegrityError that would poison the request
+        transaction.
+        """
+        stmt = (
+            pg_insert(MsTeamsBotWelcome)
+            .values(install_id=install_id, conversation_id=conversation_id)
+            .on_conflict_do_nothing(
+                index_elements=["install_id", "conversation_id"],
+            )
+            .returning(MsTeamsBotWelcome.id)
+        )
+        inserted_id = self.session.execute(stmt).scalar_one_or_none()
+        return inserted_id is not None
 
     # ------------------------------------------------------------------
     # Channel bindings

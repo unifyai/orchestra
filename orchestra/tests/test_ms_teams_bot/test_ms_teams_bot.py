@@ -33,6 +33,7 @@ from orchestra.db.models.orchestra_models import (
     BillingAccount,
     MsTeamsBotConversationRoute,
     MsTeamsBotInstall,
+    MsTeamsBotWelcome,
     Organization,
     User,
 )
@@ -424,9 +425,37 @@ class TestInstallDAO:
         install = _make_install(dbsession, organization=org, tenant_id="tenant-drop")
         dao.bind_channel(install.id, "19:chan@thread.tacv2", assistant.agent_id)
         dao.upsert_conversation_route(install.id, "conv-1", assistant.agent_id)
+        dao.claim_welcome(install.id, "conv-1")
         dao.revoke_install(install.id)
         assert dao.list_channel_bindings(install.id) == []
         assert dao.get_conversation_route(install.id, "conv-1") is None
+        # Welcome claims are dropped on revoke so a genuine reinstall greets
+        # each conversation afresh rather than staying silent.
+        remaining_welcomes = (
+            dbsession.query(MsTeamsBotWelcome)
+            .filter(MsTeamsBotWelcome.install_id == install.id)
+            .count()
+        )
+        assert remaining_welcomes == 0
+
+    def test_claim_welcome_is_one_shot_per_conversation(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "welcome")
+        org = _make_org(dbsession, user, "welcome")
+        install = _make_install(
+            dbsession,
+            organization=org,
+            tenant_id="tenant-welcome",
+        )
+        # First delivery for the conversation wins the claim.
+        assert dao.claim_welcome(install.id, "conv-personal") is True
+        # A redelivered bot-add for the same conversation stays silent.
+        assert dao.claim_welcome(install.id, "conv-personal") is False
+        # A distinct conversation (e.g. a team channel) still greets.
+        assert dao.claim_welcome(install.id, "conv-channel") is True
 
 
 # ============================================================================
@@ -1131,3 +1160,34 @@ class TestAdminEndpoints:
         )
         assert resp.status_code == status.HTTP_200_OK
         assert resp.json() == {"id": install.id, "revoked": True}
+
+    async def test_welcome_claim_idempotent(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        user = _make_user(dbsession, "http-welcome")
+        org = _make_org(dbsession, user, "http-welcome")
+        install = _make_install(
+            dbsession,
+            organization=org,
+            tenant_id="tenant-http-welcome",
+        )
+        dbsession.commit()
+
+        first = await client.post(
+            "/v0/admin/ms-teams-bot/welcome-claim",
+            json={"install_id": install.id, "conversation_id": "conv-http-welcome"},
+            headers=ADMIN_HEADERS,
+        )
+        assert first.status_code == status.HTTP_200_OK
+        assert first.json() == {"claimed": True}
+
+        # A redelivered bot-add for the same conversation must not re-welcome.
+        again = await client.post(
+            "/v0/admin/ms-teams-bot/welcome-claim",
+            json={"install_id": install.id, "conversation_id": "conv-http-welcome"},
+            headers=ADMIN_HEADERS,
+        )
+        assert again.status_code == status.HTTP_200_OK
+        assert again.json() == {"claimed": False}

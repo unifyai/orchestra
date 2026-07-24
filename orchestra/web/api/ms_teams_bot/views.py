@@ -125,6 +125,24 @@ class InstallResponse(BaseModel):
     )
 
 
+class WelcomeClaimRequest(BaseModel):
+    install_id: int
+    conversation_id: str
+
+
+class WelcomeClaimResponse(BaseModel):
+    claimed: bool = Field(
+        ...,
+        description=(
+            "True only when this call recorded the welcome for the "
+            "conversation — the adapter should send the greeting now. False "
+            "when the conversation was already welcomed (a redelivered "
+            "bot-add), so the adapter must stay silent to avoid repeating the "
+            "welcome."
+        ),
+    )
+
+
 class DispatchRequest(BaseModel):
     tenant_id: str
     conversation_id: str
@@ -465,6 +483,30 @@ def revoke_install(
         )
     session.commit()
     return {"id": install.id, "revoked": True}
+
+
+# ---------------------------------------------------------------------------
+# Welcome claims
+# ---------------------------------------------------------------------------
+
+
+@admin_router.post("/ms-teams-bot/welcome-claim")
+def claim_welcome(
+    body: WelcomeClaimRequest,
+    session: Session = Depends(get_db_session),
+) -> WelcomeClaimResponse:
+    """Claim the one-shot install welcome for a Teams conversation.
+
+    Idempotent per ``(install_id, conversation_id)``: the first caller wins
+    with ``claimed=True`` and sends the greeting; redelivered bot-add events
+    get ``claimed=False`` and stay silent. This is what keeps the bot from
+    spamming repeated welcome messages when Teams / the Bot Connector
+    redelivers the same bot-add ``conversationUpdate``.
+    """
+    dao = MsTeamsBotDAO(session)
+    claimed = dao.claim_welcome(body.install_id, body.conversation_id)
+    session.commit()
+    return WelcomeClaimResponse(claimed=claimed)
 
 
 # ---------------------------------------------------------------------------
