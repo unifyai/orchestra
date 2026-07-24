@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,12 +35,22 @@ from orchestra.db.models.orchestra_models import (
     DM_ROOT_SENTINEL,
     Assistant,
     BillingAccount,
+    Context,
+    LogEvent,
+    LogEventContext,
     Organization,
+    Project,
     SlackChannelBinding,
     SlackInstall,
     SlackThreadRoute,
     User,
 )
+from orchestra.services.assistant_bootstrap import (
+    _assistant_context_name,
+    _resolve_assistants_project,
+    ensure_owner_contact_row,
+)
+from orchestra.services.contact_membership_service import PERSONAL_BOSS_CONTACT_ID
 from orchestra.services.slack_dispatcher import resolve_inbound
 from orchestra.tests.utils import ADMIN_HEADERS
 
@@ -121,6 +132,49 @@ def _make_install(
     dbsession.add(install)
     dbsession.flush()
     return install
+
+
+def _make_assistants_project(
+    dbsession: Session,
+    *,
+    organization: Optional[Organization] = None,
+    user: Optional[User] = None,
+) -> Project:
+    if (organization is None) == (user is None):
+        raise ValueError("Provide exactly one of organization or user.")
+    project = Project(
+        name="Assistants",
+        organization_id=organization.id if organization is not None else None,
+        user_id=user.id if user is not None else None,
+    )
+    dbsession.add(project)
+    dbsession.flush()
+    return project
+
+
+def _boss_contact_data(
+    dbsession: Session,
+    *,
+    assistant: Assistant,
+) -> dict | None:
+    project = _resolve_assistants_project(dbsession, assistant=assistant)
+    context = dbsession.scalar(
+        select(Context).where(
+            Context.project_id == project.id,
+            Context.name == _assistant_context_name(assistant, "Contacts"),
+        ),
+    )
+    if context is None:
+        return None
+    logs = dbsession.scalars(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .where(LogEventContext.context_id == context.id),
+    ).all()
+    for log in logs:
+        if log.data.get("contact_id") == PERSONAL_BOSS_CONTACT_ID:
+            return log.data
+    return None
 
 
 @pytest.fixture
@@ -2519,6 +2573,82 @@ class TestAdminEndpoints:
             str(member.agent_id),
         }
         assert str(personal.agent_id) not in reawakened
+
+    async def test_install_upsert_stamps_installer_slack_id_on_initiator_org_assistants(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        installer = _make_user(dbsession, "slack-stamp-installer")
+        other_member = _make_user(dbsession, "slack-stamp-member")
+        org = _make_org(dbsession, installer, "slack-stamp")
+        _make_assistants_project(dbsession, organization=org)
+        _make_assistants_project(dbsession, user=installer)
+
+        org_assistant = _make_assistant(
+            dbsession,
+            installer,
+            first_name="OrgTwin",
+            organization=org,
+        )
+        personal_assistant = _make_assistant(
+            dbsession,
+            installer,
+            first_name="SoloTwin",
+            organization=None,
+        )
+        member_assistant = _make_assistant(
+            dbsession,
+            other_member,
+            first_name="MemberTwin",
+            organization=org,
+        )
+
+        ensure_owner_contact_row(dbsession, assistant=org_assistant)
+        ensure_owner_contact_row(dbsession, assistant=personal_assistant)
+        ensure_owner_contact_row(dbsession, assistant=member_assistant)
+        dbsession.commit()
+
+        with (
+            patch(
+                "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra._trigger_contact_sync",
+                new_callable=AsyncMock,
+            ) as mock_contact_sync,
+        ):
+            resp = await client.post(
+                "/v0/admin/slack/install",
+                json={
+                    "organization_id": org.id,
+                    "slack_team_id": "T_STAMP_ORG",
+                    "slack_app_id": "A_STAMP",
+                    "bot_user_id": "U_STAMP_BOT",
+                    "bot_access_token": "xoxb-stamp",
+                    "installer_user_id": "U_INSTALLER",
+                    "initiator_user_id": installer.id,
+                },
+                headers=ADMIN_HEADERS,
+            )
+
+        assert resp.status_code == status.HTTP_200_OK
+
+        org_boss = _boss_contact_data(dbsession, assistant=org_assistant)
+        assert org_boss is not None
+        assert org_boss.get("slack_user_id") == "U_INSTALLER"
+
+        personal_boss = _boss_contact_data(dbsession, assistant=personal_assistant)
+        assert personal_boss is not None
+        assert not personal_boss.get("slack_user_id")
+
+        member_boss = _boss_contact_data(dbsession, assistant=member_assistant)
+        assert member_boss is not None
+        assert not member_boss.get("slack_user_id")
+
+        synced = {call.args[0] for call in mock_contact_sync.call_args_list}
+        assert synced == {org_assistant.agent_id}
 
     async def test_install_upsert_reawakens_personal_assistants(
         self,
