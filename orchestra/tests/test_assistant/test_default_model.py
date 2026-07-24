@@ -58,11 +58,13 @@ async def test_list_default_model_options(client: AsyncClient):
     pairs = {(o["model"], o["reasoning_effort"]) for o in options}
     assert (None, None) in pairs
     assert ("minimax-v3@minimax", None) in pairs
+    assert ("kimi-k3@moonshotai", None) in pairs
     assert (PLATFORM_DEFAULT_MODEL, "high") in pairs
     assert ("gpt-5.6-sol@openai", "high") in pairs
     assert ("gpt-5.6-terra@openai", "medium") in pairs
     assert ("gpt-5.6-luna@openai", "low") in pairs
     assert ("claude-4.8-opus@anthropic", "medium") in pairs
+    assert ("claude-opus-5@anthropic", "high") in pairs
     assert ("claude-fable-5@anthropic", "low") in pairs
     assert ("claude-sonnet-5@anthropic", "high") in pairs
     assert ("gemini-3-pro@vertex-ai", "medium") in pairs

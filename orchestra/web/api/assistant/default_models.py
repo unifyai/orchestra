@@ -127,6 +127,17 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         output_usd_per_m=1.20,
         aa_slug="minimax-m3",
     ),
+    # Kimi K3 launches with max thinking only (low/high effort modes TBD).
+    # AA Intelligence Index ~$0.95/task → ~455 credits after margin.
+    _opt(
+        model="kimi-k3@moonshotai",
+        reasoning_effort=None,
+        label="Kimi K3",
+        approx_credits_per_task=455,
+        input_usd_per_m=3.0,
+        output_usd_per_m=15.0,
+        aa_slug="kimi-k3",
+    ),
     _opt(
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="low",
@@ -261,6 +272,35 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-4-8",
+    ),
+    # Opus 5: same $5/$25 token rates as Opus 4.8; AA ~$2.03/task at max
+    # effort → ~975 credits. Medium/low scale to ~70%/50% of the high anchor.
+    _opt(
+        model="claude-opus-5@anthropic",
+        reasoning_effort="low",
+        label="Claude Opus 5 (low thinking)",
+        approx_credits_per_task=490,
+        input_usd_per_m=5.0,
+        output_usd_per_m=25.0,
+        aa_slug="claude-opus-5",
+    ),
+    _opt(
+        model="claude-opus-5@anthropic",
+        reasoning_effort="medium",
+        label="Claude Opus 5 (medium thinking)",
+        approx_credits_per_task=680,
+        input_usd_per_m=5.0,
+        output_usd_per_m=25.0,
+        aa_slug="claude-opus-5",
+    ),
+    _opt(
+        model="claude-opus-5@anthropic",
+        reasoning_effort="high",
+        label="Claude Opus 5 (high thinking)",
+        approx_credits_per_task=975,
+        input_usd_per_m=5.0,
+        output_usd_per_m=25.0,
+        aa_slug="claude-opus-5",
     ),
     # Sonnet 5 has cheaper token rates than Opus 4.8 ($3/$15 vs $5/$25) but a
     # HIGHER per-task cost: it runs ~3x the agent loops and its tokenizer
