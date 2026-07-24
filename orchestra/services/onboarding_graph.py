@@ -1338,68 +1338,6 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         nudge_voice="replying to the Slack message",
     ),
     OnboardingStep(
-        id="ms-teams-connect",
-        title="Connect Microsoft Teams",
-        phase=PHASE_COMMUNICATION,
-        kind="connect",
-        depends_on={},
-        can_skip=True,
-        derivable=True,
-        channel="ms_teams",
-        nudge_chat=(
-            "Have them click the 'Connect Microsoft Teams' row in the "
-            "Onboarding checklist; it opens the setup path for the Unify Teams "
-            "app. Heads up that many Microsoft 365 tenants need an admin to "
-            "approve the app, so if they're not an admin the install can sit "
-            "pending until an admin connects it."
-        ),
-        nudge_voice=(
-            "clicking the 'Connect Microsoft Teams' row in the Onboarding checklist"
-        ),
-    ),
-    # The Unify Teams bot is reply-only: it cannot open a conversation, so
-    # unlike every other reference-quiz channel Twin cannot send the first
-    # clue. This step is therefore user-initiated — clicking it opens the
-    # Teams chat (via a deep link in Console) so the user sends Twin a first
-    # message, which seeds the conversation reference and lets Twin reply.
-    # Completion derives from that inbound message, not a Twin outbound.
-    OnboardingStep(
-        id="ms-teams-reference",
-        title="Send your first message to T-W1N on Teams",
-        phase=PHASE_COMMUNICATION,
-        kind="setup",
-        depends_on={"ms-teams-connect": COMPLETED},
-        can_skip=True,
-        derivable=True,
-        channel="ms_teams",
-        nudge_chat=(
-            "Have them click the 'Send your first message to T-W1N on Teams' "
-            "row in the Onboarding checklist; it opens the Teams chat with the "
-            "Unify bot (adding it for them first if needed) so they can say a "
-            "quick hello. That first message is what opens the channel so I can "
-            "reply — the Teams bot can't message first."
-        ),
-        nudge_voice=(
-            "clicking the 'Send your first message to T-W1N on Teams' row in the "
-            "Onboarding checklist and saying hello"
-        ),
-    ),
-    OnboardingStep(
-        id="ms-teams-message",
-        title="Wait for T-W1N's reply in Teams",
-        phase=PHASE_COMMUNICATION,
-        kind="reply",
-        depends_on={"ms-teams-reference": COMPLETED},
-        can_skip=True,
-        derivable=True,
-        channel="ms_teams",
-        nudge_chat=(
-            "Once they've said hello on Teams, reply to them there so they "
-            "see Twin answer inside Teams. This step completes on that reply."
-        ),
-        nudge_voice="replying to them in Microsoft Teams",
-    ),
-    OnboardingStep(
         id="discord-id",
         title="Add your Discord ID",
         phase=PHASE_COMMUNICATION,
@@ -1545,6 +1483,73 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
             "workspace-call",
             "Speak to T-W1N in a video call",
         ),
+    ),
+    # Microsoft-only: the Unify Teams bot lives in a Microsoft 365 tenant, so
+    # these rows render only when the connected workspace is Microsoft.
+    OnboardingStep(
+        id="ms-teams-connect",
+        title="Connect Microsoft Teams",
+        phase=PHASE_WORKSPACE,
+        kind="connect",
+        depends_on={},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        providers=("microsoft",),
+        nudge_chat=(
+            "Have them click the 'Connect Microsoft Teams' row in the "
+            "Onboarding checklist; it opens the setup path for the Unify Teams "
+            "app. Heads up that many Microsoft 365 tenants need an admin to "
+            "approve the app, so if they're not an admin the install can sit "
+            "pending until an admin connects it."
+        ),
+        nudge_voice=(
+            "clicking the 'Connect Microsoft Teams' row in the Onboarding checklist"
+        ),
+    ),
+    # The Unify Teams bot is reply-only: it cannot open a conversation, so
+    # unlike every other reference-quiz channel Twin cannot send the first
+    # clue. This step is therefore user-initiated — clicking it opens the
+    # Teams chat (via a deep link in Console) so the user sends Twin a first
+    # message, which seeds the conversation reference and lets Twin reply.
+    # Completion derives from that inbound message, not a Twin outbound.
+    OnboardingStep(
+        id="ms-teams-reference",
+        title="Send your first message to T-W1N on Teams",
+        phase=PHASE_WORKSPACE,
+        kind="setup",
+        depends_on={"ms-teams-connect": COMPLETED},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        providers=("microsoft",),
+        nudge_chat=(
+            "Have them click the 'Send your first message to T-W1N on Teams' "
+            "row in the Onboarding checklist; it opens the Teams chat with the "
+            "Unify bot (adding it for them first if needed) so they can say a "
+            "quick hello. That first message is what opens the channel so I can "
+            "reply — the Teams bot can't message first."
+        ),
+        nudge_voice=(
+            "clicking the 'Send your first message to T-W1N on Teams' row in the "
+            "Onboarding checklist and saying hello"
+        ),
+    ),
+    OnboardingStep(
+        id="ms-teams-message",
+        title="Wait for T-W1N's reply in Teams",
+        phase=PHASE_WORKSPACE,
+        kind="reply",
+        depends_on={"ms-teams-reference": COMPLETED},
+        can_skip=True,
+        derivable=True,
+        channel="ms_teams",
+        providers=("microsoft",),
+        nudge_chat=(
+            "Once they've said hello on Teams, reply to them there so they "
+            "see Twin answer inside Teams. This step completes on that reply."
+        ),
+        nudge_voice="replying to them in Microsoft Teams",
     ),
     OnboardingStep(
         id="apps",
@@ -1828,6 +1833,15 @@ MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
 DERIVATION_ONLY_STEP_IDS: tuple[str, ...] = (
     "your-computer-link",
     "your-computer-filesys",
+)
+
+# Teams connect/reference completion derives from the install and the user's
+# first inbound Teams message, never a manual PATCH. They live in the Workspace
+# phase (Microsoft-only) but keep the auto-derived completion the other channel
+# steps get from their Communication phase — Twin must not tick them by hand.
+MESSAGE_DERIVED_STEP_IDS: tuple[str, ...] = (
+    "ms-teams-connect",
+    "ms-teams-reference",
 )
 
 # Durable contact-detail setup steps: the user's saved WhatsApp/phone number (and
@@ -2708,6 +2722,11 @@ def manual_completion_block_reason(step_id: str) -> str | None:
         return (
             "This step completes automatically once your computer is linked and "
             "filesystem access is turned on - I cannot mark it done manually."
+        )
+    if step_id in MESSAGE_DERIVED_STEP_IDS:
+        return (
+            "This step completes automatically once Teams is connected and the "
+            "first messages are exchanged — I cannot mark it done manually."
         )
     if step.phase == PHASE_COMMUNICATION:
         return (

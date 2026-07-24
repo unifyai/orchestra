@@ -108,3 +108,35 @@ def test_manual_completion_block_reason() -> None:
     assert graph.manual_completion_block_reason("integration-action") is None
     assert graph.manual_completion_block_reason("apps") is None
     assert graph.manual_completion_block_reason("create-scheduled-task") is None
+    # Teams rows live in the Workspace phase now but keep the auto-derived
+    # completion of the other channel steps — Twin must never tick them by hand.
+    assert graph.manual_completion_block_reason("ms-teams-connect") is not None
+    assert graph.manual_completion_block_reason("ms-teams-reference") is not None
+    assert graph.manual_completion_block_reason("ms-teams-message") is not None
+
+
+def test_ms_teams_steps_are_microsoft_only_workspace_steps() -> None:
+    """The Teams rows render under Workspace and only for a Microsoft workspace.
+
+    They were relocated from Communication; visibility is gated on the connected
+    provider so a Google workspace (or none connected) never sees them.
+    """
+    teams_ids = ("ms-teams-connect", "ms-teams-reference", "ms-teams-message")
+    for step_id in teams_ids:
+        step = graph.STEP_BY_ID[step_id]
+        assert step.phase == graph.PHASE_WORKSPACE
+        assert step.providers == ("microsoft",)
+        assert graph.step_visible_for_provider(step, "microsoft") is True
+        assert graph.step_visible_for_provider(step, "google") is False
+        assert graph.step_visible_for_provider(step, None) is False
+
+    # No Teams step is left behind in the Communication phase.
+    assert not [
+        step_id
+        for step_id in teams_ids
+        if graph.STEP_BY_ID[step_id].phase == graph.PHASE_COMMUNICATION
+    ]
+
+    # They sit at the tail of the Workspace phase, after the demos.
+    workspace_ids = graph.phase_step_ids_in_graph_order(graph.PHASE_WORKSPACE)
+    assert workspace_ids[-3:] == teams_ids
