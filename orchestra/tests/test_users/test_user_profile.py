@@ -970,7 +970,9 @@ async def test_update_user_number_change_reawakens_assistants(
     dbsession.commit()
 
     reawaken = AsyncMock()
+    contact_sync = AsyncMock()
     monkeypatch.setattr(assistant_infra, "reawaken_assistant", reawaken)
+    monkeypatch.setattr(assistant_infra, "trigger_contact_sync_safe", contact_sync)
 
     resp = await client.put(
         "/v0/admin/user",
@@ -979,8 +981,10 @@ async def test_update_user_number_change_reawakens_assistants(
     )
     assert resp.status_code == 200, resp.json()
     reawaken.assert_awaited_with(str(coordinator.agent_id))
+    contact_sync.assert_awaited_with(coordinator.agent_id)
 
     reawaken.reset_mock()
+    contact_sync.reset_mock()
     resp = await client.put(
         "/v0/admin/user",
         json={"user_id": user_id, "whatsapp_number": phone},
@@ -988,6 +992,7 @@ async def test_update_user_number_change_reawakens_assistants(
     )
     assert resp.status_code == 200, resp.json()
     reawaken.assert_awaited_with(str(coordinator.agent_id))
+    contact_sync.assert_awaited_with(coordinator.agent_id)
 
 
 @pytest.mark.anyio
@@ -1013,7 +1018,9 @@ async def test_update_user_non_identity_field_does_not_reawaken(
     dbsession.commit()
 
     reawaken = AsyncMock()
+    contact_sync = AsyncMock()
     monkeypatch.setattr(assistant_infra, "reawaken_assistant", reawaken)
+    monkeypatch.setattr(assistant_infra, "trigger_contact_sync_safe", contact_sync)
 
     resp = await client.put(
         "/v0/admin/user",
@@ -1022,3 +1029,74 @@ async def test_update_user_non_identity_field_does_not_reawaken(
     )
     assert resp.status_code == 200, resp.json()
     reawaken.assert_not_awaited()
+    contact_sync.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_update_user_discord_id_refreshes_user_owned_assistants_only(
+    client: AsyncClient,
+    dbsession,
+    monkeypatch,
+):
+    """Discord ID updates refresh personal + org user-owned assistants, not team-owned."""
+    from unittest.mock import AsyncMock
+
+    import orchestra.web.api.utils.assistant_infra as assistant_infra
+    from orchestra.db.models.orchestra_models import Assistant, Organization, Team
+    from orchestra.services.coordinator_service import create_workspace_coordinator
+
+    resp = await client.post(
+        "/v0/admin/user",
+        json={"email": "profile_discord_sync@example.com"},
+        headers=HEADERS,
+    )
+    user_id = resp.json()["id"]
+
+    personal, _ = create_workspace_coordinator(
+        dbsession,
+        user_id=user_id,
+        organization_id=None,
+    )
+    org = Organization(owner_id=user_id, name=f"Discord Sync Org {user_id[:8]}")
+    dbsession.add(org)
+    dbsession.flush()
+    team = Team(organization_id=org.id, name="Automation")
+    dbsession.add(team)
+    dbsession.flush()
+
+    org_assistant = Assistant(
+        user_id=user_id,
+        organization_id=org.id,
+        first_name="OrgTwin",
+        surname="Bot",
+        is_coordinator=True,
+    )
+    team_assistant = Assistant(
+        user_id=user_id,
+        organization_id=org.id,
+        owner_team_id=team.id,
+        first_name="TeamTwin",
+        surname="Bot",
+    )
+    dbsession.add_all([org_assistant, team_assistant])
+    dbsession.commit()
+
+    reawaken = AsyncMock()
+    contact_sync = AsyncMock()
+    monkeypatch.setattr(assistant_infra, "reawaken_assistant", reawaken)
+    monkeypatch.setattr(assistant_infra, "trigger_contact_sync_safe", contact_sync)
+
+    resp = await client.put(
+        "/v0/admin/user",
+        json={"user_id": user_id, "discord_id": "999217528255561851"},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+
+    expected = {str(personal.agent_id), str(org_assistant.agent_id)}
+    reawakened = {call.args[0] for call in reawaken.call_args_list}
+    synced = {str(call.args[0]) for call in contact_sync.call_args_list}
+    assert reawakened == expected
+    assert synced == expected
+    assert str(team_assistant.agent_id) not in reawakened
+    assert str(team_assistant.agent_id) not in synced

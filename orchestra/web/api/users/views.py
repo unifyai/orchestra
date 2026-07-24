@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import datetime
 import logging
@@ -428,23 +429,30 @@ def get_user_by_account(
 
 
 async def _reawaken_user_assistants(session: Session, user_id: str) -> None:
-    """Refresh the live runtime of a user's personal assistants after a contact
-    identity (phone / WhatsApp / Discord) change.
+    """Refresh live user-owned assistants after a contact identity change.
 
-    The reawaken webhook re-fetches the user's current numbers and pushes an
-    assistant update into the runtime, so the boss contact and session details
-    pick up the new value without a coordinator restart. Best-effort: failures
-    are logged and never block the profile update.
+    Reawaken pushes phone / WhatsApp onto the live boss contact via
+    ``AssistantUpdateEvent``. Discord is not on that event path, so we also
+    kick ``sync_contacts`` — Unity re-derives the boss row from
+    ``/user/basic-info``, which includes ``discord_id``.
+
+    Covers personal and org user-owned assistants; team-owned assistants are
+    excluded because their product owner is the team, not this user's boss
+    contact. Best-effort: failures are logged and never block the profile
+    update.
     """
     from orchestra.db.models.orchestra_models import Assistant
-    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+    from orchestra.web.api.utils.assistant_infra import (
+        reawaken_assistant,
+        trigger_contact_sync_safe,
+    )
 
     agent_ids = [
         row[0]
         for row in session.query(Assistant.agent_id)
         .filter(
             Assistant.user_id == user_id,
-            Assistant.organization_id.is_(None),
+            Assistant.owner_team_id.is_(None),
         )
         .all()
     ]
@@ -457,6 +465,9 @@ async def _reawaken_user_assistants(session: Session, user_id: str) -> None:
                 agent_id,
                 exc,
             )
+    await asyncio.gather(
+        *(trigger_contact_sync_safe(agent_id) for agent_id in agent_ids),
+    )
 
 
 @admin_router.put("/user")

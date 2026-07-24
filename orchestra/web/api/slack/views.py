@@ -14,6 +14,7 @@ Pure persistence — all routing logic lives in
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -54,6 +55,7 @@ class InstallUpsertRequest(BaseModel):
     slack_team_name: Optional[str] = None
     enterprise_id: Optional[str] = None
     installer_user_id: Optional[str] = None
+    initiator_user_id: Optional[str] = None
     scopes: Optional[str] = None
 
 
@@ -272,7 +274,36 @@ async def upsert_install(
     )
     session.commit()
 
-    from orchestra.web.api.utils.assistant_infra import reawaken_slack_owner_assistants
+    stamped_assistant_ids: list[int] = []
+    unify_user_id = body.initiator_user_id or body.user_id
+    if unify_user_id and body.installer_user_id:
+        from orchestra.services.assistant_bootstrap import (
+            stamp_owner_slack_user_id_for_installer,
+        )
+
+        try:
+            stamped_assistant_ids = stamp_owner_slack_user_id_for_installer(
+                session,
+                unify_user_id=unify_user_id,
+                slack_user_id=body.installer_user_id,
+                organization_id=body.organization_id,
+            )
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.warning(
+                "Failed to stamp installer Slack user ID onto boss contacts "
+                "(org=%s user=%s initiator=%s)",
+                body.organization_id,
+                body.user_id,
+                unify_user_id,
+                exc_info=True,
+            )
+
+    from orchestra.web.api.utils.assistant_infra import (
+        reawaken_slack_owner_assistants,
+        trigger_contact_sync_safe,
+    )
 
     try:
         await reawaken_slack_owner_assistants(
@@ -288,6 +319,13 @@ async def upsert_install(
             body.user_id,
             exc_info=True,
         )
+
+    await asyncio.gather(
+        *(
+            trigger_contact_sync_safe(assistant_id)
+            for assistant_id in stamped_assistant_ids
+        ),
+    )
     return _install_to_response(install)
 
 

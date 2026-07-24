@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
+from orchestra.db.dao.trigger_catalog_dao import TriggerCatalogDAO
 from orchestra.db.models.core_models import Project
 from orchestra.db.models.integration_provider_models import IntegrationConnection
 from orchestra.db.models.orchestra_models import Assistant
@@ -31,6 +32,7 @@ from orchestra.provider_triggers.backend_ids import (
 from orchestra.provider_triggers.catalog_import.native_manifest import (
     load_native_catalog_entries,
 )
+from orchestra.provider_triggers.catalog_import.types import ProviderTriggerCatalogEntry
 from orchestra.provider_triggers.ingress_rate_limit import (
     reset_ingress_rate_limiter_for_tests,
 )
@@ -374,6 +376,115 @@ def test_validate_provider_event_trigger_accepts_workspace_facade_connection(
         assistant_id=assistant.agent_id,
         trigger=trigger,
     )
+
+
+_COMPOSIO_CALENDAR_TRIGGER_SLUG = "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_CREATED_TRIGGER"
+
+
+def _seed_composio_google_calendar_alias_catalog(
+    dbsession: Session,
+) -> tuple[Assistant, IntegrationConnection]:
+    """Connection slug ``google_calendar`` + staged hint ``googlecalendar``."""
+
+    assistant = Assistant(
+        user_id=PRIMARY_USER_ID,
+        first_name="Calendar",
+        surname="Alias",
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    connection = IntegrationConnection(
+        connection_id=f"conn-gcal-{uuid.uuid4().hex[:10]}",
+        owner_scope="assistant",
+        assistant_id=assistant.agent_id,
+        canonical_app_slug="google_calendar",
+        backend_id=COMPOSIO_BACKEND_ID,
+        provider_app_id="GOOGLECALENDAR",
+        provider_connection_id="ca_google_calendar",
+        provider_user_id="calendar-user",
+        status="connected",
+        credential_storage="provider_vault",
+    )
+    dbsession.add(connection)
+
+    dao = TriggerCatalogDAO(dbsession)
+    content_hash = f"gcal-alias-{uuid.uuid4().hex}"
+    snapshot = dao.create_snapshot(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+        catalog_version="alias-test",
+        content_hash=content_hash,
+        raw_entry_count=1,
+    )
+    dao.insert_candidates(
+        snapshot_id=snapshot.id,
+        entries=[
+            ProviderTriggerCatalogEntry(
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_trigger_slug=_COMPOSIO_CALENDAR_TRIGGER_SLUG,
+                provider_version="1",
+                canonical_app_hint="googlecalendar",
+                raw_metadata={
+                    "name": "Google Calendar Event Created",
+                    "description": "Fires when a calendar event is created.",
+                    "config": {"type": "object", "properties": {}},
+                },
+            ),
+        ],
+    )
+    bootstrap = dao.get_or_create_bootstrap_state(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+    )
+    bootstrap.desired_hash = content_hash
+    bootstrap.last_status = "imported"
+    bootstrap.candidates_imported = 1
+    dbsession.commit()
+    return assistant, connection
+
+
+def test_catalog_union_matches_google_calendar_slug_alias_for_composio(
+    dbsession: Session,
+) -> None:
+    """Humanized connection slugs still unlock raw Composio toolkit hints."""
+
+    assistant, _connection = _seed_composio_google_calendar_alias_catalog(dbsession)
+
+    catalog = list_staged_triggers_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        backend_id=COMPOSIO_BACKEND_ID,
+    )
+    assert catalog["available"] is True
+    assert len(catalog["triggers"]) == 1
+    row = catalog["triggers"][0]
+    assert row["backend_id"] == COMPOSIO_BACKEND_ID
+    assert row["canonical_app_slug"] == "google_calendar"
+    assert row["provider_trigger_slug"] == _COMPOSIO_CALENDAR_TRIGGER_SLUG
+    assert row["display_name"] == "Google Calendar Event Created"
+
+
+def test_validate_provider_event_trigger_accepts_google_calendar_slug_alias(
+    dbsession: Session,
+) -> None:
+    """Enable accepts alias-equivalent app slug vs connection slug."""
+
+    assistant, connection = _seed_composio_google_calendar_alias_catalog(dbsession)
+    trigger = ProviderEventTrigger(
+        state="enabled",
+        connection_id=connection.connection_id,
+        backend_id=COMPOSIO_BACKEND_ID,
+        canonical_app_slug="googlecalendar",
+        provider_trigger_slug=_COMPOSIO_CALENDAR_TRIGGER_SLUG,
+        trigger_config={},
+    )
+    validate_provider_event_trigger_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        trigger=trigger,
+    )
+    assert trigger.canonical_app_slug == "google_calendar"
 
 
 def _seed_native_meet_ingress_binding(

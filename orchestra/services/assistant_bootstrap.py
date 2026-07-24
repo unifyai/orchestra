@@ -243,6 +243,7 @@ def ensure_owner_contact_row(
     *,
     assistant: Assistant,
     project: Project | None = None,
+    slack_user_id: str | None = None,
 ) -> int:
     """Ensure an assistant's root Contacts context contains the owner row."""
     _lock_assistant_context(
@@ -267,6 +268,8 @@ def ensure_owner_contact_row(
         auto_counting=CONTACTS_AUTO_COUNTING,
     )
     entries = _owner_contact_entries(owner)
+    if slack_user_id:
+        entries = {**entries, "slack_user_id": slack_user_id}
     existing = _find_contact_log_by_contact_id(
         session,
         context=context,
@@ -334,3 +337,33 @@ def ensure_owner_contact_rows(
     for assistant in assistants:
         ensure_owner_contact_row(session, assistant=assistant)
     session.flush()
+
+
+def stamp_owner_slack_user_id_for_installer(
+    session: Session,
+    *,
+    unify_user_id: str,
+    slack_user_id: str,
+    organization_id: int | None,
+) -> list[int]:
+    """Stamp the Slack installer's user ID onto the installing user's boss contacts."""
+    query = select(Assistant).where(
+        Assistant.user_id == unify_user_id,
+        Assistant.owner_team_id.is_(None),
+    )
+    if organization_id is not None:
+        query = query.where(Assistant.organization_id == organization_id)
+    else:
+        query = query.where(Assistant.organization_id.is_(None))
+
+    assistant_ids: list[int] = []
+    for assistant in session.scalars(query).all():
+        ensure_owner_contact_row(
+            session,
+            assistant=assistant,
+            slack_user_id=slack_user_id,
+        )
+        assistant_ids.append(assistant.agent_id)
+    if assistant_ids:
+        session.flush()
+    return assistant_ids
