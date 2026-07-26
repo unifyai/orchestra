@@ -9,8 +9,7 @@ An option with ``reasoning_effort=None`` leaves the runtime's per-call-site
 effort levels untouched; a concrete effort overrides them wherever that model
 is used.
 
-Credit estimates (display-only; 1 USD billed provider cost = 400 credits, at a
-1.2x margin on provider rates):
+Credit estimates (display-only; 1 USD provider cost = 400 credits):
 
 - ``approx_credits_per_task`` — order-of-magnitude cost of one typical
   CodeActActor / tool-loop task. High-effort figures are anchored to Artificial
@@ -48,7 +47,6 @@ _MSG_OUTPUT_BY_EFFORT = {
     "medium": 800,
     "high": 1_500,
 }
-_MARGIN = 1.2
 _CREDITS_PER_USD = 400
 
 
@@ -77,7 +75,7 @@ def _msg_credits(
     usd = (
         input_usd_per_m * _MSG_INPUT_TOKENS + output_usd_per_m * out_tokens
     ) / 1_000_000
-    return max(1, round(usd * _MARGIN * _CREDITS_PER_USD))
+    return max(1, round(usd * _CREDITS_PER_USD))
 
 
 def _opt(
@@ -113,7 +111,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         reasoning_effort=None,
         label=f"System Default (currently {PLATFORM_DEFAULT_DISPLAY_NAME})",
         # Display credits match the platform default (GPT-5.6 Sol high).
-        approx_credits_per_task=475,
+        approx_credits_per_task=396,
         input_usd_per_m=5.0,
         output_usd_per_m=30.0,
         aa_slug="gpt-5-6-sol",
@@ -122,18 +120,18 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="minimax-v3@minimax",
         reasoning_effort=None,
         label="MiniMax-M3",
-        approx_credits_per_task=40,
+        approx_credits_per_task=33,
         input_usd_per_m=0.30,
         output_usd_per_m=1.20,
         aa_slug="minimax-m3",
     ),
     # Kimi K3 launches with max thinking only (low/high effort modes TBD).
-    # AA Intelligence Index ~$0.95/task → ~455 credits after margin.
+    # AA Intelligence Index ~$0.95/task → ~380 credits.
     _opt(
         model="kimi-k3@moonshotai",
         reasoning_effort=None,
         label="Kimi K3",
-        approx_credits_per_task=455,
+        approx_credits_per_task=380,
         input_usd_per_m=3.0,
         output_usd_per_m=15.0,
         aa_slug="kimi-k3",
@@ -142,7 +140,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="low",
         label="Gemini 3.1 Pro (low thinking)",
-        approx_credits_per_task=100,
+        approx_credits_per_task=83,
         input_usd_per_m=1.25,
         output_usd_per_m=10.0,
         aa_slug="gemini-3-1-pro-preview",
@@ -151,7 +149,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="medium",
         label="Gemini 3.1 Pro (medium thinking)",
-        approx_credits_per_task=140,
+        approx_credits_per_task=117,
         input_usd_per_m=1.25,
         output_usd_per_m=10.0,
         aa_slug="gemini-3-1-pro-preview",
@@ -160,7 +158,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="gemini-3-pro@vertex-ai",
         reasoning_effort="high",
         label="Gemini 3.1 Pro (high thinking)",
-        approx_credits_per_task=200,
+        approx_credits_per_task=167,
         input_usd_per_m=1.25,
         output_usd_per_m=10.0,
         aa_slug="gemini-3-1-pro-preview",
@@ -169,7 +167,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-luna@openrouter",
         reasoning_effort="low",
         label="GPT-5.6 Luna (low thinking)",
-        approx_credits_per_task=50,
+        approx_credits_per_task=42,
         input_usd_per_m=1.0,
         output_usd_per_m=6.0,
         aa_slug="gpt-5-6-luna",
@@ -178,7 +176,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-luna@openrouter",
         reasoning_effort="medium",
         label="GPT-5.6 Luna (medium thinking)",
-        approx_credits_per_task=70,
+        approx_credits_per_task=58,
         input_usd_per_m=1.0,
         output_usd_per_m=6.0,
         aa_slug="gpt-5-6-luna",
@@ -187,7 +185,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-luna@openrouter",
         reasoning_effort="high",
         label="GPT-5.6 Luna (high thinking)",
-        approx_credits_per_task=95,
+        approx_credits_per_task=79,
         input_usd_per_m=1.0,
         output_usd_per_m=6.0,
         aa_slug="gpt-5-6-luna",
@@ -196,7 +194,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-terra@openrouter",
         reasoning_effort="low",
         label="GPT-5.6 Terra (low thinking)",
-        approx_credits_per_task=120,
+        approx_credits_per_task=100,
         input_usd_per_m=2.50,
         output_usd_per_m=15.0,
         aa_slug="gpt-5-6-terra",
@@ -205,7 +203,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-terra@openrouter",
         reasoning_effort="medium",
         label="GPT-5.6 Terra (medium thinking)",
-        approx_credits_per_task=170,
+        approx_credits_per_task=142,
         input_usd_per_m=2.50,
         output_usd_per_m=15.0,
         aa_slug="gpt-5-6-terra",
@@ -214,7 +212,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-terra@openrouter",
         reasoning_effort="high",
         label="GPT-5.6 Terra (high thinking)",
-        approx_credits_per_task=240,
+        approx_credits_per_task=200,
         input_usd_per_m=2.50,
         output_usd_per_m=15.0,
         aa_slug="gpt-5-6-terra",
@@ -223,7 +221,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-sol@openrouter",
         reasoning_effort="low",
         label="GPT-5.6 Sol (low thinking)",
-        approx_credits_per_task=240,
+        approx_credits_per_task=200,
         input_usd_per_m=5.0,
         output_usd_per_m=30.0,
         aa_slug="gpt-5-6-sol",
@@ -232,7 +230,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-sol@openrouter",
         reasoning_effort="medium",
         label="GPT-5.6 Sol (medium thinking)",
-        approx_credits_per_task=330,
+        approx_credits_per_task=275,
         input_usd_per_m=5.0,
         output_usd_per_m=30.0,
         aa_slug="gpt-5-6-sol",
@@ -241,7 +239,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="openai/gpt-5.6-sol@openrouter",
         reasoning_effort="high",
         label="GPT-5.6 Sol (high thinking)",
-        approx_credits_per_task=475,
+        approx_credits_per_task=396,
         input_usd_per_m=5.0,
         output_usd_per_m=30.0,
         aa_slug="gpt-5-6-sol",
@@ -250,7 +248,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-4.8-opus@anthropic",
         reasoning_effort="low",
         label="Claude Opus 4.8 (low thinking)",
-        approx_credits_per_task=430,
+        approx_credits_per_task=358,
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-4-8",
@@ -259,7 +257,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-4.8-opus@anthropic",
         reasoning_effort="medium",
         label="Claude Opus 4.8 (medium thinking)",
-        approx_credits_per_task=600,
+        approx_credits_per_task=500,
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-4-8",
@@ -268,18 +266,18 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-4.8-opus@anthropic",
         reasoning_effort="high",
         label="Claude Opus 4.8 (high thinking)",
-        approx_credits_per_task=850,
+        approx_credits_per_task=708,
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-4-8",
     ),
     # Opus 5: same $5/$25 token rates as Opus 4.8; AA ~$2.03/task at max
-    # effort → ~975 credits. Medium/low scale to ~70%/50% of the high anchor.
+    # effort → ~812 credits. Medium/low scale to ~70%/50% of the high anchor.
     _opt(
         model="claude-opus-5@anthropic",
         reasoning_effort="low",
         label="Claude Opus 5 (low thinking)",
-        approx_credits_per_task=490,
+        approx_credits_per_task=408,
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-5",
@@ -288,7 +286,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-opus-5@anthropic",
         reasoning_effort="medium",
         label="Claude Opus 5 (medium thinking)",
-        approx_credits_per_task=680,
+        approx_credits_per_task=567,
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-5",
@@ -297,7 +295,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-opus-5@anthropic",
         reasoning_effort="high",
         label="Claude Opus 5 (high thinking)",
-        approx_credits_per_task=975,
+        approx_credits_per_task=812,
         input_usd_per_m=5.0,
         output_usd_per_m=25.0,
         aa_slug="claude-opus-5",
@@ -311,7 +309,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-sonnet-5@anthropic",
         reasoning_effort="low",
         label="Claude Sonnet 5 (low thinking)",
-        approx_credits_per_task=550,
+        approx_credits_per_task=458,
         input_usd_per_m=3.0,
         output_usd_per_m=15.0,
         aa_slug="claude-sonnet-5",
@@ -320,7 +318,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-sonnet-5@anthropic",
         reasoning_effort="medium",
         label="Claude Sonnet 5 (medium thinking)",
-        approx_credits_per_task=770,
+        approx_credits_per_task=642,
         input_usd_per_m=3.0,
         output_usd_per_m=15.0,
         aa_slug="claude-sonnet-5",
@@ -329,7 +327,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-sonnet-5@anthropic",
         reasoning_effort="high",
         label="Claude Sonnet 5 (high thinking)",
-        approx_credits_per_task=1100,
+        approx_credits_per_task=917,
         input_usd_per_m=3.0,
         output_usd_per_m=15.0,
         aa_slug="claude-sonnet-5",
@@ -338,7 +336,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-fable-5@anthropic",
         reasoning_effort="low",
         label="Claude Fable 5 (low thinking)",
-        approx_credits_per_task=780,
+        approx_credits_per_task=650,
         input_usd_per_m=10.0,
         output_usd_per_m=50.0,
         aa_slug="claude-fable-5",
@@ -347,7 +345,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-fable-5@anthropic",
         reasoning_effort="medium",
         label="Claude Fable 5 (medium thinking)",
-        approx_credits_per_task=1100,
+        approx_credits_per_task=917,
         input_usd_per_m=10.0,
         output_usd_per_m=50.0,
         aa_slug="claude-fable-5",
@@ -356,7 +354,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         model="claude-fable-5@anthropic",
         reasoning_effort="high",
         label="Claude Fable 5 (high thinking)",
-        approx_credits_per_task=1550,
+        approx_credits_per_task=1292,
         input_usd_per_m=10.0,
         output_usd_per_m=50.0,
         aa_slug="claude-fable-5",
