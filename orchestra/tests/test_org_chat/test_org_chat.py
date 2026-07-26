@@ -1507,6 +1507,86 @@ async def test_assistant_dm_thread_post_and_history(
 
 
 @pytest.mark.anyio
+async def test_assistant_peer_dm_post_and_fanout(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    owner, _member, org = await _create_org_with_member(client, "apd")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    left = Assistant(
+        user_id=owner["id"],
+        first_name="Alpha",
+        surname="Peer",
+        organization_id=org["id"],
+    )
+    right = Assistant(
+        user_id=owner["id"],
+        first_name="Beta",
+        surname="Peer",
+        organization_id=org["id"],
+    )
+    dbsession.add_all([left, right])
+    dbsession.commit()
+
+    post_response = await client.post(
+        "/v0/admin/chat/messages",
+        headers=ADMIN_HEADERS,
+        json={
+            "assistant_id": left.agent_id,
+            "to_assistant_id": right.agent_id,
+            "content": "Hey peer",
+        },
+    )
+    assert post_response.status_code == status.HTTP_201_CREATED, post_response.json()
+    body = post_response.json()
+    assert body["kind"] == "assistant_peer_dm"
+    assert body["sender_assistant_id"] == left.agent_id
+    assert set(body["assistant_ids"]) == {left.agent_id, right.agent_id}
+    assert body["organization_id"] == org["id"]
+    thread_id = body["thread_id"]
+
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["kind"] == "assistant_peer_dm"
+    assert payload["thread_id"] == thread_id
+    assert payload["fanout_assistant_ids"] == [right.agent_id]
+    assert payload["assistant_event"]["body"] == "Hey peer"
+    assert payload["assistant_event"]["sender_assistant_id"] == left.agent_id
+
+    # Same pair from the other side reuses the normalized thread.
+    reply_response = await client.post(
+        "/v0/admin/chat/messages",
+        headers=ADMIN_HEADERS,
+        json={
+            "assistant_id": right.agent_id,
+            "to_assistant_id": left.agent_id,
+            "content": "Hey back",
+        },
+    )
+    assert reply_response.status_code == status.HTTP_201_CREATED, reply_response.json()
+    reply = reply_response.json()
+    assert reply["thread_id"] == thread_id
+    assert reply["kind"] == "assistant_peer_dm"
+    payload = org_chat_dispatch_mock.await_args.args[0]
+    assert payload["fanout_assistant_ids"] == [left.agent_id]
+
+    # Self peer DM is rejected.
+    self_response = await client.post(
+        "/v0/admin/chat/messages",
+        headers=ADMIN_HEADERS,
+        json={
+            "assistant_id": left.agent_id,
+            "to_assistant_id": left.agent_id,
+            "content": "nope",
+        },
+    )
+    assert self_response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.anyio
 async def test_chat_message_reaction_toggle(
     client: AsyncClient,
     org_chat_dispatch_mock: AsyncMock,

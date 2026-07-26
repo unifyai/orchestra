@@ -1198,6 +1198,9 @@ class ChatThread(Base):
       stored normalized (``user_a_id < user_b_id`` lexicographically).
     * ``assistant_dm`` — one human and one assistant (the Console 1-on-1
       panel). ``organization_id`` is NULL for personal assistants.
+    * ``assistant_peer_dm`` — one assistant and another assistant in the
+      same organization. The pair is stored normalized
+      (``assistant_id < peer_assistant_id``).
     * ``team`` — a team's group chat (all team humans + assistants).
     * ``group`` — an ad-hoc chat group's thread.
 
@@ -1230,6 +1233,11 @@ class ChatThread(Base):
         ForeignKey("assistants.agent_id", ondelete="CASCADE"),
         nullable=True,
     )
+    peer_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=True,
+    )
     user_id = Column(
         String,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -1253,12 +1261,17 @@ class ChatThread(Base):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "kind IN ('dm', 'assistant_dm', 'team', 'group')",
+            "kind IN ('dm', 'assistant_dm', 'assistant_peer_dm', 'team', 'group')",
             name="ck_chat_thread_kind",
         ),
         sa.CheckConstraint(
             "user_a_id IS NULL OR user_b_id IS NULL OR user_a_id < user_b_id",
             name="ck_chat_thread_normalized_pair",
+        ),
+        sa.CheckConstraint(
+            "assistant_id IS NULL OR peer_assistant_id IS NULL OR "
+            "assistant_id < peer_assistant_id",
+            name="ck_chat_thread_normalized_assistant_pair",
         ),
         Index(
             "uq_chat_thread_dm_pair",
@@ -1274,6 +1287,13 @@ class ChatThread(Base):
             "user_id",
             unique=True,
             postgresql_where=sa.text("kind = 'assistant_dm'"),
+        ),
+        Index(
+            "uq_chat_thread_assistant_peer_dm",
+            "assistant_id",
+            "peer_assistant_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'assistant_peer_dm'"),
         ),
         Index(
             "uq_chat_thread_team",
