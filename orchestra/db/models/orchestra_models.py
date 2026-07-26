@@ -2514,12 +2514,14 @@ class Assistant(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     # Re-engagement tracking. last_correspondence_at is touched on any
-    # inbound/outbound message across all contacts; last_followup_sent_at
-    # records when the inactivity re-engagement follow-up fired and is
-    # cleared when fresh activity resumes (re-arming the follow-up);
-    # inactivity_followup_opted_out is set when the boss explicitly asks
-    # not to be followed up with again, and excludes this Coordinator
-    # from the routine until it is cleared.
+    # inbound/outbound message across all contacts *except* replies to
+    # programmatic inactivity check-in emails (matched by Gmail thread id);
+    # last_followup_sent_at records the latest check-in send;
+    # inactivity_followup_series / stage drive the multi-email cadence
+    # (series 1 → days 1/2/3, series 2 → 2/4/6, … up to max series);
+    # inactivity_followup_thread_ids stores Gmail thread ids for check-ins
+    # in the current silence so replies on those threads do not re-arm;
+    # inactivity_followup_opted_out excludes this Coordinator until cleared.
     last_correspondence_at = Column(
         TIMESTAMP(timezone=True),
         nullable=True,
@@ -2527,6 +2529,29 @@ class Assistant(Base):
         index=True,
     )
     last_followup_sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    inactivity_followup_series = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+    inactivity_followup_stage = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    inactivity_followup_thread_ids = Column(
+        JSONB,
+        nullable=False,
+        server_default="[]",
+    )
+    inactivity_followup_has_engaged = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     inactivity_followup_opted_out = Column(
         Boolean,
         nullable=False,

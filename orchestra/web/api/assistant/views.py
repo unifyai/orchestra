@@ -13,6 +13,7 @@ import mutagen
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     File,
     Form,
@@ -8920,19 +8921,60 @@ async def set_assistant_spending_limit(
 # ---------------------------------------------------------------------------
 
 
-def _touch_assistant_activity(session: Session, assistant_id: int) -> dict:
-    """Stamp fresh correspondence activity and clear any pending follow-up."""
+from pydantic import BaseModel, Field
+
+
+class TouchActivityRequest(BaseModel):
+    """Optional payload for ``POST …/touch-activity``."""
+
+    thread_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Gmail/Outlook thread id for the message. When it matches a "
+            "stored inactivity check-in thread, activity is not stamped."
+        ),
+    )
+
+
+def _touch_assistant_activity(
+    session: Session,
+    assistant_id: int,
+    *,
+    thread_id: str | None = None,
+) -> dict:
+    """Stamp fresh correspondence activity (unless this is a check-in reply)."""
     from datetime import datetime, timezone
 
+    from orchestra.settings import settings
+
     dao = AssistantDAO(session)
-    rows = dao.touch_last_correspondence_at(assistant_id, datetime.now(timezone.utc))
-    if rows == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Assistant with id {assistant_id} not found.",
+    outcome = dao.touch_last_correspondence_at(
+        assistant_id,
+        datetime.now(timezone.utc),
+        thread_id=thread_id,
+        max_series=settings.inactivity_followup_max_series,
+    )
+    if outcome.get("rows_updated", 0) == 0 and not outcome.get("skipped"):
+        # Distinguish unknown assistant from skipped follow-up-thread reply.
+        exists = (
+            session.execute(
+                select(Assistant.agent_id).where(Assistant.agent_id == assistant_id),
+            ).scalar_one_or_none()
+            is not None
         )
+        if not exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Assistant with id {assistant_id} not found.",
+            )
     session.commit()
-    return {"status": "success", "assistant_id": assistant_id, "rows_updated": rows}
+    return {
+        "status": "success",
+        "assistant_id": assistant_id,
+        "rows_updated": outcome.get("rows_updated", 0),
+        "skipped": bool(outcome.get("skipped")),
+        "reason": outcome.get("reason"),
+    }
 
 
 def _set_assistant_followup_opt_out(
@@ -8957,18 +8999,24 @@ def _set_assistant_followup_opt_out(
     status_code=status.HTTP_200_OK,
     summary="Admin: record correspondence activity for an assistant",
     description=(
-        "Stamps ``last_correspondence_at = now()`` and clears "
-        "``last_followup_sent_at`` so a future silence can re-trigger "
-        "the inactivity follow-up. Called by the Unity transcript hook "
-        "on every inbound or outbound message across any contact."
+        "Stamps ``last_correspondence_at = now()`` and re-arms the "
+        "inactivity follow-up series for a future silence. Called by the "
+        "Unity transcript hook on inbound/outbound messages. Optional "
+        "``thread_id`` skips the stamp when the message is a reply on an "
+        "inactivity check-in Gmail thread."
     ),
     tags=["Assistants", "Admin"],
 )
 def admin_touch_assistant_activity(
     assistant_id: int,
     session: Session = Depends(get_db_session),
+    body: TouchActivityRequest = Body(default_factory=TouchActivityRequest),
 ) -> dict:
-    return _touch_assistant_activity(session, assistant_id)
+    return _touch_assistant_activity(
+        session,
+        assistant_id,
+        thread_id=body.thread_id,
+    )
 
 
 @router.post(
@@ -8977,8 +9025,9 @@ def admin_touch_assistant_activity(
     summary="Record correspondence activity for an owned assistant",
     description=(
         "Ownership-scoped equivalent of the admin route: stamps "
-        "``last_correspondence_at = now()`` and clears "
-        "``last_followup_sent_at`` for an assistant the caller owns."
+        "``last_correspondence_at = now()`` and re-arms follow-up cadence "
+        "for an assistant the caller owns. Optional ``thread_id`` skips "
+        "stamping for replies to programmatic check-in emails."
     ),
     tags=["Assistants"],
     include_in_schema=False,
@@ -8987,9 +9036,14 @@ def touch_assistant_activity(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    body: TouchActivityRequest = Body(default_factory=TouchActivityRequest),
 ) -> dict:
     require_owned_assistant(request, assistant_id, session, write=True)
-    return _touch_assistant_activity(session, assistant_id)
+    return _touch_assistant_activity(
+        session,
+        assistant_id,
+        thread_id=body.thread_id,
+    )
 
 
 @admin_router.post(
