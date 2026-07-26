@@ -167,7 +167,7 @@ class AssistantCreate(BaseModel):
             "(see GET /assistant/default-model-options). NULL means the "
             "platform default applies."
         ),
-        example="gpt-5.6-sol@openai",
+        example="openai/gpt-5.6-sol@openrouter",
     )
     default_reasoning_effort: Optional[str] = Field(
         None,
@@ -185,7 +185,7 @@ class AssistantCreate(BaseModel):
             "(see GET /assistant/default-model-options?usage=slow_brain). "
             "NULL means the platform slow-brain default applies."
         ),
-        example="gpt-5.6-terra@openai",
+        example="openai/gpt-5.6-terra@openrouter",
     )
     slow_brain_reasoning_effort: Optional[str] = Field(
         None,
@@ -283,6 +283,7 @@ class AssistantCreate(BaseModel):
             if self.default_model is not None and not is_valid_default_model(
                 self.default_model,
                 self.default_reasoning_effort,
+                require_tools=True,
             ):
                 raise ValueError(
                     f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
@@ -1169,7 +1170,7 @@ class AssistantUpdate(BaseModel):
             "(see GET /assistant/default-model-options). Send null to reset "
             "to the platform default."
         ),
-        example="gpt-5.6-sol@openai",
+        example="openai/gpt-5.6-sol@openrouter",
     )
     default_reasoning_effort: Optional[str] = Field(
         None,
@@ -1187,7 +1188,7 @@ class AssistantUpdate(BaseModel):
             "(see GET /assistant/default-model-options?usage=slow_brain). "
             "Send null to reset to the platform slow-brain default."
         ),
-        example="gpt-5.6-terra@openai",
+        example="openai/gpt-5.6-terra@openrouter",
     )
     slow_brain_reasoning_effort: Optional[str] = Field(
         None,
@@ -1287,6 +1288,7 @@ class AssistantUpdate(BaseModel):
         if not is_valid_default_model(
             self.default_model,
             self.default_reasoning_effort,
+            require_tools=True,
         ):
             raise ValueError(
                 f"({self.default_model!r}, {self.default_reasoning_effort!r}) "
@@ -1470,7 +1472,7 @@ class DefaultModelOptionRead(BaseModel):
             "unillm 'model@provider' endpoint. Null means the system default "
             "(leave the assistant unset so the runtime applies its own defaults)."
         ),
-        example="gpt-5.6-sol@openai",
+        example="openai/gpt-5.6-sol@openrouter",
     )
     reasoning_effort: Optional[str] = Field(
         None,
@@ -1483,30 +1485,46 @@ class DefaultModelOptionRead(BaseModel):
     label: str = Field(
         ...,
         description="Human-readable label for the option.",
-        example="GPT-5.5 (high thinking)",
+        example="GPT-5.6 Sol (high thinking)",
     )
-    approx_credits_per_task: int = Field(
-        ...,
+    approx_credits_per_task: Optional[int] = Field(
+        None,
         description=(
             "Order-of-magnitude estimate of what one typical assistant task "
-            "costs at this option, in customer-facing credits. Display-only."
+            "costs at this option, in customer-facing credits. Display-only. "
+            "Null when pricing is unknown (OpenRouter search results)."
         ),
         example=475,
     )
-    approx_credits_per_message: int = Field(
-        ...,
+    approx_credits_per_message: Optional[int] = Field(
+        None,
         description=(
             "Order-of-magnitude estimate of what one typical ConversationManager "
             "slow-brain message costs at this option, in customer-facing "
-            "credits. Derived from raw token rates for a controlled turn "
-            "budget. Display-only."
+            "credits. Null when pricing is unknown."
         ),
         example=25,
     )
-    artificial_analysis_url: str = Field(
-        ...,
-        description="Artificial Analysis benchmark page for the model.",
-        example="https://artificialanalysis.ai/models/gpt-5-5",
+    artificial_analysis_url: Optional[str] = Field(
+        None,
+        description="Artificial Analysis benchmark page for the model, when known.",
+        example="https://artificialanalysis.ai/models/gpt-5-6-sol",
+    )
+    recommended: bool = Field(
+        True,
+        description="True for curated recommended options; False for catalog search hits.",
+    )
+    eligible: bool = Field(
+        True,
+        description="False when the model fails capability policy for this usage.",
+    )
+    disabled_reason: Optional[str] = Field(
+        None,
+        description="Why the option is not selectable, when eligible is False.",
+    )
+    supports_reasoning: Optional[bool] = Field(
+        None,
+        description="Whether reasoning_effort may be set for this model.",
     )
 
 

@@ -5877,7 +5877,9 @@ async def clone_voice(
         "Returns the curated catalog of multimodal LLM options that can be "
         "set as an assistant's default (actor) or slow-brain model. Pass "
         "usage=slow_brain to label the system-default row for the platform "
-        "slow-brain default."
+        "slow-brain default. Use "
+        "GET /assistant/default-model-options/search to browse the full "
+        "OpenRouter catalog."
     ),
     tags=["Assistant Management"],
 )
@@ -5901,8 +5903,58 @@ def list_default_model_options(
                 approx_credits_per_task=option.approx_credits_per_task,
                 approx_credits_per_message=option.approx_credits_per_message,
                 artificial_analysis_url=option.artificial_analysis_url,
+                recommended=True,
+                eligible=True,
+                disabled_reason=None,
+                supports_reasoning=True,
             )
             for option in list_model_options(usage)
+        ],
+    )
+
+
+@router.get(
+    "/assistant/default-model-options/search",
+    response_model=InfoResponse[List[DefaultModelOptionRead]],
+    status_code=status.HTTP_200_OK,
+    summary="Search OpenRouter model options",
+    description=(
+        "Search the OpenRouter model catalog for assistant default / "
+        "slow-brain selection. Results that fail the multimodal (and for "
+        "actor usage, tools) policy are returned with eligible=false."
+    ),
+    tags=["Assistant Management"],
+)
+def search_default_model_options(
+    q: str = Query("", description="Case-insensitive substring match on id/name."),
+    usage: Literal["actor", "slow_brain"] = Query(
+        "actor",
+        description="Actor requires tools; slow_brain requires image input only.",
+    ),
+    limit: int = Query(50, ge=1, le=200),
+) -> InfoResponse[List[DefaultModelOptionRead]]:
+    from orchestra.services.openrouter_catalog import search_models
+
+    rows = search_models(
+        q,
+        limit=limit,
+        require_tools=(usage == "actor"),
+    )
+    return InfoResponse(
+        info=[
+            DefaultModelOptionRead(
+                model=row["endpoint"],
+                reasoning_effort=None,
+                label=str(row.get("name") or row["id"]),
+                approx_credits_per_task=None,
+                approx_credits_per_message=None,
+                artificial_analysis_url=None,
+                recommended=False,
+                eligible=bool(row.get("eligible")),
+                disabled_reason=row.get("disabled_reason"),
+                supports_reasoning=bool(row.get("supports_reasoning")),
+            )
+            for row in rows
         ],
     )
 

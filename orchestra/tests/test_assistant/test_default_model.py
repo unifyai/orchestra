@@ -60,9 +60,9 @@ async def test_list_default_model_options(client: AsyncClient):
     assert ("minimax-v3@minimax", None) in pairs
     assert ("kimi-k3@moonshotai", None) in pairs
     assert (PLATFORM_DEFAULT_MODEL, "high") in pairs
-    assert ("gpt-5.6-sol@openai", "high") in pairs
-    assert ("gpt-5.6-terra@openai", "medium") in pairs
-    assert ("gpt-5.6-luna@openai", "low") in pairs
+    assert ("openai/gpt-5.6-sol@openrouter", "high") in pairs
+    assert ("openai/gpt-5.6-terra@openrouter", "medium") in pairs
+    assert ("openai/gpt-5.6-luna@openrouter", "low") in pairs
     assert ("claude-4.8-opus@anthropic", "medium") in pairs
     assert ("claude-opus-5@anthropic", "high") in pairs
     assert ("claude-fable-5@anthropic", "low") in pairs
@@ -91,7 +91,7 @@ async def test_list_slow_brain_model_options(client: AsyncClient):
     assert options[0]["approx_credits_per_message"] == next(
         o.approx_credits_per_message
         for o in DEFAULT_MODEL_OPTIONS
-        if o.model == "gpt-5.6-terra@openai" and o.reasoning_effort == "high"
+        if o.model == "openai/gpt-5.6-terra@openrouter" and o.reasoning_effort == "high"
     )
     # Selectable pairs match the actor catalog (minus the system-default row).
     actor = await client.get("/v0/assistant/default-model-options", headers=HEADERS)
@@ -135,12 +135,12 @@ async def test_message_credits_rank_sensibly(client: AsyncClient):
     terra_high = next(
         o["approx_credits_per_message"]
         for o in options
-        if o["model"] == "gpt-5.6-terra@openai" and o["reasoning_effort"] == "high"
+        if o["model"] == "openai/gpt-5.6-terra@openrouter" and o["reasoning_effort"] == "high"
     )
     luna_high = next(
         o["approx_credits_per_message"]
         for o in options
-        if o["model"] == "gpt-5.6-luna@openai" and o["reasoning_effort"] == "high"
+        if o["model"] == "openai/gpt-5.6-luna@openrouter" and o["reasoning_effort"] == "high"
     )
     assert terra_high > luna_high
 
@@ -196,7 +196,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
     patch_resp = await client.patch(
         f"/v0/assistant/{aid}/config",
         json={
-            "default_model": "gpt-5.6-sol@openai",
+            "default_model": "openai/gpt-5.6-sol@openrouter",
             "default_reasoning_effort": "medium",
             "create_infra": False,
         },
@@ -204,7 +204,7 @@ async def test_update_default_model(client: AsyncClient, mock_assistant_infra_ca
     )
     assert patch_resp.status_code == 200
     updated = patch_resp.json()["info"]
-    assert updated["default_model"] == "gpt-5.6-sol@openai"
+    assert updated["default_model"] == "openai/gpt-5.6-sol@openrouter"
     assert updated["default_reasoning_effort"] == "medium"
     # Changing the default model is a runtime-facing update.
     _, mock_reawaken = mock_assistant_infra_calls
@@ -217,7 +217,7 @@ async def test_update_slow_brain_model(client: AsyncClient, mock_assistant_infra
     patch_resp = await client.patch(
         f"/v0/assistant/{aid}/config",
         json={
-            "slow_brain_model": "gpt-5.6-luna@openai",
+            "slow_brain_model": "openai/gpt-5.6-luna@openrouter",
             "slow_brain_reasoning_effort": "medium",
             "create_infra": False,
         },
@@ -225,7 +225,7 @@ async def test_update_slow_brain_model(client: AsyncClient, mock_assistant_infra
     )
     assert patch_resp.status_code == 200
     updated = patch_resp.json()["info"]
-    assert updated["slow_brain_model"] == "gpt-5.6-luna@openai"
+    assert updated["slow_brain_model"] == "openai/gpt-5.6-luna@openrouter"
     assert updated["slow_brain_reasoning_effort"] == "medium"
     _, mock_reawaken = mock_assistant_infra_calls
     mock_reawaken.assert_awaited_once()
@@ -255,7 +255,7 @@ async def test_update_default_model_invalid_pair(client: AsyncClient):
     patch_resp = await client.patch(
         f"/v0/assistant/{aid}/config",
         json={
-            "default_model": "gpt-5.6-sol@openai",
+            "default_model": "openai/gpt-5.6-sol@openrouter",
             "default_reasoning_effort": "max",
             "create_infra": False,
         },
@@ -279,7 +279,7 @@ async def test_update_effort_without_model_rejected(client: AsyncClient):
 async def test_clear_default_model(client: AsyncClient):
     aid = await _create_assistant(
         client,
-        default_model="gpt-5.6-sol@openai",
+        default_model="openai/gpt-5.6-sol@openrouter",
         default_reasoning_effort="high",
     )
     patch_resp = await client.patch(
@@ -297,7 +297,7 @@ async def test_clear_default_model(client: AsyncClient):
 async def test_clear_slow_brain_model(client: AsyncClient):
     aid = await _create_assistant(
         client,
-        slow_brain_model="gpt-5.6-sol@openai",
+        slow_brain_model="openai/gpt-5.6-sol@openrouter",
         slow_brain_reasoning_effort="high",
     )
     patch_resp = await client.patch(
