@@ -163,23 +163,15 @@ async def create_user(
         raise
 
     if created_coordinator:
-        # Best-effort welcome email from the new user's Coordinator.
-        # Runs post-commit so a mail hiccup can never undo the signup.
-        try:
-            from orchestra.routines.inactivity_notifications import (
-                send_coordinator_welcome_email,
-            )
+        # Best-effort twin@ + founder welcomes. Post-commit so a mail
+        # hiccup can never undo the signup; each send is independent.
+        from orchestra.routines.founder_welcome import send_signup_welcome_emails_safe
 
-            await send_coordinator_welcome_email(
-                recipient_email=new_user.email,
-                owner_first_name=new_user.name,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to send Coordinator welcome email for user %s",
-                new_user.id,
-                exc_info=True,
-            )
+        await send_signup_welcome_emails_safe(
+            recipient_email=new_user.email,
+            owner_first_name=new_user.name,
+            user_id=new_user.id,
+        )
 
     wake_workspace_coordinator_best_effort_sync(
         session,

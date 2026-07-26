@@ -630,6 +630,21 @@ class Settings(BaseSettings):
     # Deprecated alias kept so existing env vars keep working during rollout.
     inactivity_followup_days: int = 1
 
+    # Personal founder welcome (dan@) sent once at personal Coordinator
+    # provision alongside the twin@ product welcome. Requires Workspace
+    # domain-wide delegation for the from address.
+    founder_welcome_enabled: bool = os.environ.get(
+        "FOUNDER_WELCOME_ENABLED",
+        "true",
+    ).lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    founder_welcome_from_email: str = (
+        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan@unify.ai"
+    )
+
     @property
     def db_url(self) -> URL:
         """
