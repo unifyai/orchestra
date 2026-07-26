@@ -1179,3 +1179,153 @@ class AssistantDAO:
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.session.execute(stmt).scalars().all())
+
+    def mark_founder_interview_asked(
+        self,
+        agent_id: int,
+        when: datetime,
+        *,
+        variant: str,
+    ) -> int:
+        """Stamp a successful founder interview ask (one-shot)."""
+        result = self.session.execute(
+            update(Assistant)
+            .where(
+                Assistant.agent_id == agent_id,
+                Assistant.founder_interview_asked_at.is_(None),
+            )
+            .values(
+                founder_interview_asked_at=when,
+                founder_interview_ask_variant=variant,
+            ),
+        )
+        return int(result.rowcount or 0)
+
+    def find_founder_interview_candidates(
+        self,
+        now: datetime,
+        *,
+        min_account_age_days: int = 3,
+        quiet_min_days: int = 3,
+        never_engaged_min_days: int = 5,
+        active_min_account_age_days: int = 7,
+        active_recent_days: int = 2,
+        limit: Optional[int] = None,
+        include_local: bool = False,
+    ) -> List[tuple[Assistant, str]]:
+        """Return personal Coordinators due a one-shot founder interview ask.
+
+        Variants (priority order when filling ``limit``):
+
+        - ``engaged_quiet`` — real product activity, then quiet ≥ quiet_min_days
+        - ``never_engaged`` — never engaged, quiet ≥ never_engaged_min_days
+        - ``engaged_active`` — engaged, recent activity, older account
+
+        Each Coordinator is asked at most once (``founder_interview_asked_at``).
+        """
+        activity_query = select(
+            Assistant.user_id.label("user_id"),
+            func.max(Assistant.last_correspondence_at).label("last_activity"),
+        ).where(Assistant.user_id.isnot(None))
+        if not include_local:
+            activity_query = activity_query.where(Assistant.is_local.is_(False))
+        activity_subq = activity_query.group_by(Assistant.user_id).subquery()
+
+        base_where = [
+            Assistant.is_coordinator.is_(True),
+            Assistant.organization_id.is_(None),
+            Assistant.founder_interview_asked_at.is_(None),
+            User.email.isnot(None),
+            User.email != "",
+            activity_subq.c.last_activity.isnot(None),
+            User.created_at
+            <= (now - func.make_interval(0, 0, 0, literal(min_account_age_days))),
+        ]
+        if not include_local:
+            base_where.append(Assistant.is_local.is_(False))
+
+        def _select_variant(extra_where, order_col, variant: str, remaining: int):
+            if remaining <= 0:
+                return []
+            stmt = (
+                select(Assistant)
+                .join(activity_subq, activity_subq.c.user_id == Assistant.user_id)
+                .join(User, User.id == Assistant.user_id)
+                .where(*base_where, *extra_where)
+                .order_by(order_col)
+                .limit(remaining)
+            )
+            return [
+                (row, variant) for row in self.session.execute(stmt).scalars().all()
+            ]
+
+        remaining = limit if limit is not None else 10_000
+        results: List[tuple[Assistant, str]] = []
+        seen_ids: set[int] = set()
+
+        def _extend(rows: List[tuple[Assistant, str]]) -> None:
+            nonlocal remaining
+            for assistant, variant in rows:
+                if remaining <= 0:
+                    return
+                if assistant.agent_id in seen_ids:
+                    continue
+                results.append((assistant, variant))
+                seen_ids.add(assistant.agent_id)
+                remaining -= 1
+
+        _extend(
+            _select_variant(
+                [
+                    Assistant.inactivity_followup_has_engaged.is_(True),
+                    activity_subq.c.last_activity
+                    < (now - func.make_interval(0, 0, 0, literal(quiet_min_days))),
+                ],
+                activity_subq.c.last_activity.desc(),
+                "engaged_quiet",
+                remaining,
+            ),
+        )
+        _extend(
+            _select_variant(
+                [
+                    Assistant.inactivity_followup_has_engaged.is_(False),
+                    activity_subq.c.last_activity
+                    < (
+                        now
+                        - func.make_interval(
+                            0,
+                            0,
+                            0,
+                            literal(never_engaged_min_days),
+                        )
+                    ),
+                ],
+                activity_subq.c.last_activity.desc(),
+                "never_engaged",
+                remaining,
+            ),
+        )
+        _extend(
+            _select_variant(
+                [
+                    Assistant.inactivity_followup_has_engaged.is_(True),
+                    activity_subq.c.last_activity
+                    >= (now - func.make_interval(0, 0, 0, literal(active_recent_days))),
+                    User.created_at
+                    <= (
+                        now
+                        - func.make_interval(
+                            0,
+                            0,
+                            0,
+                            literal(active_min_account_age_days),
+                        )
+                    ),
+                ],
+                activity_subq.c.last_activity.desc(),
+                "engaged_active",
+                remaining,
+            ),
+        )
+        return results

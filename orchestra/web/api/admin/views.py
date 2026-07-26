@@ -803,6 +803,46 @@ async def trigger_inactivity_followup(
         )
 
 
+@router.post("/assistants/founder-interview-ask")
+async def trigger_founder_interview_ask(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger the one-shot founder interview-ask routine.
+
+    Emails eligible personal Coordinator owners from ``dan@`` with a
+    Cal.com booking link (engaged-then-quiet, never-engaged, and
+    still-active cohorts). Stamps ``founder_interview_asked_at`` only
+    after a successful send.
+
+    Called by the ``founder-interview-ask`` GitHub Actions workflow
+    daily at 14:30 UTC.
+    """
+    try:
+        from orchestra.routines.founder_interview_ask import run_founder_interview_ask
+
+        result = await run_founder_interview_ask(session=session)
+
+        return {
+            "status": "success",
+            "message": "Founder interview-ask routine completed",
+            "interview_candidates_found": result.interview_candidates_found,
+            "interviews_dispatched": result.interviews_dispatched,
+            "interviews_failed": result.interviews_failed,
+            "interviews_skipped": result.interviews_skipped,
+        }
+
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("Founder interview-ask routine failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Founder interview-ask failed: {str(e)}",
+        )
+
+
 @router.post("/billing/reconcile")
 def trigger_billing_reconciliation(
     auto_fix: str = "none",

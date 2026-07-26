@@ -1,0 +1,75 @@
+name: Founder Interview Ask
+
+on:
+  schedule:
+    # Daily at 14:30 UTC — after the afternoon inactivity pass (13:15)
+    # so twin@ check-ins land first when both apply the same day.
+  - cron: '30 14 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  founder_interview_ask_production:
+    name: Founder Interview Ask (Production)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run founder interview-ask routine
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://api.unify.ai/v0/admin/assistants/founder-interview-ask" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Founder interview-ask failed with status $http_code"
+          exit 1
+        fi
+
+        candidates=$(echo "$body" | jq -r '.interview_candidates_found // 0')
+        dispatched=$(echo "$body" | jq -r '.interviews_dispatched // 0')
+        failed=$(echo "$body" | jq -r '.interviews_failed // 0')
+        skipped=$(echo "$body" | jq -r '.interviews_skipped // 0')
+
+        echo "::notice::Found $candidates candidate(s): $dispatched emailed, $skipped skipped, $failed failed"
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::warning::$failed interview ask(s) failed; they remain eligible for retry on the next run"
+        fi
+
+  founder_interview_ask_staging:
+    name: Founder Interview Ask (Staging)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Run founder interview-ask routine
+      run: |
+        response=$(curl -s -w "\n%{http_code}" -X POST \
+          "https://internal.example.com/v0/admin/assistants/founder-interview-ask" \
+          -H "Authorization: Bearer ${{ secrets.ORCHESTRA_ADMIN_KEY }}")
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+
+        echo "Response: $body"
+        echo "HTTP Status: $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Founder interview-ask (staging) failed with status $http_code"
+          exit 1
+        fi
+
+        candidates=$(echo "$body" | jq -r '.interview_candidates_found // 0')
+        dispatched=$(echo "$body" | jq -r '.interviews_dispatched // 0')
+        failed=$(echo "$body" | jq -r '.interviews_failed // 0')
+        skipped=$(echo "$body" | jq -r '.interviews_skipped // 0')
+
+        echo "::notice::Found $candidates candidate(s): $dispatched emailed, $skipped skipped, $failed failed"
+
+        if [ "$failed" -gt 0 ]; then
+          echo "::warning::$failed interview ask(s) failed in staging; they remain eligible for retry on the next run"
+        fi

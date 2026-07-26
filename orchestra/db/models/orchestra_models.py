@@ -2558,6 +2558,11 @@ class Assistant(Base):
         default=False,
         server_default="false",
     )
+    # One-shot founder interview ask from dan@ (Cal.com booking link).
+    # asked_at is set only after a successful send; variant records which
+    # cohort template was used (engaged_quiet / never_engaged / engaged_active).
+    founder_interview_asked_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    founder_interview_ask_variant = Column(String, nullable=True)
     voice_id = sa.Column(
         sa.String,
         nullable=True,

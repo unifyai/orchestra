@@ -645,6 +645,52 @@ class Settings(BaseSettings):
         os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan@unify.ai"
     )
 
+    # Founder interview asks (dan@) — automated, one-shot per personal
+    # Coordinator. Cohorts: engaged-then-quiet, never-engaged quiet, and
+    # engaged-still-active. Cal.com link is the booking CTA.
+    founder_interview_enabled: bool = os.environ.get(
+        "FOUNDER_INTERVIEW_ENABLED",
+        "true",
+    ).lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    founder_interview_from_email: str = (
+        os.environ.get("FOUNDER_INTERVIEW_FROM_EMAIL")
+        or os.environ.get("FOUNDER_WELCOME_FROM_EMAIL")
+        or "dan@unify.ai"
+    )
+    founder_interview_cal_url: str = (
+        os.environ.get("FOUNDER_INTERVIEW_CAL_URL") or "https://cal.com/team/unify/chat"
+    )
+    founder_interview_batch_size: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_BATCH_SIZE", "25"),
+    )
+    founder_interview_jitter_seconds: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_JITTER_SECONDS", "2"),
+    )
+    # Wait after signup before any interview ask (lets welcome emails land).
+    founder_interview_min_account_age_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_MIN_ACCOUNT_AGE_DAYS", "3"),
+    )
+    # Engaged then quiet: last real activity at least this many days ago.
+    founder_interview_quiet_min_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_QUIET_MIN_DAYS", "3"),
+    )
+    # Never engaged: quiet at least this many days since signup baseline.
+    founder_interview_never_engaged_min_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_NEVER_ENGAGED_MIN_DAYS", "5"),
+    )
+    # Still-active engaged users: account at least this old, activity within
+    # this many days.
+    founder_interview_active_min_account_age_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_ACTIVE_MIN_ACCOUNT_AGE_DAYS", "7"),
+    )
+    founder_interview_active_recent_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_ACTIVE_RECENT_DAYS", "2"),
+    )
+
     @property
     def db_url(self) -> URL:
         """
