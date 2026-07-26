@@ -381,7 +381,12 @@ _CONTACTS_SCHEMA = {
     "unique_keys": {"contact_id": "int"},
     "auto_counting": {"contact_id": None},
 }
-_TASKS_SCHEMA = {
+# NOT the current Tasks schema. Tasks is now definition-only, keyed by
+# ``task_id`` alone, with runs in ``Tasks/Executions``. This fixture keeps a
+# parent-scoped auto-counting shape (child counter scoped to a parent id) so
+# the merge remap stays covered for contexts declared that way — including
+# pre-migration Tasks contexts still in the wild.
+_LEGACY_PARENT_SCOPED_SCHEMA = {
     "unique_keys": {"task_id": "int", "instance_id": "int"},
     "auto_counting": {"task_id": None, "instance_id": "task_id"},
 }
@@ -502,8 +507,8 @@ async def test_merge_tasks_preserves_instance_grouping(
     )
     personal_tasks = f"{personal_prefix}/Tasks"
     team_tasks = f"Teams/{team_id}/Tasks"
-    _seed_table(dbsession, project_id, personal_tasks, **_TASKS_SCHEMA)
-    _seed_table(dbsession, project_id, team_tasks, **_TASKS_SCHEMA)
+    _seed_table(dbsession, project_id, personal_tasks, **_LEGACY_PARENT_SCOPED_SCHEMA)
+    _seed_table(dbsession, project_id, team_tasks, **_LEGACY_PARENT_SCOPED_SCHEMA)
     await _post_rows(
         client,
         org_headers,
@@ -864,7 +869,7 @@ async def test_merge_dedupes_identical_functions_and_remaps_references(
         dbsession,
         project_id,
         personal_tasks,
-        **_TASKS_SCHEMA,
+        **_LEGACY_PARENT_SCOPED_SCHEMA,
         foreign_keys=[
             {
                 "name": "entrypoint",
@@ -988,8 +993,8 @@ async def test_merge_dedupes_equivalent_recurring_tasks(
     )
     personal_tasks = f"{personal_prefix}/Tasks"
     team_tasks = f"Teams/{team_id}/Tasks"
-    _seed_table(dbsession, project_id, personal_tasks, **_TASKS_SCHEMA)
-    _seed_table(dbsession, project_id, team_tasks, **_TASKS_SCHEMA)
+    _seed_table(dbsession, project_id, personal_tasks, **_LEGACY_PARENT_SCOPED_SCHEMA)
+    _seed_table(dbsession, project_id, team_tasks, **_LEGACY_PARENT_SCOPED_SCHEMA)
 
     daily_digest = {
         "instance_id": 0,

@@ -1,8 +1,8 @@
-"""Guards for auto-counted unique identity fields (e.g. Tasks.instance_id).
+"""Guards for auto-counted unique identity fields (e.g. Tasks.task_id).
 
 Hand-editing these fields desyncs ``context_counter`` and creates duplicate
-composite keys. Public log updates must refuse mutations; allocation must
-never reissue an id that already exists in the context.
+identities. Public log updates must refuse mutations; allocation must never
+reissue an id that already exists in the context.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def reject_auto_counting_identity_mutations(
                 detail=(
                     f"Field '{field}' is an auto-counted unique identity on this "
                     "context and cannot be modified after create. Use TaskScheduler "
-                    "APIs / POST /tasks/{id}/trigger (omit instance_id) / "
+                    "APIs / POST /tasks/{id}/trigger / "
                     "POST /admin/task-source/release-active instead of rewriting "
                     "identity fields."
                 ),

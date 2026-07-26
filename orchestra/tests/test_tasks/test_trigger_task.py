@@ -279,11 +279,17 @@ async def test_trigger_task_repeated_calls_use_same_definition(
 
 
 @pytest.mark.anyio
-async def test_update_logs_refuses_instance_id_mutation_on_tasks_context(
+async def test_update_logs_refuses_instance_id_mutation_on_legacy_tasks_context(
     client: AsyncClient,
     dbsession: Session,
     assistant_id: int,
 ):
+    """Guard still fires on pre-migration contexts that auto-count instance_id.
+
+    Current Tasks contexts are keyed by ``task_id`` alone, so the reshaping
+    below is deliberately the *legacy* schema — it reproduces the contexts that
+    predate the collapse onto Tasks definitions plus ``Tasks/Executions``.
+    """
     task_row = _seed_task(
         dbsession,
         assistant_id=assistant_id,
