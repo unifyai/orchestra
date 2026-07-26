@@ -379,7 +379,7 @@ async def infer_plot_config(
     )
 
     payload = {
-        "model": "gpt-4o-mini@openai",
+        "model": "openai/gpt-4o-mini@openrouter",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

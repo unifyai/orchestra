@@ -616,27 +616,80 @@ class Settings(BaseSettings):
     )
     replicate_api_key: Optional[str] = None  # Populated by model_config below
 
-    # Re-engagement follow-up routine.
-    # inactivity_followup_days: days a user can go without interacting
-    #   with ANY of their assistants (incl. the Coordinator) before
-    #   Orchestra emails a soft check-in from the shared twin@ mailbox.
-    #   Measured per-user from the most recent correspondence across all
-    #   their assistants (or from signup for users who never engaged).
-    # inactivity_followup_batch_size: upper bound on users processed per
-    #   routine invocation — caps blast radius and keeps the daily run
-    #   bounded.
-    # inactivity_followup_jitter_seconds: per-user random delay
-    #   (0..jitter, capped at 2s in the routine) so a batch does not
-    #   hammer the Gmail API in the same instant.
-    #
-    # Note: this routine never deletes or deprovisions inactive
-    # assistants — contact lifecycle/cost is governed solely by the
-    # billing suspension routine (assistant_contact_suspension). The
-    # follow-up is purely a gentle re-engagement prompt, and users who
-    # explicitly opt out (``inactivity_followup_opted_out``) are skipped.
-    inactivity_followup_days: int = 7
+    # Re-engagement follow-up routine (templated twin@ emails).
+    # Cadence for series S and next email stage K (both 1-indexed):
+    #   quiet_days = inactivity_followup_base_days * S * K
+    # e.g. base_days=1 → series 1 at 1/2/3 days, series 2 at 2/4/6, …
+    # Max emails per silence and max series cap the loop; replies on the
+    # check-in Gmail thread do not count as product activity.
+    inactivity_followup_base_days: int = 1
+    inactivity_followup_max_emails_per_series: int = 3
+    inactivity_followup_max_series: int = 3
     inactivity_followup_batch_size: int = 200
     inactivity_followup_jitter_seconds: int = 2
+    # Deprecated alias kept so existing env vars keep working during rollout.
+    inactivity_followup_days: int = 1
+
+    # Personal founder welcome (dan@) sent once at personal Coordinator
+    # provision alongside the twin@ product welcome. Requires Workspace
+    # domain-wide delegation for the from address.
+    founder_welcome_enabled: bool = os.environ.get(
+        "FOUNDER_WELCOME_ENABLED",
+        "true",
+    ).lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    founder_welcome_from_email: str = (
+        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan@unify.ai"
+    )
+
+    # Founder interview asks (dan@) — automated, one-shot per personal
+    # Coordinator. Cohorts: engaged-then-quiet, never-engaged quiet, and
+    # engaged-still-active. Cal.com link is the booking CTA.
+    founder_interview_enabled: bool = os.environ.get(
+        "FOUNDER_INTERVIEW_ENABLED",
+        "true",
+    ).lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    founder_interview_from_email: str = (
+        os.environ.get("FOUNDER_INTERVIEW_FROM_EMAIL")
+        or os.environ.get("FOUNDER_WELCOME_FROM_EMAIL")
+        or "dan@unify.ai"
+    )
+    founder_interview_cal_url: str = (
+        os.environ.get("FOUNDER_INTERVIEW_CAL_URL") or "https://cal.com/team/unify/chat"
+    )
+    founder_interview_batch_size: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_BATCH_SIZE", "25"),
+    )
+    founder_interview_jitter_seconds: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_JITTER_SECONDS", "2"),
+    )
+    # Wait after signup before any interview ask (lets welcome emails land).
+    founder_interview_min_account_age_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_MIN_ACCOUNT_AGE_DAYS", "3"),
+    )
+    # Engaged then quiet: last real activity at least this many days ago.
+    founder_interview_quiet_min_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_QUIET_MIN_DAYS", "3"),
+    )
+    # Never engaged: quiet at least this many days since signup baseline.
+    founder_interview_never_engaged_min_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_NEVER_ENGAGED_MIN_DAYS", "5"),
+    )
+    # Still-active engaged users: account at least this old, activity within
+    # this many days.
+    founder_interview_active_min_account_age_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_ACTIVE_MIN_ACCOUNT_AGE_DAYS", "7"),
+    )
+    founder_interview_active_recent_days: int = int(
+        os.environ.get("FOUNDER_INTERVIEW_ACTIVE_RECENT_DAYS", "2"),
+    )
 
     @property
     def db_url(self) -> URL:

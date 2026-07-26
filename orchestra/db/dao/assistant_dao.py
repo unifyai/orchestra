@@ -6,7 +6,7 @@ from zoneinfo import available_timezones
 
 import sqlalchemy as sa
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy import and_, exists, func, literal, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
@@ -1011,44 +1011,91 @@ class AssistantDAO:
         self,
         agent_id: int,
         when: datetime,
-    ) -> int:
+        *,
+        thread_id: Optional[str] = None,
+        max_series: int = 3,
+    ) -> dict:
         """Record fresh correspondence activity for an assistant.
 
-        Updates ``last_correspondence_at`` and clears
-        ``last_followup_sent_at`` so that a subsequent lapse can fire a
-        fresh re-engagement nudge.
+        Updates ``last_correspondence_at`` and re-arms the follow-up
+        series for a later silence. Replies on a stored inactivity
+        check-in Gmail thread are ignored (still a wake for the brain,
+        but not "product activity" for cadence purposes).
 
-        :param agent_id: Assistant agent ID.
-        :param when: Timestamp of the correspondence event (tz-aware).
-        :return: Number of rows updated (0 if agent_id does not exist).
+        When the current silence already sent at least one check-in
+        (``inactivity_followup_stage > 0``), the next silence uses the
+        next series index (capped at ``max_series + 1`` = exhausted).
+
+        :return: Dict with ``rows_updated`` and optional ``skipped`` reason.
         """
+        assistant = self.session.execute(
+            select(Assistant).where(Assistant.agent_id == agent_id),
+        ).scalar_one_or_none()
+        if assistant is None:
+            return {"rows_updated": 0}
+
+        followup_threads = list(assistant.inactivity_followup_thread_ids or [])
+        if thread_id and str(thread_id) in {str(t) for t in followup_threads}:
+            return {
+                "rows_updated": 0,
+                "skipped": True,
+                "reason": "followup_thread_reply",
+            }
+
+        stage = int(assistant.inactivity_followup_stage or 0)
+        series = int(assistant.inactivity_followup_series or 1)
+        new_series = series
+        if stage > 0:
+            new_series = min(series + 1, max_series + 1)
+
         result = self.session.execute(
             update(Assistant)
             .where(Assistant.agent_id == agent_id)
             .values(
                 last_correspondence_at=when,
                 last_followup_sent_at=None,
+                inactivity_followup_stage=0,
+                inactivity_followup_thread_ids=[],
+                inactivity_followup_series=new_series,
+                inactivity_followup_has_engaged=True,
             ),
         )
-        return result.rowcount
+        return {"rows_updated": int(result.rowcount or 0)}
 
     def mark_followup_sent(
         self,
         agent_id: int,
         when: datetime,
+        *,
+        thread_id: Optional[str] = None,
     ) -> int:
-        """Record that the inactivity follow-up was dispatched.
+        """Record that one inactivity follow-up email was dispatched.
 
-        :param agent_id: Assistant agent ID.
-        :param when: Dispatch timestamp (tz-aware).
-        :return: Number of rows updated.
+        Increments ``inactivity_followup_stage`` and appends ``thread_id``
+        so later replies on that Gmail thread are not treated as product
+        activity.
         """
+        assistant = self.session.execute(
+            select(Assistant).where(Assistant.agent_id == agent_id),
+        ).scalar_one_or_none()
+        if assistant is None:
+            return 0
+
+        thread_ids = list(assistant.inactivity_followup_thread_ids or [])
+        if thread_id and str(thread_id) not in {str(t) for t in thread_ids}:
+            thread_ids.append(str(thread_id))
+
         result = self.session.execute(
             update(Assistant)
             .where(Assistant.agent_id == agent_id)
-            .values(last_followup_sent_at=when),
+            .values(
+                last_followup_sent_at=when,
+                inactivity_followup_stage=int(assistant.inactivity_followup_stage or 0)
+                + 1,
+                inactivity_followup_thread_ids=thread_ids,
+            ),
         )
-        return result.rowcount
+        return int(result.rowcount or 0)
 
     def set_inactivity_followup_opt_out(
         self,
@@ -1075,42 +1122,25 @@ class AssistantDAO:
 
     def find_followup_candidates(
         self,
-        followup_cutoff: datetime,
+        now: datetime,
+        *,
+        max_series: int = 3,
+        max_emails_per_series: int = 3,
+        base_days: int = 1,
         limit: Optional[int] = None,
         include_local: bool = False,
     ) -> List[Assistant]:
-        """Return personal Coordinators whose owner is due a follow-up.
+        """Return personal Coordinators due the next check-in email.
 
-        This is a *per-user* query: a user is due a re-engagement
-        follow-up when they have not interacted with **any** of their
-        assistants (the Coordinator included) for ``followup_cutoff``.
-        The returned rows are the users' personal Coordinators (the
-        assistant that follows up); ``last_followup_sent_at`` on the
-        Coordinator row records the last follow-up so we don't re-fire
-        every run.
+        Cadence for series ``S`` (1-indexed) and next stage ``K``
+        (``stage + 1``, also 1-indexed):
 
-        Activity is the most recent ``last_correspondence_at`` across all
-        of a user's assistants. That column carries a ``server_default``
-        of ``now()`` at row creation, so a user who signed up and never
-        engaged still has a baseline timestamp (their signup time) and is
-        followed up with once the window elapses — no separate "never
-        engaged" case is needed.
+            quiet_days_required = base_days * S * K
 
-        The follow-up re-arms automatically: once the user engages again
-        (any assistant's ``last_correspondence_at`` moves past the
-        Coordinator's ``last_followup_sent_at``), a fresh lapse becomes
-        eligible. A follow-up already sent after the latest activity is
-        not repeated. Coordinators whose owner has opted out
-        (``inactivity_followup_opted_out``) are excluded entirely.
-        Owners without a non-empty ``User.email`` are excluded (the
-        templated email path has nowhere to send).
-
-        :param followup_cutoff: Activity older than this triggers a
-            follow-up.
-        :param limit: Optional cap on the returned batch.
-        :param include_local: Include ``is_local=True`` assistants
-            (default: False).
-        :return: Personal Coordinator rows to follow up with.
+        e.g. series 1 → days 1/2/3; series 2 → 2/4/6; series 3 → 3/6/9
+        when ``base_days=1``. After ``max_emails_per_series`` emails in a
+        silence, no further sends until real product activity. Series
+        above ``max_series`` are exhausted permanently.
         """
         activity_query = select(
             Assistant.user_id.label("user_id"),
@@ -1120,6 +1150,12 @@ class AssistantDAO:
             activity_query = activity_query.where(Assistant.is_local.is_(False))
         activity_subq = activity_query.group_by(Assistant.user_id).subquery()
 
+        days_needed = (
+            literal(base_days)
+            * Assistant.inactivity_followup_series
+            * (Assistant.inactivity_followup_stage + 1)
+        )
+
         stmt = (
             select(Assistant)
             .join(activity_subq, activity_subq.c.user_id == Assistant.user_id)
@@ -1128,14 +1164,13 @@ class AssistantDAO:
                 Assistant.is_coordinator.is_(True),
                 Assistant.organization_id.is_(None),
                 Assistant.inactivity_followup_opted_out.is_(False),
+                Assistant.inactivity_followup_series <= max_series,
+                Assistant.inactivity_followup_stage < max_emails_per_series,
                 User.email.isnot(None),
                 User.email != "",
                 activity_subq.c.last_activity.isnot(None),
-                activity_subq.c.last_activity < followup_cutoff,
-                or_(
-                    Assistant.last_followup_sent_at.is_(None),
-                    Assistant.last_followup_sent_at < activity_subq.c.last_activity,
-                ),
+                activity_subq.c.last_activity
+                < (now - func.make_interval(0, 0, 0, days_needed)),
             )
         )
         if not include_local:
@@ -1144,3 +1179,153 @@ class AssistantDAO:
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.session.execute(stmt).scalars().all())
+
+    def mark_founder_interview_asked(
+        self,
+        agent_id: int,
+        when: datetime,
+        *,
+        variant: str,
+    ) -> int:
+        """Stamp a successful founder interview ask (one-shot)."""
+        result = self.session.execute(
+            update(Assistant)
+            .where(
+                Assistant.agent_id == agent_id,
+                Assistant.founder_interview_asked_at.is_(None),
+            )
+            .values(
+                founder_interview_asked_at=when,
+                founder_interview_ask_variant=variant,
+            ),
+        )
+        return int(result.rowcount or 0)
+
+    def find_founder_interview_candidates(
+        self,
+        now: datetime,
+        *,
+        min_account_age_days: int = 3,
+        quiet_min_days: int = 3,
+        never_engaged_min_days: int = 5,
+        active_min_account_age_days: int = 7,
+        active_recent_days: int = 2,
+        limit: Optional[int] = None,
+        include_local: bool = False,
+    ) -> List[tuple[Assistant, str]]:
+        """Return personal Coordinators due a one-shot founder interview ask.
+
+        Variants (priority order when filling ``limit``):
+
+        - ``engaged_quiet`` — real product activity, then quiet ≥ quiet_min_days
+        - ``never_engaged`` — never engaged, quiet ≥ never_engaged_min_days
+        - ``engaged_active`` — engaged, recent activity, older account
+
+        Each Coordinator is asked at most once (``founder_interview_asked_at``).
+        """
+        activity_query = select(
+            Assistant.user_id.label("user_id"),
+            func.max(Assistant.last_correspondence_at).label("last_activity"),
+        ).where(Assistant.user_id.isnot(None))
+        if not include_local:
+            activity_query = activity_query.where(Assistant.is_local.is_(False))
+        activity_subq = activity_query.group_by(Assistant.user_id).subquery()
+
+        base_where = [
+            Assistant.is_coordinator.is_(True),
+            Assistant.organization_id.is_(None),
+            Assistant.founder_interview_asked_at.is_(None),
+            User.email.isnot(None),
+            User.email != "",
+            activity_subq.c.last_activity.isnot(None),
+            User.created_at
+            <= (now - func.make_interval(0, 0, 0, literal(min_account_age_days))),
+        ]
+        if not include_local:
+            base_where.append(Assistant.is_local.is_(False))
+
+        def _select_variant(extra_where, order_col, variant: str, remaining: int):
+            if remaining <= 0:
+                return []
+            stmt = (
+                select(Assistant)
+                .join(activity_subq, activity_subq.c.user_id == Assistant.user_id)
+                .join(User, User.id == Assistant.user_id)
+                .where(*base_where, *extra_where)
+                .order_by(order_col)
+                .limit(remaining)
+            )
+            return [
+                (row, variant) for row in self.session.execute(stmt).scalars().all()
+            ]
+
+        remaining = limit if limit is not None else 10_000
+        results: List[tuple[Assistant, str]] = []
+        seen_ids: set[int] = set()
+
+        def _extend(rows: List[tuple[Assistant, str]]) -> None:
+            nonlocal remaining
+            for assistant, variant in rows:
+                if remaining <= 0:
+                    return
+                if assistant.agent_id in seen_ids:
+                    continue
+                results.append((assistant, variant))
+                seen_ids.add(assistant.agent_id)
+                remaining -= 1
+
+        _extend(
+            _select_variant(
+                [
+                    Assistant.inactivity_followup_has_engaged.is_(True),
+                    activity_subq.c.last_activity
+                    < (now - func.make_interval(0, 0, 0, literal(quiet_min_days))),
+                ],
+                activity_subq.c.last_activity.desc(),
+                "engaged_quiet",
+                remaining,
+            ),
+        )
+        _extend(
+            _select_variant(
+                [
+                    Assistant.inactivity_followup_has_engaged.is_(False),
+                    activity_subq.c.last_activity
+                    < (
+                        now
+                        - func.make_interval(
+                            0,
+                            0,
+                            0,
+                            literal(never_engaged_min_days),
+                        )
+                    ),
+                ],
+                activity_subq.c.last_activity.desc(),
+                "never_engaged",
+                remaining,
+            ),
+        )
+        _extend(
+            _select_variant(
+                [
+                    Assistant.inactivity_followup_has_engaged.is_(True),
+                    activity_subq.c.last_activity
+                    >= (now - func.make_interval(0, 0, 0, literal(active_recent_days))),
+                    User.created_at
+                    <= (
+                        now
+                        - func.make_interval(
+                            0,
+                            0,
+                            0,
+                            literal(active_min_account_age_days),
+                        )
+                    ),
+                ],
+                activity_subq.c.last_activity.desc(),
+                "engaged_active",
+                remaining,
+            ),
+        )
+        return results

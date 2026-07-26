@@ -1,9 +1,9 @@
 """Data Access Object for the unified chat store.
 
 One store backs every chat surface: human DMs, assistant DMs (the Console
-1-on-1 panel), team group chats, and ad-hoc chat groups — plus first-class
-call-transcript utterances. Threads are resolved get-or-create per scope;
-messages append in id order.
+1-on-1 panel), assistant↔assistant peer DMs, team group chats, and ad-hoc
+chat groups — plus first-class call-transcript utterances. Threads are
+resolved get-or-create per scope; messages append in id order.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from orchestra.db.models.orchestra_models import (
 
 KIND_DM = "dm"
 KIND_ASSISTANT_DM = "assistant_dm"
+KIND_ASSISTANT_PEER_DM = "assistant_peer_dm"
 KIND_TEAM = "team"
 KIND_GROUP = "group"
 
@@ -31,6 +32,18 @@ KIND_GROUP = "group"
 def normalized_pair(user_id_1: str, user_id_2: str) -> tuple[str, str]:
     """Order a user pair so (a, b) is stable regardless of argument order."""
     return (user_id_1, user_id_2) if user_id_1 < user_id_2 else (user_id_2, user_id_1)
+
+
+def normalized_assistant_pair(
+    assistant_id_1: int,
+    assistant_id_2: int,
+) -> tuple[int, int]:
+    """Order an assistant pair so (a, b) is stable regardless of argument order."""
+    return (
+        (assistant_id_1, assistant_id_2)
+        if assistant_id_1 < assistant_id_2
+        else (assistant_id_2, assistant_id_1)
+    )
 
 
 class ChatDAO:
@@ -93,6 +106,32 @@ class ChatDAO:
                 organization_id=organization_id,
                 assistant_id=assistant_id,
                 user_id=user_id,
+            )
+            self.session.add(thread)
+            self.session.flush()
+        return thread
+
+    def resolve_assistant_peer_dm_thread(
+        self,
+        *,
+        assistant_id_1: int,
+        assistant_id_2: int,
+        organization_id: int,
+    ) -> ChatThread:
+        left_id, right_id = normalized_assistant_pair(assistant_id_1, assistant_id_2)
+        thread = self.session.scalar(
+            select(ChatThread).where(
+                ChatThread.kind == KIND_ASSISTANT_PEER_DM,
+                ChatThread.assistant_id == left_id,
+                ChatThread.peer_assistant_id == right_id,
+            ),
+        )
+        if thread is None:
+            thread = ChatThread(
+                kind=KIND_ASSISTANT_PEER_DM,
+                organization_id=organization_id,
+                assistant_id=left_id,
+                peer_assistant_id=right_id,
             )
             self.session.add(thread)
             self.session.flush()

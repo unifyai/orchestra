@@ -722,6 +722,10 @@ def create_project(
             is_public_read=request.is_public_read,
             is_system=True,
         )
+        # Commit before the response leaves the process. Request-scoped
+        # get_db_session only commits after the body is sent, so a client that
+        # immediately uses the new project can miss an uncommitted create.
+        session.commit()
         return {"info": "Project created successfully!"}
 
     try:
@@ -794,6 +798,10 @@ def create_project(
                 is_public_read=request.is_public_read,
             )
 
+        # Commit before the response leaves the process. Request-scoped
+        # get_db_session only commits after the body is sent, so a client that
+        # immediately uses the new project can miss an uncommitted create.
+        session.commit()
         return {"info": "Project created successfully!"}
     except HTTPException:
         raise

@@ -17,7 +17,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.chat_dao import KIND_ASSISTANT_DM, KIND_DM, KIND_TEAM, ChatDAO
+from orchestra.db.dao.chat_dao import (
+    KIND_ASSISTANT_DM,
+    KIND_ASSISTANT_PEER_DM,
+    KIND_DM,
+    KIND_TEAM,
+    ChatDAO,
+)
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.team_dao import TeamDAO
@@ -288,6 +294,14 @@ def resolve_chat_thread(
             user_id=user_id,
             organization_id=assistant.organization_id,
         )
+    elif body.kind == KIND_ASSISTANT_PEER_DM:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "assistant_peer_dm threads are resolved by assistants via "
+                "to_assistant_id on message post"
+            ),
+        )
     elif body.kind == KIND_TEAM:
         if body.team_id is None:
             raise HTTPException(
@@ -543,6 +557,39 @@ async def _post_assistant_chat_message(
             team_id=team.id,
             organization_id=team.organization_id,
         )
+    elif body.to_assistant_id is not None:
+        peer = session.get(Assistant, body.to_assistant_id)
+        if peer is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Peer assistant not found",
+            )
+        if peer.agent_id == assistant.agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot open an assistant peer DM with yourself",
+            )
+        if assistant.organization_id is None or peer.organization_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "assistant_peer_dm requires both assistants to belong to "
+                    "an organization"
+                ),
+            )
+        if assistant.organization_id != peer.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "assistant_peer_dm requires both assistants in the same "
+                    "organization"
+                ),
+            )
+        thread = dao.resolve_assistant_peer_dm_thread(
+            assistant_id_1=assistant.agent_id,
+            assistant_id_2=peer.agent_id,
+            organization_id=assistant.organization_id,
+        )
     else:
         to_user_id = body.to_user_id or assistant.user_id
         if not to_user_id:
@@ -688,7 +735,17 @@ async def post_chat_message_reaction(
             "group_id": thread.group_id,
             "message": response.model_dump(),
             "fanout_assistant_ids": (
-                [thread.assistant_id] if thread.kind == KIND_ASSISTANT_DM else []
+                [thread.assistant_id]
+                if thread.kind == KIND_ASSISTANT_DM
+                else (
+                    [
+                        aid
+                        for aid in (thread.assistant_id, thread.peer_assistant_id)
+                        if aid is not None
+                    ]
+                    if thread.kind == KIND_ASSISTANT_PEER_DM
+                    else []
+                )
             ),
             "reactor_user_id": user_id,
             "emoji": body.emoji,

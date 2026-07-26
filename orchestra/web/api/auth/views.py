@@ -102,27 +102,15 @@ logger = logging.getLogger(__name__)
 ph = PasswordHasher()
 
 
-async def _send_coordinator_welcome_safe(user) -> None:
-    """Best-effort welcome email from the new user's Coordinator.
+async def _send_signup_welcome_emails_safe(user) -> None:
+    """Best-effort twin@ + founder welcome emails for a new signup."""
+    from orchestra.routines.founder_welcome import send_signup_welcome_emails_safe
 
-    Swallows every error so a mail hiccup can never break signup or
-    trigger the surrounding rollback.
-    """
-    try:
-        from orchestra.routines.inactivity_notifications import (
-            send_coordinator_welcome_email,
-        )
-
-        await send_coordinator_welcome_email(
-            recipient_email=getattr(user, "email", None),
-            owner_first_name=getattr(user, "name", None),
-        )
-    except Exception:
-        logger.warning(
-            "Failed to send Coordinator welcome email for user %s",
-            getattr(user, "id", "?"),
-            exc_info=True,
-        )
+    await send_signup_welcome_emails_safe(
+        recipient_email=getattr(user, "email", None),
+        owner_first_name=getattr(user, "name", None),
+        user_id=getattr(user, "id", "?"),
+    )
 
 
 async def _provision_email_password_user(
@@ -166,7 +154,7 @@ async def _provision_email_password_user(
         )
 
         onboarding_dao = OnboardingStatusDAO(session)
-        onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
+        onboarding_dao.create(user_id=user.id, current_step="heard_about")
 
         coordinator, created_coordinator = (
             await ensure_personal_coordinator_provisioned(
@@ -176,7 +164,7 @@ async def _provision_email_password_user(
         )
         coordinator_id = coordinator.agent_id
         if created_coordinator:
-            await _send_coordinator_welcome_safe(user)
+            await _send_signup_welcome_emails_safe(user)
         return user
     except Exception:
         session.rollback()
@@ -1495,7 +1483,7 @@ def onboarding_status_by_email(
     if not existing:
         return OnboardingStatusByEmailResponse(
             user_found=False,
-            onboarding_step="workspace_setup",
+            onboarding_step="heard_about",
         )
 
     user = existing[0][0]

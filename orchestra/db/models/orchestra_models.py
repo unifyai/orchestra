@@ -1198,6 +1198,9 @@ class ChatThread(Base):
       stored normalized (``user_a_id < user_b_id`` lexicographically).
     * ``assistant_dm`` — one human and one assistant (the Console 1-on-1
       panel). ``organization_id`` is NULL for personal assistants.
+    * ``assistant_peer_dm`` — one assistant and another assistant in the
+      same organization. The pair is stored normalized
+      (``assistant_id < peer_assistant_id``).
     * ``team`` — a team's group chat (all team humans + assistants).
     * ``group`` — an ad-hoc chat group's thread.
 
@@ -1230,6 +1233,11 @@ class ChatThread(Base):
         ForeignKey("assistants.agent_id", ondelete="CASCADE"),
         nullable=True,
     )
+    peer_assistant_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        nullable=True,
+    )
     user_id = Column(
         String,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -1253,12 +1261,17 @@ class ChatThread(Base):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "kind IN ('dm', 'assistant_dm', 'team', 'group')",
+            "kind IN ('dm', 'assistant_dm', 'assistant_peer_dm', 'team', 'group')",
             name="ck_chat_thread_kind",
         ),
         sa.CheckConstraint(
             "user_a_id IS NULL OR user_b_id IS NULL OR user_a_id < user_b_id",
             name="ck_chat_thread_normalized_pair",
+        ),
+        sa.CheckConstraint(
+            "assistant_id IS NULL OR peer_assistant_id IS NULL OR "
+            "assistant_id < peer_assistant_id",
+            name="ck_chat_thread_normalized_assistant_pair",
         ),
         Index(
             "uq_chat_thread_dm_pair",
@@ -1274,6 +1287,13 @@ class ChatThread(Base):
             "user_id",
             unique=True,
             postgresql_where=sa.text("kind = 'assistant_dm'"),
+        ),
+        Index(
+            "uq_chat_thread_assistant_peer_dm",
+            "assistant_id",
+            "peer_assistant_id",
+            unique=True,
+            postgresql_where=sa.text("kind = 'assistant_peer_dm'"),
         ),
         Index(
             "uq_chat_thread_team",
@@ -2494,12 +2514,14 @@ class Assistant(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     # Re-engagement tracking. last_correspondence_at is touched on any
-    # inbound/outbound message across all contacts; last_followup_sent_at
-    # records when the inactivity re-engagement follow-up fired and is
-    # cleared when fresh activity resumes (re-arming the follow-up);
-    # inactivity_followup_opted_out is set when the boss explicitly asks
-    # not to be followed up with again, and excludes this Coordinator
-    # from the routine until it is cleared.
+    # inbound/outbound message across all contacts *except* replies to
+    # programmatic inactivity check-in emails (matched by Gmail thread id);
+    # last_followup_sent_at records the latest check-in send;
+    # inactivity_followup_series / stage drive the multi-email cadence
+    # (series 1 → days 1/2/3, series 2 → 2/4/6, … up to max series);
+    # inactivity_followup_thread_ids stores Gmail thread ids for check-ins
+    # in the current silence so replies on those threads do not re-arm;
+    # inactivity_followup_opted_out excludes this Coordinator until cleared.
     last_correspondence_at = Column(
         TIMESTAMP(timezone=True),
         nullable=True,
@@ -2507,12 +2529,40 @@ class Assistant(Base):
         index=True,
     )
     last_followup_sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    inactivity_followup_series = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+    inactivity_followup_stage = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    inactivity_followup_thread_ids = Column(
+        JSONB,
+        nullable=False,
+        server_default="[]",
+    )
+    inactivity_followup_has_engaged = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     inactivity_followup_opted_out = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
     )
+    # One-shot founder interview ask from dan@ (Cal.com booking link).
+    # asked_at is set only after a successful send; variant records which
+    # cohort template was used (engaged_quiet / never_engaged / engaged_active).
+    founder_interview_asked_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    founder_interview_ask_variant = Column(String, nullable=True)
     voice_id = sa.Column(
         sa.String,
         nullable=True,
@@ -3269,10 +3319,12 @@ class OnboardingStatus(Base):
     Tracks user onboarding progress.
 
     The current_step represents WHERE TO RESUME next time:
-    - workspace_setup: Initial state – user needs to choose personal vs. organization workspace
+    - heard_about: First step – how the user heard about Unify
+    - workspace_setup: Choose personal vs. organization workspace
     - completed: All onboarding steps done
 
     step_data accumulates information from completed steps:
+    - heard_about, heard_about_detail (acquisition survey)
     - selected_type: "personal" | "organization"
     - organization_id, organization_name (if organization)
     - completed_at (when completed)

@@ -28,7 +28,7 @@ class OnboardingStatusDAO:
     def create(
         self,
         user_id: str,
-        current_step: str = "workspace_setup",
+        current_step: str = "heard_about",
         step_data: Optional[Dict[str, Any]] = None,
     ) -> OnboardingStatus:
         """
@@ -36,7 +36,7 @@ class OnboardingStatusDAO:
 
         Args:
             user_id: The user's ID
-            current_step: Initial step (default: "workspace_setup")
+            current_step: Initial step (default: "heard_about")
             step_data: Optional initial step data
 
         Returns:
@@ -53,7 +53,7 @@ class OnboardingStatusDAO:
     def get_or_create(
         self,
         user_id: str,
-        current_step: str = "workspace_setup",
+        current_step: str = "heard_about",
         step_data: Optional[Dict[str, Any]] = None,
     ) -> OnboardingStatus:
         """
@@ -61,7 +61,7 @@ class OnboardingStatusDAO:
 
         Args:
             user_id: The user's ID
-            current_step: Step to use if creating (default: "workspace_setup")
+            current_step: Step to use if creating (default: "heard_about")
             step_data: Step data to use if creating
 
         Returns:
@@ -184,8 +184,8 @@ class OnboardingStatusDAO:
         """
         status = self.get_by_user_id(user_id)
         if status:
-            status.current_step = "workspace_setup"
+            status.current_step = "heard_about"
             status.step_data = {}
             status.updated_at = datetime.now(timezone.utc)
             return status
-        return self.create(user_id, current_step="workspace_setup")
+        return self.create(user_id, current_step="heard_about")

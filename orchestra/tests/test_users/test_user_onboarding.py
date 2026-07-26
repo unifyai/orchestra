@@ -34,7 +34,7 @@ class TestOnboardingStatusDAO:
 
         assert status is not None
         assert status.user_id == user.id
-        assert status.current_step == "workspace_setup"  # Initial step
+        assert status.current_step == "heard_about"  # Initial step
         assert status.step_data == {}
 
     @pytest.mark.anyio
@@ -98,7 +98,7 @@ class TestOnboardingStatusDAO:
 
         assert status is not None
         assert status.user_id == user.id
-        assert status.current_step == "workspace_setup"
+        assert status.current_step == "heard_about"
 
     @pytest.mark.anyio
     async def test_get_or_create_returns_existing(self, client: AsyncClient, dbsession):
@@ -261,7 +261,7 @@ class TestOnboardingStatusDAO:
         status = dao.reset(user.id)
         dbsession.commit()
 
-        assert status.current_step == "workspace_setup"
+        assert status.current_step == "heard_about"
         assert status.step_data == {}
 
     @pytest.mark.anyio
@@ -278,7 +278,7 @@ class TestOnboardingStatusDAO:
         dbsession.commit()
 
         assert status is not None
-        assert status.current_step == "workspace_setup"
+        assert status.current_step == "heard_about"
 
 
 class TestOnboardingStatusAPI:
@@ -313,7 +313,7 @@ class TestOnboardingStatusAPI:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["current_step"] == "workspace_setup"  # Initial state
+        assert data["current_step"] == "heard_about"  # Initial state
 
     @pytest.mark.anyio
     async def test_update_after_workspace_setup(self, client: AsyncClient):
@@ -389,7 +389,7 @@ class TestOnboardingStatusAPI:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["current_step"] == "workspace_setup"
+        assert data["current_step"] == "heard_about"
 
         # Check legacy endpoint derives onboarded from OnboardingStatus
         legacy_response = await client.get(
@@ -447,9 +447,25 @@ class TestOnboardingStepProgression:
 
         # Step 1: Get initial status
         response = await client.get("/v0/user/onboarding", headers=headers)
-        assert response.json()["current_step"] == "workspace_setup"
+        assert response.json()["current_step"] == "heard_about"
 
-        # Step 2: Complete workspace setup (personal) → completed
+        # Step 2: Complete acquisition survey → workspace_setup
+        response = await client.put(
+            "/v0/user/onboarding",
+            headers=headers,
+            json={
+                "current_step": "workspace_setup",
+                "step_data": {
+                    "heard_about": "search",
+                    "heard_about_detail": "Google",
+                },
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["current_step"] == "workspace_setup"
+        assert response.json()["step_data"]["heard_about"] == "search"
+
+        # Step 3: Complete workspace setup (personal) → completed
         response = await client.put(
             "/v0/user/onboarding",
             headers=headers,
@@ -460,6 +476,9 @@ class TestOnboardingStepProgression:
         )
         assert response.status_code == 200
         assert response.json()["current_step"] == "completed"
+        # Earlier survey fields are preserved across step updates.
+        assert response.json()["step_data"]["heard_about"] == "search"
+        assert response.json()["step_data"]["selected_type"] == "personal"
 
     @pytest.mark.anyio
     async def test_organization_workspace_flow(self, client: AsyncClient):
@@ -485,17 +504,17 @@ class TestOnboardingStepProgression:
 
     @pytest.mark.anyio
     async def test_resume_onboarding(self, client: AsyncClient):
-        """Test resuming onboarding from workspace_setup step."""
+        """Test resuming onboarding from heard_about step."""
         test_user = await create_test_user(client, "onboarding_flow3@example.com")
         headers = test_user["headers"]
 
-        # User starts but doesn't complete — workspace_setup is the initial step
+        # User starts but doesn't complete — heard_about is the initial step
         response = await client.get("/v0/user/onboarding", headers=headers)
         assert response.status_code == 200
 
         data = response.json()
-        # Should be at workspace_setup (initial state)
-        assert data["current_step"] == "workspace_setup"
+        # Should be at heard_about (initial state)
+        assert data["current_step"] == "heard_about"
 
 
 # ============================================================================
@@ -508,7 +527,7 @@ class TestE2EUserOnboardingFlows:
     End-to-end tests for complete user onboarding flows.
 
     These tests simulate real user journeys through the simplified onboarding
-    process (workspace_setup → completed).
+    process (heard_about → workspace_setup → completed).
     """
 
     @pytest.mark.anyio
@@ -521,14 +540,27 @@ class TestE2EUserOnboardingFlows:
 
         Flow:
         1. User signs up (creates account)
-        2. Selects "Personal" in workspace setup
-        3. Completes onboarding
+        2. Answers acquisition survey
+        3. Selects "Personal" in workspace setup
+        4. Completes onboarding
         """
         user = await create_test_user(client, "e2e_personal@example.com")
         headers = user["headers"]
 
         # Verify initial onboarding state
         response = await client.get("/v0/user/onboarding", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["current_step"] == "heard_about"
+
+        # Complete acquisition survey → workspace_setup
+        response = await client.put(
+            "/v0/user/onboarding",
+            headers=headers,
+            json={
+                "current_step": "workspace_setup",
+                "step_data": {"heard_about": "friend"},
+            },
+        )
         assert response.status_code == 200
         assert response.json()["current_step"] == "workspace_setup"
 
@@ -543,6 +575,7 @@ class TestE2EUserOnboardingFlows:
         )
         assert response.status_code == 200
         assert response.json()["current_step"] == "completed"
+        assert response.json()["step_data"]["heard_about"] == "friend"
 
         # Verify user is marked as onboarded
         legacy = await client.get("/v0/user/onboarding-status", headers=headers)
@@ -622,15 +655,16 @@ class TestE2EUserOnboardingFlows:
         # Reset onboarding
         reset_response = await client.delete("/v0/user/onboarding", headers=headers)
         assert reset_response.status_code == 200
-        assert reset_response.json()["current_step"] == "workspace_setup"
+        assert reset_response.json()["current_step"] == "heard_about"
 
         # Start fresh
         response = await client.get("/v0/user/onboarding", headers=headers)
-        assert response.json()["current_step"] == "workspace_setup"
+        assert response.json()["current_step"] == "heard_about"
         # After reset, step_data should have cleared user-set values
         step_data = response.json()["step_data"]
         assert step_data.get("selected_type") is None
         assert step_data.get("organization_id") is None
+        assert step_data.get("heard_about") is None
 
     @pytest.mark.anyio
     async def test_e2e_onboarding_state_consistency(self, client: AsyncClient):

@@ -29,19 +29,13 @@ def _send_email_sync(
     email_body: str,
     sender_email: str,
     impersonate_email: str | None = None,
-) -> bool:
+) -> dict | None:
     """
     Synchronous implementation of email sending via Gmail API.
     This is called via run_in_executor to avoid blocking the event loop.
 
-    Args:
-        to_email: Recipient email address.
-        email_subject: Email subject line.
-        email_body: HTML email body.
-        sender_email: The "From" address shown in the email.
-        impersonate_email: The actual user to impersonate (must be a real user in Google Workspace).
-                          If sender_email is an alias, this should be the primary email.
-                          Defaults to DELEGATED_USER_EMAIL.
+    Returns the Gmail ``messages.send`` response dict on success (includes
+    ``id`` and ``threadId``), or ``None`` on failure.
     """
     try:
         # Create credentials from the service account file, impersonating the user
@@ -83,20 +77,53 @@ def _send_email_sync(
             f"Email successfully sent from {sender_email} to {to_email} via Gmail API. "
             f"Message ID: {send_message.get('id')}",
         )
-        return True
+        return send_message
 
     except HttpError as error:
         logger.error(
             f"An HTTP error occurred sending email to {to_email} via Gmail API: {error}",
             exc_info=True,
         )
-        return False
+        return None
     except Exception as e:
         logger.error(
             f"An unexpected error occurred sending email to {to_email} via Gmail API: {e}",
             exc_info=True,
         )
-        return False
+        return None
+
+
+async def send_email_async_result(
+    to_email: str,
+    email_subject: str,
+    email_body: str,
+    from_email: str | None = None,
+    impersonate_email: str | None = None,
+) -> dict | None:
+    """Send email via Gmail API; return the Gmail response dict or None."""
+    if not SERVICE_ACCOUNT_FILE:
+        logger.error(
+            "Google Service Account Key Path not configured. Cannot send email via OAuth.",
+        )
+        return None
+
+    sender_email = from_email or DELEGATED_USER_EMAIL
+    if not sender_email:
+        logger.error(
+            "No sender email configured. Set ONBOARDING_EMAIL env var or pass from_email.",
+        )
+        return None
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        _send_email_sync,
+        to_email,
+        email_subject,
+        email_body,
+        sender_email,
+        impersonate_email,
+    )
 
 
 async def send_email_async(
@@ -121,26 +148,11 @@ async def send_email_async(
         impersonate_email: The actual user to impersonate (must be a real user in Google Workspace).
                            Defaults to DELEGATED_USER_EMAIL. Required when from_email is an alias.
     """
-    if not SERVICE_ACCOUNT_FILE:
-        logger.error(
-            "Google Service Account Key Path not configured. Cannot send email via OAuth.",
-        )
-        return False
-
-    sender_email = from_email or DELEGATED_USER_EMAIL
-    if not sender_email:
-        logger.error(
-            "No sender email configured. Set ONBOARDING_EMAIL env var or pass from_email.",
-        )
-        return False
-
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,  # Use the default thread pool executor
-        _send_email_sync,
-        to_email,
-        email_subject,
-        email_body,
-        sender_email,
-        impersonate_email,
+    result = await send_email_async_result(
+        to_email=to_email,
+        email_subject=email_subject,
+        email_body=email_body,
+        from_email=from_email,
+        impersonate_email=impersonate_email,
     )
+    return result is not None

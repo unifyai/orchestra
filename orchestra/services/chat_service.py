@@ -16,7 +16,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.chat_dao import KIND_ASSISTANT_DM, KIND_DM, KIND_GROUP, KIND_TEAM
+from orchestra.db.dao.chat_dao import (
+    KIND_ASSISTANT_DM,
+    KIND_ASSISTANT_PEER_DM,
+    KIND_DM,
+    KIND_GROUP,
+    KIND_TEAM,
+)
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
@@ -88,6 +94,10 @@ def apply_user_reaction(
 
 def thread_summary(thread: ChatThread) -> dict[str, Any]:
     """Wire shape for one thread (REST responses and Console frames)."""
+    assistant_ids: list[int] = []
+    if thread.kind == KIND_ASSISTANT_PEER_DM:
+        if thread.assistant_id is not None and thread.peer_assistant_id is not None:
+            assistant_ids = [thread.assistant_id, thread.peer_assistant_id]
     return {
         "thread_id": thread.id,
         "kind": thread.kind,
@@ -95,7 +105,9 @@ def thread_summary(thread: ChatThread) -> dict[str, Any]:
         "user_ids": (
             [thread.user_a_id, thread.user_b_id] if thread.kind == KIND_DM else []
         ),
+        "assistant_ids": assistant_ids,
         "assistant_id": thread.assistant_id,
+        "peer_assistant_id": thread.peer_assistant_id,
         "user_id": thread.user_id,
         "team_id": thread.team_id,
         "group_id": thread.group_id,
@@ -167,6 +179,8 @@ def assistant_can_access_thread(
     """Whether one assistant may post in a thread (membership per kind)."""
     if thread.kind == KIND_ASSISTANT_DM:
         return thread.assistant_id == assistant_id
+    if thread.kind == KIND_ASSISTANT_PEER_DM:
+        return assistant_id in (thread.assistant_id, thread.peer_assistant_id)
     if thread.kind == KIND_TEAM:
         return (
             TeamDAO(session).get_assistant_membership(
@@ -196,10 +210,13 @@ def _fanout_assistant_ids(
 
     Team/group messages fan out to every non-coordinator member assistant
     (minus the author); assistant DMs fan out to the single assistant when a
-    human sent the message. Human DMs never involve an assistant.
+    human sent the message; assistant peer DMs fan out to the other peer.
+    Human DMs never involve an assistant.
     """
     if thread.kind == KIND_ASSISTANT_DM:
         ids = [thread.assistant_id]
+    elif thread.kind == KIND_ASSISTANT_PEER_DM:
+        ids = [thread.assistant_id, thread.peer_assistant_id]
     elif thread.kind == KIND_TEAM:
         from orchestra.services.org_chat_service import team_chat_participants
 
@@ -223,7 +240,7 @@ def _fanout_assistant_ids(
         ids = [entry["assistant_id"] for entry in participants["assistants"]]
     else:
         return []
-    return [aid for aid in ids if aid != exclude_assistant_id]
+    return [aid for aid in ids if aid is not None and aid != exclude_assistant_id]
 
 
 def build_chat_dispatch_payload(
@@ -261,6 +278,7 @@ def build_chat_dispatch_payload(
         "thread_id": thread.id,
         "organization_id": thread.organization_id,
         "assistant_id": thread.assistant_id,
+        "peer_assistant_id": thread.peer_assistant_id,
         "team_id": thread.team_id,
         "group_id": thread.group_id,
         "message": message,

@@ -11,7 +11,13 @@ from orchestra.web.api.org_chat.schema import (
     OrgChatReaction,
 )
 
-ChatThreadKind = Literal["dm", "assistant_dm", "team", "group"]
+ChatThreadKind = Literal[
+    "dm",
+    "assistant_dm",
+    "assistant_peer_dm",
+    "team",
+    "group",
+]
 
 
 class ChatThreadResolve(BaseModel):
@@ -20,6 +26,8 @@ class ChatThreadResolve(BaseModel):
     Exactly the scope fields for ``kind`` are required: ``peer_user_id`` (+
     ``organization_id``) for ``dm``, ``assistant_id`` for ``assistant_dm``,
     ``team_id`` for ``team``, ``group_id`` for ``group``.
+    ``assistant_peer_dm`` is resolved by assistants via ``to_assistant_id``
+    on message post, not this human resolve endpoint.
     """
 
     kind: ChatThreadKind
@@ -35,7 +43,9 @@ class ChatThreadResponse(BaseModel):
     kind: ChatThreadKind
     organization_id: Optional[int] = None
     user_ids: List[str] = Field(default_factory=list)
+    assistant_ids: List[int] = Field(default_factory=list)
     assistant_id: Optional[int] = None
+    peer_assistant_id: Optional[int] = None
     user_id: Optional[str] = None
     team_id: Optional[int] = None
     group_id: Optional[int] = None
@@ -56,14 +66,16 @@ class ChatMessageCreate(BaseModel):
 class AssistantChatMessageCreate(ChatMessageCreate):
     """Assistant-runtime send: resolves the target thread in one call.
 
-    Precedence: ``thread_id`` > ``group_id`` > ``team_id`` > assistant DM
-    with ``to_user_id`` (defaulting to the assistant's owner).
+    Precedence: ``thread_id`` > ``group_id`` > ``team_id`` >
+    ``to_assistant_id`` (assistant↔assistant peer DM) > ``to_user_id``
+    (assistant DM, defaulting to the assistant's owner).
     """
 
     thread_id: Optional[int] = None
     team_id: Optional[int] = None
     group_id: Optional[int] = None
     to_user_id: Optional[str] = None
+    to_assistant_id: Optional[int] = None
 
 
 class AdminAssistantChatMessageCreate(AssistantChatMessageCreate):
@@ -76,7 +88,9 @@ class ChatMessageResponse(BaseModel):
     kind: ChatThreadKind
     organization_id: Optional[int] = None
     user_ids: List[str] = Field(default_factory=list)
+    assistant_ids: List[int] = Field(default_factory=list)
     assistant_id: Optional[int] = None
+    peer_assistant_id: Optional[int] = None
     user_id: Optional[str] = None
     team_id: Optional[int] = None
     group_id: Optional[int] = None

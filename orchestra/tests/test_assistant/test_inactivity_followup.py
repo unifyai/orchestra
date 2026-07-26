@@ -134,7 +134,7 @@ def zero_jitter():
 def mock_send():
     """Replace the templated email send with an AsyncMock (succeeds by default)."""
     with patch(_SEND_TARGET, new_callable=AsyncMock) as mock:
-        mock.return_value = True
+        mock.return_value = (True, "gmail-thread-1")
         yield mock
 
 
@@ -163,18 +163,50 @@ class TestDAOTouchAndMark:
 
         now = datetime.now(timezone.utc)
         dao = AssistantDAO(dbsession)
-        rows = dao.touch_last_correspondence_at(a.agent_id, now)
+        outcome = dao.touch_last_correspondence_at(a.agent_id, now)
         dbsession.flush()
         dbsession.refresh(a)
 
-        assert rows == 1
+        assert outcome["rows_updated"] == 1
         assert a.last_correspondence_at == now
         assert a.last_followup_sent_at is None
+        assert a.inactivity_followup_has_engaged is True
+
+    def test_touch_skips_followup_thread_reply(self, dbsession: Session):
+        user = _make_user(dbsession, "dao_u1b")
+        long_ago = _cutoff(10)
+        a = _make_assistant(
+            dbsession,
+            user.id,
+            last_correspondence_at=long_ago,
+            last_followup_sent_at=long_ago,
+        )
+        a.inactivity_followup_stage = 1
+        a.inactivity_followup_thread_ids = ["checkin-thread"]
+        dbsession.flush()
+
+        now = datetime.now(timezone.utc)
+        dao = AssistantDAO(dbsession)
+        outcome = dao.touch_last_correspondence_at(
+            a.agent_id,
+            now,
+            thread_id="checkin-thread",
+        )
+        dbsession.flush()
+        dbsession.refresh(a)
+
+        assert outcome.get("skipped") is True
+        assert a.last_correspondence_at == long_ago
+        assert a.last_followup_sent_at == long_ago
+        assert a.inactivity_followup_stage == 1
 
     def test_touch_on_unknown_assistant_returns_zero(self, dbsession: Session):
         dao = AssistantDAO(dbsession)
         assert (
-            dao.touch_last_correspondence_at(999_999, datetime.now(timezone.utc)) == 0
+            dao.touch_last_correspondence_at(999_999, datetime.now(timezone.utc))[
+                "rows_updated"
+            ]
+            == 0
         )
 
     def test_mark_followup_sent_sets_timestamp(self, dbsession: Session):
@@ -217,12 +249,13 @@ class TestDAOFindFollowupCandidates:
         coord = _make_coordinator(
             dbsession,
             user.id,
-            last_correspondence_at=_cutoff(8),
+            last_correspondence_at=_cutoff(2),
         )
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id in ids
 
@@ -231,12 +264,13 @@ class TestDAOFindFollowupCandidates:
         coord = _make_coordinator(
             dbsession,
             user.id,
-            last_correspondence_at=_cutoff(1),
+            last_correspondence_at=_cutoff(0),
         )
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id not in ids
 
@@ -251,7 +285,8 @@ class TestDAOFindFollowupCandidates:
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id not in ids
 
@@ -273,7 +308,8 @@ class TestDAOFindFollowupCandidates:
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id not in ids
 
@@ -294,7 +330,8 @@ class TestDAOFindFollowupCandidates:
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id in ids
 
@@ -311,22 +348,28 @@ class TestDAOFindFollowupCandidates:
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id in ids
 
     def test_recent_signup_not_followed_up(self, dbsession: Session):
         user = _make_user(dbsession, "fup_u6")
-        coord = _make_coordinator(dbsession, user.id, last_correspondence_at=_cutoff(1))
+        coord = _make_coordinator(
+            dbsession,
+            user.id,
+            last_correspondence_at=datetime.now(timezone.utc) - timedelta(hours=12),
+        )
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id not in ids
 
-    def test_baseline_only_followed_up_once(self, dbsession: Session):
-        """An already-followed-up, still-quiet user is not re-contacted."""
+    def test_series_complete_excluded_until_activity(self, dbsession: Session):
+        """After three emails in a silence, no more until real activity."""
         user = _make_user(dbsession, "fup_u7")
         coord = _make_coordinator(
             dbsession,
@@ -334,28 +377,35 @@ class TestDAOFindFollowupCandidates:
             last_correspondence_at=_cutoff(10),
             last_followup_sent_at=_cutoff(2),
         )
+        coord.inactivity_followup_stage = 3
+        dbsession.flush()
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id not in ids
 
-    def test_recently_followed_up_quiet_user_excluded(self, dbsession: Session):
-        """Follow-up after the last activity => don't re-fire this quiet spell."""
+    def test_stage1_due_for_second_email(self, dbsession: Session):
+        """After stage 1, quiet for series*2 days ⇒ stage 2 is due."""
         user = _make_user(dbsession, "fup_u8")
         coord = _make_coordinator(
             dbsession,
             user.id,
-            last_correspondence_at=_cutoff(8),
+            last_correspondence_at=_cutoff(5),
             last_followup_sent_at=_cutoff(1),
         )
+        coord.inactivity_followup_series = 1
+        coord.inactivity_followup_stage = 1
+        dbsession.flush()
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
-        assert coord.agent_id not in ids
+        assert coord.agent_id in ids
 
     def test_re_armed_after_fresh_activity(self, dbsession: Session):
         """Engaged after a prior follow-up, then went quiet again => fire again."""
@@ -364,12 +414,16 @@ class TestDAOFindFollowupCandidates:
             dbsession,
             user.id,
             last_correspondence_at=_cutoff(8),
-            last_followup_sent_at=_cutoff(20),
+            last_followup_sent_at=None,
         )
+        coord.inactivity_followup_series = 2
+        coord.inactivity_followup_stage = 0
+        dbsession.flush()
 
         dao = AssistantDAO(dbsession)
         ids = {
-            c.agent_id for c in dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+            c.agent_id
+            for c in dao.find_followup_candidates(now=datetime.now(timezone.utc))
         }
         assert coord.agent_id in ids
 
@@ -385,7 +439,7 @@ class TestDAOFindFollowupCandidates:
         )
 
         dao = AssistantDAO(dbsession)
-        candidates = dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+        candidates = dao.find_followup_candidates(now=datetime.now(timezone.utc))
         assert specialist.agent_id not in {c.agent_id for c in candidates}
         assert all(c.is_coordinator for c in candidates)
 
@@ -399,9 +453,9 @@ class TestDAOFindFollowupCandidates:
         )
 
         dao = AssistantDAO(dbsession)
-        without = dao.find_followup_candidates(followup_cutoff=_cutoff(7))
+        without = dao.find_followup_candidates(now=datetime.now(timezone.utc))
         with_local = dao.find_followup_candidates(
-            followup_cutoff=_cutoff(7),
+            now=datetime.now(timezone.utc),
             include_local=True,
         )
         assert local.agent_id not in {c.agent_id for c in without}
@@ -413,7 +467,7 @@ class TestDAOFindFollowupCandidates:
             _make_coordinator(dbsession, user.id, last_correspondence_at=_cutoff(8))
 
         dao = AssistantDAO(dbsession)
-        limited = dao.find_followup_candidates(followup_cutoff=_cutoff(7), limit=2)
+        limited = dao.find_followup_candidates(now=datetime.now(timezone.utc), limit=2)
         assert len(limited) == 2
 
 
@@ -455,6 +509,8 @@ class TestInactivityFollowupRoutine:
         assert kwargs["owner_first_name"] == "Olivia"
         dbsession.refresh(coord)
         assert coord.last_followup_sent_at is not None
+        assert coord.inactivity_followup_stage == 1
+        assert "gmail-thread-1" in (coord.inactivity_followup_thread_ids or [])
 
     @pytest.mark.anyio
     async def test_send_false_does_not_stamp(self, dbsession: Session):
@@ -466,7 +522,7 @@ class TestInactivityFollowupRoutine:
         )
 
         with patch(_SEND_TARGET, new_callable=AsyncMock) as mock:
-            mock.return_value = False
+            mock.return_value = (False, None)
             result = await run_inactivity_followup(session=dbsession)
 
         assert result.followups_dispatched == 0
@@ -683,20 +739,39 @@ class TestEmailTemplates:
             build_coordinator_inactivity_followup_email,
         )
 
-        body = build_coordinator_inactivity_followup_email(owner_first_name="Olivia")
+        body = build_coordinator_inactivity_followup_email(
+            owner_first_name="Olivia",
+            stage=1,
+            has_engaged=True,
+        )
         normalized = re.sub(r"\s+", " ", body.lower())
 
-        assert FOLLOWUP_SUBJECT == "All good?"
-        assert "haven't heard from you in a while" in normalized
-        assert "all good on your end" in normalized
-        assert "anything i can help with" in normalized
-        assert "just reply to this email" in normalized
-        assert "helloooo olivia," in normalized
-        assert "friendly neighbourhood t-w1n" in normalized
+        assert FOLLOWUP_SUBJECT == "Just checking in"
+        assert "yesterday" in normalized
+        assert "hey olivia," in normalized
+        assert "anything else i can help with" in normalized
+        assert "your digital t-w1n" in normalized
         assert "https://console.unify.ai/" not in body
-        assert "automated message" not in normalized
         for banned in ("delet", "suspend", "billing", "terminat", "account will"):
             assert banned not in normalized
+
+    def test_followup_stage3_asks_for_feedback(self):
+        from orchestra.routines.inactivity_notifications import (
+            build_coordinator_inactivity_followup_email,
+        )
+
+        body = build_coordinator_inactivity_followup_email(
+            owner_first_name="Olivia",
+            stage=3,
+            has_engaged=True,
+        )
+        normalized = re.sub(r"\s+", " ", body.lower())
+        assert "one last note" in normalized
+        assert "leave you be" in normalized
+        assert (
+            "what would've helped" in normalized
+            or "what would have helped" in normalized
+        )
 
     def test_followup_email_handles_missing_first_name(self):
         from orchestra.routines.inactivity_notifications import (
@@ -705,7 +780,7 @@ class TestEmailTemplates:
 
         body = build_coordinator_inactivity_followup_email(owner_first_name=None)
         normalized = re.sub(r"\s+", " ", body.lower())
-        assert "helloooo," in normalized
+        assert "hey," in normalized
 
 
 class TestWelcomeSendHelper:
@@ -718,7 +793,7 @@ class TestWelcomeSendHelper:
             "send_coordinator_emails",
             new_callable=AsyncMock,
         ) as mock:
-            mock.return_value = True
+            mock.return_value = (True, "gmail-thread-welcome")
             sent = await notif.send_coordinator_welcome_email(
                 recipient_email="owner@test.com",
                 owner_first_name="Olivia",
@@ -758,18 +833,21 @@ class TestFollowupSendHelper:
             "send_coordinator_emails",
             new_callable=AsyncMock,
         ) as mock:
-            mock.return_value = True
-            sent = await notif.send_coordinator_inactivity_followup_email(
+            mock.return_value = (True, "gmail-thread-followup")
+            sent, thread_id = await notif.send_coordinator_inactivity_followup_email(
                 recipient_email="owner@test.com",
                 owner_first_name="Olivia",
+                stage=1,
+                has_engaged=True,
             )
 
         assert sent is True
+        assert thread_id == "gmail-thread-followup"
         mock.assert_awaited_once()
         recipients, subject, body = mock.await_args.args
         assert recipients == ["owner@test.com"]
-        assert subject == notif.FOLLOWUP_SUBJECT
-        assert "haven't heard from you" in body.lower()
+        assert subject in notif.FOLLOWUP_SUBJECTS.values()
+        assert "yesterday" in body.lower()
 
     @pytest.mark.anyio
     async def test_send_followup_noops_without_recipient(self):
@@ -780,10 +858,11 @@ class TestFollowupSendHelper:
             "send_coordinator_emails",
             new_callable=AsyncMock,
         ) as mock:
-            sent = await notif.send_coordinator_inactivity_followup_email(
+            sent, thread_id = await notif.send_coordinator_inactivity_followup_email(
                 recipient_email=None,
                 owner_first_name="Olivia",
             )
 
         assert sent is False
+        assert thread_id is None
         mock.assert_not_called()

@@ -29,12 +29,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal, Optional, Tuple
 
-PLATFORM_DEFAULT_MODEL = "gpt-5.6-sol@openai"
+PLATFORM_DEFAULT_MODEL = "openai/gpt-5.6-sol@openrouter"
 PLATFORM_DEFAULT_REASONING_EFFORT = "high"
 PLATFORM_DEFAULT_DISPLAY_NAME = "GPT-5.6 Sol"
 
 # Matches Unify's UNITY_CONVERSATION_SLOW_BRAIN_* defaults.
-PLATFORM_SLOW_BRAIN_MODEL = "gpt-5.6-terra@openai"
+PLATFORM_SLOW_BRAIN_MODEL = "openai/gpt-5.6-terra@openrouter"
 PLATFORM_SLOW_BRAIN_DISPLAY_NAME = "GPT-5.6 Terra"
 PLATFORM_SLOW_BRAIN_REASONING_EFFORT = "high"
 
@@ -166,7 +166,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gemini-3-1-pro-preview",
     ),
     _opt(
-        model="gpt-5.6-luna@openai",
+        model="openai/gpt-5.6-luna@openrouter",
         reasoning_effort="low",
         label="GPT-5.6 Luna (low thinking)",
         approx_credits_per_task=50,
@@ -175,7 +175,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-luna",
     ),
     _opt(
-        model="gpt-5.6-luna@openai",
+        model="openai/gpt-5.6-luna@openrouter",
         reasoning_effort="medium",
         label="GPT-5.6 Luna (medium thinking)",
         approx_credits_per_task=70,
@@ -184,7 +184,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-luna",
     ),
     _opt(
-        model="gpt-5.6-luna@openai",
+        model="openai/gpt-5.6-luna@openrouter",
         reasoning_effort="high",
         label="GPT-5.6 Luna (high thinking)",
         approx_credits_per_task=95,
@@ -193,7 +193,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-luna",
     ),
     _opt(
-        model="gpt-5.6-terra@openai",
+        model="openai/gpt-5.6-terra@openrouter",
         reasoning_effort="low",
         label="GPT-5.6 Terra (low thinking)",
         approx_credits_per_task=120,
@@ -202,7 +202,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-terra",
     ),
     _opt(
-        model="gpt-5.6-terra@openai",
+        model="openai/gpt-5.6-terra@openrouter",
         reasoning_effort="medium",
         label="GPT-5.6 Terra (medium thinking)",
         approx_credits_per_task=170,
@@ -211,7 +211,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-terra",
     ),
     _opt(
-        model="gpt-5.6-terra@openai",
+        model="openai/gpt-5.6-terra@openrouter",
         reasoning_effort="high",
         label="GPT-5.6 Terra (high thinking)",
         approx_credits_per_task=240,
@@ -220,7 +220,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-terra",
     ),
     _opt(
-        model="gpt-5.6-sol@openai",
+        model="openai/gpt-5.6-sol@openrouter",
         reasoning_effort="low",
         label="GPT-5.6 Sol (low thinking)",
         approx_credits_per_task=240,
@@ -229,7 +229,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-sol",
     ),
     _opt(
-        model="gpt-5.6-sol@openai",
+        model="openai/gpt-5.6-sol@openrouter",
         reasoning_effort="medium",
         label="GPT-5.6 Sol (medium thinking)",
         approx_credits_per_task=330,
@@ -238,7 +238,7 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         aa_slug="gpt-5-6-sol",
     ),
     _opt(
-        model="gpt-5.6-sol@openai",
+        model="openai/gpt-5.6-sol@openrouter",
         reasoning_effort="high",
         label="GPT-5.6 Sol (high thinking)",
         approx_credits_per_task=475,
@@ -385,6 +385,8 @@ _VALID_PAIRS = {
     if option.model is not None
 }
 
+_VALID_EFFORTS = {None, "low", "medium", "high"}
+
 # Terra high — used for the slow-brain system-default credit display.
 _SLOW_BRAIN_SYSTEM_DEFAULT_CREDITS = next(
     option.approx_credits_per_message
@@ -403,20 +405,51 @@ _SLOW_BRAIN_SYSTEM_DEFAULT_URL = next(
 def is_valid_default_model(
     model: str,
     reasoning_effort: Optional[str],
+    *,
+    require_tools: bool = False,
 ) -> bool:
-    """Return whether (model, reasoning_effort) is a catalog option."""
+    """Return whether (model, reasoning_effort) may be set on an assistant.
 
-    return (model, reasoning_effort) in _VALID_PAIRS
+    Accepts curated catalog pairs, or any OpenRouter catalog endpoint that
+    meets the multimodal (and optional tools) capability policy.
+    """
+
+    if (model, reasoning_effort) in _VALID_PAIRS:
+        return True
+    if reasoning_effort not in _VALID_EFFORTS:
+        return False
+
+    from orchestra.services.openrouter_catalog import (
+        get_model,
+        is_eligible_assistant_model,
+        parse_openrouter_endpoint,
+    )
+
+    ok, _reason = is_eligible_assistant_model(model, require_tools=require_tools)
+    if not ok:
+        return False
+    model_id = parse_openrouter_endpoint(model)
+    if model_id is None:
+        return False
+    info = get_model(model_id) or {}
+    if reasoning_effort is not None and not info.get("supports_reasoning"):
+        return False
+    return True
 
 
-# Alias: slow brain uses the same curated pairs as the actor default.
-is_valid_slow_brain_model = is_valid_default_model
+def is_valid_slow_brain_model(
+    model: str,
+    reasoning_effort: Optional[str],
+) -> bool:
+    """Slow brain shares the multimodal catalog; tools are not required."""
+
+    return is_valid_default_model(model, reasoning_effort, require_tools=False)
 
 
 def list_model_options(
     usage: Literal["actor", "slow_brain"] = "actor",
 ) -> Tuple[DefaultModelOption, ...]:
-    """Return catalog options, with the system-default row labeled for ``usage``."""
+    """Return curated recommended options, labeled for ``usage``."""
 
     if usage == "actor":
         return DEFAULT_MODEL_OPTIONS

@@ -146,7 +146,7 @@ async def create_user(
 
         # Initialize onboarding status for the new user
         onboarding_dao = OnboardingStatusDAO(session)
-        onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+        onboarding_dao.create(user_id=new_user.id, current_step="heard_about")
 
         coordinator, created_coordinator = (
             await ensure_personal_coordinator_provisioned(
@@ -163,23 +163,15 @@ async def create_user(
         raise
 
     if created_coordinator:
-        # Best-effort welcome email from the new user's Coordinator.
-        # Runs post-commit so a mail hiccup can never undo the signup.
-        try:
-            from orchestra.routines.inactivity_notifications import (
-                send_coordinator_welcome_email,
-            )
+        # Best-effort twin@ + founder welcomes. Post-commit so a mail
+        # hiccup can never undo the signup; each send is independent.
+        from orchestra.routines.founder_welcome import send_signup_welcome_emails_safe
 
-            await send_coordinator_welcome_email(
-                recipient_email=new_user.email,
-                owner_first_name=new_user.name,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to send Coordinator welcome email for user %s",
-                new_user.id,
-                exc_info=True,
-            )
+        await send_signup_welcome_emails_safe(
+            recipient_email=new_user.email,
+            owner_first_name=new_user.name,
+            user_id=new_user.id,
+        )
 
     wake_workspace_coordinator_best_effort_sync(
         session,
@@ -2402,12 +2394,16 @@ def update_onboarding_progress(
     if not user_row:
         raise not_found("User")
 
-    # Get or create, then update
+    # Get or create, then update. Merge step_data so earlier steps
+    # (e.g. heard_about) are preserved when a later step writes.
     status = onboarding_dao.get_or_create(request.state.user_id)
+    merged_step_data = body.step_data
+    if body.step_data is not None:
+        merged_step_data = {**(status.step_data or {}), **body.step_data}
     status = onboarding_dao.update(
         user_id=request.state.user_id,
         current_step=body.current_step,
-        step_data=body.step_data,
+        step_data=merged_step_data,
     )
 
     session.commit()
