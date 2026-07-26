@@ -3269,10 +3269,12 @@ class OnboardingStatus(Base):
     Tracks user onboarding progress.
 
     The current_step represents WHERE TO RESUME next time:
-    - workspace_setup: Initial state – user needs to choose personal vs. organization workspace
+    - heard_about: First step – how the user heard about Unify
+    - workspace_setup: Choose personal vs. organization workspace
     - completed: All onboarding steps done
 
     step_data accumulates information from completed steps:
+    - heard_about, heard_about_detail (acquisition survey)
     - selected_type: "personal" | "organization"
     - organization_id, organization_name (if organization)
     - completed_at (when completed)

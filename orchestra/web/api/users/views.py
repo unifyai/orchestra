@@ -146,7 +146,7 @@ async def create_user(
 
         # Initialize onboarding status for the new user
         onboarding_dao = OnboardingStatusDAO(session)
-        onboarding_dao.create(user_id=new_user.id, current_step="workspace_setup")
+        onboarding_dao.create(user_id=new_user.id, current_step="heard_about")
 
         coordinator, created_coordinator = (
             await ensure_personal_coordinator_provisioned(
@@ -2402,12 +2402,16 @@ def update_onboarding_progress(
     if not user_row:
         raise not_found("User")
 
-    # Get or create, then update
+    # Get or create, then update. Merge step_data so earlier steps
+    # (e.g. heard_about) are preserved when a later step writes.
     status = onboarding_dao.get_or_create(request.state.user_id)
+    merged_step_data = body.step_data
+    if body.step_data is not None:
+        merged_step_data = {**(status.step_data or {}), **body.step_data}
     status = onboarding_dao.update(
         user_id=request.state.user_id,
         current_step=body.current_step,
-        step_data=body.step_data,
+        step_data=merged_step_data,
     )
 
     session.commit()

@@ -305,11 +305,24 @@ class BusinessAddress(BaseModel):
 
 # Valid onboarding steps (enforced in schema, freeform in DB)
 # The step represents WHERE TO RESUME, not where the user currently is.
-# - workspace_setup: Initial state – user needs to choose personal / organization workspace
+# - heard_about: First step – how the user heard about Unify
+# - workspace_setup: Choose personal / organization workspace
 # - completed: All onboarding steps done
 OnboardingStep = Literal[
-    "workspace_setup",  # Initial state – choose personal vs. organization workspace
+    "heard_about",  # First step – acquisition survey
+    "workspace_setup",  # Choose personal vs. organization workspace
     "completed",  # All done
+]
+
+HeardAboutChannel = Literal[
+    "outbound_email",
+    "referral",
+    "social",
+    "github",
+    "search",
+    "friend",
+    "content",
+    "other",
 ]
 
 
@@ -322,6 +335,10 @@ class OnboardingStepDataResponse(BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
+
+    # Acquisition survey (filled when heard_about is completed)
+    heard_about: Optional[HeardAboutChannel] = None
+    heard_about_detail: Optional[str] = None
 
     # Workspace setup data (filled when workspace_setup is completed)
     selected_type: Optional[Literal["personal", "organization"]] = None
@@ -349,7 +366,8 @@ class OnboardingStatusUpdateRequest(BaseModel):
     Request to update user's onboarding status.
 
     The current_step indicates WHERE TO RESUME next time:
-    - After registration, set to "workspace_setup"
+    - After registration, set to "heard_about"
+    - After the acquisition survey, set to "workspace_setup"
     - After completing workspace setup, set to "completed"
 
     The step_data accumulates information from all completed steps.
@@ -374,7 +392,7 @@ class OnboardingStatusCreateRequest(BaseModel):
     """Request to create onboarding status (internal/admin use)."""
 
     user_id: str
-    current_step: OnboardingStep = "workspace_setup"
+    current_step: OnboardingStep = "heard_about"
     step_data: Optional[Dict[str, Any]] = None
 
 

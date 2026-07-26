@@ -166,7 +166,7 @@ async def _provision_email_password_user(
         )
 
         onboarding_dao = OnboardingStatusDAO(session)
-        onboarding_dao.create(user_id=user.id, current_step="workspace_setup")
+        onboarding_dao.create(user_id=user.id, current_step="heard_about")
 
         coordinator, created_coordinator = (
             await ensure_personal_coordinator_provisioned(
@@ -1495,7 +1495,7 @@ def onboarding_status_by_email(
     if not existing:
         return OnboardingStatusByEmailResponse(
             user_found=False,
-            onboarding_step="workspace_setup",
+            onboarding_step="heard_about",
         )
 
     user = existing[0][0]
