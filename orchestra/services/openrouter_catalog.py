@@ -7,6 +7,7 @@ filters used by the assistant model picker (multimodal image input required).
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Optional
 
@@ -153,7 +154,10 @@ def is_eligible_assistant_model(
 
     model_id = parse_openrouter_endpoint(endpoint)
     if model_id is None:
-        return False, "Only *@openrouter endpoints are accepted from the OpenRouter catalog."
+        return (
+            False,
+            "Only *@openrouter endpoints are accepted from the OpenRouter catalog.",
+        )
     info = get_model(model_id)
     if info is None:
         return False, f"Unknown OpenRouter model {model_id!r}."

@@ -135,12 +135,14 @@ async def test_message_credits_rank_sensibly(client: AsyncClient):
     terra_high = next(
         o["approx_credits_per_message"]
         for o in options
-        if o["model"] == "openai/gpt-5.6-terra@openrouter" and o["reasoning_effort"] == "high"
+        if o["model"] == "openai/gpt-5.6-terra@openrouter"
+        and o["reasoning_effort"] == "high"
     )
     luna_high = next(
         o["approx_credits_per_message"]
         for o in options
-        if o["model"] == "openai/gpt-5.6-luna@openrouter" and o["reasoning_effort"] == "high"
+        if o["model"] == "openai/gpt-5.6-luna@openrouter"
+        and o["reasoning_effort"] == "high"
     )
     assert terra_high > luna_high
 
