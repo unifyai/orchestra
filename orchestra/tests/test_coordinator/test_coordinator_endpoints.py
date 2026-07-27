@@ -267,6 +267,61 @@ def _assert_owner_contact_row(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
+    ("task_data", "completed_step_id", "uncompleted_step_id"),
+    [
+        (
+            {
+                "schedule": {"start_at": "2026-07-27T12:00:00+00:00"},
+                "trigger": None,
+            },
+            "create-scheduled-task",
+            "create-triggerable-task",
+        ),
+        (
+            {
+                "schedule": None,
+                "trigger": {"medium": "email"},
+            },
+            "create-triggerable-task",
+            "create-scheduled-task",
+        ),
+    ],
+)
+async def test_onboarding_task_derivation_ignores_null_task_configuration(
+    client: AsyncClient,
+    dbsession: Session,
+    task_data: dict,
+    completed_step_id: str,
+    uncompleted_step_id: str,
+) -> None:
+    owner = await _create_user(client, f"task-kind-{completed_step_id}")
+    coordinator = dbsession.scalars(
+        select(Assistant).where(
+            Assistant.user_id == owner["id"],
+            Assistant.organization_id.is_(None),
+            Assistant.is_coordinator.is_(True),
+        ),
+    ).one()
+    project = _assistants_project(dbsession, coordinator=coordinator)
+    _insert_log(
+        dbsession,
+        project=project,
+        context_name=_assistant_context_name(coordinator, "Tasks"),
+        data=task_data,
+    )
+
+    completed = svc.derive_onboarding_progress(
+        dbsession,
+        coordinator=coordinator,
+        state={"onboarding_active": True},
+    )
+
+    assert completed_step_id in completed
+    assert uncompleted_step_id not in completed
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
     ("trigger_step_id", "reply_step_id", "medium"),
     [
         ("email-reference", "email-reply", "email"),
