@@ -310,8 +310,8 @@ def enforce_types(
                 #   - float → 'float'
                 #   - str   → 'str'
                 #
-                # Container types (list, dict) are excluded because they
-                # need inference to validate inner/element types
+                # Bare dict/list fields are opaque JSON containers. Parameterized
+                # containers still use inference to validate inner types
                 # (e.g. List[int] vs List[str]).
                 _PYTHON_TYPE_TO_COMPATIBLE_FIELDS: dict[type, tuple[str, ...]] = {
                     bool: ("bool",),
@@ -319,11 +319,15 @@ def enforce_types(
                     float: ("float",),
                     str: ("str",),
                 }
+                is_opaque_container = (
+                    isinstance(value, dict) and field_type == "dict"
+                ) or (isinstance(value, list) and field_type == "list")
                 compatible_fields = _PYTHON_TYPE_TO_COMPATIBLE_FIELDS.get(
                     type(value),
                 )
-                if compatible_fields is not None and any(
-                    types_match(field_type, ft) for ft in compatible_fields
+                if is_opaque_container or (
+                    compatible_fields is not None
+                    and any(types_match(field_type, ft) for ft in compatible_fields)
                 ):
                     pass  # runtime type compatible with declared type
                 else:
