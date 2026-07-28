@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from orchestra.db.batched_rewrite import batched_rewrite
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.log_queries import log_event_context_join, owner_scope_clause
 from orchestra.db.models.core_models import (
@@ -426,39 +427,50 @@ class LogEventDAO:
                 "new_key": new_field_name,
                 "project_id": project_id,
             }
+            # Both scopes rewrite every row carrying the key, so both are
+            # walked. The project-wide branch is the wider of the two — on a
+            # shared project it is every log in the tenant — and was previously
+            # issued as a single statement.
+            apply_query = """
+                UPDATE log_event
+                SET data = (data - :old_key)
+                    || jsonb_build_object(:new_key, data->:old_key)
+                WHERE project_id = :project_id
+                  AND id = ANY(:ids)
+            """
             if context_id is not None:
                 params["context_id"] = context_id
-                result = self.session.execute(
-                    text(
-                        """
-                        UPDATE log_event le
-                        SET data = (le.data - :old_key)
-                            || jsonb_build_object(:new_key, le.data->:old_key)
-                        FROM log_event_context lec
-                        WHERE le.project_id = :project_id
-                          AND lec.project_id = :project_id
-                          AND lec.context_id = :context_id
-                          AND lec.log_event_id = le.id
-                          AND le.data ? :old_key
-                        """,
-                    ),
-                    params,
-                )
+                id_query = """
+                    SELECT le.id
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
+                    WHERE le.project_id = :project_id
+                      AND lec.context_id = :context_id
+                      AND le.data ? :old_key
+                      AND le.id > :last_id
+                    ORDER BY le.id
+                    LIMIT :batch_size
+                """
             else:
-                result = self.session.execute(
-                    text(
-                        """
-                        UPDATE log_event
-                        SET data = (data - :old_key)
-                            || jsonb_build_object(:new_key, data->:old_key)
-                        WHERE project_id = :project_id
-                          AND data ? :old_key
-                        """,
-                    ),
-                    params,
-                )
+                id_query = """
+                    SELECT id
+                    FROM log_event
+                    WHERE project_id = :project_id
+                      AND data ? :old_key
+                      AND id > :last_id
+                    ORDER BY id
+                    LIMIT :batch_size
+                """
+            result = batched_rewrite(
+                self.session,
+                id_query=id_query,
+                apply_query=apply_query,
+                params=params,
+            )
 
-            if result.rowcount == 0:
+            if result.rows == 0:
                 # Distinguish "no logs in scope" from "field absent on all rows"
                 scope_q = select(LogEvent.id).where(LogEvent.project_id == project_id)
                 if context_id is not None:

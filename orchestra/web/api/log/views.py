@@ -26,6 +26,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.batched_rewrite import batched_rewrite
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
@@ -3127,33 +3128,11 @@ def _delete_logs(
                 action="DELETE",
             )
 
-        # GCS media: keyset-paginate rather than bind every context id
-        last_media_id = 0
-        while True:
-            media_batch = session.execute(
-                text(
-                    """
-                    SELECT le.id
-                    FROM log_event le
-                    JOIN log_event_context lec
-                      ON lec.log_event_id = le.id
-                     AND lec.project_id = le.project_id
-                    WHERE le.project_id = :project_id
-                      AND lec.context_id = :context_id
-                      AND le.id > :last_id
-                    ORDER BY le.id
-                    LIMIT 5000
-                    """,
-                ),
-                {
-                    "project_id": project_id,
-                    "context_id": context_id,
-                    "last_id": last_media_id,
-                },
-            ).fetchall()
-            if not media_batch:
-                break
-            batch_ids = [row[0] for row in media_batch]
+        # Media deletion and the field strip share one keyset walk: the media
+        # pass was already paginated, but the strip that follows it was a single
+        # statement over the whole context and is the half that outruns the
+        # request deadline on a large table.
+        def _drop_media(batch_ids):
             all_log_event_ids_for_media.extend(batch_ids)
             all_field_names_for_media.extend(fields)
             log_dao._bulk_delete_gcs_media(
@@ -3161,27 +3140,35 @@ def _delete_logs(
                 project_id=project_id,
                 field_names=fields,
             )
-            last_media_id = batch_ids[-1]
 
-        # Set-based field strip via JOIN — no Python ID array
-        deleted_count = session.execute(
-            text(
-                """
-                UPDATE log_event le
-                SET data = le.data - CAST(:fields AS text[])
-                FROM log_event_context lec
+        deleted_count = batched_rewrite(
+            session,
+            id_query="""
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                 AND lec.project_id = le.project_id
                 WHERE le.project_id = :project_id
-                  AND lec.project_id = :project_id
                   AND lec.context_id = :context_id
-                  AND lec.log_event_id = le.id
-                """,
-            ),
-            {
+                  AND le.data ?| CAST(:fields AS text[])
+                  AND le.id > :last_id
+                ORDER BY le.id
+                LIMIT :batch_size
+            """,
+            apply_query="""
+                UPDATE log_event
+                SET data = data - CAST(:fields AS text[])
+                WHERE project_id = :project_id
+                  AND id = ANY(:ids)
+            """,
+            params={
                 "project_id": project_id,
                 "context_id": context_id,
                 "fields": fields,
             },
-        ).rowcount
+            on_batch=_drop_media,
+        ).rows
         if deleted_count and deleted_count > 0:
             context_description.append(
                 f"Deleted {len(fields)} field(s) from {deleted_count} logs (JSONB)",
@@ -6085,28 +6072,41 @@ def create_fields(
                 {name: None for name in pending_backfill_fields},
             )
 
-            result = session.execute(
-                text(
-                    """
-                    UPDATE log_event le
-                    SET data = CAST(:template AS jsonb) || COALESCE(le.data, '{}'::jsonb),
-                        updated_at = now()
-                    FROM log_event_context lec
-                    WHERE lec.log_event_id = le.id
-                      AND lec.project_id = le.project_id
+            # Pages commit as they go, which keeps the retry contract above
+            # intact rather than weakening it: the stamp is still only written
+            # once the whole walk succeeds, and the predicate is self-consuming
+            # (a backfilled row stops matching), so the retry that follows an
+            # interrupted run resumes where it stopped instead of redoing it.
+            backfilled = batched_rewrite(
+                session,
+                id_query="""
+                    SELECT le.id
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
+                    WHERE le.project_id = :project_id
                       AND lec.context_id = :context_id
-                      AND le.project_id = :project_id
                       AND NOT (le.data ?& CAST(:field_names AS text[]))
-                    """,
-                ),
-                {
+                      AND le.id > :last_id
+                    ORDER BY le.id
+                    LIMIT :batch_size
+                """,
+                apply_query="""
+                    UPDATE log_event
+                    SET data = CAST(:template AS jsonb) || COALESCE(data, '{}'::jsonb),
+                        updated_at = now()
+                    WHERE project_id = :project_id
+                      AND id = ANY(:ids)
+                """,
+                params={
                     "template": template_json,
                     "field_names": pending_backfill_fields,
                     "context_id": context_id,
                     "project_id": project_id,
                 },
             )
-            backfilled_count = result.rowcount or 0
+            backfilled_count = backfilled.rows
 
             field_type_dao.mark_backfilled(
                 project_id=project_id,
@@ -6573,60 +6573,42 @@ def delete_fields(
 
     for field_name in request.fields:
         try:
-            from sqlalchemy import text
-
-            # GCS media: keyset-paginate IDs that hold the field (avoid full ID list)
-            last_id = 0
-            while True:
-                batch = session.execute(
-                    text(
-                        """
-                        SELECT le.id
-                        FROM log_event le
-                        JOIN log_event_context lec
-                          ON lec.log_event_id = le.id
-                         AND lec.project_id = le.project_id
-                        WHERE le.project_id = :project_id
-                          AND lec.context_id = :context_id
-                          AND le.data ? :field_name
-                          AND le.id > :last_id
-                        ORDER BY le.id
-                        LIMIT 5000
-                        """,
-                    ),
-                    {
-                        "project_id": project_id,
-                        "context_id": context_id,
-                        "field_name": field_name,
-                        "last_id": last_id,
-                    },
-                ).fetchall()
-                if not batch:
-                    break
-                event_ids = [row[0] for row in batch]
-                log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
-                last_id = event_ids[-1]
-
-            result = session.execute(
-                text(
-                    """
-                    UPDATE log_event le
-                    SET data = le.data - :field_name
-                    FROM log_event_context lec
+            # One keyset walk drops the media and strips the field per page, so
+            # a context with millions of rows completes in bounded transactions
+            # instead of a single UPDATE that outruns the request deadline.
+            stripped = batched_rewrite(
+                session,
+                id_query="""
+                    SELECT le.id
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
                     WHERE le.project_id = :project_id
-                      AND lec.project_id = :project_id
                       AND lec.context_id = :context_id
-                      AND lec.log_event_id = le.id
                       AND le.data ? :field_name
-                    """,
-                ),
-                {
-                    "field_name": field_name,
+                      AND le.id > :last_id
+                    ORDER BY le.id
+                    LIMIT :batch_size
+                """,
+                apply_query="""
+                    UPDATE log_event
+                    SET data = data - :field_name
+                    WHERE project_id = :project_id
+                      AND id = ANY(:ids)
+                """,
+                params={
                     "project_id": project_id,
                     "context_id": context_id,
+                    "field_name": field_name,
                 },
+                on_batch=lambda ids: log_dao._bulk_delete_gcs_media(
+                    ids,
+                    project_id,
+                    [field_name],
+                ),
             )
-            total_updated_events += int(result.rowcount or 0)
+            total_updated_events += stripped.rows
 
             # Delete field type record
             field_type_dao.delete_field_type(
