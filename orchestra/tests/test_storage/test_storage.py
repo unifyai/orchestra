@@ -39,6 +39,10 @@ def mock_bucket_service(fastapi_app):
     bucket_mock = MagicMock(spec=OriginalBucketService)
     bucket_mock.storage_client = mock_storage_client
     bucket_mock.is_allowed_bucket.return_value = True
+    # Set in BucketService.__init__, so `spec=` does not pick it up. The
+    # signed-URL route compares against it to route recordings to the comms
+    # gateway; without it every signing request raises AttributeError.
+    bucket_mock.call_recordings_bucket_name = "unity-call-recordings"
 
     # Override the dependency - use a factory function
     def get_mock_bucket_service():
@@ -403,3 +407,193 @@ async def test_download_requires_auth(client: AsyncClient):
     )
 
     assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Call-recording delegation
+#
+# Recordings live in the comms project, which this service cannot read. The
+# signing request is proxied to the comms gateway; authorization stays here
+# because the gateway is called with the platform admin key and so cannot see
+# the end user.
+# ─────────────────────────────────────────────────────────────────────────────
+
+RECORDING_URI = "gs://bucket/staging/42/unity_call_abc_2026-07-27.mp3"
+
+
+@pytest.fixture
+def comms_recording_env(monkeypatch):
+    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example.com")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
+
+
+def _comms_response(status_code: int, payload: dict | None = None):
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = payload if payload is not None else {}
+    return response
+
+
+@pytest.mark.anyio
+async def test_recording_signing_is_delegated_to_comms(
+    client: AsyncClient,
+    mock_bucket_service,
+    comms_recording_env,
+    monkeypatch,
+):
+    """The recordings bucket is signed by comms, not locally."""
+    from orchestra.web.api.storage import views as storage_views
+
+    posted = {}
+
+    def fake_post(url, **kwargs):
+        posted["url"] = url
+        posted["json"] = kwargs.get("json")
+        posted["headers"] = kwargs.get("headers")
+        return _comms_response(
+            200,
+            {
+                "signed_url": "https://signed.example.com/a.mp3",
+                "expires_in_minutes": 60,
+            },
+        )
+
+    monkeypatch.setattr(storage_views.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        storage_views,
+        "require_owned_assistant",
+        lambda request, agent_id, session: agent_id,
+    )
+
+    resp = await client.post(
+        "/v0/storage/signed-url",
+        json={"gcs_uri": RECORDING_URI},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["signed_url"] == "https://signed.example.com/a.mp3"
+    assert posted["url"] == "https://comms.example.com/phone/recording-url"
+    assert posted["json"] == {"gcs_uri": RECORDING_URI}
+    assert posted["headers"]["Authorization"] == "Bearer test-admin-key"
+    # Never signed locally: this service has no access to that bucket.
+    mock_bucket_service["blob"].generate_signed_url.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_recording_signing_enforces_assistant_access(
+    client: AsyncClient,
+    mock_bucket_service,
+    comms_recording_env,
+    monkeypatch,
+):
+    """Authorization runs here, keyed on the assistant in the object path."""
+    from fastapi import HTTPException
+
+    from orchestra.web.api.storage import views as storage_views
+
+    seen = {}
+
+    def deny(request, agent_id, session):
+        seen["agent_id"] = agent_id
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+
+    def fail_post(*_args, **_kwargs):
+        raise AssertionError("comms must not be called when access is denied")
+
+    monkeypatch.setattr(storage_views, "require_owned_assistant", deny)
+    monkeypatch.setattr(storage_views.httpx, "post", fail_post)
+
+    resp = await client.post(
+        "/v0/storage/signed-url",
+        json={"gcs_uri": RECORDING_URI},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+    assert seen["agent_id"] == 42
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("comms_status", [403, 404])
+async def test_recording_signing_passes_comms_status_through(
+    client: AsyncClient,
+    mock_bucket_service,
+    comms_recording_env,
+    monkeypatch,
+    comms_status,
+):
+    """404 (never written) and 403 (no access) must stay distinguishable.
+
+    Collapsing them into 500 is what made a failed egress indistinguishable
+    from a broken pipeline.
+    """
+    from orchestra.web.api.storage import views as storage_views
+
+    monkeypatch.setattr(
+        storage_views.httpx,
+        "post",
+        lambda *_a, **_k: _comms_response(comms_status, {"detail": "nope"}),
+    )
+    monkeypatch.setattr(
+        storage_views,
+        "require_owned_assistant",
+        lambda request, agent_id, session: agent_id,
+    )
+
+    resp = await client.post(
+        "/v0/storage/signed-url",
+        json={"gcs_uri": RECORDING_URI},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == comms_status
+
+
+@pytest.mark.anyio
+async def test_recording_signing_rejects_unattributable_path(
+    client: AsyncClient,
+    mock_bucket_service,
+    comms_recording_env,
+    monkeypatch,
+):
+    """Without an assistant segment there is nothing to authorize against."""
+    from orchestra.web.api.storage import views as storage_views
+
+    def fail_post(*_args, **_kwargs):
+        raise AssertionError("comms must not be called for an unattributable path")
+
+    monkeypatch.setattr(storage_views.httpx, "post", fail_post)
+
+    resp = await client.post(
+        "/v0/storage/signed-url",
+        json={"gcs_uri": "gs://bucket/staging/unity__phone_2026.mp3"},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.anyio
+async def test_recording_signing_reports_unconfigured_playback(
+    client: AsyncClient,
+    mock_bucket_service,
+    monkeypatch,
+):
+    """No comms URL configured is a 503, not a signing attempt."""
+    from orchestra.web.api.storage import views as storage_views
+
+    monkeypatch.delenv("UNITY_COMMS_URL", raising=False)
+    monkeypatch.setattr(
+        storage_views,
+        "require_owned_assistant",
+        lambda request, agent_id, session: agent_id,
+    )
+
+    resp = await client.post(
+        "/v0/storage/signed-url",
+        json={"gcs_uri": RECORDING_URI},
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE

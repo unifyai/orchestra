@@ -33,12 +33,12 @@ from orchestra.services.staged_trigger_catalog_service import (
 )
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
-    _build_assistant_tasks_context_name,
     _coerce_bool,
     _coerce_int,
     _replace_log_payload,
     _requires_computer_from_row,
     _requires_filesystem_from_row,
+    resolve_tasks_context_name,
     sync_task_executions_for_task_ids,
 )
 from orchestra.services.task_mutation_contract import (
@@ -496,8 +496,9 @@ class TaskMutationService:
         )
         if project is None:
             raise ValueError("Assistants project not found for assistant owner.")
-        tasks_context_name = _build_assistant_tasks_context_name(
-            user_id=str(assistant.user_id),
+        tasks_context_name = resolve_tasks_context_name(
+            self.session,
+            project.id,
             assistant_id=str(assistant.agent_id),
         )
         context_id = self._context_dao.get_or_create(

@@ -851,6 +851,9 @@ def delete_assistant_task_run_event_context(
 def get_assistant_provider_triggers(
     assistant_id: int,
     backend_id: str | None = None,
+    canonical_app_slug: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     session=Depends(get_db_session),
 ) -> InfoResponse[TriggerCatalogResponse]:
     from orchestra.services.staged_trigger_catalog_service import (
@@ -861,6 +864,9 @@ def get_assistant_provider_triggers(
         session,
         assistant_id=assistant_id,
         backend_id=backend_id,
+        canonical_app_slug=canonical_app_slug,
+        limit=limit,
+        offset=offset,
     )
     return InfoResponse(
         info=TriggerCatalogResponse(
@@ -884,11 +890,17 @@ def get_assistant_provider_triggers(
 def get_task_trigger_catalog(
     assistant_id: int,
     backend_id: str | None = None,
+    canonical_app_slug: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     session=Depends(get_db_session),
 ) -> InfoResponse[TriggerCatalogResponse]:
     return get_assistant_provider_triggers(
         assistant_id=assistant_id,
         backend_id=backend_id,
+        canonical_app_slug=canonical_app_slug,
+        limit=limit,
+        offset=offset,
         session=session,
     )
 

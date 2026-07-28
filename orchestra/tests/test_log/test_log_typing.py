@@ -1360,6 +1360,56 @@ async def test_nested_type_persists_across_logs(client: AsyncClient):
     assert field_types["data"]["data_type"] == "List[int]"
 
 
+@pytest.mark.anyio
+async def test_bare_containers_are_opaque_but_other_container_contracts_remain_strict(
+    client: AsyncClient,
+):
+    """Test bare containers accept opaque JSON without weakening typed fields."""
+    project_name = "test_opaque_container_fields"
+    _ = await _create_project(client, project_name)
+
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "metadata": {"type": "dict", "mutable": True},
+                "tags": {"type": "list", "mutable": True},
+                "scores": {"type": "List[int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "metadata": {
+                "schema": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                "mixed": [1, "two", {"three": True}],
+            },
+            "tags": ["tool", {"nested": [1, None]}],
+            "scores": [1, 2],
+        },
+    )
+    assert response.status_code == 200, response.json()
+
+    for entries in ({"metadata": []}, {"tags": {}}):
+        response = await _create_log(client, project_name, entries=entries)
+        assert response.status_code == 400, response.json()
+        assert "Type mismatch for field" in response.json()["detail"]
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"scores": [1, "two"]},
+    )
+    assert response.status_code == 400, response.json()
+    assert "Type mismatch for field" in response.json()["detail"]
+
+
 # =============================================================================
 # Empty container type compatibility tests
 #

@@ -2249,14 +2249,14 @@ def _coordinator_task_rows(
     )
 
 
-def _coordinator_has_task_with_key(
+def _coordinator_has_task_with_non_null_key(
     session: Session,
     *,
     coordinator: Assistant,
     data_key: str,
     reset_after: datetime | None = None,
 ) -> bool:
-    """True if any Coordinator Tasks row carries ``data_key`` (SQL EXISTS)."""
+    """True if any Coordinator Tasks row has a non-null ``data_key`` (SQL EXISTS)."""
     project = _project_for_coordinator(session, coordinator)
     context_names = _coordinator_tasks_context_names(session, coordinator)
     stmt = (
@@ -2265,6 +2265,7 @@ def _coordinator_has_task_with_key(
         .where(
             Context.name.in_(context_names),
             LogEvent.data.has_key(data_key),
+            LogEvent.data[data_key].astext.is_not(None),
         )
         .limit(1)
     )
@@ -2285,7 +2286,7 @@ def _has_scheduled_task(
     by matching only tasks that carry a ``schedule`` (not a bare ``trigger``),
     so arming a triggerable task never ticks this row.
     """
-    return _coordinator_has_task_with_key(
+    return _coordinator_has_task_with_non_null_key(
         scope.session,
         coordinator=scope.coordinator,
         data_key="schedule",
@@ -2304,7 +2305,7 @@ def _has_triggerable_task(
     that fires on an event. Matches only tasks carrying a ``trigger`` so a
     purely scheduled task never ticks this row.
     """
-    return _coordinator_has_task_with_key(
+    return _coordinator_has_task_with_non_null_key(
         scope.session,
         coordinator=scope.coordinator,
         data_key="trigger",

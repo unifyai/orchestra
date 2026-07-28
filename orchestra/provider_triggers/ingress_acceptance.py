@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
+from orchestra.db.models.orchestra_models import LogEvent
 from orchestra.db.models.provider_trigger_models import (
     EventTriggerBinding,
     EventTriggerSubscriptionGeneration,
@@ -488,11 +489,28 @@ def _accept_matched_delivery(
     )
     received_at = datetime.now(timezone.utc).isoformat()
     acceptance_started_at = datetime.now(timezone.utc)
+    task_row = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == locked_binding.project_id,
+            LogEvent.id == locked_binding.source_task_log_id,
+        )
+        .one_or_none()
+    )
+    task_data: dict[str, Any] = (
+        dict(task_row.data or {}) if task_row is not None else {}
+    )
+    task_name = str(task_data.get("name")) if task_data.get("name") else None
+    task_description = (
+        str(task_data.get("description")) if task_data.get("description") else None
+    )
     run_payload = {
         "run_key": run_key,
         "assistant_id": str(locked_binding.assistant_id),
         "task_id": locked_binding.task_id,
         "source_task_log_id": locked_binding.source_task_log_id,
+        "task_name": task_name,
+        "task_description": task_description,
         "wake": "provider_event",
         "delivery": run_delivery,
         "state": "pending",

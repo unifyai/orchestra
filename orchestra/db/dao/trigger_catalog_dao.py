@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.provider_trigger_catalog_models import (
@@ -117,11 +117,30 @@ class TriggerCatalogDAO:
     def list_candidates_for_snapshot(
         self,
         snapshot_id: int,
+        *,
+        canonical_app_hints: set[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[ProviderTriggerCatalogCandidate]:
-        return list(
-            self.session.scalars(
-                select(ProviderTriggerCatalogCandidate)
-                .where(ProviderTriggerCatalogCandidate.snapshot_id == snapshot_id)
-                .order_by(ProviderTriggerCatalogCandidate.provider_trigger_slug),
-            ),
+        """List one snapshot's candidates, optionally scoped to app hints.
+
+        ``canonical_app_hints`` must be applied before ``limit``/``offset`` so
+        a caller paging one app's rows gets a page window drawn from that
+        app's candidates, not from the whole (unfiltered) snapshot.
+        """
+
+        query = select(ProviderTriggerCatalogCandidate).where(
+            ProviderTriggerCatalogCandidate.snapshot_id == snapshot_id,
         )
+        if canonical_app_hints is not None:
+            query = query.where(
+                func.lower(ProviderTriggerCatalogCandidate.canonical_app_hint).in_(
+                    canonical_app_hints,
+                ),
+            )
+        query = query.order_by(ProviderTriggerCatalogCandidate.provider_trigger_slug)
+        if offset:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))

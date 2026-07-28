@@ -203,8 +203,17 @@ def list_staged_triggers_for_assistant(
     *,
     assistant_id: int,
     backend_id: str | None = None,
+    canonical_app_slug: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """Return staged provider triggers visible for one assistant's connections."""
+    """Return staged provider triggers visible for one assistant's connections.
+
+    ``canonical_app_slug`` narrows results to one app (alias-aware, mirroring
+    the connection-slug matching already used to gate the catalog).
+    ``limit``/``offset`` page the per-backend candidate scan so a caller can
+    avoid pulling every candidate for every connected backend/app at once.
+    """
 
     # heal facade rows on catalog read so OAuth callbacks that only
     # upsert assistant secrets still expose native triggers without a separate
@@ -225,6 +234,15 @@ def list_staged_triggers_for_assistant(
         backend_id=backend_id,
     )
     connected_slug_index = _connected_app_slug_index(connected_apps)
+    requested_app_slug = (canonical_app_slug or "").strip().casefold() or None
+    # Resolve to raw hint variants so the DAO can filter *before* paginating —
+    # candidates only carry the raw ``canonical_app_hint``, not a resolved
+    # canonical slug, so the SQL-level filter has to match on hint variants.
+    requested_app_hints = (
+        {variant.casefold() for variant in slug_variants(requested_app_slug)}
+        if requested_app_slug is not None
+        else None
+    )
 
     catalog_dao = TriggerCatalogDAO(session)
     environment = _catalog_environment()
@@ -248,7 +266,12 @@ def list_staged_triggers_for_assistant(
         )
         if snapshot is None:
             continue
-        for candidate in catalog_dao.list_candidates_for_snapshot(snapshot.id):
+        for candidate in catalog_dao.list_candidates_for_snapshot(
+            snapshot.id,
+            canonical_app_hints=requested_app_hints,
+            limit=limit,
+            offset=offset,
+        ):
             app_hint = (candidate.canonical_app_hint or "").strip().casefold()
             if not app_hint:
                 continue
