@@ -347,3 +347,43 @@ async def test_resolve_requires_the_admin_key(client: AsyncClient, dbsession: Se
         status.HTTP_401_UNAUTHORIZED,
         status.HTTP_403_FORBIDDEN,
     )
+
+
+@pytest.mark.anyio
+async def test_the_owner_can_read_back_their_own_registration(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """The writer needs this to tell its own retry from a token collision.
+
+    Registration answers 409 for both, so without a way to confirm which mapping
+    exists, a collision would be accepted as success and the canvas URL would
+    resolve to somebody else's view.
+    """
+    user = await _user_with_project(client, "canvas_read@test.com", "canvas-read-proj")
+    await _register(client, user, "canvas_rd001", "canvas-read-proj")
+
+    mine = await client.get(
+        "/v0/canvas/tokens/canvas_rd001",
+        headers=user["headers"],
+    )
+
+    assert mine.status_code == status.HTTP_200_OK, mine.text
+    assert mine.json()["context_name"] == "canvas-read-proj/Canvas/Views"
+
+
+@pytest.mark.anyio
+async def test_reading_someone_elses_registration_is_refused(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    user = await _user_with_project(client, "canvas_rdo@test.com", "canvas-rdo-proj")
+    await _register(client, user, "canvas_rdo01", "canvas-rdo-proj")
+    other = await create_test_user(client, "canvas_rdx@test.com")
+
+    resp = await client.get(
+        "/v0/canvas/tokens/canvas_rdo01",
+        headers=other["headers"],
+    )
+
+    assert resp.status_code == status.HTTP_403_FORBIDDEN

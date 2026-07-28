@@ -115,6 +115,37 @@ def _owned_entry(session: Session, token: str, user_id: str):
     return dao, entry
 
 
+@router.get(
+    "/canvas/tokens/{token}",
+    response_model=CanvasTokenResponse,
+    responses={
+        200: {"description": "Token read"},
+        403: {"description": "Not the owner"},
+        404: {"description": "Token not found"},
+    },
+)
+def read_canvas_token(
+    request_fastapi: Request,
+    token: str,
+    session: Session = Depends(get_db_session),
+) -> CanvasTokenResponse:
+    """Read back one of the caller's own token registrations.
+
+    Exists so the writer can tell its own retry from a genuine token collision:
+    registration answers 409 for both, and treating the second as success would
+    leave a canvas URL resolving to somebody else's view. Owner-scoped rather than
+    admin, because confirming your own registration needs no wider reach.
+    """
+    _, entry = _owned_entry(session, token, request_fastapi.state.user_id)
+
+    return CanvasTokenResponse(
+        token=entry.token,
+        context_name=entry.context_name,
+        visibility=entry.visibility,
+        status=entry.status,
+    )
+
+
 @router.post(
     "/canvas/tokens",
     response_model=CanvasTokenResponse,
