@@ -16,15 +16,24 @@ if ! [[ -f .pre-commit-config.yaml ]]; then
   exit 0
 fi
 
+# Prefer the repo's locked Python so language:system hooks (black, custom
+# scripts) do not pick up an older Homebrew/system interpreter.
+if command -v uv >/dev/null 2>&1 && [[ -f uv.lock ]]; then
+  UV_PY="$(uv python find 3.12 2>/dev/null || uv python find 2>/dev/null || true)"
+  if [[ -n "${UV_PY}" ]]; then
+    export PATH="$(dirname "${UV_PY}"):${PATH}"
+  fi
+fi
+
 run_pre_commit() {
-  if command -v pre-commit >/dev/null 2>&1; then
-    exec pre-commit "$@"
+  if [[ -f uv.lock ]] && command -v uv >/dev/null 2>&1; then
+    exec uv run --with pre-commit pre-commit "$@"
   fi
   if [[ -x .venv/bin/pre-commit ]]; then
     exec .venv/bin/pre-commit "$@"
   fi
-  if command -v uv >/dev/null 2>&1; then
-    exec uv run --with pre-commit pre-commit "$@"
+  if command -v pre-commit >/dev/null 2>&1; then
+    exec pre-commit "$@"
   fi
   if command -v poetry >/dev/null 2>&1; then
     exec poetry run pre-commit "$@"
