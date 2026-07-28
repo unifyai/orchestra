@@ -35,15 +35,19 @@ def test_build_cleanup_spec_from_assistant_persists_external_ip_region() -> None
 async def test_release_assistant_external_ip_uses_persisted_region_without_db_row() -> (
     None
 ):
-    with patch(
-        "orchestra.services.assistant_external_ip_service.assistant_infra._comms_url",
-        return_value="https://comms.example",
-    ), patch(
-        "orchestra.services.assistant_external_ip_service.assistant_infra.ADMIN_KEY",
-        "admin-key",
-    ), patch(
-        "orchestra.services.assistant_external_ip_service.get_async_client",
-    ) as mock_client_factory:
+    with (
+        patch(
+            "orchestra.services.assistant_external_ip_service.assistant_infra._comms_url",
+            return_value="https://comms.example",
+        ),
+        patch(
+            "orchestra.services.assistant_external_ip_service.assistant_infra.ADMIN_KEY",
+            "admin-key",
+        ),
+        patch(
+            "orchestra.services.assistant_external_ip_service.get_async_client",
+        ) as mock_client_factory,
+    ):
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.json.return_value = {"released": True}

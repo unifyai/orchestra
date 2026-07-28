@@ -315,13 +315,17 @@ async def test_self_service_delete_cleans_org_assistant_runtime_and_contacts(
     )
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
-    ) as mock_enqueue_cleanup, patch(
-        "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
-    ) as mock_run_cleanup, patch(
-        "orchestra.services.bucket_service.create_bucket_service",
-    ) as mock_create_bucket:
+    with (
+        patch(
+            "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
+        ) as mock_enqueue_cleanup,
+        patch(
+            "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
+        ) as mock_run_cleanup,
+        patch(
+            "orchestra.services.bucket_service.create_bucket_service",
+        ) as mock_create_bucket,
+    ):
         mock_enqueue_cleanup.return_value = [SimpleNamespace(id=901)]
         mock_bucket = MagicMock()
         mock_create_bucket.return_value = mock_bucket
@@ -388,17 +392,22 @@ async def test_self_service_delete_schedules_background_runtime_cleanup(
     user = await create_test_user(client, email)
     user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
-    with patch(
-        "orchestra.services.user_account_cleanup_service.UserAccountCleanupService._get_user_assistant_cleanup_specs",
-        return_value=[AssistantCleanupSpec(assistant_id=321)],
-    ), patch(
-        "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
-        return_value=[SimpleNamespace(id=1234)],
-    ), patch(
-        "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
-    ) as mock_run_cleanup, patch(
-        "orchestra.services.bucket_service.create_bucket_service",
-    ) as mock_create_bucket:
+    with (
+        patch(
+            "orchestra.services.user_account_cleanup_service.UserAccountCleanupService._get_user_assistant_cleanup_specs",
+            return_value=[AssistantCleanupSpec(assistant_id=321)],
+        ),
+        patch(
+            "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
+            return_value=[SimpleNamespace(id=1234)],
+        ),
+        patch(
+            "orchestra.web.api.users.views.run_user_runtime_cleanup_tasks",
+        ) as mock_run_cleanup,
+        patch(
+            "orchestra.services.bucket_service.create_bucket_service",
+        ) as mock_create_bucket,
+    ):
         mock_bucket = MagicMock()
         mock_create_bucket.return_value = mock_bucket
         mock_bucket.delete_all_assistant_data.return_value = {

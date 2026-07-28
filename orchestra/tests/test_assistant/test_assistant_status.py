@@ -34,42 +34,56 @@ def _mock_response(status_code: int, json_data: dict) -> MagicMock:
 
 
 def test_comms_url_prefers_configured_unity_gateway_urls():
-    with patch.object(assistant_infra, "COMMS_URL", None), patch.object(
-        assistant_infra,
-        "COMMUNICATION_URL",
-        None,
-    ), patch.object(assistant_infra, "COMMS_URL_LEGACY", None), patch.object(
-        assistant_infra,
-        "LOCAL_ADAPTERS_URL",
-        "http://127.0.0.1:8001/",
-    ), patch.object(
-        assistant_infra,
-        "UNITY_GATEWAY_URL",
-        "http://127.0.0.1:9001",
+    with (
+        patch.object(assistant_infra, "COMMS_URL", None),
+        patch.object(
+            assistant_infra,
+            "COMMUNICATION_URL",
+            None,
+        ),
+        patch.object(assistant_infra, "COMMS_URL_LEGACY", None),
+        patch.object(
+            assistant_infra,
+            "LOCAL_ADAPTERS_URL",
+            "http://127.0.0.1:8001/",
+        ),
+        patch.object(
+            assistant_infra,
+            "UNITY_GATEWAY_URL",
+            "http://127.0.0.1:9001",
+        ),
     ):
         assert assistant_infra._comms_url() == "http://127.0.0.1:8001"
 
 
 def test_adapters_url_falls_back_to_local_comms_url():
-    with patch.object(assistant_infra, "ADAPTERS_URL", None), patch.object(
-        assistant_infra,
-        "COMMS_URL",
-        None,
-    ), patch.object(assistant_infra, "COMMUNICATION_URL", None), patch.object(
-        assistant_infra,
-        "COMMS_URL_LEGACY",
-        None,
-    ), patch.object(
-        assistant_infra,
-        "LOCAL_ADAPTERS_URL",
-        None,
-    ), patch.object(
-        assistant_infra,
-        "UNITY_GATEWAY_URL",
-        None,
-    ), patch.dict(
-        "os.environ",
-        {"ORCHESTRA_URL": "http://127.0.0.1:8000/v0"},
+    with (
+        patch.object(assistant_infra, "ADAPTERS_URL", None),
+        patch.object(
+            assistant_infra,
+            "COMMS_URL",
+            None,
+        ),
+        patch.object(assistant_infra, "COMMUNICATION_URL", None),
+        patch.object(
+            assistant_infra,
+            "COMMS_URL_LEGACY",
+            None,
+        ),
+        patch.object(
+            assistant_infra,
+            "LOCAL_ADAPTERS_URL",
+            None,
+        ),
+        patch.object(
+            assistant_infra,
+            "UNITY_GATEWAY_URL",
+            None,
+        ),
+        patch.dict(
+            "os.environ",
+            {"ORCHESTRA_URL": "http://127.0.0.1:8000/v0"},
+        ),
     ):
         assert assistant_infra._adapters_url() == "http://127.0.0.1:8001"
 
@@ -92,12 +106,16 @@ async def test_get_running_jobs_returns_running_job_names():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_running_jobs("abc")
 
@@ -133,12 +151,16 @@ async def test_get_running_jobs_filters_out_completed_jobs():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_running_jobs("abc")
 
@@ -151,12 +173,16 @@ async def test_get_running_jobs_empty_jobs_list():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_running_jobs("abc")
 
@@ -169,12 +195,16 @@ async def test_get_running_jobs_comms_returns_500():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_running_jobs("abc")
 
@@ -186,12 +216,16 @@ async def test_get_running_jobs_comms_unreachable():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_running_jobs("abc")
 
@@ -200,9 +234,12 @@ async def test_get_running_jobs_comms_unreachable():
 
 @pytest.mark.anyio
 async def test_get_running_jobs_no_comms_url():
-    with patch("orchestra.web.api.utils.assistant_infra.COMMS_URL", None), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch("orchestra.web.api.utils.assistant_infra.COMMS_URL", None),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_running_jobs("abc")
 
@@ -211,10 +248,13 @@ async def test_get_running_jobs_no_comms_url():
 
 @pytest.mark.anyio
 async def test_get_running_jobs_no_admin_key():
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch("orchestra.web.api.utils.assistant_infra.ADMIN_KEY", None):
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch("orchestra.web.api.utils.assistant_infra.ADMIN_KEY", None),
+    ):
         result = await get_running_jobs("abc")
 
     assert result == []
@@ -227,12 +267,16 @@ async def test_get_running_jobs_normalizes_assistant_id():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         await get_running_jobs("ABC_DEF_123")
 
@@ -254,12 +298,16 @@ async def test_get_runtime_status_returns_payload():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_resp)
 
-    with patch(_GET_CLIENT_PATH, return_value=mock_client), patch(
-        "orchestra.web.api.utils.assistant_infra.COMMS_URL",
-        "http://comms:8000",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
-        "test-key",
+    with (
+        patch(_GET_CLIENT_PATH, return_value=mock_client),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.COMMS_URL",
+            "http://comms:8000",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.ADMIN_KEY",
+            "test-key",
+        ),
     ):
         result = await get_runtime_status("abc")
 
@@ -283,18 +331,23 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_cleanup_tasks, patch(
-        "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_cleanup_tasks,
+        patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings,
+    ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_cleanup_tasks.return_value = {

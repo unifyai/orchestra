@@ -62,16 +62,20 @@ def enable_billing_charges(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_managed_desktop_reawaken():
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
-        new_callable=AsyncMock,
-    ) as mock_stop_runtime, patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up:
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+            new_callable=AsyncMock,
+        ) as mock_stop_runtime,
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+    ):
         mock_reawaken.return_value = None
         mock_stop_runtime.return_value = {"success": True, "skipped": False}
         mock_wake_up.return_value = type("Resp", (), {"status_code": 200})()

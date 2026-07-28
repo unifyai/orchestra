@@ -22,26 +22,34 @@ def mock_infra_and_bucket(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_assistant_cleanup, patch(
-        "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings, patch(
-        "orchestra.web.api.organization.views.delete_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_delete_topic, patch(
-        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.create_bucket_service",
-    ) as mock_bucket_cls:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_assistant_cleanup,
+        patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings,
+        patch(
+            "orchestra.web.api.organization.views.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_topic,
+        patch(
+            "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_org_cleanup,
+        patch(
+            "orchestra.web.api.organization.views.create_bucket_service",
+        ) as mock_bucket_cls,
+    ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_assistant_cleanup.return_value = {
@@ -181,13 +189,16 @@ async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
     )
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.delete_phone_number",
-        new_callable=AsyncMock,
-    ) as mock_delete_phone, patch(
-        "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
-        return_value=1,
-    ) as mock_delete_routes:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.delete_phone_number",
+            new_callable=AsyncMock,
+        ) as mock_delete_phone,
+        patch(
+            "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
+            return_value=1,
+        ) as mock_delete_routes,
+    ):
         del_resp = await client.delete(
             f"/v0/organizations/{org_id}",
             headers=owner["headers"],

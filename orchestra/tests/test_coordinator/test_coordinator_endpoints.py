@@ -2643,12 +2643,15 @@ async def test_coordinator_wakeup_endpoint(client: AsyncClient) -> None:
     # The endpoint reports ``attempted`` based on a hosted comms backend being
     # configured; CI has no COMMS_URL, so model the hosted environment the same
     # way test_assistant_infra.py does.
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_coordinator_best_effort",
-        new=AsyncMock(),
-    ) as wake, patch(
-        "orchestra.web.api.assistant.views.comms_explicitly_configured",
-        return_value=True,
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_coordinator_best_effort",
+            new=AsyncMock(),
+        ) as wake,
+        patch(
+            "orchestra.web.api.assistant.views.comms_explicitly_configured",
+            return_value=True,
+        ),
     ):
         response = await client.post(
             f"/v0/assistant/{coordinator_id}/wakeup",

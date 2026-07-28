@@ -17,25 +17,32 @@ from orchestra.web.api.utils import assistant_infra
 
 @pytest.mark.anyio
 async def test_teardown_assistant_runtime_reports_incomplete_steps():
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
-        new_callable=AsyncMock,
-    ) as mock_stop_session, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
-        new_callable=AsyncMock,
-    ) as mock_delete_session, patch(
-        "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
-        new_callable=AsyncMock,
-    ) as mock_wait_for_runtime_cleanup, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_delete_topic, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
-        new_callable=AsyncMock,
-    ) as mock_delete_disk, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
-        new_callable=AsyncMock,
-    ) as mock_delete_archive:
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+            new_callable=AsyncMock,
+        ) as mock_stop_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
+            new_callable=AsyncMock,
+        ) as mock_delete_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
+            new_callable=AsyncMock,
+        ) as mock_wait_for_runtime_cleanup,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_topic,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
+            new_callable=AsyncMock,
+        ) as mock_delete_disk,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+            new_callable=AsyncMock,
+        ) as mock_delete_archive,
+    ):
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -73,13 +80,17 @@ async def test_teardown_assistant_runtime_reports_incomplete_steps():
 
 
 def test_teardown_assistant_runtime_sync_reports_incomplete_steps():
-    with patch.object(assistant_infra, "COMMS_URL", "https://comms.test"), patch.object(
-        assistant_infra,
-        "ADMIN_KEY",
-        "test-key",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra._request_cleanup_step_sync",
-    ) as mock_request_step:
+    with (
+        patch.object(assistant_infra, "COMMS_URL", "https://comms.test"),
+        patch.object(
+            assistant_infra,
+            "ADMIN_KEY",
+            "test-key",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra._request_cleanup_step_sync",
+        ) as mock_request_step,
+    ):
 
         def _step(*, name, **_kwargs):
             if name == "stop_assistant_session_runtime":
@@ -119,25 +130,32 @@ def test_teardown_assistant_runtime_sync_reports_incomplete_steps():
 
 @pytest.mark.anyio
 async def test_teardown_assistant_runtime_handles_missing_session_after_cleanup():
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
-        new_callable=AsyncMock,
-    ) as mock_stop_session, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
-        new_callable=AsyncMock,
-    ) as mock_delete_session, patch(
-        "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
-        new_callable=AsyncMock,
-    ) as mock_wait_for_runtime_cleanup, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_delete_topic, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
-        new_callable=AsyncMock,
-    ) as mock_delete_disk, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
-        new_callable=AsyncMock,
-    ) as mock_delete_archive:
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+            new_callable=AsyncMock,
+        ) as mock_stop_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
+            new_callable=AsyncMock,
+        ) as mock_delete_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
+            new_callable=AsyncMock,
+        ) as mock_wait_for_runtime_cleanup,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_topic,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
+            new_callable=AsyncMock,
+        ) as mock_delete_disk,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+            new_callable=AsyncMock,
+        ) as mock_delete_archive,
+    ):
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -205,25 +223,32 @@ async def test_wait_for_runtime_cleanup_skips_when_runtime_status_reports_missin
 
 @pytest.mark.anyio
 async def test_teardown_assistant_runtime_skips_wait_when_stop_step_missing_comms():
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
-        new_callable=AsyncMock,
-    ) as mock_stop_session, patch(
-        "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
-        new_callable=AsyncMock,
-    ) as mock_wait_for_runtime_cleanup, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
-        new_callable=AsyncMock,
-    ) as mock_delete_session, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_delete_topic, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
-        new_callable=AsyncMock,
-    ) as mock_delete_disk, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
-        new_callable=AsyncMock,
-    ) as mock_delete_archive:
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+            new_callable=AsyncMock,
+        ) as mock_stop_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
+            new_callable=AsyncMock,
+        ) as mock_wait_for_runtime_cleanup,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
+            new_callable=AsyncMock,
+        ) as mock_delete_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_topic,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
+            new_callable=AsyncMock,
+        ) as mock_delete_disk,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+            new_callable=AsyncMock,
+        ) as mock_delete_archive,
+    ):
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -296,13 +321,16 @@ async def test_process_assistant_cleanup_tasks_retries_incomplete_runtime(dbsess
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_teardown.return_value = {
             "success": False,
             "assistant_id": "42",
@@ -348,13 +376,16 @@ async def test_process_assistant_cleanup_tasks_with_task_ids_ignores_retry_backo
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_teardown.return_value = {
             "success": True,
             "assistant_id": "43",
@@ -394,13 +425,16 @@ async def test_process_assistant_cleanup_tasks_with_assistant_id_ignores_retry_b
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_teardown.return_value = {
             "success": True,
             "assistant_id": "143",
@@ -443,13 +477,16 @@ async def test_process_assistant_cleanup_tasks_without_task_ids_respects_retry_b
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         result = await process_assistant_cleanup_tasks(dbsession)
 
     dbsession.expire_all()
@@ -474,13 +511,16 @@ async def test_process_assistant_cleanup_tasks_skips_fresh_processing(dbsession)
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         result = await process_assistant_cleanup_tasks(dbsession, task_ids=[task.id])
 
     dbsession.expire_all()
@@ -507,13 +547,16 @@ async def test_process_assistant_cleanup_tasks_reclaims_stale_processing(dbsessi
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_teardown.return_value = {
             "success": True,
             "assistant_id": "46",
@@ -563,14 +606,17 @@ async def test_process_assistant_cleanup_tasks_commits_claim_before_teardown(
             "errors": [],
         }
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-        side_effect=_assert_claimed_then_succeed,
-    ), patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+            side_effect=_assert_claimed_then_succeed,
+        ),
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_deprovision.return_value = {
             "success": True,
             "attempted": 0,
@@ -601,13 +647,16 @@ async def test_process_assistant_cleanup_tasks_filters_by_assistant_id(dbsession
     dbsession.add_all([keep, skip])
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_teardown.return_value = {
             "success": True,
             "assistant_id": "48",
@@ -634,28 +683,36 @@ async def test_process_assistant_cleanup_tasks_filters_by_assistant_id(dbsession
 
 @pytest.mark.anyio
 async def test_teardown_assistant_runtime_runs_sessionless_fallback_when_stop_is_not_found():
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
-        new_callable=AsyncMock,
-    ) as mock_stop_session, patch(
-        "orchestra.web.api.utils.assistant_infra._cleanup_sessionless_runtime",
-        new_callable=AsyncMock,
-    ) as mock_sessionless_fallback, patch(
-        "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
-        new_callable=AsyncMock,
-    ) as mock_wait_for_runtime_cleanup, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
-        new_callable=AsyncMock,
-    ) as mock_delete_session, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_delete_topic, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
-        new_callable=AsyncMock,
-    ) as mock_delete_disk, patch(
-        "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
-        new_callable=AsyncMock,
-    ) as mock_delete_archive:
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.stop_assistant_session_runtime",
+            new_callable=AsyncMock,
+        ) as mock_stop_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra._cleanup_sessionless_runtime",
+            new_callable=AsyncMock,
+        ) as mock_sessionless_fallback,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.wait_for_runtime_cleanup",
+            new_callable=AsyncMock,
+        ) as mock_wait_for_runtime_cleanup,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_session",
+            new_callable=AsyncMock,
+        ) as mock_delete_session,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_delete_topic,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_disk",
+            new_callable=AsyncMock,
+        ) as mock_delete_disk,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.delete_assistant_pool_archive",
+            new_callable=AsyncMock,
+        ) as mock_delete_archive,
+    ):
         mock_stop_session.return_value = {
             "name": "stop_assistant_session_runtime",
             "success": True,
@@ -715,16 +772,20 @@ async def test_cleanup_sessionless_runtime_uses_binding_scoped_vm_release():
         "other_owned_vms": [{"binding_id": "binding-2", "vm_name": "vm-2"}],
         "disk_vm_name": "vm-1",
     }
-    with patch(
-        "orchestra.web.api.utils.assistant_infra._request_cleanup_step",
-        new_callable=AsyncMock,
-    ) as mock_request_step, patch(
-        "orchestra.web.api.utils.assistant_infra.stop_jobs",
-        new_callable=AsyncMock,
-    ) as mock_stop_jobs, patch(
-        "orchestra.web.api.utils.assistant_infra.release_pool_vm",
-        new_callable=AsyncMock,
-    ) as mock_release_pool_vm:
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra._request_cleanup_step",
+            new_callable=AsyncMock,
+        ) as mock_request_step,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.stop_jobs",
+            new_callable=AsyncMock,
+        ) as mock_stop_jobs,
+        patch(
+            "orchestra.web.api.utils.assistant_infra.release_pool_vm",
+            new_callable=AsyncMock,
+        ) as mock_release_pool_vm,
+    ):
         mock_request_step.return_value = {
             "name": "runtime_status",
             "success": True,
@@ -756,17 +817,23 @@ async def test_cleanup_sessionless_runtime_uses_binding_scoped_vm_release():
 
 
 def test_teardown_assistant_runtime_sync_runs_sessionless_fallback_when_stop_is_not_found():
-    with patch.object(assistant_infra, "COMMS_URL", "https://comms.test"), patch.object(
-        assistant_infra,
-        "ADMIN_KEY",
-        "test-key",
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra._request_cleanup_step_sync",
-    ) as mock_request_step, patch(
-        "orchestra.web.api.utils.assistant_infra._wait_for_runtime_cleanup_sync",
-    ) as mock_wait_for_runtime_cleanup, patch(
-        "orchestra.web.api.utils.assistant_infra._cleanup_sessionless_runtime_sync",
-    ) as mock_sessionless_fallback:
+    with (
+        patch.object(assistant_infra, "COMMS_URL", "https://comms.test"),
+        patch.object(
+            assistant_infra,
+            "ADMIN_KEY",
+            "test-key",
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra._request_cleanup_step_sync",
+        ) as mock_request_step,
+        patch(
+            "orchestra.web.api.utils.assistant_infra._wait_for_runtime_cleanup_sync",
+        ) as mock_wait_for_runtime_cleanup,
+        patch(
+            "orchestra.web.api.utils.assistant_infra._cleanup_sessionless_runtime_sync",
+        ) as mock_sessionless_fallback,
+    ):
 
         def _step(*, name, **_kwargs):
             if name == "stop_assistant_session_runtime":
@@ -830,17 +897,22 @@ async def test_process_assistant_cleanup_tasks_deletes_assistant_gcs_after_runti
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.create_bucket_service",
-    ) as mock_bucket_cls, patch(
-        "orchestra.services.assistant_cleanup_service.settings",
-    ) as mock_settings:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+        patch(
+            "orchestra.services.assistant_cleanup_service.create_bucket_service",
+        ) as mock_bucket_cls,
+        patch(
+            "orchestra.services.assistant_cleanup_service.settings",
+        ) as mock_settings,
+    ):
         mock_teardown.return_value = {
             "success": True,
             "assistant_id": "45",
@@ -898,15 +970,19 @@ async def test_process_assistant_cleanup_tasks_defers_gcs_until_runtime_is_clean
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.create_bucket_service",
-    ) as mock_bucket_cls:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+        patch(
+            "orchestra.services.assistant_cleanup_service.create_bucket_service",
+        ) as mock_bucket_cls,
+    ):
         mock_teardown.return_value = {
             "success": False,
             "assistant_id": "46",
@@ -963,11 +1039,14 @@ async def test_deprovision_assistant_contacts_skips_external_calls_for_byod(
         ],
     )
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.delete_phone_number",
-        new_callable=AsyncMock,
-    ) as mock_del_phone, patch(
-        "orchestra.db.dao.assistant_secret_dao.AssistantSecretDAO.delete_all",
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.delete_phone_number",
+            new_callable=AsyncMock,
+        ) as mock_del_phone,
+        patch(
+            "orchestra.db.dao.assistant_secret_dao.AssistantSecretDAO.delete_all",
+        ),
     ):
         result = await deprovision_assistant_contacts(
             dbsession,
@@ -1183,13 +1262,16 @@ async def test_process_cleanup_retries_then_fails(dbsession):
     dbsession.add(task)
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+    ):
         mock_teardown.return_value = {
             "success": False,
             "steps": {},
@@ -1270,11 +1352,14 @@ def test_context_delete_chunks_large_log_id_lookups(dbsession):
     mock_bucket.bucket_name = bucket_name
 
     # Chunk size of 2 forces the 5 logs across 3 chunks in every IN-lookup.
-    with patch.object(
-        led_module.LogEventDAO,
-        "bucket_service_factory",
-        lambda: mock_bucket,
-    ), patch.object(led_module, "_LOG_ID_IN_CHUNK", 2):
+    with (
+        patch.object(
+            led_module.LogEventDAO,
+            "bucket_service_factory",
+            lambda: mock_bucket,
+        ),
+        patch.object(led_module, "_LOG_ID_IN_CHUNK", 2),
+    ):
         ContextDAO(dbsession).delete(context_id)
 
     # Every log across all chunks was scanned and its media deleted.
