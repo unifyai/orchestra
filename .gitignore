@@ -75,6 +75,7 @@ cover/
 # the migrations/versions directory so future SQL companions ship too.
 !orchestra/db/migrations/versions/*.sql
 *.txt
+!.agents/shared.txt
 *.json
 !.cursor/worktrees.json
 !orchestra/tests/fixtures/provider_trigger_contract/*.json
