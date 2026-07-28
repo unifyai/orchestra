@@ -27,8 +27,11 @@ owner and verifies the hash before handing the bytes to the frame. An endpoint
 serving bundle bytes would be a second, weaker path to the same data.
 """
 
+import hashlib
 import json
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -38,10 +41,14 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.canvas_token_dao import CanvasTokenDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.canvas.schema import (
+    CanvasActionDescriptor,
+    CanvasActionsResponse,
+    CanvasInvocationResponse,
     CanvasQueryRequest,
     CanvasQueryResponse,
     CanvasTokenResolutionResponse,
     CanvasTokenResponse,
+    InvokeCanvasActionRequest,
     RegisterCanvasTokenRequest,
     UpdateCanvasTokenRequest,
 )
@@ -663,3 +670,493 @@ def admin_canvas_query(
         )
 
     return CanvasQueryResponse(alias=body.alias, rows=rows, truncated=truncated)
+
+
+# ===========================================================================
+# Write plane
+# ===========================================================================
+
+# Canvas contexts live at `{user}/{assistant}/Canvas/*`, which is the only place
+# the owning assistant is recorded for a canvas. Derived rather than accepted from
+# the caller: the assistant that runs the work has to be the one the canvas
+# actually belongs to.
+_CANVAS_CONTEXT = re.compile(r"(?:^|/)(?P<assistant>[^/]+)/Canvas/[A-Za-z]+$")
+
+
+def _assistant_id(entry) -> int:
+    """The assistant that owns this canvas, from its context path."""
+    match = _CANVAS_CONTEXT.search(entry.context_name or "")
+    if not match:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Canvas context {entry.context_name!r} does not name an assistant; "
+                "cannot dispatch an action."
+            ),
+        )
+    raw = match.group("assistant")
+    if not raw.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Canvas context {entry.context_name!r} has a non-numeric assistant.",
+        )
+    return int(raw)
+
+
+def _sibling_context(entry, table: str) -> str:
+    """A sibling `Canvas/*` context of the one the token points at."""
+    return re.sub(r"Canvas/[A-Za-z]+$", f"Canvas/{table}", entry.context_name)
+
+
+def _action_row(entry, token: str, action_name: str, session: Session) -> dict:
+    """Load one declared action from the canvas's own action rows.
+
+    The dispatch target comes from here and nowhere else. An action the canvas
+    never declared is a 404 rather than a silent no-op, so an author whose control
+    and declaration disagree finds out.
+    """
+    rows, _ = _rows_from(
+        entry=entry,
+        context=_sibling_context(entry, "Actions"),
+        filter_expr=f"canvas_token == '{token}' and action_name == '{action_name}'",
+        limit=1,
+        offset=0,
+        session=session,
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Canvas declares no action named '{action_name}'",
+        )
+    return rows[0]
+
+
+def _validate_args(action: dict, args: dict) -> None:
+    """Re-validate arguments against the schema stored at author time.
+
+    This is the control. The frame validates too, but it is untrusted, so that
+    copy is a usability feature and this one decides. Bounds were made mandatory
+    when the action was declared precisely so they are enforceable here.
+    """
+    payload = action.get("input_schema_json")
+    if not payload:
+        # An action declared without a schema takes no arguments; accepting some
+        # anyway would let a caller smuggle a payload past a validation step that
+        # does not exist.
+        if args:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This action takes no arguments.",
+            )
+        return
+
+    try:
+        schema = json.loads(payload)
+    except (TypeError, ValueError):
+        logger.error(
+            "Canvas action %s has unreadable input_schema_json",
+            action.get("action_name"),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="This action's input schema is unreadable.",
+        )
+
+    import jsonschema
+
+    try:
+        jsonschema.validate(instance=args, schema=schema)
+    except jsonschema.ValidationError as error:
+        # The message names the offending field and bound, which is what lets the
+        # canvas tell the viewer what to fix rather than that something failed.
+        path = ".".join(str(part) for part in error.absolute_path) or "arguments"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{path}: {error.message}",
+        )
+    except jsonschema.SchemaError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"This action's input schema is invalid: {error.message}",
+        )
+
+
+# How long identical arguments are treated as one intent. Long enough to absorb a
+# double-click, a retry after a dropped response and a reconnect; short enough that
+# sending the same reminder again later is a new run rather than a silent no-op.
+DEDUP_WINDOW_SECONDS = 300
+
+
+def _derive_run_key(token: str, action_name: str, args: dict) -> str:
+    """Idempotency key for one logical run.
+
+    Hashes the canvas, the action, the arguments and a coarse time bucket. Without
+    the bucket, identical arguments would collapse *forever* — "send that reminder
+    again tomorrow" would return yesterday's run and send nothing, which is a worse
+    failure than the occasional missed deduplication when two clicks straddle a
+    bucket boundary.
+
+    Console can send its own key to make a retry after a dropped response land on
+    the same run even across a boundary.
+    """
+    canonical = json.dumps(args, sort_keys=True, separators=(",", ":"))
+    bucket = int(datetime.now(timezone.utc).timestamp()) // DEDUP_WINDOW_SECONDS
+    digest = hashlib.sha256(
+        f"{token}|{action_name}|{canonical}|{bucket}".encode(),
+    ).hexdigest()
+    return digest[:32]
+
+
+def _existing_invocation(
+    entry,
+    token: str,
+    run_key: str,
+    session: Session,
+) -> Optional[dict]:
+    """A run already recorded under this idempotency key, if any."""
+    rows, _ = _rows_from(
+        entry=entry,
+        context=_sibling_context(entry, "Invocations"),
+        filter_expr=f"canvas_token == '{token}' and run_key == '{run_key}'",
+        limit=1,
+        offset=0,
+        session=session,
+    )
+    return rows[0] if rows else None
+
+
+def _recent_invocation_count(
+    entry,
+    token: str,
+    action_name: str,
+    user_id: str,
+    session: Session,
+) -> int:
+    """How many times this viewer has run this action in the last hour."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    rows, total = _rows_from(
+        entry=entry,
+        context=_sibling_context(entry, "Invocations"),
+        filter_expr=(
+            f"canvas_token == '{token}' and action_name == '{action_name}' "
+            f"and requested_by_user_id == '{user_id}' and created_at > '{since}'"
+        ),
+        limit=1000,
+        offset=0,
+        session=session,
+    )
+    return max(total, len(rows))
+
+
+def _insert_invocation(entry, values: dict, *, session: Session) -> dict:
+    """Persist one invocation row and read it back.
+
+    Read back rather than returned from the insert because ``invocation_id`` is
+    auto-counted by the context, so the value the caller needs is assigned during
+    the write. Reading it back also confirms the row landed, which matters here:
+    everything downstream — dispatch, polling, the audit trail — keys off this row
+    existing.
+    """
+    from orchestra.db.dao.log_event_dao import LogEventDAO
+    from orchestra.web.api.log.schema import CreateLogConfig
+    from orchestra.web.api.log.utils.logging_utils import create_logs_internal
+
+    project_dao, field_type_dao, context_dao = _bridge_daos(session)
+    context_name = _sibling_context(entry, "Invocations")
+
+    context_rows = context_dao.filter(name=context_name, project_id=entry.project_id)
+    if not context_rows:
+        # Provisioned by the assistant runtime, never invented here: a context
+        # created on this path would lack the auto-counting and uniqueness the
+        # invocation model depends on.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Context '{context_name}' does not exist; the canvas cannot record actions.",
+        )
+
+    create_logs_internal(
+        request=CreateLogConfig(
+            project_name=entry.project.name,
+            context=context_name,
+            entries=values,
+        ),
+        project_id=entry.project_id,
+        context_id=context_rows[0][0].id,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        log_event_dao=LogEventDAO(session),
+        context_dao=context_dao,
+        context_obj=context_rows[0][0],
+    )
+    session.commit()
+
+    rows, _ = _rows_from(
+        entry=entry,
+        context=context_name,
+        filter_expr=f"run_key == '{values['run_key']}'",
+        limit=1,
+        offset=0,
+        session=session,
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The invocation was written but could not be read back.",
+        )
+
+    written = rows[0]
+    if written.get("invocation_id") is None:
+        # The context exists but was not provisioned with an auto-counted
+        # `invocation_id`, so nothing downstream could address this run. Saying so
+        # beats a KeyError surfacing as an opaque 500.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Context '{context_name}' has no auto-counted invocation_id; "
+                "the canvas cannot record actions."
+            ),
+        )
+    return written
+
+
+async def _wake_assistant(entry, invocation_id: int, action_name: str) -> None:
+    """Hand the invocation to the assistant that owns the canvas.
+
+    One event, not three dispatch lanes. Orchestra cannot run a stored function —
+    functions live in unify — so splitting `function`, `task` and `assistant`
+    dispatch here would put two of the three in the wrong process and duplicate
+    machinery the assistant already has. The invocation row is the durable request;
+    this only says one exists, carrying an id and nothing else.
+
+    A dispatch failure is logged rather than raised. The row is already written, so
+    the run is recoverable by retry or by a sweep; failing the request after
+    persisting it would tell the viewer nothing happened when something did.
+    """
+    from orchestra.web.api.tasks.views import ADAPTERS_URL, ADMIN_KEY, get_async_client
+
+    if not ADAPTERS_URL:
+        logger.warning(
+            "UNITY_ADAPTERS_URL not set; canvas invocation %s recorded but not dispatched",
+            invocation_id,
+        )
+        return
+
+    try:
+        client = get_async_client()
+        response = await client.post(
+            f"{ADAPTERS_URL}/unity/system-event",
+            headers={
+                "Authorization": f"Bearer {ADMIN_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "assistant_id": _assistant_id(entry),
+                "event_type": "canvas_invocation",
+                "message": f"Canvas action '{action_name}' was triggered by a viewer.",
+                "extra_event_fields": {
+                    "type": "canvas_invocation",
+                    "canvas_token": entry.token,
+                    "invocation_id": invocation_id,
+                    "action_name": action_name,
+                },
+            },
+            timeout=30,
+        )
+        if response.status_code != 200:
+            logger.error(
+                "Canvas invocation dispatch failed: %s %s",
+                response.status_code,
+                response.text[:300],
+            )
+    except Exception:
+        logger.exception("Canvas invocation %s could not be dispatched", invocation_id)
+
+
+def _invocation_response(
+    row: dict,
+    *,
+    deduplicated: bool = False,
+) -> CanvasInvocationResponse:
+    """Shape one stored invocation row for the caller."""
+    result = None
+    if row.get("result_json"):
+        try:
+            parsed = json.loads(row["result_json"])
+            result = parsed if isinstance(parsed, dict) else {"value": parsed}
+        except (TypeError, ValueError):
+            result = None
+
+    # Not `or 0`: auto-counted ids are 0-based, so a real first row and a missing
+    # field would coerce to the same value. `_insert_invocation` refuses a context
+    # without the field, so by here it is present.
+    raw_id = row.get("invocation_id")
+    return CanvasInvocationResponse(
+        invocation_id=int(raw_id) if raw_id is not None else -1,
+        action_name=str(row.get("action_name") or ""),
+        status=str(row.get("status") or "pending"),
+        result=result,
+        error=row.get("error"),
+        run_key=str(row.get("run_key") or ""),
+        deduplicated=deduplicated,
+    )
+
+
+@admin_router.get(
+    "/canvas/{token}/actions",
+    response_model=CanvasActionsResponse,
+    responses={
+        200: {"description": "Declared actions"},
+        403: {"description": "Canvas is not published"},
+        404: {"description": "Token not found"},
+    },
+)
+def admin_canvas_actions(
+    token: str = Path(..., pattern=TOKEN_PATTERN),
+    session: Session = Depends(get_db_session),
+) -> CanvasActionsResponse:
+    """List what a canvas may invoke, without saying what any of it runs.
+
+    Console passes these to the frame so it can render controls. Targets are
+    filtered out here rather than in console, so no caller of this endpoint can
+    leak them by forgetting to.
+    """
+    entry = _servable(session, token)
+
+    rows, _ = _rows_from(
+        entry=entry,
+        context=_sibling_context(entry, "Actions"),
+        filter_expr=f"canvas_token == '{token}'",
+        limit=100,
+        offset=0,
+        session=session,
+    )
+
+    actions = []
+    for row in rows:
+        schema = None
+        if row.get("input_schema_json"):
+            try:
+                schema = json.loads(row["input_schema_json"])
+            except (TypeError, ValueError):
+                schema = None
+        actions.append(
+            CanvasActionDescriptor(
+                name=str(row.get("action_name") or ""),
+                label=str(row.get("label") or ""),
+                icon=row.get("icon"),
+                input_schema=schema,
+                # A destructive action always confirms, whatever else was
+                # declared: the copy is optional, the pause is not.
+                requires_confirmation=bool(row.get("destructive"))
+                or bool(row.get("confirm")),
+                destructive=bool(row.get("destructive")),
+            ),
+        )
+
+    return CanvasActionsResponse(actions=actions)
+
+
+@admin_router.post(
+    "/canvas/{token}/action",
+    response_model=CanvasInvocationResponse,
+    responses={
+        200: {"description": "Invocation recorded (or matched an existing run)"},
+        400: {"description": "Arguments failed validation"},
+        403: {"description": "Canvas is not published"},
+        404: {"description": "Token or action not found"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
+async def admin_canvas_action(
+    body: InvokeCanvasActionRequest,
+    token: str = Path(..., pattern=TOKEN_PATTERN),
+    session: Session = Depends(get_db_session),
+) -> CanvasInvocationResponse:
+    """Record and dispatch one run of a canvas's declared action.
+
+    The order is deliberate: resolve the action, validate the arguments, check the
+    rate limit, deduplicate, **persist**, and only then dispatch. Persisting before
+    dispatching is what makes the run recoverable — a dispatch that fails leaves a
+    row to retry, whereas dispatching first can run work no one recorded.
+    """
+    entry = _servable(session, token)
+    action = _action_row(entry, token, body.action_name, session)
+
+    _validate_args(action, body.args)
+
+    user_id = body.requested_by_user_id or entry.user_id
+    limit = int(action.get("max_invocations_per_hour") or 20)
+    if (
+        _recent_invocation_count(entry, token, body.action_name, user_id, session)
+        >= limit
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"This action is limited to {limit} runs an hour.",
+        )
+
+    run_key = body.run_key or _derive_run_key(token, body.action_name, body.args)
+
+    existing = _existing_invocation(entry, token, run_key, session)
+    if existing:
+        # A double-click, a retry after a dropped response, or a reconnect. All
+        # three are the same intent, and the run that already exists is the answer.
+        return _invocation_response(existing, deduplicated=True)
+
+    now = datetime.now(timezone.utc).isoformat()
+    inserted = _insert_invocation(
+        entry,
+        {
+            "canvas_token": token,
+            "action_name": body.action_name,
+            "args_json": json.dumps(body.args, separators=(",", ":")),
+            "status": "pending",
+            "run_key": run_key,
+            "requested_by_user_id": user_id,
+            "created_at": now,
+        },
+        session=session,
+    )
+
+    await _wake_assistant(entry, inserted["invocation_id"], body.action_name)
+
+    return _invocation_response(inserted)
+
+
+@admin_router.get(
+    "/canvas/{token}/invocations/{invocation_id}",
+    response_model=CanvasInvocationResponse,
+    responses={
+        200: {"description": "Invocation state"},
+        403: {"description": "Canvas is not published"},
+        404: {"description": "Token or invocation not found"},
+    },
+)
+def admin_canvas_invocation(
+    invocation_id: int,
+    token: str = Path(..., pattern=TOKEN_PATTERN),
+    session: Session = Depends(get_db_session),
+) -> CanvasInvocationResponse:
+    """Read one invocation's current state.
+
+    The polling fallback for when the event stream is unavailable. Scoped to the
+    canvas in the path so an invocation id from one canvas cannot be read through
+    another.
+    """
+    entry = _servable(session, token)
+
+    rows, _ = _rows_from(
+        entry=entry,
+        context=_sibling_context(entry, "Invocations"),
+        filter_expr=f"canvas_token == '{token}' and invocation_id == {invocation_id}",
+        limit=1,
+        offset=0,
+        session=session,
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invocation not found",
+        )
+
+    return _invocation_response(rows[0])

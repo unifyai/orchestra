@@ -107,3 +107,60 @@ class CanvasTokenResolutionResponse(BaseModel):
     project_name: str
     visibility: Visibility
     status: Status
+
+
+# ---------------------------------------------------------------------------
+# Write plane
+# ---------------------------------------------------------------------------
+
+
+class CanvasActionDescriptor(BaseModel):
+    """What the frame is told about one action.
+
+    Deliberately excludes the dispatch target. The canvas knows an action's name,
+    label and input shape; it never learns which function, task or request sits
+    behind it, so a compromised canvas cannot redirect one or discover what else
+    exists to invoke.
+    """
+
+    name: str
+    label: str
+    icon: Optional[str] = None
+    input_schema: Optional[dict] = None
+    requires_confirmation: bool = False
+    destructive: bool = False
+
+
+class CanvasActionsResponse(BaseModel):
+    actions: list[CanvasActionDescriptor]
+
+
+class InvokeCanvasActionRequest(BaseModel):
+    """Request body for POST /admin/canvas/{token}/action.
+
+    An action name, its arguments, and who is asking. As with the read plane the
+    caller cannot name a target: the server resolves the name against this
+    canvas's own action rows.
+    """
+
+    action_name: str = Field(..., min_length=1, max_length=64)
+    args: dict = Field(default_factory=dict)
+    # Console derives this from the token, the action and the arguments so a
+    # double-click, a retry and a reconnect all collapse onto one run. Absent, the
+    # server derives the same thing — but console's copy is what makes a retry
+    # after a dropped response idempotent rather than a second send.
+    run_key: Optional[str] = Field(default=None, max_length=128)
+    requested_by_user_id: Optional[str] = None
+
+
+class CanvasInvocationResponse(BaseModel):
+    """One invocation, as the caller observes it."""
+
+    invocation_id: int
+    action_name: str
+    status: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
+    run_key: str
+    # True when this request matched an existing run rather than starting one.
+    deduplicated: bool = False
