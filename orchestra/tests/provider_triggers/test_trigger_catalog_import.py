@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -25,6 +26,7 @@ from orchestra.provider_triggers.catalog_import.native_google import (
 from orchestra.provider_triggers.catalog_import.native_manifest import (
     load_native_catalog_entries,
 )
+from orchestra.provider_triggers.catalog_import.types import ProviderTriggerCatalogEntry
 from orchestra.services.trigger_catalog_import_service import (
     TriggerCatalogImportService,
 )
@@ -212,3 +214,47 @@ def test_native_google_catalog_importer_force_fixture_in_selfhost(
     importer = NativeGoogleTriggerCatalogImporter(environment="selfhost")
     entries = importer.list_trigger_catalog_entries()
     assert len(entries) == len(expected_entries)
+
+
+def test_list_candidates_for_snapshot_pages_without_duplicates_or_gaps(
+    dbsession: Session,
+) -> None:
+    dao = TriggerCatalogDAO(dbsession)
+    snapshot = dao.create_snapshot(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+        catalog_version="pagination-test",
+        content_hash=f"pagination-{uuid.uuid4().hex}",
+        raw_entry_count=5,
+    )
+    entries = [
+        ProviderTriggerCatalogEntry(
+            backend_id=COMPOSIO_BACKEND_ID,
+            provider_trigger_slug=f"TRIGGER_{i:02d}",
+            canonical_app_hint="github",
+        )
+        for i in range(5)
+    ]
+    dao.insert_candidates(snapshot_id=snapshot.id, entries=entries)
+
+    unpaginated = dao.list_candidates_for_snapshot(snapshot.id)
+    assert [row.provider_trigger_slug for row in unpaginated] == sorted(
+        entry.provider_trigger_slug for entry in entries
+    )
+
+    page_size = 2
+    paged_slugs: list[str] = []
+    offset = 0
+    while True:
+        page = dao.list_candidates_for_snapshot(
+            snapshot.id,
+            limit=page_size,
+            offset=offset,
+        )
+        if not page:
+            break
+        assert len(page) <= page_size
+        paged_slugs.extend(row.provider_trigger_slug for row in page)
+        offset += page_size
+
+    assert paged_slugs == [row.provider_trigger_slug for row in unpaginated]

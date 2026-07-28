@@ -487,6 +487,297 @@ def test_validate_provider_event_trigger_accepts_google_calendar_slug_alias(
     assert trigger.canonical_app_slug == "google_calendar"
 
 
+_COMPOSIO_GITHUB_TRIGGER_SLUG = "GITHUB_ISSUE_CREATED_TRIGGER"
+
+
+def _seed_composio_two_app_catalog(dbsession: Session) -> Assistant:
+    """One snapshot with two connected composio apps: google_calendar + github."""
+
+    assistant = Assistant(
+        user_id=PRIMARY_USER_ID,
+        first_name="TwoApp",
+        surname="Filter",
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    dbsession.add_all(
+        [
+            IntegrationConnection(
+                connection_id=f"conn-gcal-{uuid.uuid4().hex[:10]}",
+                owner_scope="assistant",
+                assistant_id=assistant.agent_id,
+                canonical_app_slug="google_calendar",
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_app_id="GOOGLECALENDAR",
+                provider_connection_id="ca_google_calendar_two_app",
+                provider_user_id="calendar-user-two-app",
+                status="connected",
+                credential_storage="provider_vault",
+            ),
+            IntegrationConnection(
+                connection_id=f"conn-gh-{uuid.uuid4().hex[:10]}",
+                owner_scope="assistant",
+                assistant_id=assistant.agent_id,
+                canonical_app_slug="github",
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_app_id="GITHUB",
+                provider_connection_id="ca_github_two_app",
+                provider_user_id="github-user-two-app",
+                status="connected",
+                credential_storage="provider_vault",
+            ),
+        ],
+    )
+
+    dao = TriggerCatalogDAO(dbsession)
+    content_hash = f"two-app-{uuid.uuid4().hex}"
+    snapshot = dao.create_snapshot(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+        catalog_version="two-app-test",
+        content_hash=content_hash,
+        raw_entry_count=2,
+    )
+    dao.insert_candidates(
+        snapshot_id=snapshot.id,
+        entries=[
+            ProviderTriggerCatalogEntry(
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_trigger_slug=_COMPOSIO_CALENDAR_TRIGGER_SLUG,
+                provider_version="1",
+                canonical_app_hint="googlecalendar",
+                raw_metadata={"name": "Google Calendar Event Created"},
+            ),
+            ProviderTriggerCatalogEntry(
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_trigger_slug=_COMPOSIO_GITHUB_TRIGGER_SLUG,
+                provider_version="1",
+                canonical_app_hint="github",
+                raw_metadata={"name": "Issue Created"},
+            ),
+        ],
+    )
+    bootstrap = dao.get_or_create_bootstrap_state(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+    )
+    bootstrap.desired_hash = content_hash
+    bootstrap.last_status = "imported"
+    bootstrap.candidates_imported = 2
+    dbsession.commit()
+    return assistant
+
+
+def test_catalog_union_filters_by_canonical_app_slug(dbsession: Session) -> None:
+    """``canonical_app_slug`` narrows the union to one app's rows only."""
+
+    assistant = _seed_composio_two_app_catalog(dbsession)
+
+    unfiltered = list_staged_triggers_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+    )
+    assert {row["provider_trigger_slug"] for row in unfiltered["triggers"]} == {
+        _COMPOSIO_CALENDAR_TRIGGER_SLUG,
+        _COMPOSIO_GITHUB_TRIGGER_SLUG,
+    }
+
+    filtered = list_staged_triggers_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        canonical_app_slug="google_calendar",
+    )
+    assert [row["provider_trigger_slug"] for row in filtered["triggers"]] == [
+        _COMPOSIO_CALENDAR_TRIGGER_SLUG,
+    ]
+
+    # Alias-aware: the raw toolkit hint also matches the humanized slug filter.
+    alias_filtered = list_staged_triggers_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        canonical_app_slug="googlecalendar",
+    )
+    assert [row["provider_trigger_slug"] for row in alias_filtered["triggers"]] == [
+        _COMPOSIO_CALENDAR_TRIGGER_SLUG,
+    ]
+
+
+def test_catalog_union_pages_with_limit_and_offset_without_duplicates_or_gaps(
+    dbsession: Session,
+) -> None:
+    assistant = _seed_composio_two_app_catalog(dbsession)
+
+    unpaginated = list_staged_triggers_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+    )
+    all_slugs = [row["provider_trigger_slug"] for row in unpaginated["triggers"]]
+    assert len(all_slugs) == 2
+
+    page_size = 1
+    paged_slugs: list[str] = []
+    offset = 0
+    while True:
+        page = list_staged_triggers_for_assistant(
+            dbsession,
+            assistant_id=assistant.agent_id,
+            limit=page_size,
+            offset=offset,
+        )
+        rows = page["triggers"]
+        if not rows:
+            break
+        assert len(rows) <= page_size
+        paged_slugs.extend(row["provider_trigger_slug"] for row in rows)
+        offset += page_size
+
+    assert sorted(paged_slugs) == sorted(all_slugs)
+
+
+_INTERSPERSED_GITHUB_SLUGS = [
+    "AAA_GITHUB_ISSUE_TRIGGER",
+    "CCC_GITHUB_PR_TRIGGER",
+    "EEE_GITHUB_STAR_TRIGGER",
+]
+_INTERSPERSED_CALENDAR_SLUGS = [
+    "BBB_GOOGLECALENDAR_EVENT_CREATED_TRIGGER",
+    "DDD_GOOGLECALENDAR_EVENT_UPDATED_TRIGGER",
+    "FFF_GOOGLECALENDAR_EVENT_DELETED_TRIGGER",
+]
+
+
+def _seed_composio_interspersed_two_app_catalog(dbsession: Session) -> Assistant:
+    """Alphabetically interleaved google_calendar/github candidates, one snapshot.
+
+    Slugs are named so the raw alphabetical scan (used for pagination)
+    alternates between the two apps: AAA(github), BBB(calendar), CCC(github),
+    DDD(calendar), EEE(github), FFF(calendar). This means a page window drawn
+    before app-slug filtering would silently drop/skip real calendar matches.
+    """
+
+    assistant = Assistant(
+        user_id=PRIMARY_USER_ID,
+        first_name="Interspersed",
+        surname="Filter",
+    )
+    dbsession.add(assistant)
+    dbsession.flush()
+
+    dbsession.add_all(
+        [
+            IntegrationConnection(
+                connection_id=f"conn-gcal-{uuid.uuid4().hex[:10]}",
+                owner_scope="assistant",
+                assistant_id=assistant.agent_id,
+                canonical_app_slug="google_calendar",
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_app_id="GOOGLECALENDAR",
+                provider_connection_id="ca_google_calendar_interspersed",
+                provider_user_id="calendar-user-interspersed",
+                status="connected",
+                credential_storage="provider_vault",
+            ),
+            IntegrationConnection(
+                connection_id=f"conn-gh-{uuid.uuid4().hex[:10]}",
+                owner_scope="assistant",
+                assistant_id=assistant.agent_id,
+                canonical_app_slug="github",
+                backend_id=COMPOSIO_BACKEND_ID,
+                provider_app_id="GITHUB",
+                provider_connection_id="ca_github_interspersed",
+                provider_user_id="github-user-interspersed",
+                status="connected",
+                credential_storage="provider_vault",
+            ),
+        ],
+    )
+
+    dao = TriggerCatalogDAO(dbsession)
+    content_hash = f"interspersed-{uuid.uuid4().hex}"
+    entries = [
+        ProviderTriggerCatalogEntry(
+            backend_id=COMPOSIO_BACKEND_ID,
+            provider_trigger_slug=slug,
+            provider_version="1",
+            canonical_app_hint="github",
+            raw_metadata={"name": slug},
+        )
+        for slug in _INTERSPERSED_GITHUB_SLUGS
+    ] + [
+        ProviderTriggerCatalogEntry(
+            backend_id=COMPOSIO_BACKEND_ID,
+            provider_trigger_slug=slug,
+            provider_version="1",
+            canonical_app_hint="googlecalendar",
+            raw_metadata={"name": slug},
+        )
+        for slug in _INTERSPERSED_CALENDAR_SLUGS
+    ]
+    snapshot = dao.create_snapshot(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+        catalog_version="interspersed-test",
+        content_hash=content_hash,
+        raw_entry_count=len(entries),
+    )
+    dao.insert_candidates(snapshot_id=snapshot.id, entries=entries)
+    bootstrap = dao.get_or_create_bootstrap_state(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+    )
+    bootstrap.desired_hash = content_hash
+    bootstrap.last_status = "imported"
+    bootstrap.candidates_imported = len(entries)
+    dbsession.commit()
+    return assistant
+
+
+def test_catalog_union_pages_correctly_when_combined_with_app_slug_filter(
+    dbsession: Session,
+) -> None:
+    """limit/offset must page the app-filtered set, not the raw alphabetical scan.
+
+    Regression guard for filtering being applied after the SQL-level page
+    window is drawn: with candidates from the excluded app interleaved
+    alphabetically ahead of/between the requested app's rows, a
+    filter-after-paginate implementation returns too few (or zero) rows per
+    page and drops real matches when paging through offsets.
+    """
+
+    assistant = _seed_composio_interspersed_two_app_catalog(dbsession)
+
+    unfiltered = list_staged_triggers_for_assistant(
+        dbsession,
+        assistant_id=assistant.agent_id,
+        canonical_app_slug="google_calendar",
+    )
+    expected_slugs = sorted(_INTERSPERSED_CALENDAR_SLUGS)
+    assert [
+        row["provider_trigger_slug"] for row in unfiltered["triggers"]
+    ] == expected_slugs
+
+    page_size = 1
+    paged_slugs: list[str] = []
+    offset = 0
+    while True:
+        page = list_staged_triggers_for_assistant(
+            dbsession,
+            assistant_id=assistant.agent_id,
+            canonical_app_slug="google_calendar",
+            limit=page_size,
+            offset=offset,
+        )
+        rows = page["triggers"]
+        if not rows:
+            break
+        assert len(rows) <= page_size
+        paged_slugs.extend(row["provider_trigger_slug"] for row in rows)
+        offset += page_size
+
+    assert paged_slugs == expected_slugs
+
+
 def _seed_native_meet_ingress_binding(
     dbsession: Session,
     *,
