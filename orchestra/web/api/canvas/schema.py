@@ -49,6 +49,48 @@ class CanvasTokenResponse(BaseModel):
     status: Status
 
 
+class CanvasQueryRequest(BaseModel):
+    """Request body for POST /admin/canvas/{token}/query.
+
+    An alias and nothing else. This is the whole point of the endpoint: the
+    dashboard tile bridge it replaces accepts ``context`` and ``filter`` from the
+    client, so any token holder can query anything in the creator's project. Here
+    the server loads the canvas record and executes the binding that was
+    validated and stored at author time, so a compromised or prompt-injected
+    canvas cannot widen its own reach — the worst it can do is ask for one of its
+    own declared aliases.
+
+    There is deliberately no ``limit`` either. Row caps were bounded when the
+    binding was authored and travel with it.
+    """
+
+    alias: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z_$][A-Za-z0-9_$]*$",
+        description="Name of a binding declared on this canvas.",
+    )
+
+
+class CanvasQueryResponse(BaseModel):
+    """Rows for one binding alias.
+
+    Always a list, whatever the binding's operation. A reduction yields a scalar
+    or a grouped mapping, and normalising here means an authored canvas never has
+    to branch on which operation produced its data: a scalar arrives as
+    ``[{"value": …}]`` and a mapping as a single row. The same normalisation is
+    applied to the author-time dry-run samples, so the preview and the live view
+    hand the canvas the same shape.
+    """
+
+    alias: str
+    rows: list[dict]
+    # True when the binding's own row cap was reached, so the canvas can say so
+    # rather than quietly presenting a partial set as complete.
+    truncated: bool = False
+
+
 class CanvasTokenResolutionResponse(BaseModel):
     """Response for admin token resolution.
 
