@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.db.models.core_models import Project
 from orchestra.db.models.integration_provider_models import IntegrationConnection
-from orchestra.db.models.orchestra_models import Assistant
+from orchestra.db.models.orchestra_models import Assistant, LogEvent
 from orchestra.db.models.provider_trigger_models import (
     EventTriggerBinding,
     ProviderEventBlob,
@@ -45,8 +45,15 @@ def _seed_active_ingress_binding(
     dbsession: Session,
     *,
     execution_mode: str = "live",
+    task_row_data: dict | None = None,
 ) -> tuple[str, str, int, int]:
-    """Return ingress_key, binding_id, assistant_id, task_id for one live binding."""
+    """Return ingress_key, binding_id, assistant_id, task_id for one live binding.
+
+    When ``task_row_data`` is given, a real ``Tasks`` ``LogEvent`` row is
+    created with that data and its own id is used as ``source_task_log_id``,
+    so the ingress path's task-row lookup resolves to real data instead of a
+    dangling id.
+    """
 
     assistant = Assistant(
         user_id=PRIMARY_USER_ID,
@@ -77,7 +84,13 @@ def _seed_active_ingress_binding(
     )
     dbsession.flush()
 
-    task_id = int(uuid.uuid4().int % 1_000_000) + 1
+    if task_row_data is not None:
+        task_row = LogEvent(project_id=project.id, data=task_row_data)
+        dbsession.add(task_row)
+        dbsession.flush()
+        task_id = task_row.id
+    else:
+        task_id = int(uuid.uuid4().int % 1_000_000) + 1
     binding_id = f"binding-{uuid.uuid4().hex[:12]}"
     dao = ProviderTriggerDAO(dbsession)
     trigger = ProviderEventTrigger(
@@ -223,6 +236,58 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
     assert receipt.event_context_expires_at is not None
     assert (
         run["event_context_expires_at"] == receipt.event_context_expires_at.isoformat()
+    )
+
+
+@pytest.mark.anyio
+async def test_signed_composio_webhook_populates_task_name_and_description_on_run(
+    dbsession: Session,
+    client: AsyncClient,
+) -> None:
+    ingress_key, binding_id, assistant_id, _task_id = _seed_active_ingress_binding(
+        dbsession,
+        task_row_data={
+            "name": "Triage GitHub issues",
+            "description": "Triage new GitHub issues for the assistant owner.",
+        },
+    )
+    payload = load_composio_github_issue_fixture()
+    response = await deliver_signed_composio_webhook(
+        client,
+        ingress_key=ingress_key,
+        payload=payload,
+        signing_secret=WEBHOOK_SECRET,
+        webhook_id="msg_task_fields_1",
+    )
+    assert response.status_code == 200, response.text
+
+    receipts = (
+        dbsession.execute(
+            select(ProviderEventReceipt).where(
+                ProviderEventReceipt.binding_id == binding_id,
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    assert len(receipts) == 1
+    receipt = receipts[0]
+
+    run_response = await client.post(
+        "/v0/task-execution/get",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(assistant_id),
+            "run_key": receipt.run_key,
+        },
+        headers=HEADERS,
+    )
+    assert run_response.status_code == 200, run_response.text
+    run = run_response.json()["run"]
+    assert run is not None
+    assert run["task_name"] == "Triage GitHub issues"
+    assert (
+        run["task_description"] == "Triage new GitHub issues for the assistant owner."
     )
 
 
