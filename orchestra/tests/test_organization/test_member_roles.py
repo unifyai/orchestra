@@ -192,15 +192,19 @@ async def test_add_member_runs_pool_conflict_followups(
     )
     dbsession.commit()
 
-    with patch(
-        "orchestra.web.api.utils.assistant_infra.notify_pool_reassignment",
-        new_callable=AsyncMock,
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
-        new_callable=AsyncMock,
-    ), patch(
-        "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
-        new_callable=AsyncMock,
+    with (
+        patch(
+            "orchestra.web.api.utils.assistant_infra.notify_pool_reassignment",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra.reawaken_assistant",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
+            new_callable=AsyncMock,
+        ),
     ):
         add_response = await client.post(
             f"/v0/organizations/{org_id}/members",

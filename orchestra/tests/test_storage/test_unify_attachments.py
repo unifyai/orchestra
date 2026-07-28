@@ -595,11 +595,14 @@ class TestUserDeletionAttachmentCleanup:
 
         mock_session = self._make_mock_session(assistant_ids=[10, 20])
 
-        with patch(
-            "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
-        ) as mock_enqueue_cleanup, patch(
-            "orchestra.services.bucket_service.BucketService",
-        ) as mock_bucket_cls:
+        with (
+            patch(
+                "orchestra.services.user_account_cleanup_service.enqueue_cleanup_tasks",
+            ) as mock_enqueue_cleanup,
+            patch(
+                "orchestra.services.bucket_service.BucketService",
+            ) as mock_bucket_cls,
+        ):
             mock_enqueue_cleanup.return_value = [
                 MagicMock(id=101),
                 MagicMock(id=102),

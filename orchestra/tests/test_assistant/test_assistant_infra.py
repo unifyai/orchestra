@@ -78,24 +78,31 @@ def mock_all_infra(dbsession):
     dc_delete_routes_mock = AsyncMock(return_value=0)
 
     with patch.multiple("orchestra.web.api.assistant.views", **patches):
-        with patch(
-            "orchestra.web.api.utils.assistant_infra.release_pool_vm",
-            release_pool_vm_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
-            wa_pool_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
-            wa_register_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
-            dc_pool_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.register_discord_bot",
-            dc_register_mock,
-        ), patch(
-            "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
-            dc_delete_routes_mock,
+        with (
+            patch(
+                "orchestra.web.api.utils.assistant_infra.release_pool_vm",
+                release_pool_vm_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.assign_whatsapp_pool_number",
+                wa_pool_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.register_whatsapp_sender",
+                wa_register_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.assign_discord_pool_bot",
+                dc_pool_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.register_discord_bot",
+                dc_register_mock,
+            ),
+            patch(
+                "orchestra.web.api.utils.assistant_infra.delete_discord_routes",
+                dc_delete_routes_mock,
+            ),
         ):
             with patch(
                 "orchestra.web.api.assistant.views.settings",

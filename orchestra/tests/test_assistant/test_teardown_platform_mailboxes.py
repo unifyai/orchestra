@@ -381,14 +381,17 @@ async def test_execute_plan_happy_path_microsoft(dbsession: Session):
         secrets_to_delete=["MICROSOFT_ACCESS_TOKEN"],
     )
 
-    with patch(
-        "orchestra.workers.teardown_platform_mailboxes.delete_outlook_email",
-        new_callable=AsyncMock,
-        return_value={"success": True, "deleted": True},
-    ) as mock_outlook, patch(
-        "orchestra.workers.teardown_platform_mailboxes.delete_email",
-        new_callable=AsyncMock,
-    ) as mock_gmail:
+    with (
+        patch(
+            "orchestra.workers.teardown_platform_mailboxes.delete_outlook_email",
+            new_callable=AsyncMock,
+            return_value={"success": True, "deleted": True},
+        ) as mock_outlook,
+        patch(
+            "orchestra.workers.teardown_platform_mailboxes.delete_email",
+            new_callable=AsyncMock,
+        ) as mock_gmail,
+    ):
         result = await execute_plan(dbsession, plan)
 
     mock_outlook.assert_awaited_once_with("user@tenant.onmicrosoft.com")
@@ -429,14 +432,17 @@ async def test_execute_plan_routes_mismatched_row_to_outlook(dbsession: Session)
     plan = plans[0]
     assert plan.effective_provider == "microsoft_365"
 
-    with patch(
-        "orchestra.workers.teardown_platform_mailboxes.delete_outlook_email",
-        new_callable=AsyncMock,
-        return_value={"success": True, "deleted": True},
-    ) as mock_outlook, patch(
-        "orchestra.workers.teardown_platform_mailboxes.delete_email",
-        new_callable=AsyncMock,
-    ) as mock_gmail:
+    with (
+        patch(
+            "orchestra.workers.teardown_platform_mailboxes.delete_outlook_email",
+            new_callable=AsyncMock,
+            return_value={"success": True, "deleted": True},
+        ) as mock_outlook,
+        patch(
+            "orchestra.workers.teardown_platform_mailboxes.delete_email",
+            new_callable=AsyncMock,
+        ) as mock_gmail,
+    ):
         result = await execute_plan(dbsession, plan)
 
     mock_outlook.assert_awaited_once()

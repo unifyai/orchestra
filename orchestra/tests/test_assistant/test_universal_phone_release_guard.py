@@ -66,11 +66,14 @@ async def test_delete_phone_number_releases_normal_number(monkeypatch):
     client = MagicMock()
     client.request = AsyncMock(return_value=response)
 
-    with patch.object(
-        assistant_infra,
-        "_comms_url",
-        return_value="http://comms",
-    ), patch.object(assistant_infra, "get_async_client", return_value=client):
+    with (
+        patch.object(
+            assistant_infra,
+            "_comms_url",
+            return_value="http://comms",
+        ),
+        patch.object(assistant_infra, "get_async_client", return_value=client),
+    ):
         result = await assistant_infra.delete_phone_number(NORMAL_NUMBER)
 
     assert result == {"success": True}
