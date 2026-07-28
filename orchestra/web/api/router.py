@@ -32,6 +32,8 @@ from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.calls import admin_router as calls_admin_router
 from orchestra.web.api.calls import router as calls_router
+from orchestra.web.api.canvas.views import admin_router as canvas_admin_router
+from orchestra.web.api.canvas.views import router as canvas_router
 from orchestra.web.api.chat import admin_router as chat_admin_router
 from orchestra.web.api.chat import router as chat_router
 from orchestra.web.api.context.views import admin_router as context_admin_router
@@ -196,6 +198,13 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 api_router.include_router(
+    canvas_admin_router,
+    prefix="/admin",
+    tags=["Canvas"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
     plot_admin_router,
     prefix="/admin",
     tags=["Plots"],
@@ -327,6 +336,12 @@ api_router.include_router(
 api_router.include_router(
     dashboard_router,
     tags=["Dashboards"],
+    include_in_schema=False,
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    canvas_router,
+    tags=["Canvas"],
     include_in_schema=False,
     dependencies=API_KEY_AUTH,
 )
