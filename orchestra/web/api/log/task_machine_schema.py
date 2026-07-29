@@ -78,7 +78,14 @@ class TaskExecutionCreateOrAdoptRequest(BaseModel):
     )
     scheduled_for: Optional[datetime] = Field(
         default=None,
-        description="Scheduled due time when the run came from a scheduled execution.",
+        description=(
+            "Canonical due time for this occurrence. Stays un-jittered so it can "
+            "key run_key and anchor the next slot."
+        ),
+    )
+    dispatch_offset_seconds: Optional[float] = Field(
+        default=None,
+        description="Seconds to add to scheduled_for when dispatching (jitter).",
     )
     source_medium: Optional[str] = Field(
         default=None,
@@ -144,7 +151,7 @@ class TaskExecutionUpdateRequest(BaseModel):
 
 
 class TaskSourceReleaseRequest(BaseModel):
-    """Release a Tasks row left ``active`` after its offline worker vanished."""
+    """Terminalize executions left running after their offline worker vanished."""
 
     project_name: str = Field(
         default=TASK_MACHINE_PROJECT_NAME,
@@ -154,41 +161,34 @@ class TaskSourceReleaseRequest(BaseModel):
         description="Assistant identifier used to resolve the Assistants project.",
     )
     source_task_log_id: int = Field(
-        description="Physical Tasks-row log id to release when still active.",
-    )
-    mode: str = Field(
-        description=(
-            "'fail' terminalizes the row; 'reopen' returns it to scheduled/"
-            "triggerable so a retry can reclaim the same source_task_log_id."
-        ),
-        examples=["fail", "reopen"],
+        description="Physical Tasks-row log id whose running executions to release.",
     )
     info: Optional[str] = Field(
         default=None,
-        description="Optional diagnostic note stored on the Tasks row.",
+        description="Optional diagnostic note stored on each released execution.",
     )
 
 
 class TaskSourceReleaseResponse(BaseModel):
-    """Outcome of one active Tasks-source release attempt."""
+    """Outcome of one stuck-execution release attempt.
+
+    Transitions are audited on the execution rows themselves, which is where
+    run state lives. There is no definition status to record a before/after
+    for: this operation cannot reach a definition.
+    """
 
     updated: bool = Field(
-        description="True when the Tasks row transitioned away from active.",
+        description="True when at least one running execution was terminalized.",
     )
     source_task_log_id: int = Field(
-        description="Physical Tasks-row log id that was targeted.",
+        description="Physical Tasks-row log id whose executions were targeted.",
     )
-    status_before: Optional[str] = Field(
-        default=None,
-        description="Status observed before the release attempt.",
+    released_run_keys: list[str] = Field(
+        default_factory=list,
+        description="run_key of every execution moved to failed.",
     )
-    status_after: Optional[str] = Field(
-        default=None,
-        description="Status after the release attempt (unchanged when no-op).",
-    )
-    mode: str = Field(description="Release mode that was applied.")
     reason: str = Field(
-        description="Why the row was or was not updated (released/not_active/missing).",
+        description="Why rows were or were not updated (released/no_running_executions).",
     )
 
 

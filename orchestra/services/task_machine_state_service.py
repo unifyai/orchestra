@@ -67,9 +67,7 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
     },
 )
 
-_SCHEDULED_EXECUTION_STATUSES = {"scheduled"}
 _OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
-_TRIGGERABLE_STATUS = "triggerable"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
@@ -570,11 +568,6 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Repeat patterns mirrored from the task definition.",
     },
-    "status": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Legacy mirrored Tasks.status at projection time.",
-    },
     "source_task_updated_at": {
         "field_type": "datetime",
         "mutable": True,
@@ -609,6 +602,15 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "field_type": "str",
         "mutable": True,
         "description": "Stable hash of the machine-facing execution contract.",
+    },
+    "dispatch_offset_seconds": {
+        "field_type": "float",
+        "mutable": True,
+        "description": (
+            "Seconds to add to scheduled_for when dispatching. Jitter spreads "
+            "dispatch without changing the occurrence identity: scheduled_for "
+            "stays canonical so it can key run_key and anchor the next slot."
+        ),
     },
     "scheduled_for": {
         "field_type": "datetime",
@@ -975,6 +977,8 @@ def sync_task_executions_for_task_ids(
                 rows=group.rows,
                 tasks_context_name=normalized_tasks_context_name,
                 destination=source_destination,
+                session=session,
+                project_id=project_id,
             )
         if execution_payload is None:
             # Drop any prior open execution for this task/destination.
@@ -1233,86 +1237,60 @@ def create_task_run_if_absent(
     return created_row, created.created
 
 
-def release_active_task_source(
+def release_stuck_task_executions(
     session: Session,
-    project_id: int,
     *,
+    project_id: int,
     source_task_log_id: int,
-    mode: str,
     info: str | None = None,
 ) -> dict[str, Any]:
-    """Release a Tasks row that is still ``active`` after its worker is gone.
+    """Terminalize executions still ``running`` after their worker vanished.
 
-    ``mode="fail"`` terminalizes the row (crash / SIGTERM writeback).
-    ``mode="reopen"`` returns it to a runnable status so offline retry can
-    reclaim the same ``source_task_log_id`` via ``TaskScheduler.execute``.
+    Break-glass for a crashed or killed worker whose execution never reached a
+    terminal state. It operates on ``Tasks/Executions`` because that is where
+    run state lives: definitions carry authored intent only, so there is no
+    longer an ``active`` definition to release and nothing here can disarm a
+    schedule.
 
-    No-op (and reports ``updated=False``) when the row is missing or not
-    currently ``active``, so concurrent ActiveTask finalization wins cleanly.
+    The previous implementation wrote ``failed`` onto the definition with no
+    check for whether it repeats, which permanently disarmed recurring tasks —
+    the documented break-glass was itself an outage cause.
     """
 
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode not in {"fail", "reopen"}:
-        raise ValueError(
-            f"release_active_task_source mode must be 'fail' or 'reopen', "
-            f"got {mode!r}.",
-        )
-
-    task_row = (
+    executions = (
         session.query(LogEvent)
         .filter(
             LogEvent.project_id == project_id,
-            LogEvent.id == int(source_task_log_id),
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+            LogEvent.data["state"].astext == "running",
         )
-        .one_or_none()
+        .all()
     )
-    if task_row is None:
+    if not executions:
         return {
             "updated": False,
             "source_task_log_id": int(source_task_log_id),
-            "status_before": None,
-            "status_after": None,
-            "mode": normalized_mode,
-            "reason": "missing",
+            "released_run_keys": [],
+            "reason": "no_running_executions",
         }
 
-    payload = dict(task_row.data or {})
-    status_before = str(payload.get("status") or "")
-    if status_before != "active":
-        return {
-            "updated": False,
-            "source_task_log_id": int(source_task_log_id),
-            "status_before": status_before,
-            "status_after": status_before,
-            "mode": normalized_mode,
-            "reason": "not_active",
-        }
-
-    if normalized_mode == "fail":
-        status_after = "failed"
-    elif payload.get("trigger") not in (None, "", {}):
-        status_after = "triggerable"
-    else:
-        status_after = "scheduled"
-
-    payload["status"] = status_after
+    released: list[str] = []
     release_info = (info or "").strip()
-    if release_info:
-        existing_info = payload.get("info")
-        if isinstance(existing_info, dict):
-            merged = dict(existing_info)
-            merged["release_reason"] = release_info
-            payload["info"] = merged
-        else:
-            payload["info"] = release_info
-    _replace_log_payload(task_row, payload)
+    for execution in executions:
+        payload = dict(execution.data or {})
+        payload["state"] = "failed"
+        payload["completed_at"] = datetime.now(timezone.utc).isoformat()
+        if release_info:
+            payload["error"] = release_info
+        _replace_log_payload(execution, payload)
+        run_key = _coerce_optional_str(payload.get("run_key"))
+        if run_key:
+            released.append(run_key)
     session.flush()
     return {
         "updated": True,
         "source_task_log_id": int(source_task_log_id),
-        "status_before": status_before,
-        "status_after": status_after,
-        "mode": normalized_mode,
+        "released_run_keys": released,
         "reason": "released",
     }
 
@@ -1699,6 +1677,8 @@ def _build_execution_payload(
     *,
     tasks_context_name: str,
     destination: str | None,
+    session: Session,
+    project_id: int,
 ) -> dict[str, Any] | None:
     """Choose the current activatable task instance and project its machine facts."""
 
@@ -1725,6 +1705,8 @@ def _build_execution_payload(
             wake="scheduled",
             tasks_context_name=tasks_context_name,
             destination=destination,
+            session=session,
+            project_id=project_id,
         )
 
     provider_candidates = [
@@ -1748,6 +1730,8 @@ def _build_execution_payload(
             wake="triggered",
             tasks_context_name=tasks_context_name,
             destination=destination,
+            session=session,
+            project_id=project_id,
         )
 
     return None
@@ -1759,6 +1743,8 @@ def _project_execution_payload(
     wake: str,
     tasks_context_name: str,
     destination: str | None,
+    session: Session,
+    project_id: int,
 ) -> dict[str, Any]:
     """Flatten the chosen source task row into an open execution payload."""
 
@@ -1780,7 +1766,15 @@ def _project_execution_payload(
     entrypoint = _coerce_int(row.data.get("entrypoint"))
     requires_filesystem = _requires_filesystem_from_row(row.data)
     requires_computer = _requires_computer_from_row(row.data)
-    scheduled_for = _coerce_datetime_string(schedule.get("start_at"))
+    # `schedule.start_at` is the series anchor, not the next due time. Unify
+    # projects each occurrence as its own execution keyed on `scheduled_for`,
+    # so an existing open execution is authoritative and the anchor is only a
+    # fallback for a series whose first occurrence has not been projected yet.
+    scheduled_for = _open_execution_scheduled_for(
+        session,
+        project_id=project_id,
+        source_task_log_id=row.log_event_id,
+    ) or _coerce_datetime_string(schedule.get("start_at"))
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
@@ -1791,7 +1785,6 @@ def _project_execution_payload(
         "state": ("scheduled" if wake == "scheduled" else "triggerable"),
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
-        "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
         "scheduled_for": scheduled_for,
@@ -1878,7 +1871,6 @@ def _project_provider_event_execution_payload(
         "state": "triggerable",
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
-        "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
         "entrypoint": entrypoint,
@@ -2122,6 +2114,30 @@ def _is_task_enabled(data: Mapping[str, Any]) -> bool:
     return _coerce_bool(data.get("enabled"))
 
 
+def _open_execution_scheduled_for(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+) -> str | None:
+    """Earliest open occurrence already projected for one definition."""
+
+    rows = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+            LogEvent.data["state"].astext.in_(("scheduled", "triggerable")),
+        )
+        .all()
+    )
+    due = [
+        _coerce_datetime_string((row.data or {}).get("scheduled_for")) for row in rows
+    ]
+    known = sorted(value for value in due if value)
+    return known[0] if known else None
+
+
 def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:
     """Return True when a task row is the current armed scheduled execution."""
 
@@ -2135,8 +2151,7 @@ def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:
         return False
     if schedule.get("start_at") is None:
         return False
-    status = _coerce_optional_str(data.get("status"))
-    return status in _SCHEDULED_EXECUTION_STATUSES
+    return True
 
 
 def _is_provider_event_execution_candidate(data: Mapping[str, Any]) -> bool:
@@ -2150,10 +2165,7 @@ def _is_provider_event_execution_candidate(data: Mapping[str, Any]) -> bool:
     trigger = parse_task_trigger(data.get("trigger"))
     if trigger is None or trigger.kind != "provider_event":
         return False
-    if trigger.state != "enabled":
-        return False
-    status = _coerce_optional_str(data.get("status"))
-    return status == _TRIGGERABLE_STATUS
+    return trigger.state == "enabled"
 
 
 def _is_communication_trigger_execution_candidate(data: Mapping[str, Any]) -> bool:
@@ -2167,10 +2179,7 @@ def _is_communication_trigger_execution_candidate(data: Mapping[str, Any]) -> bo
     trigger = parse_task_trigger(data.get("trigger"))
     if trigger is None:
         return False
-    if trigger.kind == "provider_event":
-        return False
-    status = _coerce_optional_str(data.get("status"))
-    return status == _TRIGGERABLE_STATUS
+    return trigger.kind != "provider_event"
 
 
 def _is_trigger_execution_candidate(data: Mapping[str, Any]) -> bool:

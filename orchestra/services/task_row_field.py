@@ -29,38 +29,20 @@ class AuthoredTaskField(StrEnum):
 
 
 class RuntimeTaskField(StrEnum):
-    """Task JSONB keys that may change without bumping task_revision."""
+    """Task JSONB keys that may change without bumping task_revision.
 
-    status = "status"
-    activated_by = "activated_by"
-    instance_id = "instance_id"
+    Deliberately empty. Every field on a definition is authored: run outcome
+    lives on ``Tasks/Executions``, and ``enabled`` is an operator decision that
+    must take the revision CAS path. A new member here means something
+    run-derived has crept back onto the row every concurrent run shares.
 
-    @classmethod
-    def values(cls) -> frozenset[str]:
-        return frozenset(member.value for member in cls)
-
-
-class RuntimeTaskStatus(StrEnum):
-    """Runtime status values allowed on provider-event rows without revision bump."""
-
-    active = "active"
-    completed = "completed"
-    cancelled = "cancelled"
-    failed = "failed"
+    Mirrored byte-for-byte in ``unify.task_scheduler.types.task_row_field`` and
+    pinned by the shared contract fixture.
+    """
 
     @classmethod
     def values(cls) -> frozenset[str]:
         return frozenset(member.value for member in cls)
-
-    @classmethod
-    def allows(cls, value: object) -> bool:
-        if value is None:
-            return False
-        try:
-            cls(str(value))
-        except ValueError:
-            return False
-        return True
 
 
 class ProviderEventUpdateKind(StrEnum):

@@ -16,7 +16,15 @@ class TypedTaskResponse(BaseModel):
     assistant_id: int
     name: str | None = None
     description: str | None = None
-    status: str | None = None
+    lifecycle: str | None = Field(
+        default=None,
+        description=(
+            "Derived view of what this task is doing: disarmed, completed, "
+            "running, triggerable or scheduled. Computed from `enabled`, the "
+            "trigger, and Tasks/Executions — definitions store authored intent "
+            "only, so this is never a stored column."
+        ),
+    )
     enabled: bool | None = None
     offline: bool | None = None
     requires_filesystem: bool | None = None
@@ -41,7 +49,6 @@ class TypedTaskCreateRequest(BaseModel):
     description: str
     trigger: TaskTrigger | dict[str, Any] | None = None
     schedule: dict[str, Any] | None = None
-    status: str | None = None
     enabled: bool = True
     offline: bool = False
     requires_filesystem: bool = False
@@ -61,7 +68,6 @@ class TypedTaskPatchRequest(BaseModel):
     requires_computer: bool | None = None
     priority: str | None = None
     entrypoint: int | None = None
-    status: str | None = None
 
 
 class TaskRevisionConflictResponse(BaseModel):
