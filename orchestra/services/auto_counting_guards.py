@@ -59,7 +59,17 @@ def reject_auto_counting_identity_mutations(
         colliding = protected.intersection(this_data.keys())
         if not colliding:
             continue
-        row = session.query(LogEvent).filter(LogEvent.id == int(log_id)).first()
+        # Prune to the context's project: log_event is partitioned by
+        # project_id, and an id-only lookup fans out across every tenant's
+        # partition (the June production slowdown class of query).
+        row = (
+            session.query(LogEvent)
+            .filter(
+                LogEvent.project_id == int(context.project_id),
+                LogEvent.id == int(log_id),
+            )
+            .first()
+        )
         if row is None:
             continue
         current = row.data if isinstance(row.data, dict) else {}

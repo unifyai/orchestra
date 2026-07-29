@@ -14,7 +14,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 import httpx
@@ -243,6 +243,7 @@ def _build_open_execution_run_key(
     task_id: int,
     revision: str,
     due_at: str | None = None,
+    trigger_medium: str | None = None,
 ) -> str:
     """Build the idempotency key for an open (scheduled/triggerable) Execution.
 
@@ -254,6 +255,14 @@ def _build_open_execution_run_key(
 
     Both normalizers below exist for that reason. ``team:11`` and
     ``2026-07-29T16:50:00+00:00`` were the drift that caused it.
+
+    Unify assembles the tail from the provenance the dispatcher can see, and a
+    dispatcher waking on a projected row sees only what that row carries: the
+    due time on a scheduled wake, the trigger medium on a triggered one. The
+    contact and message that fired a live trigger exist only once an event has
+    actually arrived, and a firing carrying them is a distinct occurrence with
+    its own key. A projection with neither fragment falls through to the shared
+    ``once``, which is why no wake gets a tail of its own here.
     """
 
     revision_digest = hashlib.sha256(
@@ -261,13 +270,16 @@ def _build_open_execution_run_key(
     ).hexdigest()[:12]
     normalized_destination = _normalize_run_key_component(destination)
     destination_part = f"{normalized_destination}:" if normalized_destination else ""
-    normalized_due = _normalize_run_datetime_fragment(due_at) if due_at else None
-    if normalized_due:
-        tail = normalized_due
-    elif wake == "triggered":
-        tail = "arm"
-    else:
-        tail = "once"
+    tail_parts: list[str] = []
+    if wake == "scheduled":
+        normalized_due = _normalize_run_datetime_fragment(due_at) if due_at else None
+        if normalized_due:
+            tail_parts.append(normalized_due)
+    if wake == "triggered":
+        normalized_medium = _normalize_run_key_component(trigger_medium)
+        if normalized_medium:
+            tail_parts.append(normalized_medium[:24])
+    tail = "-".join(tail_parts) or "once"
     return (
         f"{delivery}:{wake}:{assistant_id}:{destination_part}{task_id}:"
         f"{revision_digest}:{tail}"
@@ -1242,7 +1254,33 @@ def create_task_run_if_absent(
         created_payload["run_id"] = created_row.id
         _replace_log_payload(created_row, created_payload)
     session.flush()
+    # A newly created open occurrence must reach Communication's delayed queue
+    # or nothing ever fires it: the definition-write sync cannot see it,
+    # because projecting an occurrence deliberately writes no definition. Only
+    # a pending row with its due time still ahead materializes — a run created
+    # already running is being started by its own dispatcher right now, and a
+    # row created at/after its due time is a dispatch-time create whose
+    # delayed task would fire again immediately.
+    if (
+        created.created
+        and str(created_row.data.get("state") or "") == "scheduled"
+        and _occurrence_is_in_the_future(created_row.data)
+    ):
+        _reconcile_scheduled_execution_materialization(
+            previous_execution=None,
+            current_execution=dict(created_row.data or {}),
+        )
     return created_row, created.created
+
+
+def _occurrence_is_in_the_future(data: Mapping[str, Any]) -> bool:
+    """Whether a run row's dispatch moment (due time plus jitter) is ahead."""
+
+    due = _parse_datetime(_coerce_datetime_string(data.get("scheduled_for")))
+    if due is None:
+        return False
+    offset = float(data.get("dispatch_offset_seconds") or 0.0)
+    return due + timedelta(seconds=offset) > datetime.now(timezone.utc)
 
 
 def release_stuck_task_executions(
@@ -1835,6 +1873,7 @@ def _project_execution_payload(
         task_id=task_id,
         revision=payload["revision"],
         due_at=scheduled_for,
+        trigger_medium=payload["trigger_medium"],
     )
     payload["last_materialized_at"] = _coerce_datetime_string(
         datetime.now(timezone.utc),
@@ -2001,9 +2040,13 @@ def _scheduled_execution_snapshot(
         return None
     assistant_id = _coerce_optional_str(execution.get("assistant_id"))
     task_id = _coerce_int(execution.get("task_id"))
-    revision = _coerce_optional_str(execution.get("revision"))
+    # Unify-projected occurrences carry revision "" (their run_key digested
+    # that value), so an empty revision is a real identity here, not a gap.
+    # Communication rebuilds the run key from this field at fire time; sending
+    # anything else would mint a second execution for the same occurrence.
+    revision = _coerce_optional_str(execution.get("revision")) or ""
     scheduled_for = _coerce_datetime_string(execution.get("scheduled_for"))
-    if not assistant_id or task_id is None or not revision or not scheduled_for:
+    if not assistant_id or task_id is None or not scheduled_for:
         return None
     return {
         "assistant_id": assistant_id,
@@ -2011,6 +2054,9 @@ def _scheduled_execution_snapshot(
         "task_id": task_id,
         "revision": revision,
         "scheduled_for": scheduled_for,
+        "dispatch_offset_seconds": float(
+            execution.get("dispatch_offset_seconds") or 0.0,
+        ),
         "delivery": _coerce_optional_str(execution.get("delivery")) or "live",
         "requires_filesystem": _requires_filesystem_from_row(execution),
         "requires_computer": _requires_computer_from_row(execution),
