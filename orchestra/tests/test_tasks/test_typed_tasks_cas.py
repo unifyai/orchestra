@@ -11,7 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Context, LogEvent, Project
+from orchestra.db.models.orchestra_models import LogEvent, Project
 from orchestra.db.models.provider_trigger_models import EventTriggerBinding
 from orchestra.tests.provider_triggers.conftest import (
     stub_healthy_provider_trigger_topology,
@@ -153,11 +153,21 @@ async def test_pause_increments_revision_and_advances_binding_epoch(
 from orchestra.services.task_mutation_contract import format_task_etag
 
 
-async def test_runtime_status_update_does_not_bump_task_revision(
+async def test_retired_run_state_fields_are_rejected_and_bump_nothing(
     client: AsyncClient,
     assistant_id: int,
     dbsession: Session,
 ) -> None:
+    """Definitions no longer carry run state, so writing it is unclassified.
+
+    ``status`` and ``activated_by`` used to be runtime fields that updated
+    without bumping the authored revision. Run state lives on
+    ``Tasks/Executions`` now and ``RuntimeTaskField`` is deliberately empty, so
+    the write must be refused outright — accepting it would quietly recreate
+    the shared mutable status this split removed — and the definition must be
+    left untouched, revision included.
+    """
+
     created = await _create_provider_event_task(client, assistant_id=assistant_id)
     user_id = _auth_user_id()
     project = (
@@ -170,11 +180,6 @@ async def test_runtime_status_update_does_not_bump_task_revision(
         .one()
     )
     context_name = f"{user_id}/{assistant_id}/Tasks"
-    context = (
-        dbsession.query(Context)
-        .filter(Context.project_id == project.id, Context.name == context_name)
-        .one()
-    )
 
     response = await client.put(
         "/v0/logs",
@@ -186,8 +191,8 @@ async def test_runtime_status_update_does_not_bump_task_revision(
         },
         headers=HEADERS,
     )
-    assert response.status_code == status.HTTP_200_OK, response.json()
-    assert response.json().get("task_revision") == 1
+    assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
+    assert "unclassified_fields" in str(response.json().get("detail"))
 
     log = (
         dbsession.query(LogEvent)
@@ -197,7 +202,8 @@ async def test_runtime_status_update_does_not_bump_task_revision(
         )
         .one()
     )
-    assert log.data["status"] == "active"
+    assert "status" not in log.data
+    assert "activated_by" not in log.data
     assert log.data["task_revision"] == 1
 
 
