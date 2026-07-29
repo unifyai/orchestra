@@ -243,6 +243,7 @@ def _build_open_execution_run_key(
     task_id: int,
     revision: str,
     due_at: str | None = None,
+    trigger_medium: str | None = None,
 ) -> str:
     """Build the idempotency key for an open (scheduled/triggerable) Execution.
 
@@ -254,6 +255,14 @@ def _build_open_execution_run_key(
 
     Both normalizers below exist for that reason. ``team:11`` and
     ``2026-07-29T16:50:00+00:00`` were the drift that caused it.
+
+    Unify assembles the tail from the provenance the dispatcher can see, and a
+    dispatcher waking on a projected row sees only what that row carries: the
+    due time on a scheduled wake, the trigger medium on a triggered one. The
+    contact and message that fired a live trigger exist only once an event has
+    actually arrived, and a firing carrying them is a distinct occurrence with
+    its own key. A projection with neither fragment falls through to the shared
+    ``once``, which is why no wake gets a tail of its own here.
     """
 
     revision_digest = hashlib.sha256(
@@ -261,13 +270,16 @@ def _build_open_execution_run_key(
     ).hexdigest()[:12]
     normalized_destination = _normalize_run_key_component(destination)
     destination_part = f"{normalized_destination}:" if normalized_destination else ""
-    normalized_due = _normalize_run_datetime_fragment(due_at) if due_at else None
-    if normalized_due:
-        tail = normalized_due
-    elif wake == "triggered":
-        tail = "arm"
-    else:
-        tail = "once"
+    tail_parts: list[str] = []
+    if wake == "scheduled":
+        normalized_due = _normalize_run_datetime_fragment(due_at) if due_at else None
+        if normalized_due:
+            tail_parts.append(normalized_due)
+    if wake == "triggered":
+        normalized_medium = _normalize_run_key_component(trigger_medium)
+        if normalized_medium:
+            tail_parts.append(normalized_medium[:24])
+    tail = "-".join(tail_parts) or "once"
     return (
         f"{delivery}:{wake}:{assistant_id}:{destination_part}{task_id}:"
         f"{revision_digest}:{tail}"
@@ -1835,6 +1847,7 @@ def _project_execution_payload(
         task_id=task_id,
         revision=payload["revision"],
         due_at=scheduled_for,
+        trigger_medium=payload["trigger_medium"],
     )
     payload["last_materialized_at"] = _coerce_datetime_string(
         datetime.now(timezone.utc),

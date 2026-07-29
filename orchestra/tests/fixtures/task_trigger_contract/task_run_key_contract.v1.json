@@ -39,7 +39,45 @@
         "due_at": "2026-04-10T09:00:00+00:00"
       },
       "run_key": "live:scheduled:42:7:162af81f5de4:20260410T090000Z"
+    },
+    {
+      "name": "a triggered wake tails on the medium the projected row carries",
+      "inputs": {
+        "delivery": "live",
+        "wake": "triggered",
+        "assistant_id": "42",
+        "destination": null,
+        "task_id": 301,
+        "revision": "rev-trigger",
+        "trigger_medium": "sms_message"
+      },
+      "run_key": "live:triggered:42:301:760d45c121a7:sms-message"
+    },
+    {
+      "name": "a triggered medium is normalized like any other free-form fragment",
+      "inputs": {
+        "delivery": "offline",
+        "wake": "triggered",
+        "assistant_id": "1406",
+        "destination": "team:11",
+        "task_id": 12,
+        "revision": "rev-trigger",
+        "trigger_medium": "Email Message"
+      },
+      "run_key": "offline:triggered:1406:team-11:12:760d45c121a7:email-message"
+    },
+    {
+      "name": "a triggered wake with no medium falls through to the shared once",
+      "inputs": {
+        "delivery": "live",
+        "wake": "triggered",
+        "assistant_id": "42",
+        "destination": null,
+        "task_id": 301,
+        "revision": "rev-trigger"
+      },
+      "run_key": "live:triggered:42:301:760d45c121a7:once"
     }
   ],
-  "known_divergence": "A triggered wake with no due time tails on 'arm' here and 'once' in Unify. That is the same drift on the trigger path and is deliberately not asserted as agreed contract until the trigger lane is verified end to end."
+  "trigger_lane_notes": "A dispatcher waking on a projected trigger row without remembered event provenance rebuilds the key from that row alone — its revision, destination and trigger medium — so those three cases are the adoption path. A firing that does carry a contact and message is a distinct occurrence with its own tail and is meant to mint its own row. Provider-event armed rows are not in this contract: Unify keys real provider-event runs with build_provider_event_run_key, which carries a binding segment and the full event identity digest, so nothing on that lane ever adopts the projected row."
 }

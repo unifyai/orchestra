@@ -6,6 +6,10 @@ team destination serialized as ``team:11`` against ``team-11`` and a due time as
 ``2026-07-29T16:50:00+00:00`` against ``20260729T165000Z``. Every occurrence got
 two execution rows, the second read as a concurrent peer, and the overlap guard
 skipped every tick of a ten-minute campaign runtime — silently, for days.
+
+The trigger lane converges the same way. A dispatcher waking on a projected
+trigger row with no remembered event provenance rebuilds the key from that row
+alone, so the medium the projection carries belongs in the tail.
 """
 
 from __future__ import annotations
@@ -47,3 +51,40 @@ def test_free_form_components_are_normalized() -> None:
         due_at="2026-07-29T16:50:00+00:00",
     )
     assert ":team-11:" in key
+
+
+def test_triggered_wake_has_no_tail_of_its_own() -> None:
+    """A projected trigger row Unify cannot name is a second row per occurrence.
+
+    This tail was ``arm`` while Unify built ``once`` from the same row, so the
+    dispatcher adopted nothing and minted its own execution — the scheduled-lane
+    defect, unfixed, on the trigger lane.
+    """
+
+    key = _build_open_execution_run_key(
+        delivery="live",
+        wake="triggered",
+        assistant_id="42",
+        destination=None,
+        task_id=301,
+        revision="rev-trigger",
+    )
+    assert key.endswith(":once")
+
+
+def test_only_a_triggered_wake_takes_the_medium() -> None:
+    """Unify reads a medium as provenance on a triggered wake and nowhere else."""
+
+    inputs = dict(
+        delivery="offline",
+        assistant_id="1406",
+        destination="team:11",
+        task_id=12,
+        revision="r1",
+        due_at="2026-07-29T16:50:00+00:00",
+    )
+    assert _build_open_execution_run_key(
+        wake="scheduled",
+        trigger_medium="sms_message",
+        **inputs,
+    ) == _build_open_execution_run_key(wake="scheduled", **inputs)
