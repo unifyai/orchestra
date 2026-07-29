@@ -61,15 +61,9 @@ LEGACY_DEFINITION_FIELDS = (
     "activated_by",
     "completed_at",
     "info",
+    "instance_id",
 )
 LEGACY_EXECUTION_FIELDS = ("status",)
-
-# `instance_id` is deliberately absent. The scheduler still writes it on create
-# while dropping it on every read, so stripping it here would look like it
-# worked and then quietly un-migrate on the next task created. It is also
-# harmless — no reader consults it, and Orchestra's projection uses it only as a
-# sort tiebreak. Removing it from the Task model is the fix; this migration is
-# not the place to fake one.
 
 # A definition left carrying one of these read as dead under the old model.
 # Under the new one it is armed again, which is a change worth naming.
