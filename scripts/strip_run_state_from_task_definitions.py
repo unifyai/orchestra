@@ -39,7 +39,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from sqlalchemy import ARRAY, Text, cast, create_engine, select
+from sqlalchemy import ARRAY, Text, cast, create_engine, delete, func, select
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -176,20 +176,20 @@ def drop_field_registrations(
     context_ids = [int(context.id) for context in contexts]
     if not context_ids:
         return 0
-    registrations = list(
-        session.execute(
-            select(FieldType).where(
-                FieldType.context_id.in_(context_ids),
-                FieldType.field_name.in_(fields),
-            ),
-        )
-        .scalars()
-        .unique(),
+    where = (
+        FieldType.context_id.in_(context_ids),
+        FieldType.field_name.in_(fields),
     )
-    if execute:
-        for registration in registrations:
-            session.delete(registration)
-    return len(registrations)
+    if not execute:
+        return int(
+            session.execute(
+                select(func.count()).select_from(FieldType).where(*where),
+            ).scalar_one(),
+        )
+    # One statement: deleting thousands of registrations as ORM objects issues
+    # a DELETE apiece, which does not survive the round-trip cost to a hosted
+    # database.
+    return int(session.execute(delete(FieldType).where(*where)).rowcount)
 
 
 def main() -> int:
