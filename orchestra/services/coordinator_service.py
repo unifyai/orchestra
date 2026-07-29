@@ -2374,14 +2374,21 @@ def _has_ms_teams_bot_install(
     *,
     reset_after: datetime | None = None,
 ) -> bool:
+    """Whether the Coordinator's owner has claimed a Teams tenant install.
+
+    Console binds a pending install to the *active workspace* owner, which is not
+    always the scope the Coordinator sits in: an org Coordinator's boss can
+    complete the handshake while in their personal workspace. Accept either, or
+    the step stays open forever against an install that plainly exists.
+    """
     dao = MsTeamsBotDAO(scope.session)
     coordinator = scope.coordinator
-    install = (
-        dao.get_install_for_org(coordinator.organization_id)
-        if coordinator.organization_id is not None
-        else dao.get_install_for_user(coordinator.user_id)
-    )
-    return install is not None
+    if (
+        coordinator.organization_id is not None
+        and dao.get_install_for_org(coordinator.organization_id) is not None
+    ):
+        return True
+    return dao.get_install_for_user(coordinator.user_id) is not None
 
 
 def _has_user_discord_id(

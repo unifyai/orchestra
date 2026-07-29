@@ -10,7 +10,7 @@ from orchestra.services.task_machine_state_service import (
     get_latest_task_execution_for_task,
     get_open_task_execution,
     get_task_execution,
-    release_active_task_source,
+    release_stuck_task_executions,
     resolve_tasks_context_name,
     sync_task_executions_for_task_ids,
     update_task_outbound_operation,
@@ -247,7 +247,7 @@ def release_active_task_source_core(
     session,
     request: TaskSourceReleaseRequest,
 ) -> dict:
-    """Release one active Tasks source row for offline crash/retry writeback."""
+    """Terminalize executions left running after their offline worker vanished."""
 
     project = _get_internal_project_or_404(
         session,
@@ -255,11 +255,10 @@ def release_active_task_source_core(
         assistant_id=request.assistant_id,
     )
     try:
-        return release_active_task_source(
+        return release_stuck_task_executions(
             session=session,
             project_id=project.id,
             source_task_log_id=request.source_task_log_id,
-            mode=request.mode,
             info=request.info,
         )
     except ValueError as exc:

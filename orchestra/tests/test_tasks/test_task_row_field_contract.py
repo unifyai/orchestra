@@ -7,11 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestra.services.task_row_field import (
-    AuthoredTaskField,
-    RuntimeTaskField,
-    RuntimeTaskStatus,
-)
+from orchestra.services.task_row_field import AuthoredTaskField, RuntimeTaskField
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[1]
@@ -33,13 +29,6 @@ def test_authored_task_field_matches_shared_fixture() -> None:
 def test_runtime_task_field_matches_shared_fixture() -> None:
     fixture = _load_fixture()
     assert sorted(RuntimeTaskField.values()) == sorted(fixture["runtime_fields"])
-
-
-def test_runtime_task_status_matches_shared_fixture() -> None:
-    fixture = _load_fixture()
-    assert sorted(RuntimeTaskStatus.values()) == sorted(
-        fixture["runtime_status_values"],
-    )
 
 
 def test_classify_provider_event_update_fields_uses_enum_partitions() -> None:
@@ -67,21 +56,16 @@ def test_classify_provider_event_update_fields_uses_enum_partitions() -> None:
         )
         is ProviderEventUpdateKind.authored
     )
+    # Run state no longer lives on a definition, so the fields that used to be
+    # classified as runtime are simply not part of the row vocabulary.
+    for retired in ({"status": "active"}, {"activated_by": "explicit"}):
+        with pytest.raises(ProviderEventWriteRejected, match="unclassified_fields"):
+            classify_provider_event_update_fields(retired, existing_data=existing)
+
+    # Arming is authored: it takes the revision CAS path like any other edit.
     assert (
         classify_provider_event_update_fields(
-            {"status": "active", "activated_by": "explicit"},
-            existing_data=existing,
-        )
-        is ProviderEventUpdateKind.runtime
-    )
-    with pytest.raises(ProviderEventWriteRejected):
-        classify_provider_event_update_fields(
-            {"description": "mixed", "status": "active"},
-            existing_data=existing,
-        )
-    assert (
-        classify_provider_event_update_fields(
-            {"status": "triggerable"},
+            {"enabled": False},
             existing_data=existing,
         )
         is ProviderEventUpdateKind.authored
