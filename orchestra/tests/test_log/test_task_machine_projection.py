@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -1892,3 +1893,133 @@ async def test_task_run_admin_mutations_resolve_assistant_scoped_project(
     matching = [log for log in run_logs if log["entries"].get("run_key") == run_key]
     assert len(matching) == 1
     assert matching[0]["entries"]["state"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_series_advances_one_occurrence_at_a_time(client: AsyncClient) -> None:
+    """Walk two occurrences the way dispatch does, and count the rows.
+
+    Every defect that silently stopped a ten-minute recurring tick lived here,
+    and none of them raised — the series just stopped advancing:
+
+    * A projected occurrence born ``running`` looked like a live concurrent peer
+      to its predecessor the moment that predecessor started, so an overlap
+      guard skipped both, forever.
+    * A dispatcher that could not rebuild the projected ``run_key`` created a
+      *second* row for the same occurrence instead of adopting the first, which
+      reads as concurrency for the same reason.
+
+    So this asserts occurrence counts and states rather than absence of errors:
+    one pending row per slot, adopted (not duplicated) when it starts, and a
+    successor that is pending and later while its predecessor still runs.
+    """
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=707),
+    )
+    assert response.status_code == 200, response.json()
+
+    def _rows() -> list[dict]:
+        return [
+            log["entries"] for log in executions if log["entries"].get("task_id") == 707
+        ]
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    projected = _rows()
+    assert len(projected) == 1, f"expected one projected occurrence: {projected}"
+    head = projected[0]
+    assert head["state"] == "scheduled", head
+    assert not head.get("started_at"), "a projected occurrence has not started"
+    assert head.get("run_key"), head
+
+    # Dispatch adopts the projected row by run_key rather than creating a twin.
+    adopt = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": head["run_key"],
+            "assistant_id": str(head["assistant_id"]),
+            "task_id": 707,
+            "source_task_log_id": head.get("source_task_log_id"),
+            "wake": head["wake"],
+            "delivery": head["delivery"],
+            "scheduled_for": head["scheduled_for"],
+            "state": "running",
+            "started_at": "2026-04-10T09:00:01+00:00",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert adopt.status_code == 200, adopt.json()
+    assert adopt.json()["created"] is False, (
+        "dispatch created a second execution for one occurrence instead of "
+        "adopting the projected row"
+    )
+
+    # Adoption returns the row as-is; the dispatcher marks it running itself,
+    # the way Communication does once the job is launched.
+    started = await client.post(
+        "/v0/admin/task-execution/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(head["assistant_id"]),
+            "run_key": head["run_key"],
+            "source_task_log_id": head.get("source_task_log_id"),
+            "updates": {
+                "state": "running",
+                "started_at": "2026-04-10T09:00:01+00:00",
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert started.status_code == 200, started.json()
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    running = _rows()
+    assert len(running) == 1, f"one occurrence must own one row: {running}"
+    assert running[0]["state"] == "running"
+
+    # The successor is projected while that run is still in flight.
+    successor_slot = "2026-04-10T09:10:00+00:00"
+    created = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": f"{head['run_key']}-successor",
+            "assistant_id": str(head["assistant_id"]),
+            "task_id": 707,
+            "source_task_log_id": head.get("source_task_log_id"),
+            "wake": head["wake"],
+            "delivery": head["delivery"],
+            "scheduled_for": successor_slot,
+            "state": "scheduled",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert created.status_code == 200, created.json()
+    assert created.json()["created"] is True
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    walked = _rows()
+    assert len(walked) == 2, f"the series did not advance exactly one slot: {walked}"
+    by_state = {row["state"]: row for row in walked}
+    assert set(by_state) == {"running", "scheduled"}, walked
+    successor = by_state["scheduled"]
+    # Orchestra normalizes the stored instant; compare as instants, not strings.
+    assert _parse_iso(successor["scheduled_for"]) == _parse_iso(successor_slot)
+    assert not successor.get("started_at"), (
+        "the successor was born running; it and its predecessor read as "
+        "concurrent peers and skip each other"
+    )
+    assert (
+        by_state["running"]["run_key"] == head["run_key"]
+    ), "projecting the successor replaced or terminalized the in-flight run"
+
+
+def _parse_iso(value: str) -> datetime:
+    """Parse an ISO-8601 instant, accepting either a Z or an explicit offset."""
+
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
