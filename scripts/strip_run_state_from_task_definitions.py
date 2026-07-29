@@ -15,7 +15,7 @@ recurring task is dead. That is the confusion the split exists to end.
 What it removes:
 
 * ``.../Tasks`` definitions — ``status``, ``activated_by``, ``completed_at``,
-  ``info``, ``instance_id``.
+  ``info``.
 * ``.../Tasks/Executions`` — ``status``, the mirror of ``state`` that the
   projection no longer writes.
 * The ``field_type`` registrations for those columns on those contexts.
@@ -39,7 +39,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import ARRAY, Text, cast, create_engine, select
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.orchestra_models import (
@@ -60,9 +61,15 @@ LEGACY_DEFINITION_FIELDS = (
     "activated_by",
     "completed_at",
     "info",
-    "instance_id",
 )
 LEGACY_EXECUTION_FIELDS = ("status",)
+
+# `instance_id` is deliberately absent. The scheduler still writes it on create
+# while dropping it on every read, so stripping it here would look like it
+# worked and then quietly un-migrate on the next task created. It is also
+# harmless — no reader consults it, and Orchestra's projection uses it only as a
+# sort tiebreak. Removing it from the Task model is the fix; this migration is
+# not the place to fake one.
 
 # A definition left carrying one of these read as dead under the old model.
 # Under the new one it is armed again, which is a change worth naming.
@@ -74,7 +81,9 @@ def definition_contexts(session: Session) -> list[Context]:
 
     return [
         context
-        for context in session.execute(select(Context)).scalars()
+        for context in session.execute(
+            select(Context).where(Context.name.like("%Tasks")),
+        ).scalars()
         if is_task_surface_context_name(context.name)
     ]
 
@@ -82,24 +91,40 @@ def definition_contexts(session: Session) -> list[Context]:
 def execution_contexts(session: Session) -> list[Context]:
     """Every ``Tasks/Executions`` run ledger."""
 
-    suffix = TASK_EXECUTIONS_CONTEXT_NAME
-    return [
-        context
-        for context in session.execute(select(Context)).scalars()
-        if (context.name or "").strip("/").endswith(suffix)
-    ]
-
-
-def _rows_in(session: Session, context_id: int) -> list[LogEvent]:
     return list(
         session.execute(
-            select(LogEvent)
-            .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-            .where(LogEventContext.context_id == context_id),
+            select(Context).where(
+                Context.name.like(f"%{TASK_EXECUTIONS_CONTEXT_NAME}"),
+            ),
         )
         .scalars()
-        .unique(),
+        .all(),
     )
+
+
+def _rows_carrying(
+    session: Session,
+    context_ids: list[int],
+    fields: tuple[str, ...],
+) -> list[tuple[LogEvent, str]]:
+    """Every row in ``context_ids`` that still carries a retired key.
+
+    One round-trip for the whole sweep, and the ``?|`` containment test keeps
+    untouched rows on the server rather than shipping them here to be skipped.
+    """
+
+    if not context_ids:
+        return []
+    rows = session.execute(
+        select(LogEvent, Context.name)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .where(
+            LogEventContext.context_id.in_(context_ids),
+            LogEvent.data.op("?|")(cast(array(fields), ARRAY(Text))),
+        ),
+    ).unique()
+    return [(row[0], row[1]) for row in rows]
 
 
 def strip_payload_keys(
@@ -108,37 +133,35 @@ def strip_payload_keys(
     fields: tuple[str, ...],
     *,
     execute: bool,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, list[str]]:
     """Drop retired keys from every row in ``contexts``.
 
-    Returns rows scanned, rows changed, and definitions whose retired
-    ``status`` said dead while their authored intent says armed.
+    Returns rows changed, and definitions whose retired ``status`` said dead
+    while their authored intent says armed.
     """
 
-    scanned = 0
+    context_ids = [int(context.id) for context in contexts]
     changed = 0
     revived: list[str] = []
-    for context in contexts:
-        for row in _rows_in(session, int(context.id)):
-            scanned += 1
-            data = dict(row.data or {})
-            retired = [key for key in fields if key in data]
-            if not retired:
-                continue
-            if (
-                str(data.get("status") or "") in TERMINAL_LEGACY_STATUSES
-                and data.get("enabled") is not False
-            ):
-                revived.append(
-                    f"{context.name} task_id={data.get('task_id')} "
-                    f"status={data.get('status')}",
-                )
-            for key in retired:
-                data.pop(key)
-            changed += 1
-            if execute:
-                _replace_log_payload(row, data)
-    return scanned, changed, revived
+    for row, context_name in _rows_carrying(session, context_ids, fields):
+        data = dict(row.data or {})
+        retired = [key for key in fields if key in data]
+        if not retired:
+            continue
+        if (
+            str(data.get("status") or "") in TERMINAL_LEGACY_STATUSES
+            and data.get("enabled") is not False
+        ):
+            revived.append(
+                f"{context_name} task_id={data.get('task_id')} "
+                f"status={data.get('status')}",
+            )
+        for key in retired:
+            data.pop(key)
+        changed += 1
+        if execute:
+            _replace_log_payload(row, data)
+    return changed, revived
 
 
 def drop_field_registrations(
@@ -184,13 +207,13 @@ def main() -> int:
         definitions = definition_contexts(session)
         executions = execution_contexts(session)
 
-        def_scanned, def_changed, revived = strip_payload_keys(
+        def_changed, revived = strip_payload_keys(
             session,
             definitions,
             LEGACY_DEFINITION_FIELDS,
             execute=args.execute,
         )
-        run_scanned, run_changed, _ = strip_payload_keys(
+        run_changed, _ = strip_payload_keys(
             session,
             executions,
             LEGACY_EXECUTION_FIELDS,
@@ -220,9 +243,9 @@ def main() -> int:
 
     mode = "" if args.execute else "DRY RUN — "
     print(
-        f"{mode}definitions: {def_changed}/{def_scanned} rows stripped across "
+        f"{mode}definitions: {def_changed} rows stripped across "
         f"{len(definitions)} contexts, {def_fields} column registrations dropped\n"
-        f"{mode}executions:  {run_changed}/{run_scanned} rows stripped across "
+        f"{mode}executions:  {run_changed} rows stripped across "
         f"{len(executions)} contexts, {run_fields} column registrations dropped",
         file=sys.stderr,
     )
