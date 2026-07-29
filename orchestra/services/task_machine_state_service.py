@@ -246,16 +246,24 @@ def _build_open_execution_run_key(
 ) -> str:
     """Build the idempotency key for an open (scheduled/triggerable) Execution.
 
-    Matches Unify ``build_task_run_key`` so due-fire create-or-adopt adopts the
-    same row projected here.
+    Must produce byte-identical output to Unify ``build_task_run_key``: the key
+    is what makes create-or-adopt converge, so any drift stops the dispatcher
+    adopting the row projected here and mints a second execution for the same
+    occurrence instead. Two rows per occurrence read as concurrency, and an
+    overlap guard then skips every tick — a silent halt, not an error.
+
+    Both normalizers below exist for that reason. ``team:11`` and
+    ``2026-07-29T16:50:00+00:00`` were the drift that caused it.
     """
 
     revision_digest = hashlib.sha256(
         str(revision or "").encode("utf-8"),
     ).hexdigest()[:12]
-    destination_part = f"{_coerce_optional_str(destination)}:" if destination else ""
-    if due_at:
-        tail = str(due_at).replace(" ", "T")
+    normalized_destination = _normalize_run_key_component(destination)
+    destination_part = f"{normalized_destination}:" if normalized_destination else ""
+    normalized_due = _normalize_run_datetime_fragment(due_at) if due_at else None
+    if normalized_due:
+        tail = normalized_due
     elif wake == "triggered":
         tail = "arm"
     else:
@@ -2857,3 +2865,33 @@ def _extract_key_order(data: Any, path: str = "_root") -> dict[str, list[str]]:
             if isinstance(item, dict):
                 result.update(_extract_key_order(item, f"{path}[{index}]"))
     return result
+
+
+def _normalize_run_key_component(value: Any) -> str | None:
+    """Normalize one free-form run-key component into a compact identifier.
+
+    Mirrors Unify ``_normalize_run_key_component``. See
+    ``_build_open_execution_run_key`` for why the two must not drift.
+    """
+
+    text = _coerce_optional_str(value)
+    if not text:
+        return None
+    normalized = "".join(
+        char.lower() if char.isalnum() else "-" for char in text.strip()
+    ).strip("-")
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    return normalized or None
+
+
+def _normalize_run_datetime_fragment(value: Any) -> str | None:
+    """Normalize a datetime into the canonical run-key timestamp fragment.
+
+    Mirrors Unify ``_normalize_run_datetime_fragment``.
+    """
+
+    parsed = _parse_datetime(_coerce_datetime_string(value))
+    if parsed is None:
+        return None
+    return parsed.strftime("%Y%m%dT%H%M%SZ")
