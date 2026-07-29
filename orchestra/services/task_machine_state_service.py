@@ -14,7 +14,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 import httpx
@@ -1254,7 +1254,33 @@ def create_task_run_if_absent(
         created_payload["run_id"] = created_row.id
         _replace_log_payload(created_row, created_payload)
     session.flush()
+    # A newly created open occurrence must reach Communication's delayed queue
+    # or nothing ever fires it: the definition-write sync cannot see it,
+    # because projecting an occurrence deliberately writes no definition. Only
+    # a pending row with its due time still ahead materializes — a run created
+    # already running is being started by its own dispatcher right now, and a
+    # row created at/after its due time is a dispatch-time create whose
+    # delayed task would fire again immediately.
+    if (
+        created.created
+        and str(created_row.data.get("state") or "") == "scheduled"
+        and _occurrence_is_in_the_future(created_row.data)
+    ):
+        _reconcile_scheduled_execution_materialization(
+            previous_execution=None,
+            current_execution=dict(created_row.data or {}),
+        )
     return created_row, created.created
+
+
+def _occurrence_is_in_the_future(data: Mapping[str, Any]) -> bool:
+    """Whether a run row's dispatch moment (due time plus jitter) is ahead."""
+
+    due = _parse_datetime(_coerce_datetime_string(data.get("scheduled_for")))
+    if due is None:
+        return False
+    offset = float(data.get("dispatch_offset_seconds") or 0.0)
+    return due + timedelta(seconds=offset) > datetime.now(timezone.utc)
 
 
 def release_stuck_task_executions(
@@ -2014,9 +2040,13 @@ def _scheduled_execution_snapshot(
         return None
     assistant_id = _coerce_optional_str(execution.get("assistant_id"))
     task_id = _coerce_int(execution.get("task_id"))
-    revision = _coerce_optional_str(execution.get("revision"))
+    # Unify-projected occurrences carry revision "" (their run_key digested
+    # that value), so an empty revision is a real identity here, not a gap.
+    # Communication rebuilds the run key from this field at fire time; sending
+    # anything else would mint a second execution for the same occurrence.
+    revision = _coerce_optional_str(execution.get("revision")) or ""
     scheduled_for = _coerce_datetime_string(execution.get("scheduled_for"))
-    if not assistant_id or task_id is None or not revision or not scheduled_for:
+    if not assistant_id or task_id is None or not scheduled_for:
         return None
     return {
         "assistant_id": assistant_id,
@@ -2024,6 +2054,9 @@ def _scheduled_execution_snapshot(
         "task_id": task_id,
         "revision": revision,
         "scheduled_for": scheduled_for,
+        "dispatch_offset_seconds": float(
+            execution.get("dispatch_offset_seconds") or 0.0,
+        ),
         "delivery": _coerce_optional_str(execution.get("delivery")) or "live",
         "requires_filesystem": _requires_filesystem_from_row(execution),
         "requires_computer": _requires_computer_from_row(execution),
