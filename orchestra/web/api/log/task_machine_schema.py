@@ -167,6 +167,14 @@ class TaskSourceReleaseRequest(BaseModel):
         default=None,
         description="Optional diagnostic note stored on each released execution.",
     )
+    run_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Release only this run. Omit to release every running execution "
+            "under the definition, which also terminalizes any sibling "
+            "occurrence that has already started."
+        ),
+    )
 
 
 class TaskSourceReleaseResponse(BaseModel):

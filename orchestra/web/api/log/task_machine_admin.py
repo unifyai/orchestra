@@ -260,6 +260,7 @@ def release_active_task_source_core(
             project_id=project.id,
             source_task_log_id=request.source_task_log_id,
             info=request.info,
+            run_key=request.run_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

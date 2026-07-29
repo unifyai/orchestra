@@ -24,7 +24,9 @@ def _execution(run_key: str, state: str) -> SimpleNamespace:
 
 def _session_returning(rows: list[SimpleNamespace]) -> MagicMock:
     session = MagicMock()
-    session.query.return_value.filter.return_value.all.return_value = rows
+    query = session.query.return_value.filter.return_value
+    query.filter.return_value = query
+    query.all.return_value = rows
     return session
 
 
@@ -100,3 +102,40 @@ def test_release_never_writes_to_a_definition():
         assert "status" not in written
         assert "enabled" not in written
         assert written.get("run_key"), "only execution rows may be written"
+
+
+def test_release_is_scoped_to_one_run_when_given_a_run_key():
+    """A finishing worker must not terminalize the occurrence that follows it.
+
+    Recurrence projects the next occurrence at dispatch, so by the time a Job
+    reaches a terminal condition its successor is often already running. An
+    unscoped release from that worker killed the successor, and the series
+    stopped advancing after a single healthy run.
+    """
+
+    session = _session_returning([_execution("run-a", "running")])
+
+    release_stuck_task_executions(
+        session,
+        project_id=1,
+        source_task_log_id=555,
+        run_key="run-a",
+    )
+
+    scoped = session.query.return_value.filter.return_value
+    assert scoped.filter.called, "run_key must narrow the query to one run"
+
+
+def test_release_without_a_run_key_stays_definition_wide():
+    """The break-glass keeps its original reach when no run is named."""
+
+    session = _session_returning([_execution("run-a", "running")])
+
+    release_stuck_task_executions(
+        session,
+        project_id=1,
+        source_task_log_id=555,
+    )
+
+    scoped = session.query.return_value.filter.return_value
+    assert not scoped.filter.called
