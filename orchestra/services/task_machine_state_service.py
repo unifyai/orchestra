@@ -1770,11 +1770,19 @@ def _project_execution_payload(
     # projects each occurrence as its own execution keyed on `scheduled_for`,
     # so an existing open execution is authoritative and the anchor is only a
     # fallback for a series whose first occurrence has not been projected yet.
-    scheduled_for = _open_execution_scheduled_for(
-        session,
-        project_id=project_id,
-        source_task_log_id=row.log_event_id,
-    ) or _coerce_datetime_string(schedule.get("start_at"))
+    # Occurrences only ever advance from the anchor, so an open execution
+    # falling before it belongs to a schedule the author has since replaced;
+    # ignoring it lets the edit mint a new run_key and retire the old head.
+    anchor = _coerce_datetime_string(schedule.get("start_at"))
+    scheduled_for = (
+        _open_execution_scheduled_for(
+            session,
+            project_id=project_id,
+            source_task_log_id=row.log_event_id,
+            not_before=anchor,
+        )
+        or anchor
+    )
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
@@ -2119,8 +2127,12 @@ def _open_execution_scheduled_for(
     *,
     project_id: int,
     source_task_log_id: int,
+    not_before: str | None = None,
 ) -> str | None:
-    """Earliest open occurrence already projected for one definition."""
+    """Earliest open occurrence already projected for one definition.
+
+    ``not_before`` discards occurrences projected from a superseded schedule.
+    """
 
     rows = (
         session.query(LogEvent)
@@ -2131,11 +2143,31 @@ def _open_execution_scheduled_for(
         )
         .all()
     )
-    due = [
-        _coerce_datetime_string((row.data or {}).get("scheduled_for")) for row in rows
-    ]
-    known = sorted(value for value in due if value)
-    return known[0] if known else None
+    floor = _parse_datetime(not_before)
+    due = []
+    for row in rows:
+        value = _coerce_datetime_string((row.data or {}).get("scheduled_for"))
+        parsed = _parse_datetime(value)
+        if not value or parsed is None:
+            continue
+        if floor is not None and parsed < floor:
+            continue
+        due.append((parsed, value))
+    return min(due)[1] if due else None
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 string into an aware UTC datetime, or None."""
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:

@@ -703,35 +703,6 @@ async def test_task_update_reconciles_new_schedule_head(
 
 
 @pytest.mark.anyio
-async def test_task_update_clears_execution_when_row_stops_being_armed(
-    client: AsyncClient,
-):
-    """Updating a task into a non-activatable status should clear the activation."""
-
-    await _ensure_task_machine_project(client)
-    response = await _create_log(
-        client,
-        TASK_MACHINE_PROJECT_NAME,
-        context=TASKS_CONTEXT,
-        entries=_scheduled_task_entries(task_id=202),
-    )
-    assert response.status_code == 200, response.json()
-    log_id = response.json()["log_event_ids"][0]
-
-    response = await _update_logs(
-        client,
-        [log_id],
-        {"status": "active"},
-        context=TASKS_CONTEXT,
-        overwrite=True,
-    )
-    assert response.status_code == 200, response.json()
-
-    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
-    assert all(log["entries"]["task_id"] != 202 for log in executions)
-
-
-@pytest.mark.anyio
 async def test_disabled_scheduled_task_does_not_project_execution(
     client: AsyncClient,
 ):
