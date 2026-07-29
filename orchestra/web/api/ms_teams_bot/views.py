@@ -273,11 +273,15 @@ class ConversationRouteResponse(BaseModel):
 def _build_connect_url(nonce: str) -> str:
     """One-click Console link that binds this install to the signed-in owner.
 
-    Console's ``/assistants`` page consumes ``ms_teams_bind`` and calls the
-    bind handshake, so the installer never copies a code by hand.
+    Console's ``/connect/ms-teams`` route handler claims the install server-side
+    and then redirects to the assistants surface, so the installer never copies a
+    code by hand. It is a server route rather than a page param because the link
+    is usually opened without a Console session: the request funnels through
+    sign-in (and possibly MFA / account onboarding) first, and only Console's
+    middleware can carry the nonce across those hops.
     """
     base = (settings.console_url or "https://console.unify.ai/").rstrip("/")
-    return f"{base}/assistants?ms_teams_bind={quote(nonce)}"
+    return f"{base}/connect/ms-teams?nonce={quote(nonce)}"
 
 
 def _install_to_response(
