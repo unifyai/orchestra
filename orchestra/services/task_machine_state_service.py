@@ -1243,6 +1243,7 @@ def release_stuck_task_executions(
     project_id: int,
     source_task_log_id: int,
     info: str | None = None,
+    run_key: str | None = None,
 ) -> dict[str, Any]:
     """Terminalize executions still ``running`` after their worker vanished.
 
@@ -1252,20 +1253,25 @@ def release_stuck_task_executions(
     longer an ``active`` definition to release and nothing here can disarm a
     schedule.
 
+    Pass ``run_key`` to release one run. Without it this releases every running
+    execution under the definition, which is only safe when no sibling is meant
+    to survive: recurrence projects the next occurrence at dispatch, so an
+    unscoped release from a finishing worker terminalizes the successor that
+    just started and the series stops advancing.
+
     The previous implementation wrote ``failed`` onto the definition with no
     check for whether it repeats, which permanently disarmed recurring tasks —
     the documented break-glass was itself an outage cause.
     """
 
-    executions = (
-        session.query(LogEvent)
-        .filter(
-            LogEvent.project_id == project_id,
-            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
-            LogEvent.data["state"].astext == "running",
-        )
-        .all()
+    query = session.query(LogEvent).filter(
+        LogEvent.project_id == project_id,
+        LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+        LogEvent.data["state"].astext == "running",
     )
+    if run_key:
+        query = query.filter(LogEvent.data["run_key"].astext == str(run_key))
+    executions = query.all()
     if not executions:
         return {
             "updated": False,
