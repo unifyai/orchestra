@@ -118,8 +118,8 @@ class InstallResponse(BaseModel):
         None,
         description=(
             "One-click Console URL that claims this pending install for the "
-            "signed-in owner (carries ``bind_nonce`` as ``ms_teams_bind``). "
-            "Populated alongside ``bind_nonce`` so the bot can DM the "
+            "signed-in owner (carries ``bind_nonce`` as the ``nonce`` query "
+            "param). Populated alongside ``bind_nonce`` so the bot can DM the "
             "installer a single link instead of a code to copy."
         ),
     )
@@ -227,7 +227,7 @@ class DispatchResponse(BaseModel):
         None,
         description=(
             "One-click Console URL to bind a pending install (carries the "
-            "``bind_nonce`` as ``ms_teams_bind``). Populated only when "
+            "``bind_nonce`` as the ``nonce`` query param). Populated only when "
             "``install_state == 'pending'``."
         ),
     )
