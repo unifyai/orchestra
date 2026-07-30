@@ -2023,3 +2023,152 @@ def _parse_iso(value: str) -> datetime:
     """Parse an ISO-8601 instant, accepting either a Z or an explicit offset."""
 
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+@pytest.mark.anyio
+async def test_a_definition_write_leaves_an_advanced_series_where_it_is(
+    client: AsyncClient,
+) -> None:
+    """A write to the definition must not drag the head back to the anchor.
+
+    Recurrence lives in the runtime, so the only slot Orchestra can name from a
+    definition alone is ``schedule.start_at``. Once the series has run past it
+    that slot is in the past, and projecting it here did two things at once: it
+    rebuilt a head on an occurrence that had already fired, and — because the
+    rebuilt ``run_key`` differed from the live one — it *deleted* the correct
+    future head the runtime had just projected.
+
+    In production that turned every definition write into a silent reset. The
+    console reported a next run stuck on the task's start time, and the series
+    only advanced when a runtime projection happened to survive between writes.
+    """
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=811),
+    )
+    assert response.status_code == 200, response.json()
+    definition_log_id = response.json()["log_event_ids"][0]
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    head = next(
+        log["entries"] for log in executions if log["entries"].get("task_id") == 811
+    )
+
+    # The occurrence at the anchor runs and finishes, the way dispatch leaves it.
+    consumed = await client.post(
+        "/v0/admin/task-execution/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(head["assistant_id"]),
+            "run_key": head["run_key"],
+            "source_task_log_id": head.get("source_task_log_id"),
+            "updates": {
+                "state": "completed",
+                "started_at": "2026-04-10T09:00:01+00:00",
+                "completed_at": "2026-04-10T09:02:00+00:00",
+            },
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert consumed.status_code == 200, consumed.json()
+
+    successor_slot = "2026-04-11T09:00:00+00:00"
+    projected = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": f"{head['run_key']}-next",
+            "assistant_id": str(head["assistant_id"]),
+            "task_id": 811,
+            "source_task_log_id": head.get("source_task_log_id"),
+            "wake": head["wake"],
+            "delivery": head["delivery"],
+            "scheduled_for": successor_slot,
+            "state": "scheduled",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert projected.status_code == 200, projected.json()
+
+    # Any write to the definition re-runs the projection.
+    touched = await _update_logs(
+        client,
+        [definition_log_id],
+        {"description": "unchanged intent, rewritten row"},
+        context=TASKS_CONTEXT,
+    )
+    assert touched.status_code == 200, touched.json()
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    rows = [
+        log["entries"] for log in executions if log["entries"].get("task_id") == 811
+    ]
+    open_rows = [row for row in rows if row["state"] == "scheduled"]
+    assert len(open_rows) == 1, f"the head was rebuilt or duplicated: {rows}"
+    assert _parse_iso(open_rows[0]["scheduled_for"]) == _parse_iso(successor_slot), (
+        "the head was dragged back to the anchor, onto an occurrence that had "
+        "already run"
+    )
+    assert {row["state"] for row in rows} == {"completed", "scheduled"}, rows
+
+
+@pytest.mark.anyio
+async def test_moving_the_anchor_past_the_series_still_mints_a_new_head(
+    client: AsyncClient,
+) -> None:
+    """Holding the head must not cost the author the ability to reschedule.
+
+    The anchor is authored intent. Moving it ahead of every occurrence so far
+    says "the series restarts here", and that has to retire the old head — the
+    protection above applies only to an anchor the series has already passed.
+    """
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=812),
+    )
+    assert response.status_code == 200, response.json()
+    definition_log_id = response.json()["log_event_ids"][0]
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    head = next(
+        log["entries"] for log in executions if log["entries"].get("task_id") == 812
+    )
+    consumed = await client.post(
+        "/v0/admin/task-execution/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": str(head["assistant_id"]),
+            "run_key": head["run_key"],
+            "source_task_log_id": head.get("source_task_log_id"),
+            "updates": {"state": "completed", "completed_at": "2026-04-10T09:02:00Z"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert consumed.status_code == 200, consumed.json()
+
+    moved = await _update_logs(
+        client,
+        [definition_log_id],
+        _scheduled_task_entries(task_id=812, start_at="2026-05-01T09:00:00+00:00"),
+        context=TASKS_CONTEXT,
+        overwrite=True,
+    )
+    assert moved.status_code == 200, moved.json()
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    rows = [
+        log["entries"] for log in executions if log["entries"].get("task_id") == 812
+    ]
+    open_rows = [row for row in rows if row["state"] == "scheduled"]
+    assert len(open_rows) == 1, rows
+    assert _parse_iso(open_rows[0]["scheduled_for"]) == _parse_iso(
+        "2026-05-01T09:00:00+00:00",
+    )
