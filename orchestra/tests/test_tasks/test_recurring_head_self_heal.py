@@ -39,13 +39,14 @@ _TEN_MINUTES = [{"frequency": "minutely", "interval": 10}]
 
 def _definition_row(
     repeat: list[dict] | None = _TEN_MINUTES,
+    start_at: str = "2026-07-29T22:00:00+00:00",
 ) -> service._TaskRow:
     data = {
         "task_id": 12,
         "name": "Ten minute tick",
         "description": "Recurring operator tick.",
         "enabled": True,
-        "schedule": {"start_at": "2026-07-29T22:00:00+00:00"},
+        "schedule": {"start_at": start_at},
         "_user_id": "1",
         "_assistant_id": "42",
     }
@@ -90,6 +91,28 @@ def test_a_halted_repeating_series_mints_a_future_head() -> None:
     minted = datetime.fromisoformat(payload["scheduled_for"])
     assert minted > datetime.now(timezone.utc)
     # The minted slot stays on the series grid anchored by the consumed one.
+    assert (minted - consumed).total_seconds() % 600 == 0
+
+
+def test_a_month_long_outage_still_mints_a_future_head() -> None:
+    """Outage length must not bound the self-heal.
+
+    Dense frequencies fast-forward to the present instead of stepping one slot
+    at a time, so a series dead far longer than the projection's iteration
+    bound (2048 slots — two weeks at ten minutes) still comes back.
+    """
+
+    consumed = datetime.now(timezone.utc) - timedelta(days=30, minutes=7)
+    definition = _definition_row(
+        start_at=(consumed - timedelta(days=1)).isoformat(),
+    )
+
+    payload = _project(definition, latest=consumed)
+
+    assert payload is not KEEP_CURRENT_HEAD
+    minted = datetime.fromisoformat(payload["scheduled_for"])
+    assert minted > datetime.now(timezone.utc)
+    assert minted - datetime.now(timezone.utc) <= timedelta(minutes=10)
     assert (minted - consumed).total_seconds() % 600 == 0
 
 
