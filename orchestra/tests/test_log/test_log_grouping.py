@@ -1018,6 +1018,33 @@ async def test_sorting_with_grouping_expression_sort_key(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_sorting_with_grouping_bare_literal_sort_key_fails_fast(
+    client: AsyncClient,
+):
+    """A sort key that parses to a bare literal (not an identifier or an
+    expression dict) must fail with a clear 400, not an unhandled 500.
+    """
+    project_name = "test-sorting-with-grouping-bare-literal"
+    await _create_project(client, project_name)
+    await _create_log(
+        client,
+        project_name,
+        entries={"student": "Alice", "test": "Math", "score": 95},
+    )
+
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps({"-1": "ascending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
 async def test_sorting_edge_cases(client: AsyncClient):
     """Test edge cases in sorting with groups."""
     project_name = "test-sorting-edge-cases"

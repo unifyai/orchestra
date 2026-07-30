@@ -2260,6 +2260,11 @@ def _fetch_leaf_logs(
                 sort_key,
                 field_names=list(field_types.keys()),
             )
+            if not isinstance(expr_dict, dict):
+                raise HTTPException(
+                    400,
+                    f"Unsupported sort key for grouped fetch: {sort_key!r}",
+                )
 
             if expr_dict.get("type") == "identifier":
                 # Plain field name - use the JSONB shortcut directly.
