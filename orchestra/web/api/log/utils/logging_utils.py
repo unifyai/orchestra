@@ -1297,6 +1297,18 @@ def _get_logs_query(
                     "filtered_events",
                 )
 
+                # `embedding` has a single, unpartitioned HNSW index shared by
+                # every project (no per-project partitions have ever been
+                # promoted). project_id/key/context membership below are only
+                # post-filters applied after the ANN scan returns its
+                # candidates, not partition pruning. With the default
+                # ef_search=40, a low-selectivity project (a small fraction of
+                # the ~590k shared rows) can see zero of its own rows survive
+                # the post-filter, causing zero-recall results. Widen the ANN
+                # candidate set for this transaction only so recall stays
+                # correct regardless of a project's share of the shared index.
+                session.execute(text("SET LOCAL hnsw.ef_search = 1000"))
+
                 ann_topk = (
                     select(
                         Embedding.ref_id.label("id"),
@@ -1306,8 +1318,9 @@ def _get_logs_query(
                         type_coerce(dist, Float).label("dist"),
                     )
                     .where(
-                        # Constrain to this project's partition so the planner
-                        # prunes to a single per-partition HNSW index.
+                        # project_id/key/context membership are post-filters
+                        # applied after the ANN scan, not partition pruning
+                        # (see ef_search comment above).
                         Embedding.project_id == project_id,
                         owner_scope_clause(Embedding, owner_key_filter),
                         Embedding.key == lhs_key,
