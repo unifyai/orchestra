@@ -876,6 +876,130 @@ async def test_connection_start_derives_requested_scopes_generically(
 
 
 @pytest.mark.anyio
+async def test_connection_start_reuses_connection_id_on_reconnect(
+    client: AsyncClient,
+) -> None:
+    assistant_id = 121_000 + (uuid.uuid4().int % 1000)
+    owner = _owner_payload(assistant_id=assistant_id)
+
+    first_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **owner,
+            "canonical_app_slug": "reconnect_app",
+            "backend_id": "composio",
+            "provider_app_id": "reconnect_app",
+            "requested_scopes": [],
+            "auth_mode": "oauth",
+        },
+    )
+    assert first_start.status_code == status.HTTP_200_OK, first_start.json()
+    connection_id = first_start.json()["connection"]["connection_id"]
+
+    complete = await client.post(
+        f"/v0/integrations/connections/{connection_id}/complete",
+        headers=HEADERS,
+        json={
+            "provider_connection_id": "provider-reconnect-app",
+            "granted_scopes": [],
+            "status": "connected",
+        },
+    )
+    assert complete.status_code == status.HTTP_200_OK, complete.json()
+
+    disconnect = await client.post(
+        f"/v0/integrations/connections/{connection_id}/disconnect",
+        headers=HEADERS,
+    )
+    assert disconnect.status_code == status.HTTP_200_OK, disconnect.json()
+    assert disconnect.json()["status"] == "disconnected"
+
+    second_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json={
+            **owner,
+            "canonical_app_slug": "reconnect_app",
+            "backend_id": "composio",
+            "provider_app_id": "reconnect_app",
+            "requested_scopes": [],
+            "auth_mode": "oauth",
+        },
+    )
+    assert second_start.status_code == status.HTTP_200_OK, second_start.json()
+    assert second_start.json()["connection"]["connection_id"] == connection_id
+    assert second_start.json()["connection"]["status"] == "pending"
+
+    connections = await client.get(
+        "/v0/integrations/connections",
+        headers=HEADERS,
+        params={**owner, "include_disconnected": True},
+    )
+    assert connections.status_code == status.HTTP_200_OK, connections.text
+    matching = [
+        conn
+        for conn in connections.json()
+        if conn["canonical_app_slug"] == "reconnect_app"
+    ]
+    assert len(matching) == 1
+    assert matching[0]["connection_id"] == connection_id
+
+
+@pytest.mark.anyio
+async def test_connection_start_reuses_connection_id_on_same_account_double_submit(
+    client: AsyncClient,
+) -> None:
+    """A double-submit of the same account while already connected (double-
+    click, UI retry) must reuse the existing row, not mint a duplicate.
+    """
+    assistant_id = 121_000 + (uuid.uuid4().int % 1000)
+    owner = _owner_payload(assistant_id=assistant_id)
+    payload = {
+        **owner,
+        "canonical_app_slug": "double_submit_app",
+        "backend_id": "composio",
+        "provider_app_id": "double_submit_app",
+        "requested_scopes": ["tasks:write"],
+        "auth_mode": "api_key",
+        "api_key_fields": {"token": "secret"},
+    }
+
+    first_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json=payload,
+    )
+    assert first_start.status_code == status.HTTP_200_OK, first_start.json()
+    first_connection = first_start.json()["connection"]
+    assert first_connection["status"] == "connected"
+
+    second_start = await client.post(
+        "/v0/integrations/connect/start",
+        headers=HEADERS,
+        json=payload,
+    )
+    assert second_start.status_code == status.HTTP_200_OK, second_start.json()
+    assert (
+        second_start.json()["connection"]["connection_id"]
+        == first_connection["connection_id"]
+    )
+
+    connections = await client.get(
+        "/v0/integrations/connections",
+        headers=HEADERS,
+        params={**owner, "include_disconnected": True},
+    )
+    assert connections.status_code == status.HTTP_200_OK, connections.text
+    matching = [
+        conn
+        for conn in connections.json()
+        if conn["canonical_app_slug"] == "double_submit_app"
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.anyio
 async def test_app_catalog_status_filters_facets_and_summary_payload(
     client: AsyncClient,
 ) -> None:

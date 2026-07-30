@@ -2205,6 +2205,7 @@ def test_create_or_adopt_accepts_every_field_the_runtime_sends() -> None:
         "destination",
         "scheduled_for",
         "dispatch_offset_seconds",
+        "entrypoint",
         "source_medium",
         "source_ref",
         "source_contact_id",

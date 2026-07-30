@@ -49,20 +49,37 @@ Cloud Run Job (weekly reindex - long-running, no HTTP timeout):
    - Env: MAINTENANCE_MODE=full, MAINTENANCE_SKIP_VACUUM=true
    - Task timeout: 3h, Max retries: 0
 
-5. Partition Promotion (weekly) - Move DEFAULT whales into dedicated partitions
+5. Partition Promotion (daily sweep, app-triggered) - Move DEFAULT whales into
+   dedicated partitions
    - Cloud Run Jobs: orchestra-partition-promote (prod),
      orchestra-staging-partition-promote (staging). Their image is kept current
-     by the "Update promote job image" step in deploy/cloudbuild*.yaml.
-   - Cloud Scheduler: orchestra-partition-promote-scheduler-trigger (+ staging),
-     cron 0 5 * * 0, POST to the job's :run endpoint (oauth default-compute SA).
+     by the "Update promote job image" step in deploy/cloudbuild*.yaml, and the
+     running Orchestra service is granted roles/run.jobsExecutorWithOverrides on
+     them ("Ensure promote job IAM" step) so it can trigger a run itself.
+   - Trigger: not a direct Cloud-Scheduler-to-Cloud-Run-Jobs call. Mirrors the
+     builtins-seed pattern instead -- Cloud Scheduler
+     (orchestra[-staging]-partition-promote-sweep, daily) POSTs to the app's own
+     admin endpoint (POST /v0/admin/partitioning/promote/start, Bearer
+     ORCHESTRA_ADMIN_KEY; see start_partition_promote_sweep in
+     orchestra/web/api/log/views.py). That endpoint checks each project's share
+     of the shared embedding_default partition and only triggers the job (via
+     orchestra.services.partition_promote_launcher, using
+     ORCHESTRA_PARTITION_PROMOTE_JOB_NAME) when some project crosses the
+     relative-share threshold -- catching a tenant that dominates a still-small
+     DEFAULT partition long before its absolute row count would. Ensure/update
+     the scheduler jobs with deploy/ensure_partition_promote_scheduler.sh.
    - Env: MAINTENANCE_MODE=promote, MAINTENANCE_PROMOTE_ONLINE=true (non-locking
      backfill + offline index build + brief cutover), MAINTENANCE_MAX_PROMOTIONS=1,
      MAINTENANCE_PROMOTION_THRESHOLD=500000, MAINTENANCE_DRY_RUN (see below).
+     This absolute threshold is the job's own internal candidate selection
+     (find_promotion_candidates) and is independent of the sweep endpoint's
+     relative-share gate above -- both must be satisfied for a given run to
+     actually promote a project.
    - Task timeout: 3h, Max retries: 0.
    - Arming: created with MAINTENANCE_DRY_RUN=true so scheduled runs only log the
      candidate selection. To arm (let it actually promote), flip the flag:
          gcloud run jobs update orchestra-partition-promote \
-             --region=europe-west3 --project=gcp-project-saas \
+             --region=us-central1 --project=gcp-project-saas \
              --update-env-vars=MAINTENANCE_DRY_RUN=false
      Owner sub-partitioning stays off (MAINTENANCE_OWNER_PROVISIONING unset)
      until per-owner DROP PARTITION is wired into the deletion flows.
@@ -90,7 +107,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -101,6 +118,7 @@ from orchestra.db.partitioning import (
     default_partition_name,
     find_owner_promotion_candidates,
     find_promotion_candidates,
+    find_promotion_candidates_by_id,
     is_partitioned,
     partition_leaves,
     promote_owner,
@@ -1022,6 +1040,7 @@ def run_partition_provisioning(
     max_promotions: int = 1,
     dry_run: bool = False,
     online: bool = False,
+    extra_project_ids: Optional[list[int]] = None,
 ) -> dict:
     """Promote large DEFAULT-partition projects into dedicated partitions.
 
@@ -1036,6 +1055,15 @@ def run_partition_provisioning(
     used (backfill + offline index build, then a brief locked cutover) instead of
     the single-transaction ATTACH whose index build holds ACCESS EXCLUSIVE for
     the duration -- required for tenants too large to lock for that long.
+
+    ``extra_project_ids`` names projects to promote regardless of
+    ``threshold`` -- e.g. the partition-promote sweep endpoint
+    (``start_partition_promote_sweep``) selects candidates by their relative
+    share of the shared ``embedding`` DEFAULT partition, a criterion this
+    function's own ``find_promotion_candidates`` (absolute ``log_event`` row
+    count) doesn't capture. They're prioritized ahead of threshold-based
+    candidates within ``max_promotions`` since they're the reason the run was
+    triggered.
     """
     metrics: dict = {
         "start_time": datetime.now(timezone.utc).isoformat(),
@@ -1057,11 +1085,20 @@ def run_partition_provisioning(
                 metrics["skipped"] = True
                 return metrics
             candidates = find_promotion_candidates(probe, threshold)
+            extra_candidates = find_promotion_candidates_by_id(
+                probe,
+                extra_project_ids or [],
+            )
             # The shared Assistants project is owner sub-partitioned instead of
             # plain-promoted (see run_owner_partition_provisioning); never carve
             # it into a non-owner dedicated partition or that path is blocked.
             assistants_pids = set(_assistants_project_ids(probe))
         candidates = [c for c in candidates if c[0] not in assistants_pids]
+        extra_candidates = [c for c in extra_candidates if c[0] not in assistants_pids]
+        # extra_candidates are prioritized ahead of threshold-based candidates
+        # since they're the reason this run was triggered (see docstring).
+        extra_ids = {c[0] for c in extra_candidates}
+        candidates = extra_candidates + [c for c in candidates if c[0] not in extra_ids]
 
         metrics["candidates"] = candidates
         logger.info(
@@ -1185,12 +1222,26 @@ def main():
                     str(DEFAULT_OWNER_PROMOTION_THRESHOLD),
                 ),
             )
+            # Set by the partition-promote sweep endpoint's Cloud Run Job
+            # override when it detects a project dominating the shared
+            # embedding index's relative share -- a criterion this worker's
+            # own threshold-based candidate selection doesn't capture.
+            extra_project_ids_raw = os.environ.get(
+                "MAINTENANCE_PROMOTE_EXTRA_PROJECT_IDS",
+                "",
+            ).strip()
+            extra_project_ids = (
+                [int(p) for p in extra_project_ids_raw.split(",") if p.strip()]
+                if extra_project_ids_raw
+                else None
+            )
             metrics = run_partition_provisioning(
                 session,
                 threshold=threshold,
                 max_promotions=max_promotions,
                 dry_run=dry_run,
                 online=online,
+                extra_project_ids=extra_project_ids,
             )
             # Owner sub-partitioning of the shared Assistants project is opt-in:
             # its payoff is an O(1) per-owner DROP PARTITION, which is not yet
