@@ -2172,3 +2172,102 @@ async def test_moving_the_anchor_past_the_series_still_mints_a_new_head(
     assert _parse_iso(open_rows[0]["scheduled_for"]) == _parse_iso(
         "2026-05-01T09:00:00+00:00",
     )
+
+
+def test_create_or_adopt_accepts_every_field_the_runtime_sends() -> None:
+    """A field the runtime sends and the model omits is discarded in silence.
+
+    Pydantic ignores unknown keys, so `destination` — which the runtime puts in
+    `run_key` and the dispatcher resolves the current execution by — was accepted
+    on the wire and never stored. Every occurrence the runtime projected for a
+    team surface landed without it, so `/admin/task-execution/current` could not
+    match a dispatch that named the destination, and a ten-minute recurring tick
+    stopped firing with a correct-looking ledger.
+
+    Names are asserted rather than a happy-path round trip because the failure
+    mode is a *missing* field: a request carrying it still returns 200.
+    """
+
+    from orchestra.web.api.log.task_machine_schema import (
+        TaskExecutionCreateOrAdoptRequest,
+    )
+
+    # Mirrors unify.task_scheduler.machine_state._create_or_adopt_task_run.
+    runtime_fields = {
+        "project_name",
+        "run_key",
+        "assistant_id",
+        "task_id",
+        "source_task_log_id",
+        "wake",
+        "delivery",
+        "revision",
+        "destination",
+        "scheduled_for",
+        "dispatch_offset_seconds",
+        "source_medium",
+        "source_ref",
+        "source_contact_id",
+        "source_contact_display_name",
+        "task_name",
+        "task_description",
+        "started_at",
+        "state",
+    }
+    accepted = set(TaskExecutionCreateOrAdoptRequest.model_fields)
+    assert not runtime_fields - accepted, (
+        "the runtime sends fields this model drops on the floor: "
+        f"{sorted(runtime_fields - accepted)}"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_team_scoped_run_is_found_by_the_destination_that_dispatches_it(
+    client: AsyncClient,
+) -> None:
+    """Create a run the way the runtime does, then resolve it the way dispatch does."""
+
+    await _ensure_task_machine_project(client)
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=813),
+    )
+    assert response.status_code == 200, response.json()
+
+    created = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": "offline:scheduled:42:team-11:813:deadbeef:20260411T090000Z",
+            "assistant_id": "42",
+            "task_id": 813,
+            "wake": "scheduled",
+            "delivery": "offline",
+            "destination": "team-11",
+            "scheduled_for": "2026-04-11T09:00:00+00:00",
+            "state": "scheduled",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert created.status_code == 200, created.json()
+    assert created.json()["run"]["destination"] == "team-11", created.json()
+
+    current = await client.post(
+        "/v0/admin/task-execution/current",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "task_id": 813,
+            "destination": "team-11",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert current.status_code == 200, current.json()
+    execution = current.json()["execution"]
+    assert execution is not None, (
+        "dispatch names the destination when it resolves the current execution; "
+        "a run that cannot be found there never fires"
+    )
+    assert execution["task_id"] == 813
