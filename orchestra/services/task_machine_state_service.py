@@ -1327,6 +1327,7 @@ def release_stuck_task_executions(
         }
 
     released: list[str] = []
+    released_payloads: list[dict[str, Any]] = []
     release_info = (info or "").strip()
     for execution in executions:
         payload = dict(execution.data or {})
@@ -1335,16 +1336,88 @@ def release_stuck_task_executions(
         if release_info:
             payload["error"] = release_info
         _replace_log_payload(execution, payload)
+        released_payloads.append(payload)
         run_key = _coerce_optional_str(payload.get("run_key"))
         if run_key:
             released.append(run_key)
     session.flush()
+    reprojected = _reproject_head_after_release(
+        session,
+        project_id=project_id,
+        source_task_log_id=int(source_task_log_id),
+        payloads=released_payloads,
+    )
     return {
         "updated": True,
         "source_task_log_id": int(source_task_log_id),
         "released_run_keys": released,
+        "reprojected": reprojected,
         "reason": "released",
     }
+
+
+def _reproject_head_after_release(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+    payloads: list[dict[str, Any]],
+) -> bool:
+    """Give the definition an open occurrence again after a run is released.
+
+    Recurrence is computed in Unify at dispatch, so a worker that died before it
+    got that far — an image pull failure, an OOM at startup, a SIGKILL — leaves
+    the series with no open occurrence and nothing to fire one. The definition
+    stays armed and simply never runs again, which is how a ten-minute tick sat
+    dead until an operator noticed and nudged it by hand.
+
+    Releasing a run is the moment we know it is over, so the head is
+    re-projected here. A crash then costs one occurrence instead of the series.
+    Idempotent: the projection adopts an existing open occurrence rather than
+    duplicating it, and a definition that is disabled, one-shot or exhausted
+    yields nothing.
+    """
+
+    task_ids = sorted(
+        {
+            task_id
+            for task_id in (_coerce_int(p.get("task_id")) for p in payloads)
+            if task_id is not None
+        },
+    )
+    if not task_ids:
+        return False
+    assistant_id = next(
+        (
+            _coerce_optional_str(p.get("assistant_id"))
+            for p in payloads
+            if p.get("assistant_id")
+        ),
+        None,
+    )
+    try:
+        tasks_context_name = resolve_tasks_context_name(
+            session=session,
+            project_id=project_id,
+            assistant_id=assistant_id,
+            source_task_log_id=source_task_log_id,
+        )
+        result = sync_task_executions_for_task_ids(
+            session=session,
+            project_id=project_id,
+            task_ids=task_ids,
+            tasks_context_name=tasks_context_name,
+        )
+    except Exception:
+        # Releasing the run is the caller's contract and must still succeed; a
+        # series left without a head is recoverable, a lost release is not.
+        logger.exception(
+            "Failed to re-project the head after releasing task_ids=%s; the "
+            "series will not advance until a definition write re-projects it.",
+            task_ids,
+        )
+        return False
+    return bool(result.get("upserted"))
 
 
 def update_task_run(
