@@ -26,6 +26,7 @@ from orchestra.db.partitioning import (
     dedicated_partition_name,
     drop_owner,
     find_owner_promotion_candidates,
+    find_relative_default_share_candidates,
     index_attached_to_child,
     is_partitioned,
     owner_subpartition_name,
@@ -128,6 +129,48 @@ def test_owner_partition_lifecycle(dbsession) -> None:
     # Dropping an un-promoted owner falls back to a scoped row delete.
     assert drop_owner(conn, PID, "a2") == "row_delete"
     assert _counts(conn) == {"a1": 0, "a2": 0, "sys": 1}
+
+
+def test_find_relative_default_share_candidates_filters_by_share(dbsession) -> None:
+    """A project can dominate a still-small DEFAULT partition's recall long
+    before its absolute row count would flag it, so the relative-share gate
+    must catch it independently of :func:`find_promotion_candidates`.
+    """
+    conn = dbsession.connection()
+    conn.execute(text("CREATE SCHEMA relative_share_scratch"))
+    conn.execute(text("SET search_path TO relative_share_scratch"))
+
+    conn.execute(
+        text(
+            "CREATE TABLE embedding (project_id int NOT NULL, id bigint NOT NULL, "
+            "ref_id bigint, PRIMARY KEY (project_id, id)) PARTITION BY LIST (project_id)",
+        ),
+    )
+    conn.execute(text("CREATE TABLE embedding_default PARTITION OF embedding DEFAULT"))
+
+    # Project 1001: 40/100 rows (40% share). Project 1002: 10/100 (exactly at a
+    # 0.10 threshold). The remaining 50 rows are noise spread across 50 distinct
+    # single-row projects (2% share each) that must never qualify.
+    project_ids = [1001] * 40 + [1002] * 10 + [2000 + i for i in range(50)]
+    for row_id, project_id in enumerate(project_ids):
+        conn.execute(
+            text(
+                "INSERT INTO embedding (project_id, id, ref_id) " "VALUES (:p, :i, :i)",
+            ),
+            {"p": project_id, "i": row_id},
+        )
+
+    assert find_relative_default_share_candidates(conn, "embedding", 0.10) == [
+        (1001, 40, 100),
+        (1002, 10, 100),
+    ]
+    # A stricter threshold excludes the project sitting right at the boundary.
+    assert find_relative_default_share_candidates(conn, "embedding", 0.11) == [
+        (1001, 40, 100),
+    ]
+    # A table outside PARTITIONED_TABLES is rejected outright.
+    with pytest.raises(ValueError):
+        find_relative_default_share_candidates(conn, "not_a_table", 0.1)
 
 
 def _leaf_reloptions(conn, qualified_leaf: str) -> dict[str, str]:

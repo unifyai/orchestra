@@ -89,6 +89,8 @@ from orchestra.web.api.log.schema import (
     HydrateLogsRequest,
     JoinLogsRequest,
     JoinQueryRequest,
+    PartitionPromoteSweepRequest,
+    PartitionPromoteSweepResponse,
     QueryLogsPostBody,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
@@ -6380,6 +6382,77 @@ def drain_external_writes_endpoint(
     from orchestra.external_bindings.write import drain_external_writes
 
     return drain_external_writes(session, limit=request.limit)
+
+
+@admin_router.post("/partitioning/promote/start")
+def start_partition_promote_sweep(
+    body: PartitionPromoteSweepRequest,
+    session=Depends(get_db_session),
+) -> PartitionPromoteSweepResponse:
+    """Periodic sweep: trigger the embedding partition-promote Cloud Run Job
+    when a project's share of the shared ``embedding_default`` partition
+    crosses ``relative_threshold``.
+
+    **Cloud Scheduler** (project ``gcp-project-saas`` / ``us-central1``):
+
+    - Staging: ``orchestra-staging-partition-promote-sweep``
+      → daily POST to
+      ``https://internal.example.com/v0/admin/partitioning/promote/start``
+    - Production: ``orchestra-partition-promote-sweep``
+      → daily POST to
+      ``https://api.unify.ai/v0/admin/partitioning/promote/start``
+
+    Auth: ``Authorization: Bearer <ORCHESTRA_ADMIN_KEY>`` (same pattern as
+    ``external_writes/drain``). Ensure/update the jobs with
+    ``bash deploy/ensure_partition_promote_scheduler.sh``.
+
+    The promote Cloud Run Job (``ORCHESTRA_PARTITION_PROMOTE_JOB_NAME``) already
+    finds and promotes its own candidates from the DEFAULT partition by absolute
+    ``log_event`` row count (see ``orchestra.workers.index_maintenance``, mode
+    ``promote``) -- that logic is untouched here. This sweep adds the
+    relative-share gate: a project can dominate a still-small DEFAULT
+    partition's shared HNSW index (hurting ANN recall) long before it crosses
+    that absolute threshold, so the job is only triggered once some project's
+    share of ``embedding_default`` crosses ``relative_threshold``. Idempotent:
+    a sweep with nothing over threshold is a no-op, and a mid-cycle failure
+    just retries on the next scheduler tick.
+    """
+    from orchestra.db.partitioning import find_relative_default_share_candidates
+    from orchestra.services.partition_promote_launcher import (
+        execute_partition_promote_job,
+        partition_promote_job_configured,
+    )
+
+    candidates = find_relative_default_share_candidates(
+        session.get_bind(),
+        table="embedding",
+        relative_threshold=body.relative_threshold,
+    )
+    if not candidates:
+        return PartitionPromoteSweepResponse(triggered=False, candidates=[])
+
+    if not partition_promote_job_configured():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "ORCHESTRA_PARTITION_PROMOTE_JOB_NAME is not configured; cannot "
+                "trigger the partition-promote job."
+            ),
+        )
+
+    execute_partition_promote_job()
+    return PartitionPromoteSweepResponse(
+        triggered=True,
+        candidates=[
+            {
+                "project_id": project_id,
+                "row_count": row_count,
+                "default_partition_row_count": total,
+                "share": round(row_count / total, 4),
+            }
+            for project_id, row_count, total in candidates
+        ],
+    )
 
 
 @router.patch(
