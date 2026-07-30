@@ -16,7 +16,6 @@ from orchestra.db.models.orchestra_models import (
     Voice,
 )
 from orchestra.services.coordinator_multiplayer import (
-    TWIN_ALIAS_EMAIL_METADATA,
     MultiplayerFlipError,
     display_name_conflict,
     find_twin_by_alias_email,
@@ -26,7 +25,10 @@ from orchestra.services.coordinator_multiplayer import (
     is_twin_alias_email_address,
 )
 from orchestra.services.coordinator_service import create_coordinator_assistant
-from orchestra.services.shared_coordinator_routing import find_owned_shared_coordinators
+from orchestra.services.shared_coordinator_routing import (
+    find_owned_shared_coordinators,
+    resolve_shared_coordinator_owner,
+)
 from orchestra.services.universal_unity_email import (
     ensure_coordinator_universal_email_contact,
 )
@@ -115,7 +117,8 @@ def test_flip_applies_identity_and_swaps_contacts(dbsession: Session) -> None:
     assert len(contacts) == 1
     alias = contacts[0]
     assert alias.contact_type == "email"
-    assert alias.metadata_ == TWIN_ALIAS_EMAIL_METADATA
+    assert alias.metadata_.get("twin_alias") is True
+    assert alias.metadata_.get("flipped_at"), "grace window anchor must be stamped"
     assert is_twin_alias_email_address(alias.contact_value)
     assert alias.contact_value.startswith("max.vector@")
 
@@ -201,7 +204,7 @@ def test_pool_reattach_and_shared_routing_skip_multiplayer(
         is None
     )
     contacts = _active_contacts(dbsession, coordinator)
-    assert [c.metadata_ for c in contacts] == [TWIN_ALIAS_EMAIL_METADATA]
+    assert [c.metadata_.get("twin_alias") for c in contacts] == [True]
 
     # Even with a stale pool row, sender-based routing must skip the twin.
     AssistantContactDAO(dbsession).upsert_assistant_contact(
@@ -363,3 +366,58 @@ def test_display_name_conflict_normalizes_and_excludes_self(
         )
         is None
     )
+
+
+def test_pool_address_returns_moved_notice_for_owner_within_grace(
+    dbsession: Session,
+) -> None:
+    owner = _make_user(dbsession, "moved")
+    coordinator = _make_coordinator(dbsession, owner)
+    _make_voice(dbsession, owner)
+    flipped = _flip(dbsession, coordinator)
+    dbsession.flush()
+    alias = _active_contacts(dbsession, flipped)[0].contact_value
+
+    route = resolve_shared_coordinator_owner(
+        dbsession,
+        platform="email",
+        contact_type="email",
+        contact_value="twin@unify.ai",
+        sender=owner.email,
+    )
+    assert route["action"] == "coordinator_multiplayer_moved"
+    assert route["alias_email"] == alias
+    assert route["twin_name"] == "Max Vector"
+
+    # Cold senders keep getting rejected outright.
+    cold = resolve_shared_coordinator_owner(
+        dbsession,
+        platform="email",
+        contact_type="email",
+        contact_value="twin@unify.ai",
+        sender="stranger@example.com",
+    )
+    assert cold == {"action": "reject_cold"}
+
+
+def test_pool_address_goes_cold_after_grace_expires(dbsession: Session) -> None:
+    owner = _make_user(dbsession, "grace-out")
+    coordinator = _make_coordinator(dbsession, owner)
+    _make_voice(dbsession, owner)
+    flipped = _flip(dbsession, coordinator)
+    dbsession.flush()
+    alias_row = _active_contacts(dbsession, flipped)[0]
+    alias_row.metadata_ = {
+        **alias_row.metadata_,
+        "flipped_at": "2020-01-01T00:00:00+00:00",
+    }
+    dbsession.flush()
+
+    route = resolve_shared_coordinator_owner(
+        dbsession,
+        platform="email",
+        contact_type="email",
+        contact_value="twin@unify.ai",
+        sender=owner.email,
+    )
+    assert route == {"action": "reject_cold"}

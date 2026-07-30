@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -225,7 +226,13 @@ def flip_coordinator_to_multiplayer(
         contact_value=alias_address,
         provider="google_workspace",
         provisioned_by="platform",
-        metadata=TWIN_ALIAS_EMAIL_METADATA,
+        metadata={
+            **TWIN_ALIAS_EMAIL_METADATA,
+            # Anchors the pool-address grace window: for a while after the
+            # flip, boss mail to the retired shared address gets a
+            # redirect notice instead of a silent drop.
+            "flipped_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     coordinator.first_name = cleaned_first

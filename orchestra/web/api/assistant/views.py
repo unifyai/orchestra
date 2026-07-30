@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import logging
 import math
 import os
@@ -1754,8 +1755,24 @@ async def flip_coordinator_multiplayer_endpoint(
 
     from orchestra.web.api.utils.assistant_infra import reawaken_assistant
 
+    alias_contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        coordinator.agent_id,
+        "email",
+    )
+    wake_reasons = [
+        {
+            "type": "coordinator_multiplayer_flipped",
+            "alias_email": alias_contact.contact_value if alias_contact else "",
+        },
+    ]
     try:
-        await reawaken_assistant(str(coordinator.agent_id))
+        await reawaken_assistant(
+            str(coordinator.agent_id),
+            data={
+                "assistant_id": str(coordinator.agent_id),
+                "wake_reasons": json.dumps(wake_reasons),
+            },
+        )
     except Exception as e:
         logger.warning(
             "Failed to reawaken coordinator %s after multiplayer flip: %s",
