@@ -95,6 +95,15 @@ class TaskExecutionCreateOrAdoptRequest(BaseModel):
         default=None,
         description="Seconds to add to scheduled_for when dispatching (jitter).",
     )
+    entrypoint: Optional[int] = Field(
+        default=None,
+        description=(
+            "Symbolic function id the definition binds this occurrence to. "
+            "Dispatch reads it from the row; a runtime-projected occurrence "
+            "stored without it dispatches as agentic and a symbolic task then "
+            "refuses the run as an entrypoint mismatch."
+        ),
+    )
     source_medium: Optional[str] = Field(
         default=None,
         description="Inbound medium that triggered the run when applicable.",
