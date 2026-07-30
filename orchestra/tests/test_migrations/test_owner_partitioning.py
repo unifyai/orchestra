@@ -26,6 +26,7 @@ from orchestra.db.partitioning import (
     dedicated_partition_name,
     drop_owner,
     find_owner_promotion_candidates,
+    find_promotion_candidates_by_id,
     find_relative_default_share_candidates,
     index_attached_to_child,
     is_partitioned,
@@ -171,6 +172,37 @@ def test_find_relative_default_share_candidates_filters_by_share(dbsession) -> N
     # A table outside PARTITIONED_TABLES is rejected outright.
     with pytest.raises(ValueError):
         find_relative_default_share_candidates(conn, "not_a_table", 0.1)
+
+
+def test_find_promotion_candidates_by_id_ignores_threshold(dbsession) -> None:
+    """The partition-promote sweep passes candidates it selected by relative
+    share, not absolute count -- this lookup must return their row counts
+    regardless of size, and omit ids that aren't in the DEFAULT partition.
+    """
+    conn = dbsession.connection()
+    conn.execute(text("CREATE SCHEMA promote_by_id_scratch"))
+    conn.execute(text("SET search_path TO promote_by_id_scratch"))
+
+    conn.execute(
+        text(
+            "CREATE TABLE log_event (project_id int NOT NULL, id bigint NOT NULL, "
+            "PRIMARY KEY (project_id, id)) PARTITION BY LIST (project_id)",
+        ),
+    )
+    conn.execute(text("CREATE TABLE log_event_default PARTITION OF log_event DEFAULT"))
+
+    # Project 1: 3 rows (would never clear an absolute-count threshold like
+    # 500_000). Project 2: 0 rows in the default partition (e.g. already
+    # promoted elsewhere, or never existed there) -- must be omitted, not
+    # returned as a zero-count row.
+    for row_id, project_id in enumerate([1, 1, 1]):
+        conn.execute(
+            text("INSERT INTO log_event (project_id, id) VALUES (:p, :i)"),
+            {"p": project_id, "i": row_id},
+        )
+
+    assert find_promotion_candidates_by_id(conn, [1, 2]) == [(1, 3)]
+    assert find_promotion_candidates_by_id(conn, []) == []
 
 
 def _leaf_reloptions(conn, qualified_leaf: str) -> dict[str, str]:

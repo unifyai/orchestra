@@ -941,6 +941,33 @@ def find_promotion_candidates(
     return [(int(r[0]), int(r[1])) for r in rows]
 
 
+def find_promotion_candidates_by_id(
+    conn: Connection,
+    project_ids: list[int],
+) -> list[tuple[int, int]]:
+    """Row counts (in ``log_event``'s DEFAULT partition) for specific projects.
+
+    Unlike :func:`find_promotion_candidates`, this ignores the absolute-count
+    threshold entirely -- for callers (e.g. the relative-share sweep) that
+    already decided *which* projects to promote by a different criterion and
+    just need their current row counts. A project not present in the DEFAULT
+    partition (already promoted, or genuinely has no rows there) is omitted.
+    """
+    if not project_ids:
+        return []
+    default_part = default_partition_name("log_event")
+    if not relation_exists(conn, default_part):
+        return []
+    rows = conn.execute(
+        text(
+            f'SELECT project_id, count(*) AS c FROM "{default_part}" '
+            f"WHERE project_id = ANY(:pids) GROUP BY project_id ORDER BY c DESC",
+        ),
+        {"pids": list(project_ids)},
+    ).all()
+    return [(int(r[0]), int(r[1])) for r in rows]
+
+
 def find_relative_default_share_candidates(
     conn: Connection,
     table: str,

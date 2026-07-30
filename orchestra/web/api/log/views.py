@@ -6406,16 +6406,19 @@ def start_partition_promote_sweep(
     ``external_writes/drain``). Ensure/update the jobs with
     ``bash deploy/ensure_partition_promote_scheduler.sh``.
 
-    The promote Cloud Run Job (``ORCHESTRA_PARTITION_PROMOTE_JOB_NAME``) already
-    finds and promotes its own candidates from the DEFAULT partition by absolute
-    ``log_event`` row count (see ``orchestra.workers.index_maintenance``, mode
-    ``promote``) -- that logic is untouched here. This sweep adds the
-    relative-share gate: a project can dominate a still-small DEFAULT
-    partition's shared HNSW index (hurting ANN recall) long before it crosses
-    that absolute threshold, so the job is only triggered once some project's
-    share of ``embedding_default`` crosses ``relative_threshold``. Idempotent:
-    a sweep with nothing over threshold is a no-op, and a mid-cycle failure
-    just retries on the next scheduler tick.
+    The promote Cloud Run Job (``ORCHESTRA_PARTITION_PROMOTE_JOB_NAME``) still
+    finds its own threshold-based candidates from ``log_event``'s DEFAULT
+    partition by default (see ``orchestra.workers.index_maintenance``, mode
+    ``promote``) -- that logic is untouched. This sweep adds the relative-share
+    gate on a different table (``embedding``) and criterion: a project can
+    dominate a still-small DEFAULT partition's shared HNSW index (hurting ANN
+    recall) long before it crosses the job's own absolute threshold. Since
+    those are two different signals, the sweep passes its candidate
+    ``project_id``s to the job via a Cloud Run Jobs container env override
+    (``MAINTENANCE_PROMOTE_EXTRA_PROJECT_IDS``) so the job actually promotes
+    what the sweep found, prioritized ahead of its own threshold-based
+    candidates. Idempotent: a sweep with nothing over threshold is a no-op,
+    and a mid-cycle failure just retries on the next scheduler tick.
     """
     from orchestra.db.partitioning import find_relative_default_share_candidates
     from orchestra.services.partition_promote_launcher import (
@@ -6440,7 +6443,15 @@ def start_partition_promote_sweep(
             ),
         )
 
-    execute_partition_promote_job()
+    try:
+        execute_partition_promote_job(
+            project_ids=[project_id for project_id, _row_count, _total in candidates],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger the partition-promote job: {exc}",
+        ) from exc
     return PartitionPromoteSweepResponse(
         triggered=True,
         candidates=[
