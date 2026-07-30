@@ -1687,15 +1687,22 @@ def start_connection(
         owner=replace(owner, user_id=effective_user_id),
         canonical_app_slug=canonical_app_slug,
     )
+
+    def _label_key(label: Optional[str]) -> Optional[str]:
+        normalized = _normalize_account_label(label)
+        return normalized.lower() if normalized is not None else None
+
     # Reuse the existing row for a genuine reconnect of the *same* account
     # (not currently connected, or a same-account double-submit while already
-    # connected). A different account_label means the caller is deliberately
-    # connecting a second account for this app_slug, which must get its own
-    # row rather than overwrite the first one.
+    # connected). Compared case-insensitively since account labels are
+    # typically emails and a caller may resend a differently-cased rendering
+    # of the same account. A different account_label means the caller is
+    # deliberately connecting a second account for this app_slug, which must
+    # get its own row rather than overwrite the first one.
     reuse_existing = existing_connection is not None and (
         existing_connection.status != "connected"
-        or _normalize_account_label(account_label)
-        == existing_connection.external_account_label
+        or _label_key(account_label)
+        == _label_key(existing_connection.external_account_label)
     )
     if reuse_existing:
         connection = dao.update_connection_fields(
