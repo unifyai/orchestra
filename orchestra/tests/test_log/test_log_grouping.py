@@ -964,6 +964,60 @@ async def test_sorting_with_grouping(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_sorting_with_grouping_expression_sort_key(client: AsyncClient):
+    """Grouped leaf fetches must evaluate non-plain sort expressions
+    (e.g. arithmetic) instead of treating the whole expression string as a
+    literal JSONB field name and silently falling back to id-based order.
+    """
+    project_name = "test-sorting-with-grouping-expression"
+    await _create_project(client, project_name)
+
+    test_data = [
+        {"student": "Alice", "test": "Math", "score": 95},
+        {"student": "Alice", "test": "Physics", "score": 88},
+        {"student": "Alice", "test": "Chemistry", "score": 92},
+        {"student": "Bob", "test": "Math", "score": 82},
+        {"student": "Bob", "test": "Physics", "score": 90},
+        {"student": "Bob", "test": "Chemistry", "score": 85},
+    ]
+    for entry in test_data:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200, response.json()
+
+    # "score * -1" is not a literal JSONB key on any row - if it were treated
+    # as a flat field name (the bug), every row would tie as NULL and the
+    # query would silently fall back to `ORDER BY LogEvent.id DESC`.
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps({"score * -1": "ascending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    group_obj = result["logs"]["entries/student"]
+    for student, expected_scores_desc in (
+        ("Alice", [95, 92, 88]),
+        ("Bob", [90, 85, 82]),
+    ):
+        group_item = next(
+            (item for item in group_obj.get("group", []) if item.get("key") == student),
+            None,
+        )
+        assert group_item is not None, f"Missing group for student {student}"
+        scores = [log["entries"]["score"] for log in group_item.get("value")]
+        # ascending by (score * -1) == descending by score
+        assert scores == expected_scores_desc, (
+            f"Expected {student}'s scores ordered by 'score * -1' ascending "
+            f"(i.e. score descending) to be {expected_scores_desc}, got {scores}"
+        )
+
+
+@pytest.mark.anyio
 async def test_sorting_edge_cases(client: AsyncClient):
     """Test edge cases in sorting with groups."""
     project_name = "test-sorting-edge-cases"

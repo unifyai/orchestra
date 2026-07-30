@@ -2242,22 +2242,59 @@ def _fetch_leaf_logs(
         project_scope(LogEvent, project_id),
     )
 
+    # Resolve context up front - needed both for sort expression parsing below
+    # and for field type lookups after the query executes.
+    context_name = "" if not context else context
+    context_obj = context_dao.filter(name=context_name, project_id=project_id)
+    context_id = context_obj[0][0].id if context_obj else None
+
     # Apply sorting if specified
     if sorting:
         sort_dict = json.loads(sorting)
         for sort_key, mode in sort_dict.items():
             if mode not in ("ascending", "descending"):
                 continue
-            # Use '->' operator instead of '->>' to preserve JSONB type for comparison
-            # This allows PostgreSQL to compare numbers as numbers, strings as strings, etc.
-            # (using '->>' returns TEXT which sorts lexicographically: "-5" < "0")
-            sort_expr = LogEvent.data.op("->")(sort_key)
-            field_type = field_types.get(sort_key, "")
-            # If we know the type explicitly, cast for efficiency
-            if field_type in ("float", "int"):
-                sort_expr = cast(LogEvent.data.op("->>")(sort_key), Float)
             direction = asc if mode == "ascending" else desc
-            query = query.order_by(direction(sort_expr).nulls_last())
+
+            expr_dict = str_filter_exp_to_dict(
+                sort_key,
+                field_names=list(field_types.keys()),
+            )
+
+            if expr_dict.get("type") == "identifier":
+                # Plain field name - use the JSONB shortcut directly.
+                # Use '->' operator instead of '->>' to preserve JSONB type for
+                # comparison. This allows PostgreSQL to compare numbers as
+                # numbers, strings as strings, etc. (using '->>' returns TEXT
+                # which sorts lexicographically: "-5" < "0")
+                sort_expr = LogEvent.data.op("->")(sort_key)
+                field_type = field_types.get(sort_key, "")
+                if field_type in ("float", "int"):
+                    sort_expr = cast(LogEvent.data.op("->>")(sort_key), Float)
+                query = query.order_by(direction(sort_expr).nulls_last())
+                continue
+
+            # Complex sort expression (e.g. cosine(...)/embed(...)) - route
+            # through the same expression parser the non-grouped path uses
+            # instead of treating sort_key as a literal JSONB field name.
+            sort_val_expr = build_sql_query(
+                expr_dict,
+                LogEvent,
+                session,
+                log_event_ids=event_ids,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            if isinstance(sort_val_expr, Subquery):
+                query = query.outerjoin(
+                    sort_val_expr,
+                    sort_val_expr.c.log_event_id == LogEvent.id,
+                )
+                query = query.order_by(
+                    direction(sort_val_expr.c.value).nulls_last(),
+                )
+            else:
+                query = query.order_by(direction(sort_val_expr).nulls_last())
 
     # Apply default ordering
     query = query.order_by(desc(LogEvent.id))
@@ -2271,9 +2308,6 @@ def _fetch_leaf_logs(
     rows = query.all()
 
     # Get field types with full metadata
-    context_name = "" if not context else context
-    context_obj = context_dao.filter(name=context_name, project_id=project_id)
-    context_id = context_obj[0][0].id if context_obj else None
     field_types_full = field_type_dao.get_field_types(
         project_id,
         context_id=context_id,
