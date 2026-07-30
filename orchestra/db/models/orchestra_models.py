@@ -2584,6 +2584,16 @@ class Assistant(Base):
         default=False,
         server_default="false",
     )
+    # Coordinator multiplayer mode: the twin trades its private, boss-only
+    # comms surface for hire-like outward identity (own name/voice/avatar,
+    # dedicated contact details, open audience). Coordinator-only, and a
+    # one-way flip — see _validate_is_multiplayer_one_way.
+    is_multiplayer = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     console_config = relationship(
         "AssistantConsoleConfig",
@@ -2628,6 +2638,30 @@ class Assistant(Base):
             raise ValueError(
                 "is_coordinator is immutable after the assistant has been persisted",
             )
+        return value
+
+    @property
+    def is_private_coordinator(self) -> bool:
+        """A coordinator still in single-player mode.
+
+        Private coordinators are invisible outside their owner: excluded from
+        team/group rosters, group-chat fan-out, and multi-party calls. A
+        multiplayer twin participates in all of those like a hired teammate.
+        """
+        return bool(self.is_coordinator and not self.is_multiplayer)
+
+    @validates("is_multiplayer")
+    def _validate_is_multiplayer_one_way(self, key, value):
+        """Multiplayer is a one-way flip on coordinators.
+
+        Once a twin has gone multiplayer it has handed out dedicated contact
+        details; reverting would strand external threads, so downgrade is not
+        modeled. Non-coordinators can never carry the flag.
+        """
+        if value and not self.is_coordinator:
+            raise ValueError("is_multiplayer requires is_coordinator")
+        if getattr(self, key, None) and not value and sa_inspect(self).persistent:
+            raise ValueError("is_multiplayer cannot be reverted once set")
         return value
 
     __table_args__ = (

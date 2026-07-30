@@ -181,7 +181,9 @@ def ensure_coordinator_universal_phone_contact(
     preferred_country: str | None = None,
     assignment_source: str = "auto",
 ) -> AssistantContact | None:
-    if not coordinator.is_coordinator:
+    # Multiplayer twins run on dedicated identities; shared pools must
+    # never re-attach to them (heal/repair paths funnel through here).
+    if not coordinator.is_coordinator or coordinator.is_multiplayer:
         return None
 
     existing = _existing_universal_phone_contact(session, coordinator=coordinator)

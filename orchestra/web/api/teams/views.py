@@ -1231,7 +1231,7 @@ def list_teams_for_assistant(
 
     if assistant.user_id == user_id:
         pass
-    elif assistant.is_coordinator and assistant.organization_id is not None:
+    elif assistant.is_private_coordinator and assistant.organization_id is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to view this assistant.",

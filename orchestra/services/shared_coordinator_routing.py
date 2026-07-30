@@ -42,6 +42,9 @@ def find_owned_shared_coordinators(
         .filter(
             Assistant.user_id == user_id,
             Assistant.is_coordinator.is_(True),
+            # Multiplayer twins left the shared pools; a stale pool contact
+            # row must not route pool traffic to them.
+            Assistant.is_multiplayer.is_(False),
             AssistantContact.contact_type == contact_type,
             AssistantContact.contact_value == contact_value,
             AssistantContact.status == "active",

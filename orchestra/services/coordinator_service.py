@@ -1778,11 +1778,6 @@ SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
 # Twin marks the step done explicitly after the chat attachment via
 # ``set_onboarding_task_state``.
 SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED = "your_computer_beat_requested"
-# Fired when the user clicks the workspace video-call beat row: they host a
-# Google Meet / Microsoft Teams meeting and paste the link; Twin joins and talks
-# live (no chips, no creation). Twin marks the step done explicitly after it has
-# joined and spoken via ``set_onboarding_task_state``.
-SUBTYPE_WORKSPACE_CALL_BEAT_REQUESTED = "workspace_call_beat_requested"
 # Fired by Console the moment the onboarding picker resolves —
 # i.e. the user picked "I'd rather chat for now" or "Start Call".
 # Unity uses it to open the session with the right kind of message:
@@ -1827,7 +1822,6 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_LEARNING_BEAT_REQUESTED,
         SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
         SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED,
-        SUBTYPE_WORKSPACE_CALL_BEAT_REQUESTED,
         SUBTYPE_ONBOARDING_SESSION_STARTED,
     },
 )

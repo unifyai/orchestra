@@ -1104,6 +1104,14 @@ async def add_assistant_to_call(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found",
         )
+    # Roster filtering already hides private coordinators from the picker,
+    # but the invariant is enforced here too: a single-player twin never
+    # joins a call with anyone but its owner (assistant_dm).
+    if assistant.is_private_coordinator and call_session.scope != "assistant_dm":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Private coordinators cannot join multi-party calls",
+        )
 
     if call_session.scope == "team" and call_session.team_id is not None:
         membership = TeamDAO(session).get_assistant_membership(

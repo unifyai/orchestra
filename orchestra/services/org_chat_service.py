@@ -8,7 +8,8 @@ endpoints share: participant listings and assistant sender identity.
 Realtime delivery and assistant fan-out are delegated to the hosted
 communication layer (adapters ``POST /unify/chat``): one publish to the
 per-organization Pub/Sub topic for Console SSE, plus one standard
-``unify_message`` envelope per non-coordinator team assistant — team chat is
+``unify_message`` envelope per roster-visible team assistant (private
+single-player coordinators are excluded) — team chat is
 ordinary unify_message traffic fanned out to every team assistant, like a
 large email CC chain.
 """
@@ -36,7 +37,7 @@ def team_chat_participants(
     *,
     team: Team,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Humans and non-coordinator assistants participating in a team chat."""
+    """Humans and roster-visible assistants participating in a team chat."""
     team_dao = TeamDAO(session)
 
     member_user_ids = team_dao.get_team_members(team.id)
@@ -63,7 +64,7 @@ def team_chat_participants(
             or f"Assistant {assistant.agent_id}",
         }
         for _, assistant in team_dao.list_assistant_members(team.id)
-        if not assistant.is_coordinator
+        if not assistant.is_private_coordinator
     ]
     return {"humans": humans, "assistants": assistants}
 

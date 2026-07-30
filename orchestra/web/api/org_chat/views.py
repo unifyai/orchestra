@@ -98,9 +98,10 @@ def get_org_roster(
 ) -> OrgRosterResponse:
     """Selector payload: org humans (with presence) and teams (with members).
 
-    Coordinators are deliberately excluded from every team's
-    ``assistant_member_ids``: their memberships exist for shared-memory
-    access, not for the roster or group chat.
+    Private (single-player) coordinators are deliberately excluded from
+    every team's ``assistant_member_ids``: their memberships exist for
+    shared-memory access, not for the roster or group chat. Multiplayer
+    twins participate like hired teammates and are listed.
     """
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
@@ -159,7 +160,7 @@ def get_org_roster(
         assistant_member_ids = [
             assistant.agent_id
             for _, assistant in team_dao.list_assistant_members(team.id)
-            if not assistant.is_coordinator
+            if not assistant.is_private_coordinator
         ]
         teams.append(
             RosterTeam(

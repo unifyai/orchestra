@@ -190,26 +190,6 @@ WORKSPACE_FRAMING = (
     "marks the step done, and moves on rather than inventing content."
 )
 
-WORKSPACE_CALL_FRAMING = (
-    "The user wants to speak with T-W1N live in a video call on their connected "
-    "workspace's own platform — Google Meet for a Google workspace, Microsoft "
-    "Teams for a Microsoft one. T-W1N never creates the meeting: the user hosts "
-    "it and pastes the link, because only the human account can open a meeting on "
-    "their tenant. So T-W1N asks the user to start a Meet/Teams meeting and paste "
-    "the link (the Console click already opens the right 'new meeting' page for "
-    "them), and if no link has arrived yet it waits for one rather than guessing. "
-    "Once a link is in hand, T-W1N joins it — a meet.google.com link with the "
-    "Google Meet join tool, a teams.microsoft.com link with the Teams join tool — "
-    "with a short, warm spoken opener, has a brief live back-and-forth to prove "
-    "two-way audio works, and then wraps up. Joining and speaking is the demo "
-    "task; the checklist does NOT auto-detect it, so it is not finished until "
-    "T-W1N has actually joined and spoken, after which T-W1N marks the step done "
-    "explicitly. Respect the one-voice-session-at-a-time guard: if T-W1N is "
-    "already in a call it finishes or leaves that first. If the user declines to "
-    "share a link or can't host, T-W1N says so plainly and does not mark the step "
-    "done."
-)
-
 INTEGRATIONS_FRAMING = (
     "In the Integrations phase T-W1N proves connected apps are more than a "
     "gallery: first the user connects at least one non-workspace app, then "
@@ -1003,52 +983,6 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     )
 
 
-def _workspace_call_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
-    """Event fired when the user clicks the workspace video-call beat row.
-
-    The click asks T-W1N to join a live Google Meet / Microsoft Teams call the
-    user hosts. The provider is auto-detected upstream (Console opens the right
-    'new meeting' page), and T-W1N picks the join tool from the pasted link's
-    host, so the event itself stays provider-agnostic — scripted by
-    ``WORKSPACE_CALL_FRAMING``. There is no meeting creation, no freeform mode,
-    and there are no chips.
-    """
-    interaction = {
-        "type": "workspace_call_beat",
-        "trigger_step_id": step_id,
-        "instructions": WORKSPACE_CALL_FRAMING,
-    }
-    return OnboardingEventSpec(
-        event_type="coordinator_onboarding_event",
-        message=(
-            f"The user just clicked '{title}' — they want to talk to me live in a "
-            "Google Meet or Microsoft Teams call. I do NOT create the meeting: I "
-            "ask them to start the meeting and paste the link (the Console click "
-            "already opened the right 'new meeting' page for them), and I wait for "
-            "the link rather than guessing one. When the link arrives I join it — "
-            "a meet.google.com link with join_google_meet, a teams.microsoft.com "
-            "link with join_teams_meet — passing a short, warm spoken opener, then "
-            "have a brief live exchange to prove two-way audio. Respect the "
-            "one-voice-session-at-a-time guard. This is a poll, not a request to "
-            "repeat work already done: if I have already joined and spoken, treat "
-            "this as confirmation and do NOT rejoin. After I have actually joined "
-            "and spoken, mark the step done in its own turn with "
-            "set_onboarding_task_state; on failure or if they decline, say so and "
-            "do not mark it done. "
-            f"Full contract: {WORKSPACE_CALL_FRAMING}"
-        ),
-        subtype="workspace_call_beat_requested",
-        details={
-            "trigger_step_id": step_id,
-            "framing": WORKSPACE_CALL_FRAMING,
-            "phase": PHASE_WORKSPACE,
-            "phase_id": "workspace",
-            "phase_framing": WORKSPACE_FRAMING,
-            "interaction": interaction,
-        },
-    )
-
-
 def _your_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     """Event fired when the user clicks the Their Computer beat row.
 
@@ -1460,30 +1394,6 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         ),
         requires_feature="calendar",
     ),
-    OnboardingStep(
-        id="workspace-call",
-        title="Speak to T-W1N in a video call",
-        phase=PHASE_WORKSPACE,
-        kind="trigger",
-        depends_on={"workspace": COMPLETED},
-        can_skip=True,
-        derivable=False,
-        paired_reply=None,
-        nudge_chat=(
-            "Once their workspace is connected, invite them to click the 'Speak "
-            "to T-W1N in a video call' row in the Onboarding checklist; it opens "
-            "a new Google Meet or Microsoft Teams meeting for them to host. They "
-            "paste me the link, I join the call and we talk live."
-        ),
-        nudge_voice=(
-            "clicking the 'Speak to T-W1N in a video call' row in the Onboarding "
-            "checklist"
-        ),
-        event=_workspace_call_beat_event(
-            "workspace-call",
-            "Speak to T-W1N in a video call",
-        ),
-    ),
     # Microsoft-only: the Unify Teams bot lives in a Microsoft 365 tenant, so
     # these rows render only when the connected workspace is Microsoft.
     OnboardingStep(
@@ -1820,7 +1730,6 @@ MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
     "learn-from-correction",
     "my-computer-demo",
     "your-computer-demo",
-    "workspace-call",
 )
 
 # Steps whose completion comes ONLY from durable domain state and never from a
@@ -2138,11 +2047,6 @@ STEP_PRESENTATION: dict[str, StepPresentation] = {
         "Thunar, opens it in Ristretto, and sends it to you here.",
         "~3 min",
     ),
-    "workspace-call": StepPresentation(
-        "Host a quick video call and T-W1N joins to talk with you live — you "
-        "start the meeting, paste T-W1N the link, and it hops on to chat.",
-        "~2 min",
-    ),
 }
 
 _EMPTY_PRESENTATION = StepPresentation()
@@ -2369,15 +2273,6 @@ STEP_FLOW_NOTES: dict[str, str] = {
         "invitation instead. When the attachment is delivered, I mark the step "
         "done explicitly — nothing auto-completes."
     ),
-    "workspace-call": (
-        "Clicking the 'Speak to T-W1N in a video call' row opens a new Google "
-        "Meet or Microsoft Teams meeting page (whichever matches their connected "
-        "workspace) for the user to host. I don't create the meeting myself — I "
-        "ask them to start it and paste me the link, then I join that link and "
-        "we talk live to prove two-way audio, and I mark the step done once I've "
-        "actually joined and spoken. Nothing auto-completes; if they can't host "
-        "or decline, I say so and leave it pending."
-    ),
 }
 
 
@@ -2399,17 +2294,6 @@ PROVIDER_PRESENTATION_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "microsoft": (
             "T-W1N scans your OneDrive and SharePoint files and sends back a "
             "short summary, with an optional tidy-up suggestion if it looks messy."
-        ),
-    },
-    "workspace-call": {
-        "google": (
-            "Host a quick Google Meet and T-W1N joins to talk with you live — "
-            "you start the meeting, paste T-W1N the link, and it hops on to chat."
-        ),
-        "microsoft": (
-            "Host a quick Microsoft Teams meeting and T-W1N joins to talk with "
-            "you live — you start the meeting, paste T-W1N the link, and it hops "
-            "on to chat."
         ),
     },
 }
