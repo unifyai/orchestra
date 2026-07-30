@@ -76,6 +76,14 @@ class TaskExecutionCreateOrAdoptRequest(BaseModel):
         default=None,
         description="Execution revision adopted when the run was created.",
     )
+    destination: Optional[str] = Field(
+        default=None,
+        description=(
+            "Owning surface for a team-scoped run (e.g. `team-11`). Part of "
+            "`run_key`, and the dispatcher resolves the current execution by it, "
+            "so a run created without it can never be found and never fires."
+        ),
+    )
     scheduled_for: Optional[datetime] = Field(
         default=None,
         description=(
