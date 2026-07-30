@@ -207,6 +207,24 @@ class IntegrationConnection(Base):
             "canonical_app_slug",
             "status",
         ),
+        # Enforced via CREATE UNIQUE INDEX CONCURRENTLY in a dedicated
+        # migration (integration_connections_owner_app_account_uq), not a
+        # plain UniqueConstraint, so it can be built without holding a table
+        # lock. NULL-valued columns are coalesced to a sentinel so two rows
+        # both missing e.g. assistant_id collide instead of Postgres treating
+        # NULLs as distinct; the account label is compared case-insensitively
+        # to match operations.py's reconnect-reuse logic.
+        Index(
+            "uq_integration_connections_owner_app_account",
+            "owner_scope",
+            sa.func.coalesce(sa.column("org_id"), -1),
+            sa.func.coalesce(sa.column("team_id"), -1),
+            sa.func.coalesce(sa.column("user_id"), ""),
+            sa.func.coalesce(sa.column("assistant_id"), -1),
+            "canonical_app_slug",
+            sa.func.lower(sa.func.coalesce(sa.column("external_account_label"), "")),
+            unique=True,
+        ),
     )
 
 
