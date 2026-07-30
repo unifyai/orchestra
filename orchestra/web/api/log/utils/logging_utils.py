@@ -1561,8 +1561,12 @@ def _get_logs_query(
 
     # Capture SQL for test analysis (if enabled)
     try:
-        from sqlalchemy import text
-
+        # `text` must stay the module-level sqlalchemy import: a function-local
+        # `from sqlalchemy import text` here made `text` local to ALL of
+        # _get_logs_query, so any use earlier in the function raised
+        # UnboundLocalError. The ef_search widening on the vector-sort fast
+        # path hit exactly that, and every semantic search in the fleet failed
+        # with an opaque 400 until the shadow was found.
         from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
@@ -3000,8 +3004,9 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
 
     # Capture SQL for test analysis (if enabled)
     try:
-        from sqlalchemy import text
-
+        # Same shadow hazard as in _get_logs_query: `text` is the module-level
+        # sqlalchemy import, and re-importing it locally makes it local to the
+        # whole function.
         from orchestra.observability.sql_capture import capture_sql, is_capture_enabled
 
         if is_capture_enabled():

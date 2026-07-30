@@ -21,7 +21,10 @@ def _fixed_embeddings(monkeypatch):
     """Deterministic vectors; the code under test is the query, not the model."""
 
     def _fake_batch(texts, model=None, dimensions=None):
-        return [[float(len(t) % 7)] * 8 for t in texts]
+        # Dimension must match the stored model's real width: the ANN fast path
+        # casts stored vectors to the model's declared dimension to use the
+        # HNSW index, and a mismatched literal breaks the comparison.
+        return [[float(len(t) % 7)] * 1536 for t in texts]
 
     monkeypatch.setattr(embed_helpers, "_get_embeddings_batch", _fake_batch)
 
