@@ -11,13 +11,20 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from orchestra.services import task_machine_state_service as service
 from orchestra.services.task_machine_state_service import release_stuck_task_executions
 
 
 def _execution(run_key: str, state: str) -> SimpleNamespace:
     return SimpleNamespace(
         id=hash(run_key) & 0xFFFF,
-        data={"run_key": run_key, "state": state, "source_task_log_id": "555"},
+        data={
+            "run_key": run_key,
+            "state": state,
+            "source_task_log_id": "555",
+            "task_id": 12,
+            "assistant_id": "42",
+        },
         key_order={},
     )
 
@@ -139,3 +146,57 @@ def test_release_without_a_run_key_stays_definition_wide():
 
     scoped = session.query.return_value.filter.return_value
     assert not scoped.filter.called
+
+
+def test_release_reprojects_the_head_so_a_crash_costs_one_occurrence() -> None:
+    """A worker that died before projecting its successor must not end the series.
+
+    Recurrence is computed in Unify at dispatch, so a pod killed before it got
+    there leaves the definition armed with no open occurrence and nothing to fire
+    one — a ten-minute tick sits dead until someone nudges it by hand. Releasing
+    the run is the moment we know it is over, so the head is re-projected there.
+    """
+
+    session = _session_returning([_execution("run-a", "running")])
+
+    with (
+        patch.object(service, "_replace_log_payload"),
+        patch.object(service, "resolve_tasks_context_name", return_value="1/42/Tasks"),
+        patch.object(
+            service,
+            "sync_task_executions_for_task_ids",
+            return_value={"upserted": 1, "deleted": 0},
+        ) as sync,
+    ):
+        result = release_stuck_task_executions(
+            session,
+            project_id=1,
+            source_task_log_id=555,
+        )
+
+    assert result["reprojected"] is True
+    assert sync.call_args.kwargs["task_ids"] == [12]
+
+
+def test_a_failed_reprojection_still_releases_the_run() -> None:
+    """Releasing is the caller's contract; a headless series is recoverable."""
+
+    session = _session_returning([_execution("run-a", "running")])
+
+    with (
+        patch.object(service, "_replace_log_payload"),
+        patch.object(
+            service,
+            "resolve_tasks_context_name",
+            side_effect=RuntimeError("orchestra unavailable"),
+        ),
+    ):
+        result = release_stuck_task_executions(
+            session,
+            project_id=1,
+            source_task_log_id=555,
+        )
+
+    assert result["updated"] is True
+    assert result["released_run_keys"] == ["run-a"]
+    assert result["reprojected"] is False

@@ -195,6 +195,15 @@ class TaskSourceReleaseResponse(BaseModel):
         default_factory=list,
         description="run_key of every execution moved to failed.",
     )
+    reprojected: bool = Field(
+        default=False,
+        description=(
+            "True when the definition regained an open occurrence. Recurrence is "
+            "computed at dispatch, so a worker that died before projecting its "
+            "successor leaves the series with nothing to fire; releasing the run "
+            "re-projects the head so a crash costs one occurrence, not the series."
+        ),
+    )
     reason: str = Field(
         description="Why rows were or were not updated (released/no_running_executions).",
     )

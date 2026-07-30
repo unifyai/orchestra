@@ -73,6 +73,24 @@ _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
 _TASK_SUMMARY_MAX_CHARS = 240
 
+
+class _KeepCurrentHead:
+    """Projection outcome meaning "the run ledger owns this head, leave it".
+
+    Distinct from ``None``, which means "this definition arms nothing" and so
+    retires any open execution. Recurrence lives in the runtime, so once a
+    series has started, Orchestra can recognize the head but cannot compute a
+    new one; overwriting it from here can only move it backwards.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "KEEP_CURRENT_HEAD"
+
+
+KEEP_CURRENT_HEAD = _KeepCurrentHead()
+
 logger = logging.getLogger(__name__)
 
 
@@ -1000,6 +1018,8 @@ def sync_task_executions_for_task_ids(
                 session=session,
                 project_id=project_id,
             )
+        if execution_payload is KEEP_CURRENT_HEAD:
+            continue
         if execution_payload is None:
             # Drop any prior open execution for this task/destination.
             deleted_rows = _delete_open_executions_for_task(
@@ -1327,6 +1347,7 @@ def release_stuck_task_executions(
         }
 
     released: list[str] = []
+    released_payloads: list[dict[str, Any]] = []
     release_info = (info or "").strip()
     for execution in executions:
         payload = dict(execution.data or {})
@@ -1335,16 +1356,88 @@ def release_stuck_task_executions(
         if release_info:
             payload["error"] = release_info
         _replace_log_payload(execution, payload)
+        released_payloads.append(payload)
         run_key = _coerce_optional_str(payload.get("run_key"))
         if run_key:
             released.append(run_key)
     session.flush()
+    reprojected = _reproject_head_after_release(
+        session,
+        project_id=project_id,
+        source_task_log_id=int(source_task_log_id),
+        payloads=released_payloads,
+    )
     return {
         "updated": True,
         "source_task_log_id": int(source_task_log_id),
         "released_run_keys": released,
+        "reprojected": reprojected,
         "reason": "released",
     }
+
+
+def _reproject_head_after_release(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+    payloads: list[dict[str, Any]],
+) -> bool:
+    """Give the definition an open occurrence again after a run is released.
+
+    Recurrence is computed in Unify at dispatch, so a worker that died before it
+    got that far — an image pull failure, an OOM at startup, a SIGKILL — leaves
+    the series with no open occurrence and nothing to fire one. The definition
+    stays armed and simply never runs again, which is how a ten-minute tick sat
+    dead until an operator noticed and nudged it by hand.
+
+    Releasing a run is the moment we know it is over, so the head is
+    re-projected here. A crash then costs one occurrence instead of the series.
+    Idempotent: the projection adopts an existing open occurrence rather than
+    duplicating it, and a definition that is disabled, one-shot or exhausted
+    yields nothing.
+    """
+
+    task_ids = sorted(
+        {
+            task_id
+            for task_id in (_coerce_int(p.get("task_id")) for p in payloads)
+            if task_id is not None
+        },
+    )
+    if not task_ids:
+        return False
+    assistant_id = next(
+        (
+            _coerce_optional_str(p.get("assistant_id"))
+            for p in payloads
+            if p.get("assistant_id")
+        ),
+        None,
+    )
+    try:
+        tasks_context_name = resolve_tasks_context_name(
+            session=session,
+            project_id=project_id,
+            assistant_id=assistant_id,
+            source_task_log_id=source_task_log_id,
+        )
+        result = sync_task_executions_for_task_ids(
+            session=session,
+            project_id=project_id,
+            task_ids=task_ids,
+            tasks_context_name=tasks_context_name,
+        )
+    except Exception:
+        # Releasing the run is the caller's contract and must still succeed; a
+        # series left without a head is recoverable, a lost release is not.
+        logger.exception(
+            "Failed to re-project the head after releasing task_ids=%s; the "
+            "series will not advance until a definition write re-projects it.",
+            task_ids,
+        )
+        return False
+    return bool(result.get("upserted"))
 
 
 def update_task_run(
@@ -1731,7 +1824,7 @@ def _build_execution_payload(
     destination: str | None,
     session: Session,
     project_id: int,
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | _KeepCurrentHead | None:
     """Choose the current activatable task instance and project its machine facts."""
 
     if not rows:
@@ -1797,7 +1890,7 @@ def _project_execution_payload(
     destination: str | None,
     session: Session,
     project_id: int,
-) -> dict[str, Any]:
+) -> dict[str, Any] | _KeepCurrentHead:
     """Flatten the chosen source task row into an open execution payload."""
 
     task_id = _coerce_int(row.data.get("task_id"))
@@ -1826,15 +1919,29 @@ def _project_execution_payload(
     # falling before it belongs to a schedule the author has since replaced;
     # ignoring it lets the edit mint a new run_key and retire the old head.
     anchor = _coerce_datetime_string(schedule.get("start_at"))
-    scheduled_for = (
-        _open_execution_scheduled_for(
+    scheduled_for = _open_execution_scheduled_for(
+        session,
+        project_id=project_id,
+        source_task_log_id=row.log_event_id,
+        not_before=anchor,
+    )
+    if scheduled_for is None:
+        # Falling back to the anchor is right for a series the ledger has not
+        # reached yet — a new definition, or one whose author just moved the
+        # anchor ahead of every occurrence so far. It is wrong for a series that
+        # has already run past it: recurrence lives in the runtime, so the only
+        # slot Orchestra can name is one that has already fired. Doing that
+        # rebuilt a head on a consumed occurrence *and* deleted the correct
+        # future head the runtime had projected, which is why a live schedule
+        # showed its next run stuck on its start time.
+        latest = _latest_ledger_occurrence(
             session,
             project_id=project_id,
             source_task_log_id=row.log_event_id,
-            not_before=anchor,
         )
-        or anchor
-    )
+        if latest is not None and latest >= (_parse_datetime(anchor) or latest):
+            return KEEP_CURRENT_HEAD
+        scheduled_for = anchor
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
@@ -2180,6 +2287,35 @@ def _is_task_enabled(data: Mapping[str, Any]) -> bool:
     if "enabled" not in data:
         return True
     return _coerce_bool(data.get("enabled"))
+
+
+def _latest_ledger_occurrence(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+) -> datetime | None:
+    """Newest occurrence this definition has materialized, in any state."""
+
+    rows = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+        )
+        .all()
+    )
+    occurrences = [
+        parsed
+        for parsed in (
+            _parse_datetime(
+                _coerce_datetime_string((row.data or {}).get("scheduled_for")),
+            )
+            for row in rows
+        )
+        if parsed is not None
+    ]
+    return max(occurrences) if occurrences else None
 
 
 def _open_execution_scheduled_for(
