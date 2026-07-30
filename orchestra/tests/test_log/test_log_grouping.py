@@ -1018,6 +1018,74 @@ async def test_sorting_with_grouping_expression_sort_key(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_sorting_with_grouping_cosine_embedding_sort_key(client: AsyncClient):
+    """Grouped leaf fetches must correctly evaluate a cosine/embed() sort
+    expression -- the exact motivating scenario from the original ticket
+    (`str_filter_exp_to_dict`'s "expression" branch, which returns a
+    ``Subquery`` from ``build_sql_query`` and must be outerjoined, not just
+    the plain-expression branch the arithmetic test above exercises).
+    """
+    project_name = "test-sorting-with-grouping-cosine"
+    await _create_project(client, project_name, user=1)
+
+    descriptions = [
+        ("Alice", "a cute little cat playing"),
+        ("Alice", "a red sports car racing"),
+        ("Bob", "a friendly golden retriever dog"),
+        ("Bob", "a blue wooden chair"),
+    ]
+    log_ids = []
+    for student, desc in descriptions:
+        response = await _create_log(
+            client,
+            project_name,
+            entries={"student": student, "description": desc},
+        )
+        assert response.status_code == 200, response.json()
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        "desc_embedding",
+        "embed({log:description})",
+        {"log": log_ids},
+    )
+    assert response.status_code == 200, f"Failed to create embedding: {response.text}"
+
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps(
+                {"cosine(desc_embedding, embed('a pet animal'))": "ascending"},
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    group_obj = result["logs"]["entries/student"]
+    for student in ("Alice", "Bob"):
+        group_item = next(
+            (item for item in group_obj.get("group", []) if item.get("key") == student),
+            None,
+        )
+        assert group_item is not None, f"Missing group for student {student}"
+        descs = [log["entries"]["description"] for log in group_item.get("value")]
+        # The animal description must sort closer (first) than the
+        # car/furniture description for "a pet animal" in every group -- if
+        # the outerjoin/value column were wired wrong, order would be
+        # arbitrary (or every row would tie, falling back to id order).
+        assert "cat" in descs[0] or "dog" in descs[0], (
+            f"Expected {student}'s animal description first for a cosine "
+            f"similarity sort to 'a pet animal', got order: {descs}"
+        )
+
+
+@pytest.mark.anyio
 async def test_sorting_with_grouping_bare_literal_sort_key_fails_fast(
     client: AsyncClient,
 ):
