@@ -101,6 +101,7 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_multiplayer import (
     MultiplayerFlipError,
+    display_name_conflict,
     flip_coordinator_to_multiplayer,
     is_reserved_coordinator_name,
 )
@@ -1176,6 +1177,18 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
                 )
+
+        if is_reserved_coordinator_name(assistant_in.first_name):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "coordinator_name_is_reserved",
+                    "message": (
+                        "That first name is reserved for the workspace "
+                        "coordinator. Pick a name of its own."
+                    ),
+                },
+            )
 
         existing_assistant = assistant_dao.find_by_natural_key(
             user_id=user_id,
@@ -5062,13 +5075,44 @@ async def update_assistant_config(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="coordinator_name_is_platform_managed",
             )
-        if existing_assistant.is_multiplayer and is_reserved_coordinator_name(
-            update_data.get("first_name"),
+        if (
+            not existing_assistant.is_private_coordinator
+            and is_reserved_coordinator_name(
+                update_data.get("first_name"),
+            )
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="coordinator_name_is_reserved",
             )
+        # Renames share the natural-name uniqueness creation enforces:
+        # org-wide for organization assistants, per-user for personal ones.
+        # Existing duplicates are grandfathered — only new name writes are
+        # validated.
+        if "first_name" in update_data or "surname" in update_data:
+            conflict = display_name_conflict(
+                session,
+                user_id=existing_assistant.user_id,
+                organization_id=existing_assistant.organization_id,
+                first_name=update_data.get(
+                    "first_name",
+                    existing_assistant.first_name,
+                ),
+                surname=update_data.get("surname", existing_assistant.surname),
+                exclude_agent_id=existing_assistant.agent_id,
+            )
+            if conflict is not None:
+                taken = " ".join(
+                    part for part in (conflict.first_name, conflict.surname) if part
+                ).strip()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Another assistant in this workspace is already "
+                        f"named {taken!r}; pick a name teammates can tell "
+                        f"apart."
+                    ),
+                )
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)
         if (

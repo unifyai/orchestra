@@ -18,6 +18,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.coordinator_multiplayer import (
     TWIN_ALIAS_EMAIL_METADATA,
     MultiplayerFlipError,
+    display_name_conflict,
     find_twin_by_alias_email,
     flip_coordinator_to_multiplayer,
     generate_twin_alias_email,
@@ -319,3 +320,46 @@ def test_flip_grants_owner_assistant_access_for_org_twins(
         .first()
     )
     assert grant is not None, "flip must mirror the hire-creation Owner grant"
+
+
+def test_flip_rejects_duplicate_personal_display_name(dbsession: Session) -> None:
+    owner = _make_user(dbsession, "personal-unique")
+    hire = Assistant(user_id=owner.id, first_name="Ada", surname="Lovelace")
+    dbsession.add(hire)
+    dbsession.flush()
+
+    coordinator = _make_coordinator(dbsession, owner)
+    _make_voice(dbsession, owner)
+    with pytest.raises(MultiplayerFlipError, match="already named"):
+        _flip(dbsession, coordinator, first_name="ada", surname=" LOVELACE ")
+
+
+def test_display_name_conflict_normalizes_and_excludes_self(
+    dbsession: Session,
+) -> None:
+    owner = _make_user(dbsession, "conflict-helper")
+    hire = Assistant(user_id=owner.id, first_name="Ada", surname="Lovelace")
+    dbsession.add(hire)
+    dbsession.flush()
+
+    conflict = display_name_conflict(
+        dbsession,
+        user_id=owner.id,
+        organization_id=None,
+        first_name="  ADA ",
+        surname="lovelace",
+    )
+    assert conflict is not None and conflict.agent_id == hire.agent_id
+
+    # A case-only rename of the same assistant is not a collision.
+    assert (
+        display_name_conflict(
+            dbsession,
+            user_id=owner.id,
+            organization_id=None,
+            first_name="ada",
+            surname="LOVELACE",
+            exclude_agent_id=hire.agent_id,
+        )
+        is None
+    )

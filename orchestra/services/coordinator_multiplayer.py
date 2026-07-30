@@ -19,10 +19,10 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact
@@ -49,44 +49,30 @@ def is_reserved_coordinator_name(name: str | None) -> bool:
     return (name or "").strip().lower() == COORDINATOR_DEFAULT_FIRST_NAME.lower()
 
 
-def _org_display_name_taken(
+def display_name_conflict(
     session: Session,
     *,
-    coordinator: Assistant,
+    user_id: str,
+    organization_id: int | None,
     first_name: str,
     surname: str | None,
-) -> str | None:
-    """Return the colliding display name when the org already shows it.
+    exclude_agent_id: int | None = None,
+) -> Assistant | None:
+    """Return the assistant already holding this normalized name, if any.
 
-    Uniqueness is scoped to roster-visible assistants (hires and
-    multiplayer twins) in the coordinator's organization — the surfaces
-    where two identical names would be indistinguishable to teammates.
-    Personal-workspace twins have no shared roster and skip the check.
+    Reuses the natural-name key assistant creation enforces — org-wide for
+    organization assistants, per-user for personal ones — so create,
+    rename, and the multiplayer flip all share one uniqueness semantics.
     """
-    if coordinator.organization_id is None:
-        return None
-    target = " ".join(
-        part.strip() for part in (first_name, surname or "") if part.strip()
-    ).lower()
-    rows = (
-        session.query(Assistant.first_name, Assistant.surname)
-        .filter(
-            Assistant.organization_id == coordinator.organization_id,
-            Assistant.agent_id != coordinator.agent_id,
-            or_(
-                Assistant.is_coordinator.is_(False),
-                Assistant.is_multiplayer.is_(True),
-            ),
-        )
-        .all()
+    conflict = AssistantDAO(session).find_by_natural_key(
+        user_id=user_id,
+        organization_id=organization_id,
+        first_name=first_name,
+        surname=surname,
     )
-    for row_first, row_surname in rows:
-        display = " ".join(
-            part.strip() for part in (row_first or "", row_surname or "") if part
-        ).strip()
-        if display.lower() == target:
-            return display
-    return None
+    if conflict is None or conflict.agent_id == exclude_agent_id:
+        return None
+    return conflict
 
 
 def is_twin_alias_email_address(address: str | None) -> bool:
@@ -199,16 +185,21 @@ def flip_coordinator_to_multiplayer(
         raise MultiplayerFlipError(
             "The multiplayer name must differ from the shared coordinator default",
         )
-    colliding = _org_display_name_taken(
+    colliding = display_name_conflict(
         session,
-        coordinator=coordinator,
+        user_id=coordinator.user_id,
+        organization_id=coordinator.organization_id,
         first_name=cleaned_first,
         surname=cleaned_surname,
+        exclude_agent_id=coordinator.agent_id,
     )
     if colliding is not None:
+        taken = " ".join(
+            part for part in (colliding.first_name, colliding.surname) if part
+        ).strip()
         raise MultiplayerFlipError(
-            f"Another assistant in this organization is already named "
-            f"{colliding!r}; pick a name teammates can tell apart",
+            f"Another assistant in this workspace is already named "
+            f"{taken!r}; pick a name teammates can tell apart",
         )
 
     alias_address = generate_twin_alias_email(
