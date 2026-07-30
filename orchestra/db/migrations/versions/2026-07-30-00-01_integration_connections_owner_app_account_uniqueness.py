@@ -59,4 +59,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(f'DROP INDEX IF EXISTS "{_INDEX_NAME}"')
+    bind = op.get_bind()
+    with op.get_context().autocommit_block():
+        bind.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS "{_INDEX_NAME}"'))
