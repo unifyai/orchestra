@@ -19,7 +19,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -1660,31 +1660,40 @@ def start_connection(
             coordinator = None
         if coordinator is not None:
             effective_user_id = coordinator.user_id
-    connection = dao.create_connection(
-        {
-            "owner_scope": owner.owner_scope,
-            "org_id": owner.org_id,
-            "team_id": owner.team_id,
-            "user_id": effective_user_id,
-            "assistant_id": owner.assistant_id,
-            "canonical_app_slug": canonical_app_slug,
-            "backend_id": resolved_backend_id,
-            "provider_app_id": resolved_provider_app_id,
-            "provider_connection_id": (
-                f"local_{uuid.uuid4().hex}" if status == "connected" else None
-            ),
-            "status": status,
-            "granted_scopes_json": effective_requested_scopes,
-            "enabled_capabilities_json": [],
-            "credential_storage": credential_storage,
-            "secret_refs_json": {key: "<redacted>" for key in api_key_fields},
-            "external_account_label": _normalize_account_label(account_label),
-            "created_by": created_by,
-            "reconnect_reason": (
-                None if status == "connected" else "authorization_required"
-            ),
-        },
+    connection_values = {
+        "owner_scope": owner.owner_scope,
+        "org_id": owner.org_id,
+        "team_id": owner.team_id,
+        "user_id": effective_user_id,
+        "assistant_id": owner.assistant_id,
+        "canonical_app_slug": canonical_app_slug,
+        "backend_id": resolved_backend_id,
+        "provider_app_id": resolved_provider_app_id,
+        "provider_connection_id": (
+            f"local_{uuid.uuid4().hex}" if status == "connected" else None
+        ),
+        "status": status,
+        "granted_scopes_json": effective_requested_scopes,
+        "enabled_capabilities_json": [],
+        "credential_storage": credential_storage,
+        "secret_refs_json": {key: "<redacted>" for key in api_key_fields},
+        "external_account_label": _normalize_account_label(account_label),
+        "created_by": created_by,
+        "reconnect_reason": (
+            None if status == "connected" else "authorization_required"
+        ),
+    }
+    existing_connection = dao.find_connection_for_owner_app(
+        owner=replace(owner, user_id=effective_user_id),
+        canonical_app_slug=canonical_app_slug,
     )
+    if existing_connection is not None and existing_connection.status != "connected":
+        connection = dao.update_connection_fields(
+            existing_connection,
+            **connection_values,
+        )
+    else:
+        connection = dao.create_connection(connection_values)
     session.commit()
 
     connect_url = None

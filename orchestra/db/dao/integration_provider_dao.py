@@ -438,6 +438,21 @@ class IntegrationProviderDAO:
             .one_or_none()
         )
 
+    def find_connection_for_owner_app(
+        self,
+        *,
+        owner: Any,
+        canonical_app_slug: str,
+    ) -> IntegrationConnection | None:
+        """Find any existing row (any status, including disconnected) for the
+        same owner+app_slug tuple, so reconnects can reuse the connection_id
+        instead of minting a new row."""
+        query = self.owner_filter(
+            self.session.query(IntegrationConnection),
+            owner,
+        ).filter_by(canonical_app_slug=canonical_app_slug)
+        return query.order_by(IntegrationConnection.updated_at.desc()).first()
+
     def find_connection_by_provider_id(
         self,
         *,
