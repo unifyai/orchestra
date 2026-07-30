@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import re
 import traceback
@@ -58,6 +59,8 @@ from ..python2SQL import STR_TO_SQL_TYPES
 from ..python2SQL.core import build_sql_query
 from ..python2SQL.helpers import _select_value
 from ..python2SQL.parsers import str_filter_exp_to_dict
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "_get_logs_query",
@@ -1400,6 +1403,10 @@ def _get_logs_query(
                 return (rows, total_count)
 
             except Exception as e:
+                # A one-line str(e) hides where a programming error came from —
+                # an UnboundLocalError here once read as an opaque client 400
+                # while every semantic search in the fleet failed on it.
+                logger.exception("Vector sort failed (sorting=%s)", sorting)
                 raise HTTPException(
                     status_code=400,
                     detail=f"Error processing vector sort: {str(e)}",
