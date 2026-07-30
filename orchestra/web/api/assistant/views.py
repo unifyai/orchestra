@@ -102,6 +102,7 @@ from orchestra.services.contact_membership_service import (
 from orchestra.services.coordinator_multiplayer import (
     MultiplayerFlipError,
     flip_coordinator_to_multiplayer,
+    is_reserved_coordinator_name,
 )
 from orchestra.services.coordinator_service import (
     build_onboarding_catalog,
@@ -5050,7 +5051,9 @@ async def update_assistant_config(
             update_data.pop(field_name, None)
         # A single-player coordinator's name is the fixed shared identity;
         # renaming happens only through the multiplayer flip. Multiplayer
-        # twins rename freely like hired teammates.
+        # twins rename freely like hired teammates — except back to the
+        # reserved shared default, which would recreate the ambiguity the
+        # flip ceremony exists to prevent.
         if existing_assistant.is_private_coordinator and any(
             update_data.get(field) not in (None, getattr(existing_assistant, field))
             for field in ("first_name", "surname")
@@ -5058,6 +5061,13 @@ async def update_assistant_config(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="coordinator_name_is_platform_managed",
+            )
+        if existing_assistant.is_multiplayer and is_reserved_coordinator_name(
+            update_data.get("first_name"),
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="coordinator_name_is_reserved",
             )
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)

@@ -19,9 +19,12 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact
 from orchestra.services.coordinator_service import COORDINATOR_DEFAULT_FIRST_NAME
 from orchestra.settings import settings
@@ -33,6 +36,57 @@ _MAX_LOCAL_PART_LENGTH = 64
 
 class MultiplayerFlipError(ValueError):
     """A flip request that cannot be honored (bad state or bad identity)."""
+
+
+def is_reserved_coordinator_name(name: str | None) -> bool:
+    """Whether a name collides with the shared single-player identity.
+
+    Reserved at flip time and for every later rename of a multiplayer
+    twin: a roster showing the fixed coordinator default next to real
+    multiplayer twins would recreate the ambiguity the flip ceremony
+    exists to prevent.
+    """
+    return (name or "").strip().lower() == COORDINATOR_DEFAULT_FIRST_NAME.lower()
+
+
+def _org_display_name_taken(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    first_name: str,
+    surname: str | None,
+) -> str | None:
+    """Return the colliding display name when the org already shows it.
+
+    Uniqueness is scoped to roster-visible assistants (hires and
+    multiplayer twins) in the coordinator's organization — the surfaces
+    where two identical names would be indistinguishable to teammates.
+    Personal-workspace twins have no shared roster and skip the check.
+    """
+    if coordinator.organization_id is None:
+        return None
+    target = " ".join(
+        part.strip() for part in (first_name, surname or "") if part.strip()
+    ).lower()
+    rows = (
+        session.query(Assistant.first_name, Assistant.surname)
+        .filter(
+            Assistant.organization_id == coordinator.organization_id,
+            Assistant.agent_id != coordinator.agent_id,
+            or_(
+                Assistant.is_coordinator.is_(False),
+                Assistant.is_multiplayer.is_(True),
+            ),
+        )
+        .all()
+    )
+    for row_first, row_surname in rows:
+        display = " ".join(
+            part.strip() for part in (row_first or "", row_surname or "") if part
+        ).strip()
+        if display.lower() == target:
+            return display
+    return None
 
 
 def is_twin_alias_email_address(address: str | None) -> bool:
@@ -141,9 +195,20 @@ def flip_coordinator_to_multiplayer(
     cleaned_surname = (surname or "").strip() or None
     if not cleaned_first:
         raise MultiplayerFlipError("A first name is required to go multiplayer")
-    if cleaned_first.lower() == COORDINATOR_DEFAULT_FIRST_NAME.lower():
+    if is_reserved_coordinator_name(cleaned_first):
         raise MultiplayerFlipError(
             "The multiplayer name must differ from the shared coordinator default",
+        )
+    colliding = _org_display_name_taken(
+        session,
+        coordinator=coordinator,
+        first_name=cleaned_first,
+        surname=cleaned_surname,
+    )
+    if colliding is not None:
+        raise MultiplayerFlipError(
+            f"Another assistant in this organization is already named "
+            f"{colliding!r}; pick a name teammates can tell apart",
         )
 
     alias_address = generate_twin_alias_email(
@@ -179,5 +244,20 @@ def flip_coordinator_to_multiplayer(
     if profile_photo:
         coordinator.profile_photo = profile_photo
     coordinator.is_multiplayer = True
+
+    # Mirror the per-assistant grant a hired org assistant gets at creation,
+    # so a flipped twin's RBAC state matches a hire's exactly. Project-level
+    # member grants already exist from the coordinator bootstrap.
+    if coordinator.organization_id is not None:
+        owner_role = RoleDAO(session).get_by_name("Owner", organization_id=None)
+        if owner_role is not None:
+            ResourceAccessDAO(session).grant_access(
+                resource_type="assistant",
+                resource_id=coordinator.agent_id,
+                role_id=owner_role.id,
+                grantee_type="user",
+                grantee_id=coordinator.user_id,
+            )
+
     session.flush()
     return coordinator

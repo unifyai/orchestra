@@ -9,6 +9,9 @@ from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
+    Organization,
+    ResourceAccess,
+    Role,
     User,
     Voice,
 )
@@ -18,6 +21,7 @@ from orchestra.services.coordinator_multiplayer import (
     find_twin_by_alias_email,
     flip_coordinator_to_multiplayer,
     generate_twin_alias_email,
+    is_reserved_coordinator_name,
     is_twin_alias_email_address,
 )
 from orchestra.services.coordinator_service import create_coordinator_assistant
@@ -241,3 +245,77 @@ def test_assistant_read_projects_multiplayer_flag(dbsession: Session) -> None:
     _flip(dbsession, coordinator)
     read = _build_assistant_read(coordinator, dbsession)
     assert read.is_multiplayer is True
+
+
+def _make_org(dbsession: Session, owner: User, suffix: str) -> Organization:
+    org = Organization(owner_id=owner.id, name=f"Multiplayer Org {suffix}")
+    dbsession.add(org)
+    dbsession.flush()
+    return org
+
+
+def test_reserved_name_helper_matches_default_case_insensitively() -> None:
+    assert is_reserved_coordinator_name("T-W1N")
+    assert is_reserved_coordinator_name("  t-w1n  ")
+    assert not is_reserved_coordinator_name("Max")
+    assert not is_reserved_coordinator_name(None)
+
+
+def test_flip_rejects_duplicate_org_display_name(dbsession: Session) -> None:
+    owner = _make_user(dbsession, "unique")
+    org = _make_org(dbsession, owner, "unique")
+    hire = Assistant(
+        user_id=owner.id,
+        organization_id=org.id,
+        first_name="Max",
+        surname="Vector",
+    )
+    dbsession.add(hire)
+    dbsession.flush()
+
+    coordinator = create_coordinator_assistant(
+        dbsession,
+        owner_user_id=owner.id,
+        organization_id=org.id,
+    )
+    _make_voice(dbsession, owner)
+    with pytest.raises(MultiplayerFlipError, match="already named"):
+        _flip(dbsession, coordinator, first_name="  max ", surname="VECTOR")
+
+    # A distinct name passes, and personal-workspace twins never collide.
+    flipped = _flip(dbsession, coordinator, first_name="Maxine", surname="Vector")
+    assert flipped.is_multiplayer is True
+
+
+def test_flip_grants_owner_assistant_access_for_org_twins(
+    dbsession: Session,
+) -> None:
+    owner = _make_user(dbsession, "grants")
+    org = _make_org(dbsession, owner, "grants")
+    if (
+        dbsession.query(Role)
+        .filter(Role.name == "Owner", Role.organization_id.is_(None))
+        .first()
+    ) is None:
+        dbsession.add(Role(name="Owner", organization_id=None))
+        dbsession.flush()
+
+    coordinator = create_coordinator_assistant(
+        dbsession,
+        owner_user_id=owner.id,
+        organization_id=org.id,
+    )
+    _make_voice(dbsession, owner)
+    _flip(dbsession, coordinator)
+
+    grant = (
+        dbsession.query(ResourceAccess)
+        .filter(
+            ResourceAccess.resource_type == "assistant",
+            ResourceAccess.resource_id == coordinator.agent_id,
+            ResourceAccess.grantee_type == "user",
+            ResourceAccess.grantee_id == owner.id,
+        )
+        .first()
+    )
+    assert grant is not None, "flip must mirror the hire-creation Owner grant"
