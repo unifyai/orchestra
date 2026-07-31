@@ -2,13 +2,23 @@
 set -euo pipefail
 
 # Keep staging->main release gates aligned with .github/workflows/tests.yml.
-# The aggregate "pytest" check comes from the pytest-required job, which only
-# publishes when should-run-tests enabled the matrix. Individual shards
-# ("pytest (0)".."pytest (N)") are not branch-protection contexts.
+# The aggregate "pytest" check comes from the pytest-required job, which runs
+# unconditionally and reports an explicit pass or fail on every commit.
+# Individual shards ("pytest (0)".."pytest (N)") are not branch-protection
+# contexts.
+#
+# pytest-required must never become conditional again. GitHub counts a skipped
+# required check as satisfied, so a conditional gate publishes an implicit pass
+# on every commit where it does not run -- and because a release PR shares its
+# head SHA with pushes to staging, that stale pass satisfies this ruleset. That
+# is how #125, #127, #128 and #129 merged into main carrying a failing suite.
 
 REPO="${REPO:-unifyai/orchestra}"
 RULESET_ID="${RULESET_ID:-17691842}"
 
+# dismiss_stale_reviews_on_push mirrors main branch protection's
+# dismiss_stale_reviews below: an approval must not survive a later push, or a
+# reviewer can be shown one diff while a different one merges.
 echo "Updating ${REPO} Staging->Main ruleset (${RULESET_ID})..."
 gh api \
   --method PUT \
@@ -32,7 +42,7 @@ gh api \
       "type": "pull_request",
       "parameters": {
         "required_approving_review_count": 1,
-        "dismiss_stale_reviews_on_push": false,
+        "dismiss_stale_reviews_on_push": true,
         "required_reviewers": [],
         "require_code_owner_review": false,
         "dismissal_restriction": {
