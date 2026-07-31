@@ -83,20 +83,65 @@ def has_ever_paid(session: Session, billing_account_id: int) -> bool:
     )
 
 
+def is_internal_account(session: Session, billing_account_id: int) -> bool:
+    """Whether the billing account belongs to the platform's own team.
+
+    True when a user whose OAuth-verified email is on an exempt domain
+    (``settings.trial_exempt_email_domains``) links to the account directly,
+    or owns the organization the account belongs to. Internal accounts are
+    exempt from the trial anti-abuse gates: they are not burner signups, and
+    gating them only breaks internal environments (shared staging tenants,
+    benchmarks, smoke tests).
+    """
+    from orchestra.db.models.orchestra_models import Organization, User
+
+    domains = {
+        d.strip().lower().lstrip("@")
+        for d in settings.trial_exempt_email_domains.split(",")
+        if d.strip()
+    }
+    if not domains:
+        return False
+
+    emails = [
+        email
+        for (email,) in session.execute(
+            select(User.email).where(
+                User.billing_account_id == billing_account_id,
+            ),
+        )
+    ]
+    org_owner_emails = [
+        email
+        for (email,) in session.execute(
+            select(User.email)
+            .join(Organization, Organization.owner_id == User.id)
+            .where(Organization.billing_account_id == billing_account_id),
+        )
+    ]
+    return any(
+        (email or "").rsplit("@", 1)[-1].lower() in domains
+        for email in (*emails, *org_owner_emails)
+    )
+
+
 def has_platform_access(session: Session, ba: BillingAccount) -> bool:
     """Whether the account may use metered platform features (LLM calls).
 
     True when the card gate is disabled globally, when a subscription is
     live (``stripe_subscription_id`` is cleared by the
     ``customer.subscription.deleted`` webhook, so its presence means
-    trialing/active/past-due-in-dunning), or when the account has real
-    payment history (grandfathered pre-subscription payers).
+    trialing/active/past-due-in-dunning), when the account has real
+    payment history (grandfathered pre-subscription payers), or when the
+    account is internal (see :func:`is_internal_account`).
     """
     if not settings.require_card_on_file:
         return True
     if ba.stripe_subscription_id:
         return True
-    return has_ever_paid(session, ba.id)
+    if has_ever_paid(session, ba.id):
+        return True
+    return is_internal_account(session, ba.id)
 
 
 def create_trial_checkout_session(
@@ -238,7 +283,8 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
     * ``trial_daily_spend`` / ``trial_daily_cap`` — populated for
       never-paid accounts so the runtime enforces a daily burn ceiling
       during the trial; both NULL once the account has real payment
-      history.
+      history, and never populated for internal accounts (see
+      :func:`is_internal_account`).
     """
     from decimal import Decimal
 
@@ -258,7 +304,11 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
         "trial_daily_spend": None,
         "trial_daily_cap": None,
     }
-    if settings.trial_daily_spend_cap > 0 and not has_ever_paid(session, ba.id):
+    if (
+        settings.trial_daily_spend_cap > 0
+        and not has_ever_paid(session, ba.id)
+        and not is_internal_account(session, ba.id)
+    ):
         day_start = datetime.now(timezone.utc).replace(
             hour=0,
             minute=0,
