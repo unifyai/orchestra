@@ -5,6 +5,8 @@ Two admin-triggered sweeps, both idempotent and dry-run-first:
 * :func:`freeze_never_paid_accounts` — one-shot migration sweep for the
   card gate: every ACTIVE account with neither a linked subscription nor
   any real payment history is suspended with reason ``card_required``.
+  Orgs holding an admin-granted free trial are exempt, so a comped
+  white-glove account is not frozen out from under the customer.
   Completing the trial Checkout auto-reinstates the account
   (``trial_subscription.apply_trial_checkout_completed``).
 
@@ -33,6 +35,7 @@ from orchestra.db.models.enums import RECHARGE_TYPE_PAYMENT
 from orchestra.db.models.orchestra_models import (
     BillingAccount,
     CreditTransaction,
+    Organization,
     Recharge,
     RechargeStatus,
 )
@@ -77,6 +80,19 @@ def _paid_ba_ids(session: Session) -> set[int]:
     return {row[0] for row in rows}
 
 
+def _free_trial_ba_ids(session: Session) -> set[int]:
+    """Billing accounts of orgs holding an admin-granted free trial."""
+    rows = session.execute(
+        select(Organization.billing_account_id)
+        .where(
+            Organization.free_trial.is_(True),
+            Organization.billing_account_id.isnot(None),
+        )
+        .distinct(),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def freeze_never_paid_accounts(
     session: Session,
     *,
@@ -93,6 +109,7 @@ def freeze_never_paid_accounts(
         return result
 
     paid = _paid_ba_ids(session)
+    comped = _free_trial_ba_ids(session)
     candidates = session.execute(
         select(BillingAccount).where(
             BillingAccount.account_status == "ACTIVE",
@@ -102,7 +119,7 @@ def freeze_never_paid_accounts(
 
     for ba in candidates:
         result.scanned += 1
-        if ba.id in paid:
+        if ba.id in paid or ba.id in comped:
             continue
         result.billing_account_ids.append(ba.id)
         if not dry_run:
