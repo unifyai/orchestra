@@ -154,6 +154,7 @@ def _seed_connection(
     assistant_id: int = 7,
     provider_connection_id: str = "ca_test_123",
     provider_user_id: str = "provider-user-1",
+    status: str = "connected",
 ) -> IntegrationConnection:
     connection = IntegrationConnection(
         connection_id=connection_id,
@@ -164,7 +165,7 @@ def _seed_connection(
         provider_app_id="GITHUB",
         provider_connection_id=provider_connection_id,
         provider_user_id=provider_user_id,
-        status="connected",
+        status=status,
         credential_storage="provider_vault",
     )
     dbsession.add(connection)
@@ -534,6 +535,90 @@ def test_health_failures_increment_counter_and_trip_threshold(
     assert binding.runtime_health == BindingRuntimeHealth.needs_attention.value
     assert binding.local_acceptance_open is False
     assert binding.reconcile_next_retry_at is not None
+
+
+def test_health_check_fails_when_local_connection_not_active(
+    dbsession: Session,
+) -> None:
+    """A disconnected local connection must fail health even though the
+    provider-side adapter would otherwise report the trigger as healthy."""
+
+    connection_id = _connection_id()
+    binding_id = _binding_id()
+    _seed_connection(dbsession, connection_id=connection_id, status="disconnected")
+    binding = _seed_enabled_binding(
+        dbsession,
+        binding_id=binding_id,
+        connection_id=connection_id,
+    )
+    dao = ProviderTriggerDAO(dbsession)
+    generation = dao.create_generation(binding=binding)
+    dao.journal_generation_create(
+        generation=generation,
+        external_trigger_id="ti_existing_3",
+    )
+    dao.promote_generation(binding=binding, generation=generation)
+    binding.runtime_health = BindingRuntimeHealth.healthy.value
+    binding.last_health_check_at = None
+    dbsession.flush()
+
+    adapter = FakeTriggerAdapter(health_status="ok")
+    service = _service(dbsession, adapter)
+
+    service.process_health_batch()
+    dbsession.commit()
+
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    assert binding.consecutive_health_failures == 1
+    assert binding.runtime_health == BindingRuntimeHealth.recovering.value
+    assert binding.last_stable_error_code == "connection_not_active"
+    assert binding.last_health_check_at is not None
+    assert adapter.provision_calls == []
+
+
+def test_health_check_passes_with_active_local_connection(
+    dbsession: Session,
+) -> None:
+    """Provider-side health signal is still respected when the local
+    connection status is active."""
+
+    connection_id = _connection_id()
+    binding_id = _binding_id()
+    _seed_connection(dbsession, connection_id=connection_id, status="connected")
+    binding = _seed_enabled_binding(
+        dbsession,
+        binding_id=binding_id,
+        connection_id=connection_id,
+    )
+    dao = ProviderTriggerDAO(dbsession)
+    generation = dao.create_generation(binding=binding)
+    dao.journal_generation_create(
+        generation=generation,
+        external_trigger_id="ti_existing_4",
+    )
+    dao.promote_generation(binding=binding, generation=generation)
+    binding.runtime_health = BindingRuntimeHealth.healthy.value
+    binding.last_health_check_at = None
+    dbsession.flush()
+
+    adapter = FakeTriggerAdapter(health_status="ok")
+    service = _service(dbsession, adapter)
+
+    service.process_health_batch()
+    dbsession.commit()
+
+    binding = dbsession.execute(
+        select(EventTriggerBinding).where(
+            EventTriggerBinding.binding_id == binding_id,
+        ),
+    ).scalar_one()
+    assert binding.consecutive_health_failures == 0
+    assert binding.runtime_health == BindingRuntimeHealth.healthy.value
+    assert binding.last_stable_error_code is None
 
 
 def test_claim_generations_for_operation_reclaims_expired_lease(
