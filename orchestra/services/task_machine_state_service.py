@@ -76,7 +76,6 @@ _OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
-_TASK_SUMMARY_MAX_CHARS = 240
 
 
 class _KeepCurrentHead:
@@ -607,10 +606,10 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Optional per-task execution bound.",
     },
-    "repeat": {
-        "field_type": "list",
+    "recurring": {
+        "field_type": "bool",
         "mutable": True,
-        "description": "Repeat patterns mirrored from the task definition.",
+        "description": "Whether the definition repeats; the patterns live on it.",
     },
     "source_task_updated_at": {
         "field_type": "datetime",
@@ -685,11 +684,6 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "field_type": "str",
         "mutable": True,
         "description": "Human-readable task title mirrored into the run row.",
-    },
-    "task_description": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Human-readable task description mirrored into the run row.",
     },
     "started_at": {
         "field_type": "datetime",
@@ -1984,7 +1978,6 @@ def _project_execution_payload(
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "task_name": _coerce_optional_str(row.data.get("name")),
-        "task_description": _coerce_optional_str(row.data.get("description")),
         "scheduled_for": scheduled_for,
         "trigger_medium": _coerce_optional_str(trigger.get("medium")),
         "trigger_from_contact_ids": _coerce_optional_list(
@@ -1997,7 +1990,7 @@ def _project_execution_payload(
         "trigger_recurring": bool(trigger.get("recurring", False)),
         "entrypoint": entrypoint,
         "max_runtime_seconds": _coerce_int(row.data.get("max_runtime_seconds")),
-        "repeat": _coerce_optional_list(row.data.get("repeat")),
+        "recurring": bool(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
             row.updated_at or row.created_at,
         ),
@@ -2075,9 +2068,8 @@ def _project_provider_event_execution_payload(
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "task_name": _coerce_optional_str(row.data.get("name")),
-        "task_description": _coerce_optional_str(row.data.get("description")),
         "entrypoint": entrypoint,
-        "repeat": _coerce_optional_list(row.data.get("repeat")),
+        "recurring": bool(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
             row.updated_at or row.created_at,
         ),
@@ -2115,6 +2107,9 @@ def _normalize_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "activation_kind",
         "next_due_at",
         "instance_id",
+        "task_description",
+        "repeat",
+        "previous_error",
     ):
         normalized.pop(obsolete_key, None)
     state = str(normalized.get("state") or "").lower()
@@ -2205,18 +2200,6 @@ def _scheduled_execution_snapshot(
     }
 
 
-def _compact_task_summary(text: Any, *, fallback: str) -> str:
-    """Return one compact wake-summary line for scheduled task delivery."""
-
-    candidate = " ".join((_coerce_optional_str(text) or "").split())
-    if not candidate:
-        candidate = " ".join(fallback.split())
-    if len(candidate) <= _TASK_SUMMARY_MAX_CHARS:
-        return candidate
-    truncated = candidate[: _TASK_SUMMARY_MAX_CHARS - 3].rstrip(" ,.;:")
-    return f"{truncated}..."
-
-
 def _scheduled_execution_wake_context(
     execution: Mapping[str, Any],
 ) -> dict[str, str]:
@@ -2226,14 +2209,12 @@ def _scheduled_execution_wake_context(
     task_label = _coerce_optional_str(execution.get("task_name")) or (
         f"task {task_id}" if task_id is not None else "scheduled task"
     )
-    repeat = _coerce_optional_list(execution.get("repeat")) or []
-    recurrence_hint = _RECURRING_WAKE_HINT if repeat else _ONE_OFF_WAKE_HINT
+    recurrence_hint = (
+        _RECURRING_WAKE_HINT if execution.get("recurring") else _ONE_OFF_WAKE_HINT
+    )
     return {
         "task_label": task_label,
-        "task_summary": _compact_task_summary(
-            execution.get("task_description"),
-            fallback=task_label,
-        ),
+        "task_summary": task_label,
         "visibility_policy": _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY,
         "recurrence_hint": recurrence_hint,
     }

@@ -47,8 +47,7 @@ def _definition_row(
         "description": "Recurring operator tick.",
         "enabled": True,
         "schedule": {"start_at": start_at},
-        "_user_id": "1",
-        "_assistant_id": "42",
+        "assistant_id": "42",
     }
     if repeat is not None:
         data["repeat"] = repeat
