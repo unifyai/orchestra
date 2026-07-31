@@ -501,17 +501,21 @@ async def test_identical_arguments_do_not_collapse_forever(
 
 
 @pytest.mark.anyio
-async def test_a_caller_supplied_run_key_is_honoured(
+async def test_a_caller_supplied_run_key_cannot_defeat_dedup(
     client: AsyncClient,
     dbsession: Session,
 ):
-    # Console sends its own so a retry after a dropped response lands on the same
-    # run even if the derived window has since rolled over.
+    """The dedup key is derived server-side, whatever the caller sends.
+
+    If a client-supplied key were honoured, a canvas could mint a fresh key per
+    click and turn double-click protection off for exactly the actions where a
+    duplicate run means a duplicate send.
+    """
     await _seed(client, "ca_key@test.com", "ca-key-proj", "ca_key_00001")
 
     first = await _invoke(client, "ca_key_00001", run_key="explicit-key-1")
-    second = await _invoke(client, "ca_key_00001", run_key="explicit-key-1")
+    second = await _invoke(client, "ca_key_00001", run_key="explicit-key-2")
 
-    assert first.json()["run_key"] == "explicit-key-1"
+    assert first.json()["run_key"] != "explicit-key-1"
     assert second.json()["deduplicated"] is True
     assert second.json()["invocation_id"] == first.json()["invocation_id"]

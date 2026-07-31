@@ -145,11 +145,10 @@ class InvokeCanvasActionRequest(BaseModel):
 
     action_name: str = Field(..., min_length=1, max_length=64)
     args: dict = Field(default_factory=dict)
-    # Console derives this from the token, the action and the arguments so a
-    # double-click, a retry and a reconnect all collapse onto one run. Absent, the
-    # server derives the same thing — but console's copy is what makes a retry
-    # after a dropped response idempotent rather than a second send.
-    run_key: Optional[str] = Field(default=None, max_length=128)
+    # Deliberately no client-supplied run key. The dedup key is derived here,
+    # from the token, the action, the arguments and a time window — a caller
+    # able to choose it could mint a fresh key per click and turn double-click
+    # protection off for exactly the actions it matters on.
     requested_by_user_id: Optional[str] = None
 
 

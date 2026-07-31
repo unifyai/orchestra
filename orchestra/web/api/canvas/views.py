@@ -1095,7 +1095,7 @@ async def admin_canvas_action(
             detail=f"This action is limited to {limit} runs an hour.",
         )
 
-    run_key = body.run_key or _derive_run_key(token, body.action_name, body.args)
+    run_key = _derive_run_key(token, body.action_name, body.args)
 
     existing = _existing_invocation(entry, token, run_key, session)
     if existing:
