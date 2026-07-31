@@ -110,42 +110,54 @@ def has_free_trial_grant(session: Session, billing_account_id: int) -> bool:
 def is_internal_account(session: Session, billing_account_id: int) -> bool:
     """Whether the billing account belongs to the platform's own team.
 
-    True when a user whose OAuth-verified email is on an exempt domain
-    (``settings.trial_exempt_email_domains``) links to the account directly,
-    or owns the organization the account belongs to. Internal accounts are
-    exempt from the trial anti-abuse gates: they are not burner signups, and
-    gating them only breaks internal environments (shared staging tenants,
-    benchmarks, smoke tests).
-    """
-    from orchestra.db.models.orchestra_models import Organization, User
+    True for the Unify organization's own billing account, and for the
+    personal account of any of its members. Internal accounts are exempt
+    from the trial anti-abuse gates: they are not burner signups, and
+    gating them only breaks internal environments (shared staging
+    tenants, benchmarks, smoke tests).
 
-    domains = {
-        d.strip().lower().lstrip("@")
-        for d in settings.trial_exempt_email_domains.split(",")
-        if d.strip()
-    }
-    if not domains:
+    Membership is deliberately *not* inferred from an ``@unify.ai`` email
+    domain. Staff provision and own customer organizations during
+    white-glove onboarding, so an owner-domain test silently marked real
+    customer accounts internal and exempted them from the card gate and
+    the daily burn ceiling. A customer that should skip the card gate
+    gets an explicit, revocable grant instead — see
+    :func:`has_free_trial_grant`.
+    """
+    from orchestra.db.models.orchestra_models import (
+        Organization,
+        OrganizationMember,
+        User,
+    )
+    from orchestra.services.personal_workspace_service import UNIFY_ORGANIZATION_NAME
+
+    unify_org_id = session.execute(
+        select(Organization.id).where(
+            Organization.name == UNIFY_ORGANIZATION_NAME,
+        ),
+    ).scalar_one_or_none()
+    if unify_org_id is None:
         return False
 
-    emails = [
-        email
-        for (email,) in session.execute(
-            select(User.email).where(
+    owns_the_account = session.execute(
+        select(Organization.id).where(
+            Organization.id == unify_org_id,
+            Organization.billing_account_id == billing_account_id,
+        ),
+    ).first()
+    if owns_the_account is not None:
+        return True
+
+    return (
+        session.execute(
+            select(User.id)
+            .join(OrganizationMember, OrganizationMember.user_id == User.id)
+            .where(
                 User.billing_account_id == billing_account_id,
+                OrganizationMember.organization_id == unify_org_id,
             ),
-        )
-    ]
-    org_owner_emails = [
-        email
-        for (email,) in session.execute(
-            select(User.email)
-            .join(Organization, Organization.owner_id == User.id)
-            .where(Organization.billing_account_id == billing_account_id),
-        )
-    ]
-    return any(
-        (email or "").rsplit("@", 1)[-1].lower() in domains
-        for email in (*emails, *org_owner_emails)
+        ).first()
+        is not None
     )
 
 

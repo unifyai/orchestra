@@ -24,9 +24,8 @@ from orchestra.tests.test_billing.conftest import make_org_with_billing
 
 @pytest.fixture
 def card_gate_on(monkeypatch):
-    """Card gate enabled, and no email-domain exemption in play."""
+    """Card gate enabled."""
     monkeypatch.setattr(settings, "require_card_on_file", True)
-    monkeypatch.setattr(settings, "trial_exempt_email_domains", "")
     return settings
 
 
