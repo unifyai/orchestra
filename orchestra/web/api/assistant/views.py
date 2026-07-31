@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import logging
 import math
 import os
@@ -101,7 +102,9 @@ from orchestra.services.contact_membership_service import (
 )
 from orchestra.services.coordinator_multiplayer import (
     MultiplayerFlipError,
+    display_name_conflict,
     flip_coordinator_to_multiplayer,
+    is_reserved_coordinator_name,
 )
 from orchestra.services.coordinator_service import (
     build_onboarding_catalog,
@@ -1176,6 +1179,18 @@ async def create_assistant(
                     detail="Insufficient credits to create an assistant.",
                 )
 
+        if is_reserved_coordinator_name(assistant_in.first_name):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "coordinator_name_is_reserved",
+                    "message": (
+                        "That first name is reserved for the workspace "
+                        "coordinator. Pick a name of its own."
+                    ),
+                },
+            )
+
         existing_assistant = assistant_dao.find_by_natural_key(
             user_id=user_id,
             organization_id=organization_id,
@@ -1740,8 +1755,24 @@ async def flip_coordinator_multiplayer_endpoint(
 
     from orchestra.web.api.utils.assistant_infra import reawaken_assistant
 
+    alias_contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        coordinator.agent_id,
+        "email",
+    )
+    wake_reasons = [
+        {
+            "type": "coordinator_multiplayer_flipped",
+            "alias_email": alias_contact.contact_value if alias_contact else "",
+        },
+    ]
     try:
-        await reawaken_assistant(str(coordinator.agent_id))
+        await reawaken_assistant(
+            str(coordinator.agent_id),
+            data={
+                "assistant_id": str(coordinator.agent_id),
+                "wake_reasons": json.dumps(wake_reasons),
+            },
+        )
     except Exception as e:
         logger.warning(
             "Failed to reawaken coordinator %s after multiplayer flip: %s",
@@ -5050,7 +5081,9 @@ async def update_assistant_config(
             update_data.pop(field_name, None)
         # A single-player coordinator's name is the fixed shared identity;
         # renaming happens only through the multiplayer flip. Multiplayer
-        # twins rename freely like hired teammates.
+        # twins rename freely like hired teammates — except back to the
+        # reserved shared default, which would recreate the ambiguity the
+        # flip ceremony exists to prevent.
         if existing_assistant.is_private_coordinator and any(
             update_data.get(field) not in (None, getattr(existing_assistant, field))
             for field in ("first_name", "surname")
@@ -5059,6 +5092,44 @@ async def update_assistant_config(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="coordinator_name_is_platform_managed",
             )
+        if (
+            not existing_assistant.is_private_coordinator
+            and is_reserved_coordinator_name(
+                update_data.get("first_name"),
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="coordinator_name_is_reserved",
+            )
+        # Renames share the natural-name uniqueness creation enforces:
+        # org-wide for organization assistants, per-user for personal ones.
+        # Existing duplicates are grandfathered — only new name writes are
+        # validated.
+        if "first_name" in update_data or "surname" in update_data:
+            conflict = display_name_conflict(
+                session,
+                user_id=existing_assistant.user_id,
+                organization_id=existing_assistant.organization_id,
+                first_name=update_data.get(
+                    "first_name",
+                    existing_assistant.first_name,
+                ),
+                surname=update_data.get("surname", existing_assistant.surname),
+                exclude_agent_id=existing_assistant.agent_id,
+            )
+            if conflict is not None:
+                taken = " ".join(
+                    part for part in (conflict.first_name, conflict.surname) if part
+                ).strip()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Another assistant in this workspace is already "
+                        f"named {taken!r}; pick a name teammates can tell "
+                        f"apart."
+                    ),
+                )
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)
         if (

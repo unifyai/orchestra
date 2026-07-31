@@ -9,19 +9,26 @@ from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.models.orchestra_models import (
     Assistant,
     AssistantContact,
+    Organization,
+    ResourceAccess,
+    Role,
     User,
     Voice,
 )
 from orchestra.services.coordinator_multiplayer import (
-    TWIN_ALIAS_EMAIL_METADATA,
     MultiplayerFlipError,
+    display_name_conflict,
     find_twin_by_alias_email,
     flip_coordinator_to_multiplayer,
     generate_twin_alias_email,
+    is_reserved_coordinator_name,
     is_twin_alias_email_address,
 )
 from orchestra.services.coordinator_service import create_coordinator_assistant
-from orchestra.services.shared_coordinator_routing import find_owned_shared_coordinators
+from orchestra.services.shared_coordinator_routing import (
+    find_owned_shared_coordinators,
+    resolve_shared_coordinator_owner,
+)
 from orchestra.services.universal_unity_email import (
     ensure_coordinator_universal_email_contact,
 )
@@ -110,7 +117,8 @@ def test_flip_applies_identity_and_swaps_contacts(dbsession: Session) -> None:
     assert len(contacts) == 1
     alias = contacts[0]
     assert alias.contact_type == "email"
-    assert alias.metadata_ == TWIN_ALIAS_EMAIL_METADATA
+    assert alias.metadata_.get("twin_alias") is True
+    assert alias.metadata_.get("flipped_at"), "grace window anchor must be stamped"
     assert is_twin_alias_email_address(alias.contact_value)
     assert alias.contact_value.startswith("max.vector@")
 
@@ -196,7 +204,7 @@ def test_pool_reattach_and_shared_routing_skip_multiplayer(
         is None
     )
     contacts = _active_contacts(dbsession, coordinator)
-    assert [c.metadata_ for c in contacts] == [TWIN_ALIAS_EMAIL_METADATA]
+    assert [c.metadata_.get("twin_alias") for c in contacts] == [True]
 
     # Even with a stale pool row, sender-based routing must skip the twin.
     AssistantContactDAO(dbsession).upsert_assistant_contact(
@@ -241,3 +249,175 @@ def test_assistant_read_projects_multiplayer_flag(dbsession: Session) -> None:
     _flip(dbsession, coordinator)
     read = _build_assistant_read(coordinator, dbsession)
     assert read.is_multiplayer is True
+
+
+def _make_org(dbsession: Session, owner: User, suffix: str) -> Organization:
+    org = Organization(owner_id=owner.id, name=f"Multiplayer Org {suffix}")
+    dbsession.add(org)
+    dbsession.flush()
+    return org
+
+
+def test_reserved_name_helper_matches_default_case_insensitively() -> None:
+    assert is_reserved_coordinator_name("T-W1N")
+    assert is_reserved_coordinator_name("  t-w1n  ")
+    assert not is_reserved_coordinator_name("Max")
+    assert not is_reserved_coordinator_name(None)
+
+
+def test_flip_rejects_duplicate_org_display_name(dbsession: Session) -> None:
+    owner = _make_user(dbsession, "unique")
+    org = _make_org(dbsession, owner, "unique")
+    hire = Assistant(
+        user_id=owner.id,
+        organization_id=org.id,
+        first_name="Max",
+        surname="Vector",
+    )
+    dbsession.add(hire)
+    dbsession.flush()
+
+    coordinator = create_coordinator_assistant(
+        dbsession,
+        owner_user_id=owner.id,
+        organization_id=org.id,
+    )
+    _make_voice(dbsession, owner)
+    with pytest.raises(MultiplayerFlipError, match="already named"):
+        _flip(dbsession, coordinator, first_name="  max ", surname="VECTOR")
+
+    # A distinct name passes, and personal-workspace twins never collide.
+    flipped = _flip(dbsession, coordinator, first_name="Maxine", surname="Vector")
+    assert flipped.is_multiplayer is True
+
+
+def test_flip_grants_owner_assistant_access_for_org_twins(
+    dbsession: Session,
+) -> None:
+    owner = _make_user(dbsession, "grants")
+    org = _make_org(dbsession, owner, "grants")
+    if (
+        dbsession.query(Role)
+        .filter(Role.name == "Owner", Role.organization_id.is_(None))
+        .first()
+    ) is None:
+        dbsession.add(Role(name="Owner", organization_id=None))
+        dbsession.flush()
+
+    coordinator = create_coordinator_assistant(
+        dbsession,
+        owner_user_id=owner.id,
+        organization_id=org.id,
+    )
+    _make_voice(dbsession, owner)
+    _flip(dbsession, coordinator)
+
+    grant = (
+        dbsession.query(ResourceAccess)
+        .filter(
+            ResourceAccess.resource_type == "assistant",
+            ResourceAccess.resource_id == coordinator.agent_id,
+            ResourceAccess.grantee_type == "user",
+            ResourceAccess.grantee_id == owner.id,
+        )
+        .first()
+    )
+    assert grant is not None, "flip must mirror the hire-creation Owner grant"
+
+
+def test_flip_rejects_duplicate_personal_display_name(dbsession: Session) -> None:
+    owner = _make_user(dbsession, "personal-unique")
+    hire = Assistant(user_id=owner.id, first_name="Ada", surname="Lovelace")
+    dbsession.add(hire)
+    dbsession.flush()
+
+    coordinator = _make_coordinator(dbsession, owner)
+    _make_voice(dbsession, owner)
+    with pytest.raises(MultiplayerFlipError, match="already named"):
+        _flip(dbsession, coordinator, first_name="ada", surname=" LOVELACE ")
+
+
+def test_display_name_conflict_normalizes_and_excludes_self(
+    dbsession: Session,
+) -> None:
+    owner = _make_user(dbsession, "conflict-helper")
+    hire = Assistant(user_id=owner.id, first_name="Ada", surname="Lovelace")
+    dbsession.add(hire)
+    dbsession.flush()
+
+    conflict = display_name_conflict(
+        dbsession,
+        user_id=owner.id,
+        organization_id=None,
+        first_name="  ADA ",
+        surname="lovelace",
+    )
+    assert conflict is not None and conflict.agent_id == hire.agent_id
+
+    # A case-only rename of the same assistant is not a collision.
+    assert (
+        display_name_conflict(
+            dbsession,
+            user_id=owner.id,
+            organization_id=None,
+            first_name="ada",
+            surname="LOVELACE",
+            exclude_agent_id=hire.agent_id,
+        )
+        is None
+    )
+
+
+def test_pool_address_returns_moved_notice_for_owner_within_grace(
+    dbsession: Session,
+) -> None:
+    owner = _make_user(dbsession, "moved")
+    coordinator = _make_coordinator(dbsession, owner)
+    _make_voice(dbsession, owner)
+    flipped = _flip(dbsession, coordinator)
+    dbsession.flush()
+    alias = _active_contacts(dbsession, flipped)[0].contact_value
+
+    route = resolve_shared_coordinator_owner(
+        dbsession,
+        platform="email",
+        contact_type="email",
+        contact_value="twin@unify.ai",
+        sender=owner.email,
+    )
+    assert route["action"] == "coordinator_multiplayer_moved"
+    assert route["alias_email"] == alias
+    assert route["twin_name"] == "Max Vector"
+
+    # Cold senders keep getting rejected outright.
+    cold = resolve_shared_coordinator_owner(
+        dbsession,
+        platform="email",
+        contact_type="email",
+        contact_value="twin@unify.ai",
+        sender="stranger@example.com",
+    )
+    assert cold == {"action": "reject_cold"}
+
+
+def test_pool_address_goes_cold_after_grace_expires(dbsession: Session) -> None:
+    owner = _make_user(dbsession, "grace-out")
+    coordinator = _make_coordinator(dbsession, owner)
+    _make_voice(dbsession, owner)
+    flipped = _flip(dbsession, coordinator)
+    dbsession.flush()
+    alias_row = _active_contacts(dbsession, flipped)[0]
+    alias_row.metadata_ = {
+        **alias_row.metadata_,
+        "flipped_at": "2020-01-01T00:00:00+00:00",
+    }
+    dbsession.flush()
+
+    route = resolve_shared_coordinator_owner(
+        dbsession,
+        platform="email",
+        contact_type="email",
+        contact_value="twin@unify.ai",
+        sender=owner.email,
+    )
+    assert route == {"action": "reject_cold"}

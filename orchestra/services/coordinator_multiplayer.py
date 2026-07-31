@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
+from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact
 from orchestra.services.coordinator_service import COORDINATOR_DEFAULT_FIRST_NAME
 from orchestra.settings import settings
@@ -33,6 +37,43 @@ _MAX_LOCAL_PART_LENGTH = 64
 
 class MultiplayerFlipError(ValueError):
     """A flip request that cannot be honored (bad state or bad identity)."""
+
+
+def is_reserved_coordinator_name(name: str | None) -> bool:
+    """Whether a name collides with the shared single-player identity.
+
+    Reserved at flip time and for every later rename of a multiplayer
+    twin: a roster showing the fixed coordinator default next to real
+    multiplayer twins would recreate the ambiguity the flip ceremony
+    exists to prevent.
+    """
+    return (name or "").strip().lower() == COORDINATOR_DEFAULT_FIRST_NAME.lower()
+
+
+def display_name_conflict(
+    session: Session,
+    *,
+    user_id: str,
+    organization_id: int | None,
+    first_name: str,
+    surname: str | None,
+    exclude_agent_id: int | None = None,
+) -> Assistant | None:
+    """Return the assistant already holding this normalized name, if any.
+
+    Reuses the natural-name key assistant creation enforces — org-wide for
+    organization assistants, per-user for personal ones — so create,
+    rename, and the multiplayer flip all share one uniqueness semantics.
+    """
+    conflict = AssistantDAO(session).find_by_natural_key(
+        user_id=user_id,
+        organization_id=organization_id,
+        first_name=first_name,
+        surname=surname,
+    )
+    if conflict is None or conflict.agent_id == exclude_agent_id:
+        return None
+    return conflict
 
 
 def is_twin_alias_email_address(address: str | None) -> bool:
@@ -141,9 +182,25 @@ def flip_coordinator_to_multiplayer(
     cleaned_surname = (surname or "").strip() or None
     if not cleaned_first:
         raise MultiplayerFlipError("A first name is required to go multiplayer")
-    if cleaned_first.lower() == COORDINATOR_DEFAULT_FIRST_NAME.lower():
+    if is_reserved_coordinator_name(cleaned_first):
         raise MultiplayerFlipError(
             "The multiplayer name must differ from the shared coordinator default",
+        )
+    colliding = display_name_conflict(
+        session,
+        user_id=coordinator.user_id,
+        organization_id=coordinator.organization_id,
+        first_name=cleaned_first,
+        surname=cleaned_surname,
+        exclude_agent_id=coordinator.agent_id,
+    )
+    if colliding is not None:
+        taken = " ".join(
+            part for part in (colliding.first_name, colliding.surname) if part
+        ).strip()
+        raise MultiplayerFlipError(
+            f"Another assistant in this workspace is already named "
+            f"{taken!r}; pick a name teammates can tell apart",
         )
 
     alias_address = generate_twin_alias_email(
@@ -169,7 +226,13 @@ def flip_coordinator_to_multiplayer(
         contact_value=alias_address,
         provider="google_workspace",
         provisioned_by="platform",
-        metadata=TWIN_ALIAS_EMAIL_METADATA,
+        metadata={
+            **TWIN_ALIAS_EMAIL_METADATA,
+            # Anchors the pool-address grace window: for a while after the
+            # flip, boss mail to the retired shared address gets a
+            # redirect notice instead of a silent drop.
+            "flipped_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     coordinator.first_name = cleaned_first
@@ -179,5 +242,20 @@ def flip_coordinator_to_multiplayer(
     if profile_photo:
         coordinator.profile_photo = profile_photo
     coordinator.is_multiplayer = True
+
+    # Mirror the per-assistant grant a hired org assistant gets at creation,
+    # so a flipped twin's RBAC state matches a hire's exactly. Project-level
+    # member grants already exist from the coordinator bootstrap.
+    if coordinator.organization_id is not None:
+        owner_role = RoleDAO(session).get_by_name("Owner", organization_id=None)
+        if owner_role is not None:
+            ResourceAccessDAO(session).grant_access(
+                resource_type="assistant",
+                resource_id=coordinator.agent_id,
+                role_id=owner_role.id,
+                grantee_type="user",
+                grantee_id=coordinator.user_id,
+            )
+
     session.flush()
     return coordinator

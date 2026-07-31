@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact, User
+
+# How long after a multiplayer flip the retired shared-pool address still
+# answers the boss with a redirect notice instead of a silent drop.
+TWIN_POOL_GRACE = timedelta(days=60)
 
 
 def find_user_by_shared_identity(
@@ -85,6 +89,67 @@ def _pick_most_recently_active_coordinator(
     return max(rows, key=activity_rank)[0]
 
 
+def _multiplayer_moved_route(session: Session, *, user_id: str) -> dict | None:
+    """Redirect notice for a verified owner whose twin left the pools.
+
+    Only within the post-flip grace window: the boss's muscle memory (and
+    address book) points at the retired shared address, so a silent drop
+    is replaced with the twin's dedicated coordinates. Cold senders never
+    reach this path — the caller resolves the sender to a platform user
+    first.
+    """
+    twins = (
+        session.query(Assistant)
+        .filter(
+            Assistant.user_id == user_id,
+            Assistant.is_coordinator.is_(True),
+            Assistant.is_multiplayer.is_(True),
+        )
+        .order_by(Assistant.agent_id.asc())
+        .all()
+    )
+    if not twins:
+        return None
+    if len(twins) > 1:
+        winner_id = _pick_most_recently_active_coordinator(
+            session,
+            [t.agent_id for t in twins],
+        )
+        twin = next((t for t in twins if t.agent_id == winner_id), twins[0])
+    else:
+        twin = twins[0]
+
+    alias_row = (
+        session.query(AssistantContact)
+        .filter(
+            AssistantContact.assistant_id == twin.agent_id,
+            AssistantContact.contact_type == "email",
+            AssistantContact.status == "active",
+        )
+        .first()
+    )
+    if alias_row is None:
+        return None
+    flipped_at_raw = (alias_row.metadata_ or {}).get("flipped_at")
+    if flipped_at_raw:
+        try:
+            flipped_at = datetime.fromisoformat(flipped_at_raw)
+        except ValueError:
+            flipped_at = None
+        if flipped_at is not None and datetime.now(timezone.utc) - flipped_at > (
+            TWIN_POOL_GRACE
+        ):
+            return None
+    twin_name = " ".join(
+        part for part in (twin.first_name, twin.surname) if part
+    ).strip()
+    return {
+        "action": "coordinator_multiplayer_moved",
+        "alias_email": alias_row.contact_value,
+        "twin_name": twin_name,
+    }
+
+
 def resolve_shared_coordinator_owner(
     session: Session,
     *,
@@ -110,4 +175,7 @@ def resolve_shared_coordinator_owner(
         if winner is not None:
             return {"assistant_id": winner, "role": "owner"}
         return {"action": "reject_ambiguous"}
+    moved = _multiplayer_moved_route(session, user_id=user.id)
+    if moved is not None:
+        return moved
     return {"action": "reject_cold"}

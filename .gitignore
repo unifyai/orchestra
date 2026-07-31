@@ -80,6 +80,9 @@ cover/
 !.cursor/worktrees.json
 !orchestra/tests/fixtures/provider_trigger_contract/*.json
 !orchestra/tests/fixtures/task_trigger_contract/*.json
+# Shared recurrence drift-guard vectors, mirrored byte-identically in the
+# unify repo (tests/task_scheduler/); see orchestra/services/task_repetition.py.
+!orchestra/tests/test_tasks/repeat_projection_vectors.json
 # Native provider-trigger catalog manifests are the source of truth for
 # staging/non-selfhost imports (loaded via native_manifest.py), so they must
 # ship in git rather than being caught by the blanket ``*.json`` rule above.

@@ -43,6 +43,11 @@ from orchestra.provider_triggers.revision import (
     normalize_trigger_config,
 )
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
+from orchestra.services.task_repetition import (
+    deterministic_jitter_seconds,
+    next_repeated_start_at,
+    parse_repeat_patterns,
+)
 from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
@@ -78,9 +83,10 @@ class _KeepCurrentHead:
     """Projection outcome meaning "the run ledger owns this head, leave it".
 
     Distinct from ``None``, which means "this definition arms nothing" and so
-    retires any open execution. Recurrence lives in the runtime, so once a
-    series has started, Orchestra can recognize the head but cannot compute a
-    new one; overwriting it from here can only move it backwards.
+    retires any open execution. A started series keeps its current head when a
+    run is in flight — its dispatcher projects the successor, and a definition
+    write must not race it — and when the definition does not repeat or its
+    repeat rule is exhausted, where there is no future slot to rebuild.
     """
 
     __slots__ = ()
@@ -1919,6 +1925,7 @@ def _project_execution_payload(
     # falling before it belongs to a schedule the author has since replaced;
     # ignoring it lets the edit mint a new run_key and retire the old head.
     anchor = _coerce_datetime_string(schedule.get("start_at"))
+    dispatch_offset_seconds = 0.0
     scheduled_for = _open_execution_scheduled_for(
         session,
         project_id=project_id,
@@ -1929,19 +1936,34 @@ def _project_execution_payload(
         # Falling back to the anchor is right for a series the ledger has not
         # reached yet — a new definition, or one whose author just moved the
         # anchor ahead of every occurrence so far. It is wrong for a series that
-        # has already run past it: recurrence lives in the runtime, so the only
-        # slot Orchestra can name is one that has already fired. Doing that
-        # rebuilt a head on a consumed occurrence *and* deleted the correct
-        # future head the runtime had projected, which is why a live schedule
-        # showed its next run stuck on its start time.
+        # has already run past it: rebuilding a head on a consumed occurrence
+        # deleted the correct future head the runtime had projected, which is
+        # why a live schedule once showed its next run stuck on its start time.
+        # A started series with no open occurrence is instead advanced from its
+        # repeat rule — unless a run is in flight, in which case its dispatcher
+        # owns the projection and this write must not race it.
         latest = _latest_ledger_occurrence(
             session,
             project_id=project_id,
             source_task_log_id=row.log_event_id,
         )
         if latest is not None and latest >= (_parse_datetime(anchor) or latest):
-            return KEEP_CURRENT_HEAD
-        scheduled_for = anchor
+            if _has_running_execution(
+                session,
+                project_id=project_id,
+                source_task_log_id=row.log_event_id,
+            ):
+                return KEEP_CURRENT_HEAD
+            minted = _next_repeat_occurrence_after(
+                data=row.data,
+                task_id=task_id,
+                previous_start=latest,
+            )
+            if minted is None:
+                return KEEP_CURRENT_HEAD
+            scheduled_for, dispatch_offset_seconds = minted
+        else:
+            scheduled_for = anchor
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
@@ -1972,6 +1994,10 @@ def _project_execution_payload(
         ),
     }
     payload["revision"] = _stable_hash(payload)
+    # Post-hash: jitter spreads dispatch without changing the occurrence
+    # identity, so it must not perturb the revision (or the run_key digested
+    # from it) that concurrent writers converge on.
+    payload["dispatch_offset_seconds"] = dispatch_offset_seconds
     payload["run_key"] = _build_open_execution_run_key(
         delivery=delivery,
         wake=wake,
@@ -2287,6 +2313,60 @@ def _is_task_enabled(data: Mapping[str, Any]) -> bool:
     if "enabled" not in data:
         return True
     return _coerce_bool(data.get("enabled"))
+
+
+def _next_repeat_occurrence_after(
+    *,
+    data: Mapping[str, Any],
+    task_id: int,
+    previous_start: datetime,
+) -> tuple[str, float] | None:
+    """Mint the next future slot for a repeating series left without a head.
+
+    A worker that dies before dispatch never projects its successor, so the
+    series sits armed with no open occurrence and nothing to fire one. The
+    repeat rule on the definition names the slot the runtime would have chosen;
+    advancing it past *now* (rather than past the consumed occurrence) means a
+    crash costs the occurrences inside the outage window, never the series.
+    Returns ``None`` for a definition that does not repeat or is exhausted.
+    """
+
+    patterns = parse_repeat_patterns(data.get("repeat"))
+    if not patterns:
+        return None
+    next_start = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=patterns,
+        current_occurrence_index=0,
+        now=datetime.now(timezone.utc),
+    )
+    if next_start is None:
+        return None
+    offset = deterministic_jitter_seconds(
+        task_id=task_id,
+        slot=next_start,
+        patterns=patterns,
+    )
+    return next_start.isoformat(), offset
+
+
+def _has_running_execution(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+) -> bool:
+    """Whether any execution of this definition is currently running."""
+
+    return (
+        session.query(LogEvent.id)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+            LogEvent.data["state"].astext == "running",
+        )
+        .first()
+    ) is not None
 
 
 def _latest_ledger_occurrence(

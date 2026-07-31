@@ -19,6 +19,10 @@ class ResolveResponse(BaseModel):
     assistant_id: Optional[int] = None
     role: Optional[str] = None
     action: Optional[str] = None
+    # Populated for action == "coordinator_multiplayer_moved": the twin's
+    # dedicated address (and name) for the grace-window redirect notice.
+    alias_email: Optional[str] = None
+    twin_name: Optional[str] = None
 
 
 @admin_router.get("/email/resolve")
@@ -44,7 +48,11 @@ def resolve_inbound(
         sender=sender_normalized,
     )
     if "action" in result:
-        return ResolveResponse(action=result["action"])
+        return ResolveResponse(
+            action=result["action"],
+            alias_email=result.get("alias_email"),
+            twin_name=result.get("twin_name"),
+        )
     return ResolveResponse(
         assistant_id=result["assistant_id"],
         role=result["role"],
