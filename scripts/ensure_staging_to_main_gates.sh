@@ -64,7 +64,9 @@ gh api \
         "required_status_checks": [
           {"context": "pytest", "integration_id": 15368},
           {"context": "black", "integration_id": 15368},
-          {"context": "staging-source", "integration_id": 15368}
+          {"context": "should-run-tests", "integration_id": 15368},
+          {"context": "staging-source", "integration_id": 15368},
+          {"context": "unify-orchestra-staging (gcp-project-saas)", "integration_id": 10529}
         ]
       }
     }
