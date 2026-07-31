@@ -20,11 +20,13 @@ Module-level helpers (auth-related utilities, not DAO methods):
 """
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
 import logging
 import os
+import pathlib
 import re
 import secrets
 import string
@@ -213,10 +215,56 @@ def hash_code(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()
 
 
+@functools.lru_cache(maxsize=1)
+def _supplemental_disposable_domains() -> frozenset[str]:
+    """Disposable domains vendored in-repo, beyond the PyPI package list.
+
+    ``disposable_domains_extra.txt`` is the community aggregate list
+    (github.com/disposable/disposable-email-domains); the PyPI package's
+    list is conservative (~5k domains) and misses most throwaway
+    providers. ``disposable_domains_local.txt`` holds domains we've
+    observed in signup abuse ourselves.
+    """
+    data_dir = pathlib.Path(__file__).parent / "data"
+    domains: set[str] = set()
+    for filename in (
+        "disposable_domains_extra.txt",
+        "disposable_domains_local.txt",
+    ):
+        for line in (data_dir / filename).read_text().splitlines():
+            line = line.strip().lower()
+            if line and not line.startswith("#"):
+                domains.add(line)
+    return frozenset(domains)
+
+
 def is_disposable_email(email: str) -> bool:
-    """Check if an email domain is in the disposable email blocklist."""
+    """Check if an email domain is in the disposable email blocklists."""
     domain = email.rsplit("@", 1)[-1].lower()
-    return domain in disposable_blocklist
+    return (
+        domain in disposable_blocklist or domain in _supplemental_disposable_domains()
+    )
+
+
+# Domains where the local part ignores dots and everything after '+'.
+_GMAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
+
+
+def canonicalize_email(email: str) -> str:
+    """Reduce an email to its canonical deliverable identity.
+
+    Plus-suffixes are aliases on every major provider, and Gmail
+    additionally ignores dots in the local part (``googlemail.com`` is
+    the same mailbox namespace as ``gmail.com``). Uniqueness checks at
+    signup run against this form so one inbox cannot mint unlimited
+    "distinct" accounts.
+    """
+    local, _, domain = email.lower().strip().rpartition("@")
+    local = local.split("+", 1)[0]
+    if domain in _GMAIL_DOMAINS:
+        local = local.replace(".", "")
+        domain = "gmail.com"
+    return f"{local}@{domain}"
 
 
 def check_user_agent(user_agent: Optional[str]) -> bool:

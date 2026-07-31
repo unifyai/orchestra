@@ -1766,7 +1766,7 @@ SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED = "integration_connect_chip_requested
 # demo instruction, resolved server-side from the graph.
 SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
 # Fired when the user clicks the Learning-phase beat row: it starts the guided
-# expenses-etl tutorial directly (no chips). Twin marks the step done explicitly
+# bill-split tutorial directly (no chips). Twin marks the step done explicitly
 # after the replay deliverable via ``set_onboarding_task_state``.
 SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 # Fired when the user clicks the My Computer beat row: it starts the call-anchored

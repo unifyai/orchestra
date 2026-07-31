@@ -789,6 +789,7 @@ def revert_to_default_on_cancel(
     billing_account.stripe_subscription_id = None
     billing_account.current_period_end = None
     billing_account.subscription_cancel_at_period_end = False
+    billing_account.trial_end_at = None
     billing_account.plan_credits_granted_period = Decimal(0)
     # A past-due hold no longer applies once the subscription is gone and
     # the account has dropped to the free tier — let them use it / re-subscribe.

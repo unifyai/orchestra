@@ -177,6 +177,11 @@ class SuspensionReason(StrEnum):
 
     ADMIN_FREEZE = "admin_freeze"
     DISPUTE = "dispute"
+    #: Never-paid account frozen pending the card-gated trial checkout;
+    #: auto-reinstated when the checkout completes.
+    CARD_REQUIRED = "card_required"
+    #: Frozen by the abuse-fingerprint sweep (raw-API credit extraction).
+    ABUSE_FINGERPRINT = "abuse_fingerprint"
 
 
 # ---------------------------------------------------------------------------

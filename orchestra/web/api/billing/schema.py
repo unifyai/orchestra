@@ -481,3 +481,39 @@ class TaxIdValidationRequest(BaseModel):
 
     tax_id: str = Field(..., description="Tax ID to validate")
     country: str = Field(..., description="Two-letter country code")
+
+
+# ---------------------------------------------------------------------------
+# Card-Gated Trial Schemas
+# ---------------------------------------------------------------------------
+
+
+class TrialCheckoutResponse(BaseModel):
+    """Response for ``POST /billing/trial-checkout``."""
+
+    checkout_url: str = Field(
+        ...,
+        description="Stripe-hosted Checkout page collecting the card and "
+        "starting the auto-enrolled trial subscription.",
+    )
+
+
+class AccessGateResponse(BaseModel):
+    """Response for ``GET /billing/access-gate``."""
+
+    allowed: bool = Field(
+        ...,
+        description="Whether the account may use metered platform features.",
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Why access is denied (``card_required``) when not allowed.",
+    )
+    trial_end_at: Optional[str] = Field(
+        None,
+        description="ISO timestamp of the trial's first charge, when known.",
+    )
+    subscription_active: bool = Field(
+        False,
+        description="Whether a subscription (trialing or active) is linked.",
+    )

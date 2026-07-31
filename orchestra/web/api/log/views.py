@@ -510,8 +510,17 @@ def create_logs(
             context_dao=context_dao,
         )
 
-        # Final sanity: if nothing succeeded and there are failures, surface 400
-        if not result.get("log_event_ids") and result.get("failed"):
+        # Final sanity: if nothing succeeded and there are failures, surface 400.
+        # Skip this when on_duplicate=skip was requested: an all-skipped batch is
+        # the documented skip contract (200 + populated `failed`), not an error.
+        request_on_duplicate = str(
+            getattr(request.on_duplicate, "value", request.on_duplicate) or "error",
+        ).lower()
+        if (
+            not result.get("log_event_ids")
+            and result.get("failed")
+            and request_on_duplicate != "skip"
+        ):
             first_error = result["failed"][0].get("error", "Log creation failed")
             raise HTTPException(status_code=400, detail=first_error)
 
@@ -2912,8 +2921,13 @@ def _update_logs(
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
 
-    # Final sanity: if everything failed, surface an error instead of returning 200
-    if not successful_update_ids and failed_updates:
+    # Final sanity: if everything failed, surface an error instead of returning 200.
+    # Skip this when on_duplicate=skip was requested: an all-skipped batch is the
+    # documented skip contract (200 + populated `failed`), not an error.
+    body_on_duplicate = str(
+        getattr(body.on_duplicate, "value", body.on_duplicate) or "error",
+    ).lower()
+    if not successful_update_ids and failed_updates and body_on_duplicate != "skip":
         first_error = failed_updates[0].get("error", "Update failed")
         raise HTTPException(status_code=400, detail=first_error)
 

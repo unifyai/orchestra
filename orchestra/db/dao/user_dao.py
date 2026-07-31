@@ -104,8 +104,11 @@ class UserDAO:
 
         billing_account = BillingAccountDAO(self.session).create()
 
+        from orchestra.db.dao.auth_dao import canonicalize_email
+
         user = User(
             email=email,
+            canonical_email=canonicalize_email(email),
             name=name,
             last_name=last_name,
             job_title=job_title,
@@ -166,6 +169,23 @@ class UserDAO:
 
         rows = self.session.execute(query)
         return rows.fetchall()
+
+    def exists_by_canonical_email(self, email: str) -> bool:
+        """Whether any user's canonical email matches ``email``'s canonical form.
+
+        Catches dotted/plus-suffixed aliases of an already-registered
+        inbox that a plain exact-email lookup misses.
+        """
+        from orchestra.db.dao.auth_dao import canonicalize_email
+
+        return (
+            self.session.execute(
+                select(User.id).where(
+                    User.canonical_email == canonicalize_email(email),
+                ),
+            ).first()
+            is not None
+        )
 
     def get_by_id(self, user_id: str) -> Optional:
         """

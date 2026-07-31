@@ -614,6 +614,12 @@ class ProviderTriggerReconciliationService:
                 error_code=ReconcileErrorCode.provider_connection_missing.value,
             )
             return
+        if connection.status not in ACTIVE_CONNECTION_STATUSES:
+            self._record_health_failure(
+                binding,
+                error_code=ReconcileErrorCode.connection_not_active.value,
+            )
+            return
 
         generation = None
         if binding.active_generation_id:

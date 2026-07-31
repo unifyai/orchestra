@@ -30,21 +30,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from orchestra.services.learning_expenses_fixtures import (
-    LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION,
-    LEARNING_EXPENSES_REPLAY_HINT,
-    LEARNING_EXPENSES_SCENARIO_ID,
-    LEARNING_EXPENSES_USER_CORRECTION_TEXT,
-    learning_expenses_card_attachment_description,
-    learning_expenses_checking_attachment_description,
-    learning_expenses_concepts_opening_guidance,
-    learning_expenses_contrivance_acknowledgment,
-    learning_expenses_deliverable_handoff_rule,
-    learning_expenses_intro_arc_lines,
-    learning_expenses_opening_script_guidance,
-    learning_expenses_stop_act_for_storage_rule,
-    learning_expenses_storage_check_nudge,
-    learning_expenses_user_facing_voice,
+from orchestra.services.learning_billsplit_fixtures import (
+    LEARNING_BILLSPLIT_NAIVE_MISTAKE_DESCRIPTION,
+    LEARNING_BILLSPLIT_REPLAY_HINT,
+    LEARNING_BILLSPLIT_SCENARIO_ID,
+    LEARNING_BILLSPLIT_USER_CORRECTION_TEXT,
+    learning_billsplit_concepts_opening_guidance,
+    learning_billsplit_contrivance_acknowledgment,
+    learning_billsplit_deliverable_handoff_rule,
+    learning_billsplit_friday_attachment_description,
+    learning_billsplit_intro_arc_lines,
+    learning_billsplit_opening_script_guidance,
+    learning_billsplit_saturday_attachment_description,
+    learning_billsplit_stop_act_for_storage_rule,
+    learning_billsplit_storage_check_nudge,
+    learning_billsplit_user_facing_voice,
 )
 
 ADDRESSED = 0
@@ -296,54 +296,70 @@ _BRAIN_FUNCTIONS_NUDGE = (
 )
 
 # The Learning beat is one openly-narrated tutorial (scripted narrative, real
-# mechanics) over the seeded Expenses ETL example. One constant so the phase
-# framing and the beat event tell the same story.
-_LEARNING_ARC_PREVIEW = "; ".join(learning_expenses_intro_arc_lines())
+# mechanics) over the seeded bill-splitting dinner example. One constant so the
+# phase framing and the beat event tell the same story.
+_LEARNING_ARC_PREVIEW = "; ".join(learning_billsplit_intro_arc_lines())
 LEARNING_FRAMING = (
-    "The Learning phase is an openly narrated tutorial over seeded bank exports. "
-    f"{learning_expenses_concepts_opening_guidance()} "
-    "The hands-on demo shows this in action: one user correction becomes durable "
-    "Guidance (playbook) and a reusable Function (skill); replay on fresh data "
-    "proves it stuck. "
-    f"{learning_expenses_contrivance_acknowledgment()} "
+    "The Learning phase is an openly narrated tutorial over a bill-splitting "
+    "demo. "
+    f"{learning_billsplit_concepts_opening_guidance()} "
+    "The hands-on demo shows this in action: one user correction becomes a "
+    "durable rule (Guidance), a durable fact about a person (Knowledge), and a "
+    "reusable Function (skill); a zero-shot replay on a second dinner proves it "
+    "all stuck. "
+    f"{learning_billsplit_contrivance_acknowledgment()} "
     "Before any attachments, preview the full hands-on arc up front: "
     f"{_LEARNING_ARC_PREVIEW}. "
     "Rule 1 — "
-    f"{learning_expenses_deliverable_handoff_rule()} "
+    f"{learning_billsplit_deliverable_handoff_rule()} "
     "Rule 2 — Opening voice: "
-    f"{learning_expenses_opening_script_guidance()} "
+    f"{learning_billsplit_opening_script_guidance()} "
     "Rule 2b — User-facing deliverables: "
-    f"{learning_expenses_user_facing_voice()} "
-    "Rule 3 — Attachments: before the first attempt, send the month-N bank "
-    "export CSVs as unify_message attachments (one attachment per message). "
-    f"{learning_expenses_checking_attachment_description()} "
-    f"{learning_expenses_card_attachment_description()} "
-    "Rule 4 — First act: run a deliberately naive first pass over the month-N "
-    "files via act(persist=True) — "
-    f"{LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION} "
-    "from the fixtures; numbers are genuinely computed, never asserted. "
+    f"{learning_billsplit_user_facing_voice()} "
+    "Rule 3 — Beat 2 attachment: send Friday's dinner receipt as a single "
+    "unify_message attachment — one file, attendees named in the caption, not "
+    "a second file. "
+    f"{learning_billsplit_friday_attachment_description()} "
+    "Rule 4 — Beat 3 first act: run a deliberately naive first pass over the "
+    "Friday receipt via act(persist=True) — "
+    f"{LEARNING_BILLSPLIT_NAIVE_MISTAKE_DESCRIPTION} "
+    "from the fixture; numbers are genuinely computed, never asserted. "
     "Rule 5 — After the first act completes, send the naive result as a "
-    "unify_message (see Rule 1). State the naive total and explain the mistake "
-    "in plain language (Rule 2b) — never forward act tables or row-by-row math. "
+    "unify_message (see Rule 1). State the naive total and own the mistake in "
+    "plain language (Rule 2b) — never forward act tables or row-by-row math. "
     "Suggest this exact correction text "
-    f'for the user to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}" — '
+    f'for the user to send: "{LEARNING_BILLSPLIT_USER_CORRECTION_TEXT}" — '
     "then WAIT; never send the correction or proceed on their behalf. "
-    "Rule 6 — After their correction: interject into the running persist act "
-    "with the corrected algorithm and include this StorageCheck memoization "
-    f"request verbatim: {learning_expenses_storage_check_nudge()} "
-    "Send the improved deliverable as a unify_message. The doing loop must not "
-    "call store tools — StorageCheck persists after the act completes; after "
-    f"StorageCheck finishes, cite the stored ids from its summary when nudging "
-    f"the user, then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
-    f"Rule 6b — {learning_expenses_stop_act_for_storage_rule()} "
-    "Rule 7 — Invite them to ask for next month's report and WAIT; replay only "
-    f"once they ask ({LEARNING_EXPENSES_REPLAY_HINT}). "
-    "Rule 8 — Replay: second act(persist=True) over month-N+1 files; send the "
-    "replay deliverable as a unify_message. Brain nudges and attachment intro "
-    "messages are not deliverables. "
+    "Rule 6 — Beat 4, after their correction: interject into the running "
+    "persist act with the corrected algorithm and include this StorageCheck "
+    f"memoization request verbatim: {learning_billsplit_storage_check_nudge()} "
+    "Send the improved deliverable as a unify_message — corrected total, one "
+    "sentence on what changed, no replay invite yet. The doing loop must not "
+    "call store tools — StorageCheck persists after the act completes. "
+    f"Rule 6b — {learning_billsplit_stop_act_for_storage_rule()} "
+    "Rule 7 — Beat 5, the save announcement: you cannot know when StorageCheck "
+    "finishes inside the same turn that stopped the act, so do not try. "
+    "Instead, when your next turn resumes because the storage-completion "
+    "notification has arrived, compose the Saved message citing what that "
+    "notification's summary actually reports was stored (the rule, the Sam "
+    f"fact, the skill), then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}, "
+    "and invite them to ask you to split Saturday's dinner as the test — send "
+    "this announcement exactly once. If the notification reports failure, say "
+    "plainly that the save failed and offer to retry — never send a Saved "
+    "message that isn't true. If the user asks about status before this "
+    "notification arrives, answer honestly with whatever you actually know; "
+    "that poke never cancels or duplicates the eventual announcement. "
+    "Rule 8 — Beat 6, replay: only once they ask for Saturday's dinner "
+    f"({LEARNING_BILLSPLIT_REPLAY_HINT}), send Saturday's receipt as a "
+    "unify_message attachment — "
+    f"{learning_billsplit_saturday_attachment_description()} — then run the "
+    "replay zero-shot via act(persist=True), applying the saved rule and fact "
+    "with no reminders, and send the replay deliverable as a unify_message. "
+    "Brain nudges and attachment intro messages are not deliverables. "
     f"Before and during each act run, {_ACTIONS_TAB_NUDGE}. "
     "Rule 9 — After sending the replay deliverable, the tutorial deliverable "
-    "contract is complete — the checklist does not auto-detect the tutorial."
+    "contract is complete — mark the step done explicitly; the checklist does "
+    "not auto-detect the tutorial."
 )
 
 # Interaction channel id stamped on the Learning beat event (Unity narration).
@@ -798,9 +814,9 @@ _TASK_BEAT_KIND: dict[str, str] = {
 }
 
 # Learning-phase beat: one row, no chips. The row click starts the openly
-# scripted expenses-etl tutorial directly (see LEARNING_FRAMING).
-_LEARNING_SCENARIO_ID = LEARNING_EXPENSES_SCENARIO_ID
-_LEARNING_REPLAY_HINT = LEARNING_EXPENSES_REPLAY_HINT
+# scripted bill-split tutorial directly (see LEARNING_FRAMING).
+_LEARNING_SCENARIO_ID = LEARNING_BILLSPLIT_SCENARIO_ID
+_LEARNING_REPLAY_HINT = LEARNING_BILLSPLIT_REPLAY_HINT
 
 
 def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
@@ -867,9 +883,10 @@ def _task_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
 def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
     """Event fired when the user clicks the Learning beat row.
 
-    The click starts the guided expenses-etl tutorial directly — an openly
-    narrated correction loop over seeded bank exports, scripted end to end by
-    ``LEARNING_FRAMING``. There is no freeform mode and there are no chips.
+    The click starts the guided bill-split tutorial directly — an openly
+    narrated correction loop over a seeded dinner-receipts demo, scripted end
+    to end by ``LEARNING_FRAMING``. There is no freeform mode and there are no
+    chips.
     """
     interaction = {
         "type": "learning_beat",
@@ -882,26 +899,36 @@ def _learning_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
         event_type="coordinator_onboarding_event",
         message=(
             f"The user just clicked '{title}' — run the guided learning demo now. "
-            f"{learning_expenses_opening_script_guidance()} "
-            "Then send the two January bank export CSVs as unify_message attachments "
-            "(one file per message), describing each file's rows as you send it: "
-            f"{learning_expenses_checking_attachment_description()} "
-            f"{learning_expenses_card_attachment_description()} "
+            f"{learning_billsplit_opening_script_guidance()} "
+            "Then send Friday's dinner receipt as a single unify_message "
+            "attachment, attendees named in the caption — no second file: "
+            f"{learning_billsplit_friday_attachment_description()} "
             f"Tell them to open the Actions tab before the first act. "
-            f"Rule — {learning_expenses_deliverable_handoff_rule()} "
+            f"Rule — {learning_billsplit_deliverable_handoff_rule()} "
             "Run act(persist=True) for the naive first pass "
-            f"({LEARNING_EXPENSES_NAIVE_MISTAKE_DESCRIPTION}; real computed "
+            f"({LEARNING_BILLSPLIT_NAIVE_MISTAKE_DESCRIPTION}; real computed "
             "numbers only). When that act completes, your SAME turn must send "
-            "the result as a unify_message — never a bare wait. Surface the "
+            "the result as a unify_message — never a bare wait. Own the "
             "mistake, suggest this correction for them "
-            f'to send: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}", then WAIT. '
-            "After their correction: revise, store Guidance and Function, send "
-            "the improved deliverable, "
-            f"{learning_expenses_stop_act_for_storage_rule()} "
-            f"then {_BRAIN_GUIDANCE_NUDGE} and {_BRAIN_FUNCTIONS_NUDGE}. "
-            f"Invite them to ask for next month's report and WAIT. Replay: "
-            f"{_LEARNING_REPLAY_HINT} Send the replay deliverable — the tutorial "
-            "deliverable contract is then complete. "
+            f'to send: "{LEARNING_BILLSPLIT_USER_CORRECTION_TEXT}", then WAIT. '
+            "After their correction: revise, request Guidance + Knowledge + "
+            "Function storage, send the improved deliverable — corrected "
+            "total, no invite yet — then "
+            f"{learning_billsplit_stop_act_for_storage_rule()} "
+            "You cannot know when StorageCheck finishes inside this same turn, "
+            "so do not try to cite it here. Only when your next turn resumes "
+            "because the storage-completion notification has arrived: send "
+            "the Saved message citing what that notification actually reports "
+            f"was stored, then {_BRAIN_GUIDANCE_NUDGE} and "
+            f"{_BRAIN_FUNCTIONS_NUDGE}, and invite them to ask you to split "
+            "Saturday's dinner — exactly once. On a reported failure, say so "
+            "plainly and offer to retry; a status question from the user "
+            "before that notification arrives gets an honest answer and never "
+            "cancels or duplicates the eventual announcement. Replay only "
+            f"once they ask for Saturday's dinner: {_LEARNING_REPLAY_HINT} "
+            f"{learning_billsplit_saturday_attachment_description()} Send the "
+            "replay deliverable, then mark the step done explicitly — the "
+            "tutorial deliverable contract is then complete. "
             f"{_ACTIONS_TAB_NUDGE} before and during each act run. "
             f"Full contract: {LEARNING_FRAMING}"
         ),
@@ -1559,9 +1586,10 @@ ONBOARDING_GRAPH: tuple[OnboardingStep, ...] = (
         nudge_chat=(
             "Have them click the 'Teach me by correcting me' row in the "
             "Onboarding checklist. It starts a guided tutorial where I make "
-            "a deliberate mistake on seeded bank exports, they correct me, "
-            "I store the learning in Brain, and they prove it by asking me "
-            "to run next month's report."
+            "a deliberate mistake splitting Friday's dinner bill, they "
+            "correct me, I save the learning in Brain and confirm what I "
+            "stored, and they prove it by asking me to split Saturday's "
+            "dinner."
         ),
         nudge_voice=(
             "clicking the 'Teach me by correcting me' row in the Onboarding checklist"
@@ -2235,14 +2263,16 @@ STEP_FLOW_NOTES: dict[str, str] = {
     "learn-from-correction": (
         "Clicking the 'Teach me by correcting me' row starts an openly "
         "narrated tutorial: I first explain what learning, Guidance, and "
-        "Functions are and why they matter, then walk through a seeded demo — "
-        "month-N bank exports as chat attachments, a deliberately naive pass, "
-        "my mistake, a correction for the user to send, and a wait. "
-        "After they send it I revise, stop the persist act so StorageCheck can "
-        "save the learning in Brain (Guidance and Functions), and invite them "
-        "to ask me for next month's report — the replay runs only when they ask. "
-        "When the replay deliverable is sent, I mark the step done explicitly — "
-        "the checklist does not auto-detect the tutorial."
+        "Functions are and why they matter, then walk through a bill-split "
+        "demo — Friday's dinner receipt as a chat attachment, a deliberately "
+        "naive even split that overcharges Sam for wine they never drank, and "
+        "a correction for the user to send. After they send it I revise, stop "
+        "the persist act so StorageCheck can save the rule, the fact, and the "
+        "skill in Brain, and once that save actually completes I proactively "
+        "confirm what was stored and invite them to ask me to split "
+        "Saturday's dinner — the replay runs only when they ask. When the "
+        "replay deliverable is sent, I mark the step done explicitly — the "
+        "checklist does not auto-detect the tutorial."
     ),
     "your-computer-link": (
         "Clicking the 'Connect your computer' row opens the desktop-linker "

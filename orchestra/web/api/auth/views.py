@@ -204,6 +204,24 @@ async def register(
         max_attempts=5,
         identifier=email,
     )
+    # The (IP, email) limit above never trips for a farmer rotating
+    # email addresses; these two throttle raw signup velocity per IP and
+    # per /24 subnet regardless of the email used.
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_register_ip",
+        max_attempts=10,
+        window_minutes=60,
+    )
+    enforce_auth_rate_limit(
+        session,
+        request,
+        "auth_register_subnet",
+        max_attempts=30,
+        window_minutes=1440,
+        use_subnet=True,
+    )
 
     # 0a. User-Agent heuristic check
     user_agent = request.headers.get("user-agent")
@@ -226,10 +244,11 @@ async def register(
             },
         )
 
-    # 2. Check if email already registered (cheap DB lookup, no CAPTCHA needed)
+    # 2. Check if email already registered (cheap DB lookup, no CAPTCHA
+    # needed). The canonical-form check also rejects dotted/plus-suffix
+    # aliases of an inbox that already has an account.
     user_dao = UserDAO(session)
-    existing = user_dao.filter(email=email)
-    if existing:
+    if user_dao.filter(email=email) or user_dao.exists_by_canonical_email(email):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -420,10 +439,10 @@ async def create_user_after_verification(
     # enabled must still not be exchangeable for a non-Unify account.
     enforce_unify_members_only(email)
 
-    # Check if user was created concurrently
+    # Check if user was created concurrently (including under a
+    # dotted/plus-suffix alias of the same inbox)
     user_dao = UserDAO(session)
-    existing = user_dao.filter(email=email)
-    if existing:
+    if user_dao.filter(email=email) or user_dao.exists_by_canonical_email(email):
         session.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

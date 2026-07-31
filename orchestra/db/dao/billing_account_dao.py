@@ -86,7 +86,10 @@ class BillingAccountDAO:
         if apply_signup_grant:
             from orchestra.settings import settings
 
-            if settings.signup_credit_grant > 0:
+            # Under the card gate the signup grant moves to trial-checkout
+            # completion (``trial_subscription.apply_trial_checkout_completed``)
+            # so a card is always on file before any credits exist.
+            if settings.signup_credit_grant > 0 and not settings.require_card_on_file:
                 self.apply_credit_grant(
                     billing_account.id,
                     settings.signup_credit_grant,
