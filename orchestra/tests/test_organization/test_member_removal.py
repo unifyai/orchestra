@@ -38,29 +38,38 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_assistant_cleanup, patch(
-        "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings, patch(
-        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.create_bucket_service",
-    ) as mock_bucket_cls, patch(
-        "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
-        new_callable=AsyncMock,
-    ), patch(
-        "orchestra.services.coordinator_service.create_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as mock_personal_coordinator_topic:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_assistant_cleanup,
+        patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings,
+        patch(
+            "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_org_cleanup,
+        patch(
+            "orchestra.web.api.organization.views.create_bucket_service",
+        ) as mock_bucket_cls,
+        patch(
+            "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as mock_personal_coordinator_topic,
+    ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_assistant_cleanup.return_value = {
@@ -324,12 +333,15 @@ async def test_member_removal_drops_personal_coordinator_memberships_from_org_te
     ), create_team_resp.json()
     team_id = create_team_resp.json()["id"]
 
-    with patch(
-        "orchestra.services.coordinator_service.create_pubsub_topic",
-        new_callable=AsyncMock,
-    ) as create_topic_mock, patch(
-        "orchestra.services.team_membership_refresh_service.reawaken_assistant",
-        new_callable=AsyncMock,
+    with (
+        patch(
+            "orchestra.services.coordinator_service.create_pubsub_topic",
+            new_callable=AsyncMock,
+        ) as create_topic_mock,
+        patch(
+            "orchestra.services.team_membership_refresh_service.reawaken_assistant",
+            new_callable=AsyncMock,
+        ),
     ):
         create_topic_mock.return_value = {"success": True, "skipped": True}
         add_team_member_resp = await client.post(
@@ -610,13 +622,16 @@ async def test_member_removal_deprovisions_contacts_before_deleting_unshared_ass
     )
     dbsession.commit()
 
-    with patch(
-        "orchestra.services.assistant_cleanup_service.delete_phone_number",
-        new_callable=AsyncMock,
-    ) as mock_delete_phone, patch(
-        "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
-        return_value=1,
-    ) as mock_delete_routes:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.delete_phone_number",
+            new_callable=AsyncMock,
+        ) as mock_delete_phone,
+        patch(
+            "orchestra.db.dao.shared_pool_dao.SharedPoolDAO.delete_routes_for_assistant",
+            return_value=1,
+        ) as mock_delete_routes,
+    ):
         remove_resp = await client.delete(
             f"/v0/organizations/{org_id}/members/{member['id']}",
             headers=owner["headers"],

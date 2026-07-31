@@ -41,13 +41,16 @@ def mock_assistant_infra_calls(request):
         yield
         return
 
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+    ):
 
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
@@ -1427,15 +1430,19 @@ async def test_delete_assistant_deletes_contexts(
         .filter(AssistantCleanupTask.assistant_id == int(assistant_id))
         .one()
     )
-    with patch(
-        "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
-        new_callable=AsyncMock,
-    ) as mock_teardown, patch(
-        "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
-        new_callable=AsyncMock,
-    ) as mock_deprovision, patch(
-        "orchestra.services.assistant_cleanup_service.create_bucket_service",
-    ) as MockBucketServiceClass:
+    with (
+        patch(
+            "orchestra.services.assistant_cleanup_service.teardown_assistant_runtime",
+            new_callable=AsyncMock,
+        ) as mock_teardown,
+        patch(
+            "orchestra.services.assistant_cleanup_service.deprovision_assistant_contacts",
+            new_callable=AsyncMock,
+        ) as mock_deprovision,
+        patch(
+            "orchestra.services.assistant_cleanup_service.create_bucket_service",
+        ) as MockBucketServiceClass,
+    ):
         mock_teardown.return_value = {"success": True, "steps": {}, "errors": []}
         mock_deprovision.return_value = {
             "success": True,
@@ -1957,12 +1964,15 @@ async def test_delete_assistant_cleans_up_recordings(client: AsyncClient):
     assert create_resp.status_code == 200
     assistant_id = create_resp.json()["info"]["agent_id"]
 
-    with patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.create_bucket_service",
-    ) as MockBucketServiceClass:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup,
+        patch(
+            "orchestra.web.api.assistant.views.create_bucket_service",
+        ) as MockBucketServiceClass,
+    ):
         mock_process_cleanup.return_value = {
             "processed": 1,
             "completed": 1,
@@ -2003,12 +2013,15 @@ async def test_delete_assistant_processes_cleanup_tasks(
     assert create_resp.status_code == 200
     assistant_id = int(create_resp.json()["info"]["agent_id"])
 
-    with patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.create_bucket_service",
-    ) as MockBucketServiceClass:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup,
+        patch(
+            "orchestra.web.api.assistant.views.create_bucket_service",
+        ) as MockBucketServiceClass,
+    ):
         mock_process_cleanup.return_value = {
             "processed": 1,
             "completed": 1,
@@ -2058,12 +2071,15 @@ async def test_delete_assistant_recording_cleanup_failure_is_non_fatal(
     assert create_resp.status_code == 200
     assistant_id = create_resp.json()["info"]["agent_id"]
 
-    with patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_process_cleanup, patch(
-        "orchestra.web.api.assistant.views.create_bucket_service",
-    ) as MockBucketServiceClass:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_process_cleanup,
+        patch(
+            "orchestra.web.api.assistant.views.create_bucket_service",
+        ) as MockBucketServiceClass,
+    ):
         mock_process_cleanup.return_value = {
             "processed": 1,
             "completed": 0,

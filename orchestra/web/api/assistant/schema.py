@@ -596,6 +596,15 @@ class AssistantRead(AssistantCreate):
         False,
         description="Whether this assistant configures and coordinates its workspace.",
     )
+    is_multiplayer: bool = Field(
+        False,
+        description=(
+            "Whether this coordinator has flipped to multiplayer mode: "
+            "hire-like outward identity with dedicated contact details "
+            "instead of the private boss-only surface. One-way; set via "
+            "POST /assistant/{agent_id}/multiplayer only."
+        ),
+    )
     desktop_filesync_sshkey: Optional[str] = Field(
         None,
         description="SSH private key for desktop filesystem sync. Only returned via admin endpoints.",
@@ -684,6 +693,44 @@ class AssistantRead(AssistantCreate):
                 "is_coordinator": False,
             },
         },
+    )
+
+
+class CoordinatorMultiplayerFlip(BaseModel):
+    """Request body for the one-way coordinator multiplayer flip.
+
+    The flip trades the twin's private boss-only surface for a hire-like
+    outward identity, so the pieces that make it distinguishable are
+    mandatory up front: a real name (not the shared coordinator default)
+    and an owned voice. A platform alias email is provisioned server-side.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    first_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=60,
+        description="The twin's outward first name. Must differ from the coordinator default.",
+    )
+    surname: Optional[str] = Field(
+        None,
+        max_length=60,
+        description="Optional outward surname.",
+    )
+    voice_id: str = Field(
+        ...,
+        min_length=1,
+        description="Voice for the twin's calls and meetings.",
+    )
+    voice_provider: str = Field(
+        ...,
+        min_length=1,
+        description="Provider of the chosen voice.",
+    )
+    profile_photo: Optional[str] = Field(
+        None,
+        description="Optional avatar URL chosen during the flip ceremony.",
     )
 
 

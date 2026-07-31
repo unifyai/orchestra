@@ -354,6 +354,178 @@ async def test_update_logs_on_duplicate_skip_unique_field(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_logs_on_duplicate_skip_all_collide_returns_200(
+    client: AsyncClient,
+):
+    """An all-skipped batch is the documented skip contract, not an error."""
+    project_name = "on-duplicate-skip-all-collide"
+    await _create_project(client, project_name)
+    context = "prospects"
+    ctx_resp = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context,
+            "unique_keys": {"github_login": "str"},
+        },
+        headers=HEADERS,
+    )
+    assert ctx_resp.status_code == 200, ctx_resp.json()
+
+    first = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context,
+            "entries": {"github_login": "alice", "best_email": "a@example.com"},
+        },
+        headers=HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+
+    # Every row in this batch collides with the pre-existing row above.
+    all_skipped = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context,
+            "on_duplicate": "skip",
+            "entries": [
+                {"github_login": "alice", "best_email": "a2@example.com"},
+                {"github_login": "alice", "best_email": "a3@example.com"},
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert all_skipped.status_code == 200, all_skipped.json()
+    body = all_skipped.json()
+    assert body["log_event_ids"] == []
+    failed = body.get("failed") or []
+    assert len(failed) == 2
+    assert all("Duplicate composite key" in f["error"] for f in failed)
+
+
+@pytest.mark.anyio
+async def test_create_logs_on_duplicate_error_all_collide_still_400(
+    client: AsyncClient,
+):
+    """Regression guard: without skip, an all-colliding batch still 400s."""
+    project_name = "on-duplicate-error-all-collide"
+    await _create_project(client, project_name)
+    context = "prospects"
+    ctx_resp = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context,
+            "unique_keys": {"github_login": "str"},
+        },
+        headers=HEADERS,
+    )
+    assert ctx_resp.status_code == 200, ctx_resp.json()
+
+    first = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context,
+            "entries": {"github_login": "alice", "best_email": "a@example.com"},
+        },
+        headers=HEADERS,
+    )
+    assert first.status_code == 200, first.json()
+
+    err = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "context": context,
+            "entries": [
+                {"github_login": "alice", "best_email": "a2@example.com"},
+                {"github_login": "alice", "best_email": "a3@example.com"},
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert err.status_code == 400, err.json()
+    assert "Duplicate composite key" in err.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_logs_on_duplicate_skip_all_collide_returns_200(
+    client: AsyncClient,
+):
+    """All-colliding update batch under skip returns 200, not 400."""
+    project_name = "on-duplicate-skip-update-all-collide"
+    await _create_project(client, project_name)
+
+    a = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {
+                "email": "keep@example.com",
+                "explicit_types": {
+                    "email": {"type": "str", "unique": True, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert a.status_code == 200, a.json()
+
+    b = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"email": "other@example.com"},
+        },
+        headers=HEADERS,
+    )
+    assert b.status_code == 200, b.json()
+    b_id = b.json()["log_event_ids"][0]
+
+    c = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"email": "third@example.com"},
+        },
+        headers=HEADERS,
+    )
+    assert c.status_code == 200, c.json()
+    c_id = c.json()["log_event_ids"][0]
+
+    # Both updates collide with the pre-existing "keep@example.com" value.
+    skipped = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [b_id, c_id],
+            "project_name": project_name,
+            "entries": [
+                {"email": "keep@example.com"},
+                {"email": "keep@example.com"},
+            ],
+            "overwrite": True,
+            "on_duplicate": "skip",
+        },
+        headers=HEADERS,
+    )
+    assert skipped.status_code == 200, skipped.json()
+    body = skipped.json()
+    failed = body.get("failed") or []
+    assert len(failed) == 2
+    assert {f["log_event_id"] for f in failed} == {b_id, c_id}
+
+    logs_resp = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_resp.status_code == 200, logs_resp.json()
+    by_id = {log["id"]: log["entries"].get("email") for log in logs_resp.json()["logs"]}
+    assert by_id[b_id] == "other@example.com"
+    assert by_id[c_id] == "third@example.com"
+
+
+@pytest.mark.anyio
 async def test_create_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)

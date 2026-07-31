@@ -118,8 +118,8 @@ class InstallResponse(BaseModel):
         None,
         description=(
             "One-click Console URL that claims this pending install for the "
-            "signed-in owner (carries ``bind_nonce`` as ``ms_teams_bind``). "
-            "Populated alongside ``bind_nonce`` so the bot can DM the "
+            "signed-in owner (carries ``bind_nonce`` as the ``nonce`` query "
+            "param). Populated alongside ``bind_nonce`` so the bot can DM the "
             "installer a single link instead of a code to copy."
         ),
     )
@@ -227,7 +227,7 @@ class DispatchResponse(BaseModel):
         None,
         description=(
             "One-click Console URL to bind a pending install (carries the "
-            "``bind_nonce`` as ``ms_teams_bind``). Populated only when "
+            "``bind_nonce`` as the ``nonce`` query param). Populated only when "
             "``install_state == 'pending'``."
         ),
     )
@@ -273,11 +273,15 @@ class ConversationRouteResponse(BaseModel):
 def _build_connect_url(nonce: str) -> str:
     """One-click Console link that binds this install to the signed-in owner.
 
-    Console's ``/assistants`` page consumes ``ms_teams_bind`` and calls the
-    bind handshake, so the installer never copies a code by hand.
+    Console's ``/connect/ms-teams`` route handler claims the install server-side
+    and then redirects to the assistants surface, so the installer never copies a
+    code by hand. It is a server route rather than a page param because the link
+    is usually opened without a Console session: the request funnels through
+    sign-in (and possibly MFA / account onboarding) first, and only Console's
+    middleware can carry the nonce across those hops.
     """
     base = (settings.console_url or "https://console.unify.ai/").rstrip("/")
-    return f"{base}/assistants?ms_teams_bind={quote(nonce)}"
+    return f"{base}/connect/ms-teams?nonce={quote(nonce)}"
 
 
 def _install_to_response(

@@ -502,9 +502,12 @@ class AssistantDAO:
             Assistant.organization_id == organization_id,
         )
         if requesting_user_id is not None:
+            # Multiplayer twins are visible colleagues; only single-player
+            # coordinators are private to their owner.
             stmt = stmt.where(
                 or_(
                     Assistant.is_coordinator.is_(False),
+                    Assistant.is_multiplayer.is_(True),
                     Assistant.user_id == requesting_user_id,
                 ),
             )

@@ -160,6 +160,11 @@ def _mock_start_connection_dao(
 ) -> MagicMock:
     dao = dao_cls.return_value
     dao.get_backend.return_value = SimpleNamespace(status="enabled")
+    # No prior connection for this owner+app_slug in these fresh-connect
+    # scenarios, matching real DAO behavior; otherwise a MagicMock's default
+    # truthy auto-child return would route start_connection into the
+    # update_connection_fields reuse branch instead of create_connection.
+    dao.find_connection_for_owner_app.return_value = None
     dao.create_connection.return_value = connection
     return dao
 

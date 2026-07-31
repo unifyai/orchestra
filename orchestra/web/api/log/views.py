@@ -26,6 +26,7 @@ from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
+from orchestra.db.batched_rewrite import batched_rewrite
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_event_dao import (
@@ -88,6 +89,8 @@ from orchestra.web.api.log.schema import (
     HydrateLogsRequest,
     JoinLogsRequest,
     JoinQueryRequest,
+    PartitionPromoteSweepRequest,
+    PartitionPromoteSweepResponse,
     QueryLogsPostBody,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
@@ -507,8 +510,17 @@ def create_logs(
             context_dao=context_dao,
         )
 
-        # Final sanity: if nothing succeeded and there are failures, surface 400
-        if not result.get("log_event_ids") and result.get("failed"):
+        # Final sanity: if nothing succeeded and there are failures, surface 400.
+        # Skip this when on_duplicate=skip was requested: an all-skipped batch is
+        # the documented skip contract (200 + populated `failed`), not an error.
+        request_on_duplicate = str(
+            getattr(request.on_duplicate, "value", request.on_duplicate) or "error",
+        ).lower()
+        if (
+            not result.get("log_event_ids")
+            and result.get("failed")
+            and request_on_duplicate != "skip"
+        ):
             first_error = result["failed"][0].get("error", "Log creation failed")
             raise HTTPException(status_code=400, detail=first_error)
 
@@ -2909,8 +2921,13 @@ def _update_logs(
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
 
-    # Final sanity: if everything failed, surface an error instead of returning 200
-    if not successful_update_ids and failed_updates:
+    # Final sanity: if everything failed, surface an error instead of returning 200.
+    # Skip this when on_duplicate=skip was requested: an all-skipped batch is the
+    # documented skip contract (200 + populated `failed`), not an error.
+    body_on_duplicate = str(
+        getattr(body.on_duplicate, "value", body.on_duplicate) or "error",
+    ).lower()
+    if not successful_update_ids and failed_updates and body_on_duplicate != "skip":
         first_error = failed_updates[0].get("error", "Update failed")
         raise HTTPException(status_code=400, detail=first_error)
 
@@ -3127,33 +3144,11 @@ def _delete_logs(
                 action="DELETE",
             )
 
-        # GCS media: keyset-paginate rather than bind every context id
-        last_media_id = 0
-        while True:
-            media_batch = session.execute(
-                text(
-                    """
-                    SELECT le.id
-                    FROM log_event le
-                    JOIN log_event_context lec
-                      ON lec.log_event_id = le.id
-                     AND lec.project_id = le.project_id
-                    WHERE le.project_id = :project_id
-                      AND lec.context_id = :context_id
-                      AND le.id > :last_id
-                    ORDER BY le.id
-                    LIMIT 5000
-                    """,
-                ),
-                {
-                    "project_id": project_id,
-                    "context_id": context_id,
-                    "last_id": last_media_id,
-                },
-            ).fetchall()
-            if not media_batch:
-                break
-            batch_ids = [row[0] for row in media_batch]
+        # Media deletion and the field strip share one keyset walk: the media
+        # pass was already paginated, but the strip that follows it was a single
+        # statement over the whole context and is the half that outruns the
+        # request deadline on a large table.
+        def _drop_media(batch_ids):
             all_log_event_ids_for_media.extend(batch_ids)
             all_field_names_for_media.extend(fields)
             log_dao._bulk_delete_gcs_media(
@@ -3161,27 +3156,35 @@ def _delete_logs(
                 project_id=project_id,
                 field_names=fields,
             )
-            last_media_id = batch_ids[-1]
 
-        # Set-based field strip via JOIN — no Python ID array
-        deleted_count = session.execute(
-            text(
-                """
-                UPDATE log_event le
-                SET data = le.data - CAST(:fields AS text[])
-                FROM log_event_context lec
+        deleted_count = batched_rewrite(
+            session,
+            id_query="""
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec
+                  ON lec.log_event_id = le.id
+                 AND lec.project_id = le.project_id
                 WHERE le.project_id = :project_id
-                  AND lec.project_id = :project_id
                   AND lec.context_id = :context_id
-                  AND lec.log_event_id = le.id
-                """,
-            ),
-            {
+                  AND le.data ?| CAST(:fields AS text[])
+                  AND le.id > :last_id
+                ORDER BY le.id
+                LIMIT :batch_size
+            """,
+            apply_query="""
+                UPDATE log_event
+                SET data = data - CAST(:fields AS text[])
+                WHERE project_id = :project_id
+                  AND id = ANY(:ids)
+            """,
+            params={
                 "project_id": project_id,
                 "context_id": context_id,
                 "fields": fields,
             },
-        ).rowcount
+            on_batch=_drop_media,
+        ).rows
         if deleted_count and deleted_count > 0:
             context_description.append(
                 f"Deleted {len(fields)} field(s) from {deleted_count} logs (JSONB)",
@@ -6085,28 +6088,41 @@ def create_fields(
                 {name: None for name in pending_backfill_fields},
             )
 
-            result = session.execute(
-                text(
-                    """
-                    UPDATE log_event le
-                    SET data = CAST(:template AS jsonb) || COALESCE(le.data, '{}'::jsonb),
-                        updated_at = now()
-                    FROM log_event_context lec
-                    WHERE lec.log_event_id = le.id
-                      AND lec.project_id = le.project_id
+            # Pages commit as they go, which keeps the retry contract above
+            # intact rather than weakening it: the stamp is still only written
+            # once the whole walk succeeds, and the predicate is self-consuming
+            # (a backfilled row stops matching), so the retry that follows an
+            # interrupted run resumes where it stopped instead of redoing it.
+            backfilled = batched_rewrite(
+                session,
+                id_query="""
+                    SELECT le.id
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
+                    WHERE le.project_id = :project_id
                       AND lec.context_id = :context_id
-                      AND le.project_id = :project_id
                       AND NOT (le.data ?& CAST(:field_names AS text[]))
-                    """,
-                ),
-                {
+                      AND le.id > :last_id
+                    ORDER BY le.id
+                    LIMIT :batch_size
+                """,
+                apply_query="""
+                    UPDATE log_event
+                    SET data = CAST(:template AS jsonb) || COALESCE(data, '{}'::jsonb),
+                        updated_at = now()
+                    WHERE project_id = :project_id
+                      AND id = ANY(:ids)
+                """,
+                params={
                     "template": template_json,
                     "field_names": pending_backfill_fields,
                     "context_id": context_id,
                     "project_id": project_id,
                 },
             )
-            backfilled_count = result.rowcount or 0
+            backfilled_count = backfilled.rows
 
             field_type_dao.mark_backfilled(
                 project_id=project_id,
@@ -6382,6 +6398,88 @@ def drain_external_writes_endpoint(
     return drain_external_writes(session, limit=request.limit)
 
 
+@admin_router.post("/partitioning/promote/start")
+def start_partition_promote_sweep(
+    body: PartitionPromoteSweepRequest,
+    session=Depends(get_db_session),
+) -> PartitionPromoteSweepResponse:
+    """Periodic sweep: trigger the embedding partition-promote Cloud Run Job
+    when a project's share of the shared ``embedding_default`` partition
+    crosses ``relative_threshold``.
+
+    **Cloud Scheduler** (project ``gcp-project-saas`` / ``us-central1``):
+
+    - Staging: ``orchestra-staging-partition-promote-sweep``
+      → daily POST to
+      ``https://internal.example.com/v0/admin/partitioning/promote/start``
+    - Production: ``orchestra-partition-promote-sweep``
+      → daily POST to
+      ``https://api.unify.ai/v0/admin/partitioning/promote/start``
+
+    Auth: ``Authorization: Bearer <ORCHESTRA_ADMIN_KEY>`` (same pattern as
+    ``external_writes/drain``). Ensure/update the jobs with
+    ``bash deploy/ensure_partition_promote_scheduler.sh``.
+
+    The promote Cloud Run Job (``ORCHESTRA_PARTITION_PROMOTE_JOB_NAME``) still
+    finds its own threshold-based candidates from ``log_event``'s DEFAULT
+    partition by default (see ``orchestra.workers.index_maintenance``, mode
+    ``promote``) -- that logic is untouched. This sweep adds the relative-share
+    gate on a different table (``embedding``) and criterion: a project can
+    dominate a still-small DEFAULT partition's shared HNSW index (hurting ANN
+    recall) long before it crosses the job's own absolute threshold. Since
+    those are two different signals, the sweep passes its candidate
+    ``project_id``s to the job via a Cloud Run Jobs container env override
+    (``MAINTENANCE_PROMOTE_EXTRA_PROJECT_IDS``) so the job actually promotes
+    what the sweep found, prioritized ahead of its own threshold-based
+    candidates. Idempotent: a sweep with nothing over threshold is a no-op,
+    and a mid-cycle failure just retries on the next scheduler tick.
+    """
+    from orchestra.db.partitioning import find_relative_default_share_candidates
+    from orchestra.services.partition_promote_launcher import (
+        execute_partition_promote_job,
+        partition_promote_job_configured,
+    )
+
+    candidates = find_relative_default_share_candidates(
+        session.get_bind(),
+        table="embedding",
+        relative_threshold=body.relative_threshold,
+    )
+    if not candidates:
+        return PartitionPromoteSweepResponse(triggered=False, candidates=[])
+
+    if not partition_promote_job_configured():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "ORCHESTRA_PARTITION_PROMOTE_JOB_NAME is not configured; cannot "
+                "trigger the partition-promote job."
+            ),
+        )
+
+    try:
+        execute_partition_promote_job(
+            project_ids=[project_id for project_id, _row_count, _total in candidates],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger the partition-promote job: {exc}",
+        ) from exc
+    return PartitionPromoteSweepResponse(
+        triggered=True,
+        candidates=[
+            {
+                "project_id": project_id,
+                "row_count": row_count,
+                "default_partition_row_count": total,
+                "share": round(row_count / total, 4),
+            }
+            for project_id, row_count, total in candidates
+        ],
+    )
+
+
 @router.patch(
     "/logs/update_field",
     responses={
@@ -6573,60 +6671,42 @@ def delete_fields(
 
     for field_name in request.fields:
         try:
-            from sqlalchemy import text
-
-            # GCS media: keyset-paginate IDs that hold the field (avoid full ID list)
-            last_id = 0
-            while True:
-                batch = session.execute(
-                    text(
-                        """
-                        SELECT le.id
-                        FROM log_event le
-                        JOIN log_event_context lec
-                          ON lec.log_event_id = le.id
-                         AND lec.project_id = le.project_id
-                        WHERE le.project_id = :project_id
-                          AND lec.context_id = :context_id
-                          AND le.data ? :field_name
-                          AND le.id > :last_id
-                        ORDER BY le.id
-                        LIMIT 5000
-                        """,
-                    ),
-                    {
-                        "project_id": project_id,
-                        "context_id": context_id,
-                        "field_name": field_name,
-                        "last_id": last_id,
-                    },
-                ).fetchall()
-                if not batch:
-                    break
-                event_ids = [row[0] for row in batch]
-                log_dao._bulk_delete_gcs_media(event_ids, project_id, [field_name])
-                last_id = event_ids[-1]
-
-            result = session.execute(
-                text(
-                    """
-                    UPDATE log_event le
-                    SET data = le.data - :field_name
-                    FROM log_event_context lec
+            # One keyset walk drops the media and strips the field per page, so
+            # a context with millions of rows completes in bounded transactions
+            # instead of a single UPDATE that outruns the request deadline.
+            stripped = batched_rewrite(
+                session,
+                id_query="""
+                    SELECT le.id
+                    FROM log_event le
+                    JOIN log_event_context lec
+                      ON lec.log_event_id = le.id
+                     AND lec.project_id = le.project_id
                     WHERE le.project_id = :project_id
-                      AND lec.project_id = :project_id
                       AND lec.context_id = :context_id
-                      AND lec.log_event_id = le.id
                       AND le.data ? :field_name
-                    """,
-                ),
-                {
-                    "field_name": field_name,
+                      AND le.id > :last_id
+                    ORDER BY le.id
+                    LIMIT :batch_size
+                """,
+                apply_query="""
+                    UPDATE log_event
+                    SET data = data - :field_name
+                    WHERE project_id = :project_id
+                      AND id = ANY(:ids)
+                """,
+                params={
                     "project_id": project_id,
                     "context_id": context_id,
+                    "field_name": field_name,
                 },
+                on_batch=lambda ids: log_dao._bulk_delete_gcs_media(
+                    ids,
+                    project_id,
+                    [field_name],
+                ),
             )
-            total_updated_events += int(result.rowcount or 0)
+            total_updated_events += stripped.rows
 
             # Delete field type record
             field_type_dao.delete_field_type(

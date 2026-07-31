@@ -116,6 +116,7 @@ isort = "^5.11.4"
 autoflake = "^1.6.1"
 
 [tool.black]
+target-version = ["py312"]
 extend-exclude = '''
 ^/scripts/
 '''

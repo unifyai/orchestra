@@ -14,7 +14,7 @@ from orchestra.services.task_mutation_contract import (
     is_provider_event_task_row,
 )
 from orchestra.services.task_mutation_service import TaskMutationService
-from orchestra.services.task_row_field import RuntimeTaskField, RuntimeTaskStatus
+from orchestra.services.task_row_field import RuntimeTaskField
 
 
 class TaskRuntimeUpdateService:
@@ -33,15 +33,12 @@ class TaskRuntimeUpdateService:
     ) -> dict[str, Any]:
         """Patch allowlisted runtime fields on one provider-event task row."""
 
+        # RuntimeTaskField is empty: definitions carry authored intent only, so
+        # every patch to one takes the revision CAS path. This rejects all
+        # runtime writes until a field is deliberately added to that set.
         allowed = set(updates.keys())
         if not allowed.issubset(RuntimeTaskField.values()):
             raise ProviderEventWriteRejected(reason="runtime_field_not_allowlisted")
-        if RuntimeTaskField.status.value in updates and not RuntimeTaskStatus.allows(
-            updates["status"],
-        ):
-            raise ProviderEventWriteRejected(
-                reason=f"runtime_status_not_allowed:{updates['status']}",
-            )
 
         project_id, context_id, tasks_context_name = (
             self._mutation_service._resolve_task_scope(assistant)

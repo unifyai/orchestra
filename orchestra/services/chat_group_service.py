@@ -4,7 +4,8 @@ Group *messages* live in the unified chat store
 (:mod:`orchestra.db.dao.chat_dao`) and are served by the ``/chat`` API. This
 module owns group membership CRUD and participant resolution. Realtime
 delivery mirrors team chat: Console SSE via adapters ``POST /unify/chat``
-plus ``unify_message`` fan-out to every non-coordinator member assistant.
+plus ``unify_message`` fan-out to every roster-visible member assistant
+(private single-player coordinators are excluded).
 """
 
 from __future__ import annotations
@@ -276,7 +277,7 @@ def chat_group_participants(
             or f"Assistant {assistant.agent_id}",
         }
         for assistant in assistants_rows
-        if not assistant.is_coordinator
+        if not assistant.is_private_coordinator
     ]
     return {"humans": humans, "assistants": assistants}
 

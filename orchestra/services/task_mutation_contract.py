@@ -9,7 +9,6 @@ from orchestra.services.task_row_field import (
     AuthoredTaskField,
     ProviderEventUpdateKind,
     RuntimeTaskField,
-    RuntimeTaskStatus,
     TaskRowKey,
     TaskRowMetaField,
 )
@@ -68,12 +67,6 @@ def classify_provider_event_update_fields(
         raise ProviderEventWriteRejected(
             reason=f"unclassified_fields:{','.join(sorted(unknown_keys))}",
         )
-
-    if RuntimeTaskField.status.value in runtime_keys:
-        status = fields.get(RuntimeTaskField.status.value)
-        if not RuntimeTaskStatus.allows(status):
-            runtime_keys.discard(RuntimeTaskField.status.value)
-            authored_keys.add(RuntimeTaskField.status.value)
 
     if authored_keys and runtime_keys:
         raise ProviderEventWriteRejected(reason="mixed_authored_runtime_update")

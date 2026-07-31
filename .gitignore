@@ -75,10 +75,14 @@ cover/
 # the migrations/versions directory so future SQL companions ship too.
 !orchestra/db/migrations/versions/*.sql
 *.txt
+!.agents/shared.txt
 *.json
 !.cursor/worktrees.json
 !orchestra/tests/fixtures/provider_trigger_contract/*.json
 !orchestra/tests/fixtures/task_trigger_contract/*.json
+# Shared recurrence drift-guard vectors, mirrored byte-identically in the
+# unify repo (tests/task_scheduler/); see orchestra/services/task_repetition.py.
+!orchestra/tests/test_tasks/repeat_projection_vectors.json
 # Native provider-trigger catalog manifests are the source of truth for
 # staging/non-selfhost imports (loaded via native_manifest.py), so they must
 # ship in git rather than being caught by the blanket ``*.json`` rule above.
@@ -196,3 +200,10 @@ logs/*
 # Cursor local scratch files
 /.cursor/projects/
 /.cursor/plans/
+
+# This project is Poetry-managed. Any uv invocation that resolves the workspace
+# (uv run / uv sync / uv lock) writes a stub uv.lock here, because uv reads PEP
+# 621 [project].requires-python and this pyproject.toml declares the constraint
+# under [tool.poetry.dependencies]. The stub carries no package data and has
+# been committed by accident twice; ignore it so it cannot recur.
+/uv.lock

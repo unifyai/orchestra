@@ -941,6 +941,72 @@ def find_promotion_candidates(
     return [(int(r[0]), int(r[1])) for r in rows]
 
 
+def find_promotion_candidates_by_id(
+    conn: Connection,
+    project_ids: list[int],
+) -> list[tuple[int, int]]:
+    """Row counts (in ``log_event``'s DEFAULT partition) for specific projects.
+
+    Unlike :func:`find_promotion_candidates`, this ignores the absolute-count
+    threshold entirely -- for callers (e.g. the relative-share sweep) that
+    already decided *which* projects to promote by a different criterion and
+    just need their current row counts. A project not present in the DEFAULT
+    partition (already promoted, or genuinely has no rows there) is omitted.
+    """
+    if not project_ids:
+        return []
+    default_part = default_partition_name("log_event")
+    if not relation_exists(conn, default_part):
+        return []
+    rows = conn.execute(
+        text(
+            f'SELECT project_id, count(*) AS c FROM "{default_part}" '
+            f"WHERE project_id = ANY(:pids) GROUP BY project_id ORDER BY c DESC",
+        ),
+        {"pids": list(project_ids)},
+    ).all()
+    return [(int(r[0]), int(r[1])) for r in rows]
+
+
+def find_relative_default_share_candidates(
+    conn: Connection,
+    table: str,
+    relative_threshold: float,
+) -> list[tuple[int, int, int]]:
+    """Projects whose share of ``table``'s DEFAULT partition exceeds a threshold.
+
+    Complements :func:`find_promotion_candidates`' absolute row-count gate: ANN
+    recall degrades as a function of a tenant's *fraction* of the shared index,
+    not its raw size, so a project can dominate a still-small DEFAULT partition
+    long before its own row count crosses an absolute threshold. ``table`` must
+    be one of :data:`PARTITIONED_TABLES` (checked, not just interpolated).
+
+    Returns ``(project_id, project_row_count, default_partition_row_count)``
+    triples sorted by share desc, for every project whose
+    ``project_row_count / default_partition_row_count >= relative_threshold``.
+    Empty when the DEFAULT partition doesn't exist or has no rows.
+    """
+    if table not in PARTITIONED_TABLES:
+        raise ValueError(f"Unknown partitioned table: {table}")
+    default_part = default_partition_name(table)
+    if not relation_exists(conn, default_part):
+        return []
+    total = conn.execute(text(f'SELECT count(*) FROM "{default_part}"')).scalar() or 0
+    if not total:
+        return []
+    rows = conn.execute(
+        text(
+            f'SELECT project_id, count(*) AS c FROM "{default_part}" '
+            f"GROUP BY project_id ORDER BY c DESC",
+        ),
+    ).all()
+    return [
+        (int(r[0]), int(r[1]), int(total))
+        for r in rows
+        if (int(r[1]) / total) >= relative_threshold
+    ]
+
+
 def find_owner_promotion_candidates(
     conn: Connection,
     project_id: int,

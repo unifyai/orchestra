@@ -13,7 +13,7 @@ Constraint / index names match what ``meta.create_all`` produces from the ORM
 model so fresh test DBs and migrated production DBs agree.
 
 Revision ID: canvas_token
-Revises: founder_interview_ask
+Revises: merge_multiplayer_conn_uq
 Create Date: 2026-08-16 00:00:00.000000
 """
 
@@ -23,7 +23,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "canvas_token"
-down_revision = "founder_interview_ask"
+down_revision = "merge_multiplayer_conn_uq"
 branch_labels = None
 depends_on = None
 

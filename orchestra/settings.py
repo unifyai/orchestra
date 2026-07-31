@@ -573,6 +573,15 @@ class Settings(BaseSettings):
         or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
         or "twin@unify.ai"
     )
+    # Catch-all domain for multiplayer twin alias addresses. Each multiplayer
+    # twin gets a unique local part on this domain at flip time; inbound mail
+    # is routed by recipient address (unlike the shared coordinator address,
+    # which routes by verified sender).
+    unity_twin_alias_email_domain: Optional[str] = (
+        os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+        or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+        or "twins.unify.ai"
+    )
     # Discrete per-country Coordinator phone numbers. The UK number is keyed
     # under ISO country code "GB". The correct prod/staging value is mounted
     # from Secret Manager per service.

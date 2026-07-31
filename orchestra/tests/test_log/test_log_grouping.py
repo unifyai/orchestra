@@ -964,6 +964,155 @@ async def test_sorting_with_grouping(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_sorting_with_grouping_expression_sort_key(client: AsyncClient):
+    """Grouped leaf fetches must evaluate non-plain sort expressions
+    (e.g. arithmetic) instead of treating the whole expression string as a
+    literal JSONB field name and silently falling back to id-based order.
+    """
+    project_name = "test-sorting-with-grouping-expression"
+    await _create_project(client, project_name)
+
+    test_data = [
+        {"student": "Alice", "test": "Math", "score": 95},
+        {"student": "Alice", "test": "Physics", "score": 88},
+        {"student": "Alice", "test": "Chemistry", "score": 92},
+        {"student": "Bob", "test": "Math", "score": 82},
+        {"student": "Bob", "test": "Physics", "score": 90},
+        {"student": "Bob", "test": "Chemistry", "score": 85},
+    ]
+    for entry in test_data:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200, response.json()
+
+    # "score * -1" is not a literal JSONB key on any row - if it were treated
+    # as a flat field name (the bug), every row would tie as NULL and the
+    # query would silently fall back to `ORDER BY LogEvent.id DESC`.
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps({"score * -1": "ascending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    group_obj = result["logs"]["entries/student"]
+    for student, expected_scores_desc in (
+        ("Alice", [95, 92, 88]),
+        ("Bob", [90, 85, 82]),
+    ):
+        group_item = next(
+            (item for item in group_obj.get("group", []) if item.get("key") == student),
+            None,
+        )
+        assert group_item is not None, f"Missing group for student {student}"
+        scores = [log["entries"]["score"] for log in group_item.get("value")]
+        # ascending by (score * -1) == descending by score
+        assert scores == expected_scores_desc, (
+            f"Expected {student}'s scores ordered by 'score * -1' ascending "
+            f"(i.e. score descending) to be {expected_scores_desc}, got {scores}"
+        )
+
+
+@pytest.mark.anyio
+async def test_sorting_with_grouping_cosine_embedding_sort_key(client: AsyncClient):
+    """Grouped leaf fetches must correctly evaluate a cosine/embed() sort
+    expression -- the exact motivating scenario from the original ticket
+    (`str_filter_exp_to_dict`'s "expression" branch, which returns a
+    ``Subquery`` from ``build_sql_query`` and must be outerjoined, not just
+    the plain-expression branch the arithmetic test above exercises).
+    """
+    project_name = "test-sorting-with-grouping-cosine"
+    await _create_project(client, project_name, user=1)
+
+    descriptions = [
+        ("Alice", "a cute little cat playing"),
+        ("Alice", "a red sports car racing"),
+        ("Bob", "a friendly golden retriever dog"),
+        ("Bob", "a blue wooden chair"),
+    ]
+    log_ids = []
+    for student, desc in descriptions:
+        response = await _create_log(
+            client,
+            project_name,
+            entries={"student": student, "description": desc},
+        )
+        assert response.status_code == 200, response.json()
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        "desc_embedding",
+        "embed({log:description})",
+        {"log": log_ids},
+    )
+    assert response.status_code == 200, f"Failed to create embedding: {response.text}"
+
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps(
+                {"cosine(desc_embedding, embed('a pet animal'))": "ascending"},
+            ),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    group_obj = result["logs"]["entries/student"]
+    for student in ("Alice", "Bob"):
+        group_item = next(
+            (item for item in group_obj.get("group", []) if item.get("key") == student),
+            None,
+        )
+        assert group_item is not None, f"Missing group for student {student}"
+        descs = [log["entries"]["description"] for log in group_item.get("value")]
+        # The animal description must sort closer (first) than the
+        # car/furniture description for "a pet animal" in every group -- if
+        # the outerjoin/value column were wired wrong, order would be
+        # arbitrary (or every row would tie, falling back to id order).
+        assert "cat" in descs[0] or "dog" in descs[0], (
+            f"Expected {student}'s animal description first for a cosine "
+            f"similarity sort to 'a pet animal', got order: {descs}"
+        )
+
+
+@pytest.mark.anyio
+async def test_sorting_with_grouping_bare_literal_sort_key_fails_fast(
+    client: AsyncClient,
+):
+    """A sort key that parses to a bare literal (not an identifier or an
+    expression dict) must fail with a clear 400, not an unhandled 500.
+    """
+    project_name = "test-sorting-with-grouping-bare-literal"
+    await _create_project(client, project_name)
+    await _create_log(
+        client,
+        project_name,
+        entries={"student": "Alice", "test": "Math", "score": 95},
+    )
+
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project_name": project_name,
+            "group_by": ["entries/student"],
+            "sorting": json.dumps({"-1": "ascending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
 async def test_sorting_edge_cases(client: AsyncClient):
     """Test edge cases in sorting with groups."""
     project_name = "test-sorting-edge-cases"

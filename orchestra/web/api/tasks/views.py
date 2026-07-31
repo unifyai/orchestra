@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, Path, Response, status
 from fastapi.routing import APIRouter
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from orchestra.db.dependencies import get_db_session, transient_request_db_session
@@ -13,6 +14,7 @@ from orchestra.services.task_cancel_service import (
     apply_task_cancel,
     resolve_task_cancel_target,
 )
+from orchestra.services.task_lifecycle import derive_task_lifecycle
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     _requires_computer_from_row,
@@ -298,6 +300,13 @@ async def _dispatch_task_trigger_to_adapters(
     return request_id
 
 
+def _task_project_id(session: Session, assistant) -> int:
+    """Project that owns one assistant's Tasks rows and their execution ledger."""
+
+    project_id, _, _ = TaskMutationService(session)._resolve_task_scope(assistant)
+    return project_id
+
+
 def _typed_task_response(
     *,
     assistant_id: int,
@@ -305,6 +314,8 @@ def _typed_task_response(
     task_id: int,
     task_revision: int,
     data: dict,
+    session: Session | None = None,
+    project_id: int | None = None,
 ) -> TypedTaskResponse:
     trigger = data.get("trigger")
     parsed_trigger = None
@@ -320,7 +331,16 @@ def _typed_task_response(
         assistant_id=assistant_id,
         name=data.get("name"),
         description=data.get("description"),
-        status=data.get("status"),
+        lifecycle=(
+            derive_task_lifecycle(
+                session,
+                project_id=project_id,
+                source_task_log_id=log_event_id,
+                data=data,
+            ).value
+            if session is not None and project_id is not None
+            else None
+        ),
         enabled=data.get("enabled"),
         offline=data.get("offline"),
         requires_filesystem=_requires_filesystem_from_row(data),
@@ -380,6 +400,8 @@ def list_assistant_tasks(
                     task_id=row.task_id,
                     task_revision=row.task_revision,
                     data=row.data,
+                    session=session,
+                    project_id=_task_project_id(session, assistant),
                 )
                 for row in rows
             ],
@@ -409,8 +431,6 @@ def create_assistant_task(
             if hasattr(body.trigger, "model_dump")
             else body.trigger
         )
-    if body.status is None:
-        entries["status"] = "triggerable" if entries.get("trigger") else "scheduled"
     service = TaskMutationService(session)
     try:
         result = service.create_task(assistant=assistant, entries=entries)
@@ -428,6 +448,8 @@ def create_assistant_task(
             task_id=result.task_id,
             task_revision=result.task_revision,
             data=result.data,
+            session=session,
+            project_id=_task_project_id(session, assistant),
         ),
     )
 
@@ -461,6 +483,8 @@ def get_assistant_task(
             task_id=row.task_id,
             task_revision=row.task_revision,
             data=row.data,
+            session=session,
+            project_id=_task_project_id(session, assistant),
         ),
     )
 
@@ -513,6 +537,8 @@ def patch_assistant_task(
             task_id=result.task_id,
             task_revision=result.task_revision,
             data=result.data,
+            session=session,
+            project_id=_task_project_id(session, assistant),
         ),
     )
 
@@ -589,6 +615,8 @@ def pause_assistant_task_trigger(
             task_id=result.task_id,
             task_revision=result.task_revision,
             data=result.data,
+            session=session,
+            project_id=_task_project_id(session, assistant),
         ),
     )
 
@@ -632,6 +660,8 @@ def resume_assistant_task_trigger(
             task_id=result.task_id,
             task_revision=result.task_revision,
             data=result.data,
+            session=session,
+            project_id=_task_project_id(session, assistant),
         ),
     )
 
@@ -851,6 +881,9 @@ def delete_assistant_task_run_event_context(
 def get_assistant_provider_triggers(
     assistant_id: int,
     backend_id: str | None = None,
+    canonical_app_slug: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     session=Depends(get_db_session),
 ) -> InfoResponse[TriggerCatalogResponse]:
     from orchestra.services.staged_trigger_catalog_service import (
@@ -861,6 +894,9 @@ def get_assistant_provider_triggers(
         session,
         assistant_id=assistant_id,
         backend_id=backend_id,
+        canonical_app_slug=canonical_app_slug,
+        limit=limit,
+        offset=offset,
     )
     return InfoResponse(
         info=TriggerCatalogResponse(
@@ -884,11 +920,17 @@ def get_assistant_provider_triggers(
 def get_task_trigger_catalog(
     assistant_id: int,
     backend_id: str | None = None,
+    canonical_app_slug: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     session=Depends(get_db_session),
 ) -> InfoResponse[TriggerCatalogResponse]:
     return get_assistant_provider_triggers(
         assistant_id=assistant_id,
         backend_id=backend_id,
+        canonical_app_slug=canonical_app_slug,
+        limit=limit,
+        offset=offset,
         session=session,
     )
 

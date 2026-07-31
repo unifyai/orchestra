@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import re
 import traceback
@@ -58,6 +59,8 @@ from ..python2SQL import STR_TO_SQL_TYPES
 from ..python2SQL.core import build_sql_query
 from ..python2SQL.helpers import _select_value
 from ..python2SQL.parsers import str_filter_exp_to_dict
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "_get_logs_query",
@@ -1297,6 +1300,18 @@ def _get_logs_query(
                     "filtered_events",
                 )
 
+                # `embedding` has a single, unpartitioned HNSW index shared by
+                # every project (no per-project partitions have ever been
+                # promoted). project_id/key/context membership below are only
+                # post-filters applied after the ANN scan returns its
+                # candidates, not partition pruning. With the default
+                # ef_search=40, a low-selectivity project (a small fraction of
+                # the ~590k shared rows) can see zero of its own rows survive
+                # the post-filter, causing zero-recall results. Widen the ANN
+                # candidate set for this transaction only so recall stays
+                # correct regardless of a project's share of the shared index.
+                session.execute(text("SET LOCAL hnsw.ef_search = 1000"))
+
                 ann_topk = (
                     select(
                         Embedding.ref_id.label("id"),
@@ -1306,8 +1321,9 @@ def _get_logs_query(
                         type_coerce(dist, Float).label("dist"),
                     )
                     .where(
-                        # Constrain to this project's partition so the planner
-                        # prunes to a single per-partition HNSW index.
+                        # project_id/key/context membership are post-filters
+                        # applied after the ANN scan, not partition pruning
+                        # (see ef_search comment above).
                         Embedding.project_id == project_id,
                         owner_scope_clause(Embedding, owner_key_filter),
                         Embedding.key == lhs_key,
@@ -1387,6 +1403,10 @@ def _get_logs_query(
                 return (rows, total_count)
 
             except Exception as e:
+                # A one-line str(e) hides where a programming error came from —
+                # an UnboundLocalError here once read as an opaque client 400
+                # while every semantic search in the fleet failed on it.
+                logger.exception("Vector sort failed (sorting=%s)", sorting)
                 raise HTTPException(
                     status_code=400,
                     detail=f"Error processing vector sort: {str(e)}",
@@ -1541,8 +1561,12 @@ def _get_logs_query(
 
     # Capture SQL for test analysis (if enabled)
     try:
-        from sqlalchemy import text
-
+        # `text` must stay the module-level sqlalchemy import: a function-local
+        # `from sqlalchemy import text` here made `text` local to ALL of
+        # _get_logs_query, so any use earlier in the function raised
+        # UnboundLocalError. The ef_search widening on the vector-sort fast
+        # path hit exactly that, and every semantic search in the fleet failed
+        # with an opaque 400 until the shadow was found.
         from orchestra.observability.sql_capture import (
             capture_sql,
             is_capture_enabled,
@@ -2980,8 +3004,9 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
 
     # Capture SQL for test analysis (if enabled)
     try:
-        from sqlalchemy import text
-
+        # Same shadow hazard as in _get_logs_query: `text` is the module-level
+        # sqlalchemy import, and re-importing it locally makes it local to the
+        # whole function.
         from orchestra.observability.sql_capture import capture_sql, is_capture_enabled
 
         if is_capture_enabled():

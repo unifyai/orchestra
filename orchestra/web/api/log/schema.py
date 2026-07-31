@@ -694,6 +694,30 @@ class DrainExternalWritesRequest(BaseModel):
     )
 
 
+class PartitionPromoteSweepRequest(BaseModel):
+    relative_threshold: float = Field(
+        default=0.10,
+        gt=0,
+        le=1,
+        description=(
+            "Minimum share (0-1) of the embedding DEFAULT partition a single "
+            "project must hold before the sweep triggers the promote job."
+        ),
+    )
+
+
+class PartitionPromoteSweepCandidate(BaseModel):
+    project_id: int
+    row_count: int
+    default_partition_row_count: int
+    share: float
+
+
+class PartitionPromoteSweepResponse(BaseModel):
+    triggered: bool
+    candidates: List[PartitionPromoteSweepCandidate] = Field(default_factory=list)
+
+
 class JoinLogsRequest(BaseModel):
     pair_of_args: List[Dict[str, Any]] = Field(
         ...,

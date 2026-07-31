@@ -62,7 +62,9 @@ def ensure_coordinator_universal_whatsapp_contact(
     *,
     coordinator: Assistant,
 ) -> AssistantContact | None:
-    if not coordinator.is_coordinator:
+    # Multiplayer twins run on dedicated identities; shared pools must
+    # never re-attach to them (heal/repair paths funnel through here).
+    if not coordinator.is_coordinator or coordinator.is_multiplayer:
         return None
 
     pool = ensure_universal_unity_whatsapp_pool(session)

@@ -69,6 +69,7 @@ class ReconcileErrorCode(StrEnum):
     provider_delete_failed = "provider_delete_failed"
     provider_health_check_failed = "provider_health_check_failed"
     provider_connection_not_active = "provider_connection_not_active"
+    connection_not_active = "connection_not_active"
     provider_subscription_missing = "provider_subscription_missing"
     provider_subscription_inactive = "provider_subscription_inactive"
     trigger_delivery_only = "trigger_delivery_only"

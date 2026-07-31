@@ -14,7 +14,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 import httpx
@@ -43,6 +43,11 @@ from orchestra.provider_triggers.revision import (
     normalize_trigger_config,
 )
 from orchestra.provider_triggers.task_trigger import parse_task_trigger
+from orchestra.services.task_repetition import (
+    deterministic_jitter_seconds,
+    next_repeated_start_at,
+    parse_repeat_patterns,
+)
 from orchestra.settings import settings
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
@@ -67,13 +72,30 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
     },
 )
 
-_SCHEDULED_EXECUTION_STATUSES = {"scheduled"}
 _OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
-_TRIGGERABLE_STATUS = "triggerable"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
 _TASK_SUMMARY_MAX_CHARS = 240
+
+
+class _KeepCurrentHead:
+    """Projection outcome meaning "the run ledger owns this head, leave it".
+
+    Distinct from ``None``, which means "this definition arms nothing" and so
+    retires any open execution. A started series keeps its current head when a
+    run is in flight — its dispatcher projects the successor, and a definition
+    write must not race it — and when the definition does not repeat or its
+    repeat rule is exhausted, where there is no future slot to rebuild.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "KEEP_CURRENT_HEAD"
+
+
+KEEP_CURRENT_HEAD = _KeepCurrentHead()
 
 logger = logging.getLogger(__name__)
 
@@ -245,23 +267,43 @@ def _build_open_execution_run_key(
     task_id: int,
     revision: str,
     due_at: str | None = None,
+    trigger_medium: str | None = None,
 ) -> str:
     """Build the idempotency key for an open (scheduled/triggerable) Execution.
 
-    Matches Unify ``build_task_run_key`` so due-fire create-or-adopt adopts the
-    same row projected here.
+    Must produce byte-identical output to Unify ``build_task_run_key``: the key
+    is what makes create-or-adopt converge, so any drift stops the dispatcher
+    adopting the row projected here and mints a second execution for the same
+    occurrence instead. Two rows per occurrence read as concurrency, and an
+    overlap guard then skips every tick — a silent halt, not an error.
+
+    Both normalizers below exist for that reason. ``team:11`` and
+    ``2026-07-29T16:50:00+00:00`` were the drift that caused it.
+
+    Unify assembles the tail from the provenance the dispatcher can see, and a
+    dispatcher waking on a projected row sees only what that row carries: the
+    due time on a scheduled wake, the trigger medium on a triggered one. The
+    contact and message that fired a live trigger exist only once an event has
+    actually arrived, and a firing carrying them is a distinct occurrence with
+    its own key. A projection with neither fragment falls through to the shared
+    ``once``, which is why no wake gets a tail of its own here.
     """
 
     revision_digest = hashlib.sha256(
         str(revision or "").encode("utf-8"),
     ).hexdigest()[:12]
-    destination_part = f"{_coerce_optional_str(destination)}:" if destination else ""
-    if due_at:
-        tail = str(due_at).replace(" ", "T")
-    elif wake == "triggered":
-        tail = "arm"
-    else:
-        tail = "once"
+    normalized_destination = _normalize_run_key_component(destination)
+    destination_part = f"{normalized_destination}:" if normalized_destination else ""
+    tail_parts: list[str] = []
+    if wake == "scheduled":
+        normalized_due = _normalize_run_datetime_fragment(due_at) if due_at else None
+        if normalized_due:
+            tail_parts.append(normalized_due)
+    if wake == "triggered":
+        normalized_medium = _normalize_run_key_component(trigger_medium)
+        if normalized_medium:
+            tail_parts.append(normalized_medium[:24])
+    tail = "-".join(tail_parts) or "once"
     return (
         f"{delivery}:{wake}:{assistant_id}:{destination_part}{task_id}:"
         f"{revision_digest}:{tail}"
@@ -570,11 +612,6 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Repeat patterns mirrored from the task definition.",
     },
-    "status": {
-        "field_type": "str",
-        "mutable": True,
-        "description": "Legacy mirrored Tasks.status at projection time.",
-    },
     "source_task_updated_at": {
         "field_type": "datetime",
         "mutable": True,
@@ -609,6 +646,15 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "field_type": "str",
         "mutable": True,
         "description": "Stable hash of the machine-facing execution contract.",
+    },
+    "dispatch_offset_seconds": {
+        "field_type": "float",
+        "mutable": True,
+        "description": (
+            "Seconds to add to scheduled_for when dispatching. Jitter spreads "
+            "dispatch without changing the occurrence identity: scheduled_for "
+            "stays canonical so it can key run_key and anchor the next slot."
+        ),
     },
     "scheduled_for": {
         "field_type": "datetime",
@@ -975,7 +1021,11 @@ def sync_task_executions_for_task_ids(
                 rows=group.rows,
                 tasks_context_name=normalized_tasks_context_name,
                 destination=source_destination,
+                session=session,
+                project_id=project_id,
             )
+        if execution_payload is KEEP_CURRENT_HEAD:
+            continue
         if execution_payload is None:
             # Drop any prior open execution for this task/destination.
             deleted_rows = _delete_open_executions_for_task(
@@ -1230,91 +1280,170 @@ def create_task_run_if_absent(
         created_payload["run_id"] = created_row.id
         _replace_log_payload(created_row, created_payload)
     session.flush()
+    # A newly created open occurrence must reach Communication's delayed queue
+    # or nothing ever fires it: the definition-write sync cannot see it,
+    # because projecting an occurrence deliberately writes no definition. Only
+    # a pending row with its due time still ahead materializes — a run created
+    # already running is being started by its own dispatcher right now, and a
+    # row created at/after its due time is a dispatch-time create whose
+    # delayed task would fire again immediately.
+    if (
+        created.created
+        and str(created_row.data.get("state") or "") == "scheduled"
+        and _occurrence_is_in_the_future(created_row.data)
+    ):
+        _reconcile_scheduled_execution_materialization(
+            previous_execution=None,
+            current_execution=dict(created_row.data or {}),
+        )
     return created_row, created.created
 
 
-def release_active_task_source(
+def _occurrence_is_in_the_future(data: Mapping[str, Any]) -> bool:
+    """Whether a run row's dispatch moment (due time plus jitter) is ahead."""
+
+    due = _parse_datetime(_coerce_datetime_string(data.get("scheduled_for")))
+    if due is None:
+        return False
+    offset = float(data.get("dispatch_offset_seconds") or 0.0)
+    return due + timedelta(seconds=offset) > datetime.now(timezone.utc)
+
+
+def release_stuck_task_executions(
     session: Session,
-    project_id: int,
     *,
+    project_id: int,
     source_task_log_id: int,
-    mode: str,
     info: str | None = None,
+    run_key: str | None = None,
 ) -> dict[str, Any]:
-    """Release a Tasks row that is still ``active`` after its worker is gone.
+    """Terminalize executions still ``running`` after their worker vanished.
 
-    ``mode="fail"`` terminalizes the row (crash / SIGTERM writeback).
-    ``mode="reopen"`` returns it to a runnable status so offline retry can
-    reclaim the same ``source_task_log_id`` via ``TaskScheduler.execute``.
+    Break-glass for a crashed or killed worker whose execution never reached a
+    terminal state. It operates on ``Tasks/Executions`` because that is where
+    run state lives: definitions carry authored intent only, so there is no
+    longer an ``active`` definition to release and nothing here can disarm a
+    schedule.
 
-    No-op (and reports ``updated=False``) when the row is missing or not
-    currently ``active``, so concurrent ActiveTask finalization wins cleanly.
+    Pass ``run_key`` to release one run. Without it this releases every running
+    execution under the definition, which is only safe when no sibling is meant
+    to survive: recurrence projects the next occurrence at dispatch, so an
+    unscoped release from a finishing worker terminalizes the successor that
+    just started and the series stops advancing.
+
+    The previous implementation wrote ``failed`` onto the definition with no
+    check for whether it repeats, which permanently disarmed recurring tasks —
+    the documented break-glass was itself an outage cause.
     """
 
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode not in {"fail", "reopen"}:
-        raise ValueError(
-            f"release_active_task_source mode must be 'fail' or 'reopen', "
-            f"got {mode!r}.",
-        )
-
-    task_row = (
-        session.query(LogEvent)
-        .filter(
-            LogEvent.project_id == project_id,
-            LogEvent.id == int(source_task_log_id),
-        )
-        .one_or_none()
+    query = session.query(LogEvent).filter(
+        LogEvent.project_id == project_id,
+        LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+        LogEvent.data["state"].astext == "running",
     )
-    if task_row is None:
+    if run_key:
+        query = query.filter(LogEvent.data["run_key"].astext == str(run_key))
+    executions = query.all()
+    if not executions:
         return {
             "updated": False,
             "source_task_log_id": int(source_task_log_id),
-            "status_before": None,
-            "status_after": None,
-            "mode": normalized_mode,
-            "reason": "missing",
+            "released_run_keys": [],
+            "reason": "no_running_executions",
         }
 
-    payload = dict(task_row.data or {})
-    status_before = str(payload.get("status") or "")
-    if status_before != "active":
-        return {
-            "updated": False,
-            "source_task_log_id": int(source_task_log_id),
-            "status_before": status_before,
-            "status_after": status_before,
-            "mode": normalized_mode,
-            "reason": "not_active",
-        }
-
-    if normalized_mode == "fail":
-        status_after = "failed"
-    elif payload.get("trigger") not in (None, "", {}):
-        status_after = "triggerable"
-    else:
-        status_after = "scheduled"
-
-    payload["status"] = status_after
+    released: list[str] = []
+    released_payloads: list[dict[str, Any]] = []
     release_info = (info or "").strip()
-    if release_info:
-        existing_info = payload.get("info")
-        if isinstance(existing_info, dict):
-            merged = dict(existing_info)
-            merged["release_reason"] = release_info
-            payload["info"] = merged
-        else:
-            payload["info"] = release_info
-    _replace_log_payload(task_row, payload)
+    for execution in executions:
+        payload = dict(execution.data or {})
+        payload["state"] = "failed"
+        payload["completed_at"] = datetime.now(timezone.utc).isoformat()
+        if release_info:
+            payload["error"] = release_info
+        _replace_log_payload(execution, payload)
+        released_payloads.append(payload)
+        run_key = _coerce_optional_str(payload.get("run_key"))
+        if run_key:
+            released.append(run_key)
     session.flush()
+    reprojected = _reproject_head_after_release(
+        session,
+        project_id=project_id,
+        source_task_log_id=int(source_task_log_id),
+        payloads=released_payloads,
+    )
     return {
         "updated": True,
         "source_task_log_id": int(source_task_log_id),
-        "status_before": status_before,
-        "status_after": status_after,
-        "mode": normalized_mode,
+        "released_run_keys": released,
+        "reprojected": reprojected,
         "reason": "released",
     }
+
+
+def _reproject_head_after_release(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+    payloads: list[dict[str, Any]],
+) -> bool:
+    """Give the definition an open occurrence again after a run is released.
+
+    Recurrence is computed in Unify at dispatch, so a worker that died before it
+    got that far — an image pull failure, an OOM at startup, a SIGKILL — leaves
+    the series with no open occurrence and nothing to fire one. The definition
+    stays armed and simply never runs again, which is how a ten-minute tick sat
+    dead until an operator noticed and nudged it by hand.
+
+    Releasing a run is the moment we know it is over, so the head is
+    re-projected here. A crash then costs one occurrence instead of the series.
+    Idempotent: the projection adopts an existing open occurrence rather than
+    duplicating it, and a definition that is disabled, one-shot or exhausted
+    yields nothing.
+    """
+
+    task_ids = sorted(
+        {
+            task_id
+            for task_id in (_coerce_int(p.get("task_id")) for p in payloads)
+            if task_id is not None
+        },
+    )
+    if not task_ids:
+        return False
+    assistant_id = next(
+        (
+            _coerce_optional_str(p.get("assistant_id"))
+            for p in payloads
+            if p.get("assistant_id")
+        ),
+        None,
+    )
+    try:
+        tasks_context_name = resolve_tasks_context_name(
+            session=session,
+            project_id=project_id,
+            assistant_id=assistant_id,
+            source_task_log_id=source_task_log_id,
+        )
+        result = sync_task_executions_for_task_ids(
+            session=session,
+            project_id=project_id,
+            task_ids=task_ids,
+            tasks_context_name=tasks_context_name,
+        )
+    except Exception:
+        # Releasing the run is the caller's contract and must still succeed; a
+        # series left without a head is recoverable, a lost release is not.
+        logger.exception(
+            "Failed to re-project the head after releasing task_ids=%s; the "
+            "series will not advance until a definition write re-projects it.",
+            task_ids,
+        )
+        return False
+    return bool(result.get("upserted"))
 
 
 def update_task_run(
@@ -1699,7 +1828,9 @@ def _build_execution_payload(
     *,
     tasks_context_name: str,
     destination: str | None,
-) -> dict[str, Any] | None:
+    session: Session,
+    project_id: int,
+) -> dict[str, Any] | _KeepCurrentHead | None:
     """Choose the current activatable task instance and project its machine facts."""
 
     if not rows:
@@ -1725,6 +1856,8 @@ def _build_execution_payload(
             wake="scheduled",
             tasks_context_name=tasks_context_name,
             destination=destination,
+            session=session,
+            project_id=project_id,
         )
 
     provider_candidates = [
@@ -1748,6 +1881,8 @@ def _build_execution_payload(
             wake="triggered",
             tasks_context_name=tasks_context_name,
             destination=destination,
+            session=session,
+            project_id=project_id,
         )
 
     return None
@@ -1759,7 +1894,9 @@ def _project_execution_payload(
     wake: str,
     tasks_context_name: str,
     destination: str | None,
-) -> dict[str, Any]:
+    session: Session,
+    project_id: int,
+) -> dict[str, Any] | _KeepCurrentHead:
     """Flatten the chosen source task row into an open execution payload."""
 
     task_id = _coerce_int(row.data.get("task_id"))
@@ -1780,7 +1917,53 @@ def _project_execution_payload(
     entrypoint = _coerce_int(row.data.get("entrypoint"))
     requires_filesystem = _requires_filesystem_from_row(row.data)
     requires_computer = _requires_computer_from_row(row.data)
-    scheduled_for = _coerce_datetime_string(schedule.get("start_at"))
+    # `schedule.start_at` is the series anchor, not the next due time. Unify
+    # projects each occurrence as its own execution keyed on `scheduled_for`,
+    # so an existing open execution is authoritative and the anchor is only a
+    # fallback for a series whose first occurrence has not been projected yet.
+    # Occurrences only ever advance from the anchor, so an open execution
+    # falling before it belongs to a schedule the author has since replaced;
+    # ignoring it lets the edit mint a new run_key and retire the old head.
+    anchor = _coerce_datetime_string(schedule.get("start_at"))
+    dispatch_offset_seconds = 0.0
+    scheduled_for = _open_execution_scheduled_for(
+        session,
+        project_id=project_id,
+        source_task_log_id=row.log_event_id,
+        not_before=anchor,
+    )
+    if scheduled_for is None:
+        # Falling back to the anchor is right for a series the ledger has not
+        # reached yet — a new definition, or one whose author just moved the
+        # anchor ahead of every occurrence so far. It is wrong for a series that
+        # has already run past it: rebuilding a head on a consumed occurrence
+        # deleted the correct future head the runtime had projected, which is
+        # why a live schedule once showed its next run stuck on its start time.
+        # A started series with no open occurrence is instead advanced from its
+        # repeat rule — unless a run is in flight, in which case its dispatcher
+        # owns the projection and this write must not race it.
+        latest = _latest_ledger_occurrence(
+            session,
+            project_id=project_id,
+            source_task_log_id=row.log_event_id,
+        )
+        if latest is not None and latest >= (_parse_datetime(anchor) or latest):
+            if _has_running_execution(
+                session,
+                project_id=project_id,
+                source_task_log_id=row.log_event_id,
+            ):
+                return KEEP_CURRENT_HEAD
+            minted = _next_repeat_occurrence_after(
+                data=row.data,
+                task_id=task_id,
+                previous_start=latest,
+            )
+            if minted is None:
+                return KEEP_CURRENT_HEAD
+            scheduled_for, dispatch_offset_seconds = minted
+        else:
+            scheduled_for = anchor
     payload = {
         "assistant_id": assistant_id,
         "destination": destination,
@@ -1791,7 +1974,6 @@ def _project_execution_payload(
         "state": ("scheduled" if wake == "scheduled" else "triggerable"),
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
-        "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
         "scheduled_for": scheduled_for,
@@ -1812,6 +1994,10 @@ def _project_execution_payload(
         ),
     }
     payload["revision"] = _stable_hash(payload)
+    # Post-hash: jitter spreads dispatch without changing the occurrence
+    # identity, so it must not perturb the revision (or the run_key digested
+    # from it) that concurrent writers converge on.
+    payload["dispatch_offset_seconds"] = dispatch_offset_seconds
     payload["run_key"] = _build_open_execution_run_key(
         delivery=delivery,
         wake=wake,
@@ -1820,6 +2006,7 @@ def _project_execution_payload(
         task_id=task_id,
         revision=payload["revision"],
         due_at=scheduled_for,
+        trigger_medium=payload["trigger_medium"],
     )
     payload["last_materialized_at"] = _coerce_datetime_string(
         datetime.now(timezone.utc),
@@ -1878,7 +2065,6 @@ def _project_provider_event_execution_payload(
         "state": "triggerable",
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
-        "status": row.data.get("status"),
         "task_name": _coerce_optional_str(row.data.get("name")),
         "task_description": _coerce_optional_str(row.data.get("description")),
         "entrypoint": entrypoint,
@@ -1987,9 +2173,13 @@ def _scheduled_execution_snapshot(
         return None
     assistant_id = _coerce_optional_str(execution.get("assistant_id"))
     task_id = _coerce_int(execution.get("task_id"))
-    revision = _coerce_optional_str(execution.get("revision"))
+    # Unify-projected occurrences carry revision "" (their run_key digested
+    # that value), so an empty revision is a real identity here, not a gap.
+    # Communication rebuilds the run key from this field at fire time; sending
+    # anything else would mint a second execution for the same occurrence.
+    revision = _coerce_optional_str(execution.get("revision")) or ""
     scheduled_for = _coerce_datetime_string(execution.get("scheduled_for"))
-    if not assistant_id or task_id is None or not revision or not scheduled_for:
+    if not assistant_id or task_id is None or not scheduled_for:
         return None
     return {
         "assistant_id": assistant_id,
@@ -1997,6 +2187,9 @@ def _scheduled_execution_snapshot(
         "task_id": task_id,
         "revision": revision,
         "scheduled_for": scheduled_for,
+        "dispatch_offset_seconds": float(
+            execution.get("dispatch_offset_seconds") or 0.0,
+        ),
         "delivery": _coerce_optional_str(execution.get("delivery")) or "live",
         "requires_filesystem": _requires_filesystem_from_row(execution),
         "requires_computer": _requires_computer_from_row(execution),
@@ -2122,6 +2315,137 @@ def _is_task_enabled(data: Mapping[str, Any]) -> bool:
     return _coerce_bool(data.get("enabled"))
 
 
+def _next_repeat_occurrence_after(
+    *,
+    data: Mapping[str, Any],
+    task_id: int,
+    previous_start: datetime,
+) -> tuple[str, float] | None:
+    """Mint the next future slot for a repeating series left without a head.
+
+    A worker that dies before dispatch never projects its successor, so the
+    series sits armed with no open occurrence and nothing to fire one. The
+    repeat rule on the definition names the slot the runtime would have chosen;
+    advancing it past *now* (rather than past the consumed occurrence) means a
+    crash costs the occurrences inside the outage window, never the series.
+    Returns ``None`` for a definition that does not repeat or is exhausted.
+    """
+
+    patterns = parse_repeat_patterns(data.get("repeat"))
+    if not patterns:
+        return None
+    next_start = next_repeated_start_at(
+        previous_start=previous_start,
+        patterns=patterns,
+        current_occurrence_index=0,
+        now=datetime.now(timezone.utc),
+    )
+    if next_start is None:
+        return None
+    offset = deterministic_jitter_seconds(
+        task_id=task_id,
+        slot=next_start,
+        patterns=patterns,
+    )
+    return next_start.isoformat(), offset
+
+
+def _has_running_execution(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+) -> bool:
+    """Whether any execution of this definition is currently running."""
+
+    return (
+        session.query(LogEvent.id)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+            LogEvent.data["state"].astext == "running",
+        )
+        .first()
+    ) is not None
+
+
+def _latest_ledger_occurrence(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+) -> datetime | None:
+    """Newest occurrence this definition has materialized, in any state."""
+
+    rows = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+        )
+        .all()
+    )
+    occurrences = [
+        parsed
+        for parsed in (
+            _parse_datetime(
+                _coerce_datetime_string((row.data or {}).get("scheduled_for")),
+            )
+            for row in rows
+        )
+        if parsed is not None
+    ]
+    return max(occurrences) if occurrences else None
+
+
+def _open_execution_scheduled_for(
+    session: Session,
+    *,
+    project_id: int,
+    source_task_log_id: int,
+    not_before: str | None = None,
+) -> str | None:
+    """Earliest open occurrence already projected for one definition.
+
+    ``not_before`` discards occurrences projected from a superseded schedule.
+    """
+
+    rows = (
+        session.query(LogEvent)
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
+            LogEvent.data["state"].astext.in_(("scheduled", "triggerable")),
+        )
+        .all()
+    )
+    floor = _parse_datetime(not_before)
+    due = []
+    for row in rows:
+        value = _coerce_datetime_string((row.data or {}).get("scheduled_for"))
+        parsed = _parse_datetime(value)
+        if not value or parsed is None:
+            continue
+        if floor is not None and parsed < floor:
+            continue
+        due.append((parsed, value))
+    return min(due)[1] if due else None
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 string into an aware UTC datetime, or None."""
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:
     """Return True when a task row is the current armed scheduled execution."""
 
@@ -2135,8 +2459,7 @@ def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:
         return False
     if schedule.get("start_at") is None:
         return False
-    status = _coerce_optional_str(data.get("status"))
-    return status in _SCHEDULED_EXECUTION_STATUSES
+    return True
 
 
 def _is_provider_event_execution_candidate(data: Mapping[str, Any]) -> bool:
@@ -2150,10 +2473,7 @@ def _is_provider_event_execution_candidate(data: Mapping[str, Any]) -> bool:
     trigger = parse_task_trigger(data.get("trigger"))
     if trigger is None or trigger.kind != "provider_event":
         return False
-    if trigger.state != "enabled":
-        return False
-    status = _coerce_optional_str(data.get("status"))
-    return status == _TRIGGERABLE_STATUS
+    return trigger.state == "enabled"
 
 
 def _is_communication_trigger_execution_candidate(data: Mapping[str, Any]) -> bool:
@@ -2167,10 +2487,7 @@ def _is_communication_trigger_execution_candidate(data: Mapping[str, Any]) -> bo
     trigger = parse_task_trigger(data.get("trigger"))
     if trigger is None:
         return False
-    if trigger.kind == "provider_event":
-        return False
-    status = _coerce_optional_str(data.get("status"))
-    return status == _TRIGGERABLE_STATUS
+    return trigger.kind != "provider_event"
 
 
 def _is_trigger_execution_candidate(data: Mapping[str, Any]) -> bool:
@@ -2810,3 +3127,33 @@ def _extract_key_order(data: Any, path: str = "_root") -> dict[str, list[str]]:
             if isinstance(item, dict):
                 result.update(_extract_key_order(item, f"{path}[{index}]"))
     return result
+
+
+def _normalize_run_key_component(value: Any) -> str | None:
+    """Normalize one free-form run-key component into a compact identifier.
+
+    Mirrors Unify ``_normalize_run_key_component``. See
+    ``_build_open_execution_run_key`` for why the two must not drift.
+    """
+
+    text = _coerce_optional_str(value)
+    if not text:
+        return None
+    normalized = "".join(
+        char.lower() if char.isalnum() else "-" for char in text.strip()
+    ).strip("-")
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    return normalized or None
+
+
+def _normalize_run_datetime_fragment(value: Any) -> str | None:
+    """Normalize a datetime into the canonical run-key timestamp fragment.
+
+    Mirrors Unify ``_normalize_run_datetime_fragment``.
+    """
+
+    parsed = _parse_datetime(_coerce_datetime_string(value))
+    if parsed is None:
+        return None
+    return parsed.strftime("%Y%m%dT%H%M%SZ")

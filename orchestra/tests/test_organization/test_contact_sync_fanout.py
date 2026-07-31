@@ -25,29 +25,38 @@ from orchestra.web.api.utils.assistant_infra import fan_out_contact_sync_for_org
 @pytest.fixture
 def mocked_infra():
     """Mock all Adapters webhooks but expose contact-sync mocks for assertion."""
-    with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant",
-        new_callable=AsyncMock,
-    ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-        new_callable=AsyncMock,
-    ) as mock_reawaken, patch(
-        "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_assistant_cleanup, patch(
-        "orchestra.web.api.assistant.views.settings",
-    ) as mock_settings, patch(
-        "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
-        new_callable=AsyncMock,
-    ) as mock_org_cleanup, patch(
-        "orchestra.web.api.organization.views.create_bucket_service",
-    ) as mock_bucket_cls, patch(
-        "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
-        new_callable=AsyncMock,
-    ) as mock_fan_out, patch(
-        "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
-        new_callable=AsyncMock,
-    ) as mock_trigger:
+    with (
+        patch(
+            "orchestra.web.api.assistant.views.wake_up_assistant",
+            new_callable=AsyncMock,
+        ) as mock_wake_up,
+        patch(
+            "orchestra.web.api.assistant.views.reawaken_assistant",
+            new_callable=AsyncMock,
+        ) as mock_reawaken,
+        patch(
+            "orchestra.web.api.assistant.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_assistant_cleanup,
+        patch(
+            "orchestra.web.api.assistant.views.settings",
+        ) as mock_settings,
+        patch(
+            "orchestra.web.api.organization.views.process_assistant_cleanup_tasks",
+            new_callable=AsyncMock,
+        ) as mock_org_cleanup,
+        patch(
+            "orchestra.web.api.organization.views.create_bucket_service",
+        ) as mock_bucket_cls,
+        patch(
+            "orchestra.web.api.organization.views.fan_out_contact_sync_for_org",
+            new_callable=AsyncMock,
+        ) as mock_fan_out,
+        patch(
+            "orchestra.web.api.assistant.views.trigger_contact_sync_safe",
+            new_callable=AsyncMock,
+        ) as mock_trigger,
+    ):
         mock_wake_up.return_value = MagicMock(status_code=200)
         mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
         mock_assistant_cleanup.return_value = {
@@ -241,14 +250,17 @@ async def test_fan_out_helper_iterates_every_org_assistant_and_tolerates_failure
             raise RuntimeError("simulated webhook failure")
         return {"status": "ok"}
 
-    with patch(
-        "orchestra.db.dao.assistant_dao.AssistantDAO",
-        return_value=fake_dao,
-    ), patch(
-        "orchestra.web.api.utils.assistant_infra._trigger_contact_sync",
-        new_callable=AsyncMock,
-        side_effect=trigger_side_effect,
-    ) as mock_trigger:
+    with (
+        patch(
+            "orchestra.db.dao.assistant_dao.AssistantDAO",
+            return_value=fake_dao,
+        ),
+        patch(
+            "orchestra.web.api.utils.assistant_infra._trigger_contact_sync",
+            new_callable=AsyncMock,
+            side_effect=trigger_side_effect,
+        ) as mock_trigger,
+    ):
         await fan_out_contact_sync_for_org(42, fake_session)
 
     fake_dao.list_all_org_assistants.assert_called_once_with(organization_id=42)

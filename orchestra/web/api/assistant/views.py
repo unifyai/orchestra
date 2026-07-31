@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import logging
 import math
 import os
@@ -99,6 +100,12 @@ from orchestra.services.contact_membership_service import (
     ensure_personal_contact_memberships,
     ensure_team_contact_memberships,
 )
+from orchestra.services.coordinator_multiplayer import (
+    MultiplayerFlipError,
+    display_name_conflict,
+    flip_coordinator_to_multiplayer,
+    is_reserved_coordinator_name,
+)
 from orchestra.services.coordinator_service import (
     build_onboarding_catalog,
     compose_voice_intro_briefing,
@@ -187,6 +194,7 @@ from orchestra.web.api.assistant.schema import (
     ContactMembershipUpsertResponse,
     CoordinatorDelegateRequest,
     CoordinatorDelegateResponse,
+    CoordinatorMultiplayerFlip,
     CoordinatorResetResponse,
     CoordinatorStateResponse,
     CoordinatorStateUpdate,
@@ -835,6 +843,7 @@ def _build_assistant_read(
         timezone=a.timezone,
         is_local=a.is_local,
         is_coordinator=a.is_coordinator,
+        is_multiplayer=a.is_multiplayer,
         monthly_spending_cap=(
             float(a.monthly_spending_cap)
             if a.monthly_spending_cap is not None
@@ -869,9 +878,13 @@ def _is_hidden_workspace_coordinator_for_user(
     *,
     user_id: str,
 ) -> bool:
-    """Return whether an org Coordinator row is hidden from this user."""
+    """Return whether an org Coordinator row is hidden from this user.
+
+    Only single-player coordinators are private to their owner; a
+    multiplayer twin is a visible colleague like any hired teammate.
+    """
     return (
-        assistant.is_coordinator
+        assistant.is_private_coordinator
         and assistant.organization_id is not None
         and assistant.user_id != user_id
     )
@@ -1165,6 +1178,18 @@ async def create_assistant(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
                 )
+
+        if is_reserved_coordinator_name(assistant_in.first_name):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "coordinator_name_is_reserved",
+                    "message": (
+                        "That first name is reserved for the workspace "
+                        "coordinator. Pick a name of its own."
+                    ),
+                },
+            )
 
         existing_assistant = assistant_dao.find_by_natural_key(
             user_id=user_id,
@@ -1676,6 +1701,85 @@ async def reset_coordinator_endpoint(
     return InfoResponse(
         info=CoordinatorResetResponse(coordinator_id=str(coordinator.agent_id)),
     )
+
+
+@router.post(
+    "/assistant/{coordinator_id}/multiplayer",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Flip a Coordinator to multiplayer mode (one-way)",
+    tags=["Assistant Management"],
+    responses={
+        409: {"description": "The coordinator is already multiplayer."},
+        422: {"description": "Identity requirements not met (name/voice)."},
+    },
+)
+async def flip_coordinator_multiplayer_endpoint(
+    coordinator_id: int,
+    flip: CoordinatorMultiplayerFlip,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[AssistantRead]:
+    """Trade the twin's private surface for a hire-like outward identity.
+
+    Applies the owned name/voice/avatar, retires every shared-pool contact,
+    and provisions the dedicated alias email in one transaction, then
+    reawakens the runtime so it comes back up in multiplayer mode.
+    """
+    coordinator = require_authorized_coordinator(
+        session,
+        coordinator_id=coordinator_id,
+        user_id=request.state.user_id,
+    )
+    try:
+        flip_coordinator_to_multiplayer(
+            session,
+            coordinator=coordinator,
+            first_name=flip.first_name,
+            surname=flip.surname,
+            voice_id=flip.voice_id,
+            voice_provider=flip.voice_provider,
+            profile_photo=flip.profile_photo,
+        )
+    except MultiplayerFlipError as e:
+        already = coordinator.is_multiplayer
+        raise HTTPException(
+            status_code=(
+                status.HTTP_409_CONFLICT
+                if already
+                else status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=str(e),
+        )
+    session.commit()
+
+    from orchestra.web.api.utils.assistant_infra import reawaken_assistant
+
+    alias_contact = AssistantContactDAO(session).get_contact_by_assistant_and_type(
+        coordinator.agent_id,
+        "email",
+    )
+    wake_reasons = [
+        {
+            "type": "coordinator_multiplayer_flipped",
+            "alias_email": alias_contact.contact_value if alias_contact else "",
+        },
+    ]
+    try:
+        await reawaken_assistant(
+            str(coordinator.agent_id),
+            data={
+                "assistant_id": str(coordinator.agent_id),
+                "wake_reasons": json.dumps(wake_reasons),
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to reawaken coordinator %s after multiplayer flip: %s",
+            coordinator.agent_id,
+            e,
+        )
+    return InfoResponse(info=_build_assistant_read(coordinator, session))
 
 
 def _coordinator_state_response(
@@ -2830,22 +2934,34 @@ async def delete_assistant_contact(
             contact_type,
         )
 
-        # Coordinator contacts are platform-managed: the shared universal
-        # email / phone / WhatsApp pools are owned by the repair path
-        # (``ensure_coordinator_*``), so a deleted platform contact would
-        # just be re-provisioned on the owner's next visit — leaving a
+        # Private coordinator contacts are platform-managed: the shared
+        # universal email / phone / WhatsApp pools are owned by the repair
+        # path (``ensure_coordinator_*``), so a deleted platform contact
+        # would just be re-provisioned on the owner's next visit — leaving a
         # confusing gap in inbound routing meanwhile. Block deletion of
         # those. Legacy ``provisioned_by="user"`` rows that predate the
         # connect gating stay deletable so leftover BYOD contacts can
         # still be cleaned up (here and via the disconnect endpoint).
+        # Multiplayer twins manage dedicated contacts like any hire, except
+        # the alias email — that address is the twin's required outward
+        # identity and cannot be removed.
         if (
-            assistant.is_coordinator
+            assistant.is_private_coordinator
             and contact is not None
             and contact.provisioned_by != "user"
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="coordinator_contacts_are_platform_managed",
+            )
+        if (
+            assistant.is_multiplayer
+            and contact is not None
+            and (contact.metadata_ or {}).get("twin_alias")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="twin_alias_email_is_permanent",
             )
 
         if contact:
@@ -2981,12 +3097,14 @@ async def create_assistant_contact(
             detail="Assistant not found.",
         )
 
-    # Coordinator contacts are platform-managed (shared universal email /
-    # phone / WhatsApp pools provisioned by the ``ensure_coordinator_*``
-    # helpers). Manual contact creation — including BYOD — is never valid
-    # for a Coordinator, so reject it here rather than letting a row land
-    # that the repair path would later clobber.
-    if assistant.is_coordinator:
+    # Private coordinator contacts are platform-managed (shared universal
+    # email / phone / WhatsApp pools provisioned by the
+    # ``ensure_coordinator_*`` helpers). Manual contact creation — including
+    # BYOD — is never valid for a single-player Coordinator, so reject it
+    # here rather than letting a row land that the repair path would later
+    # clobber. Multiplayer twins provision dedicated contacts through this
+    # endpoint exactly like hired teammates.
+    if assistant.is_private_coordinator:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="coordinator_contacts_are_platform_managed",
@@ -4961,6 +5079,57 @@ async def update_assistant_config(
         # Remove deprecated contact fields
         for field_name in _DEPRECATED_CONTACT_FIELDS:
             update_data.pop(field_name, None)
+        # A single-player coordinator's name is the fixed shared identity;
+        # renaming happens only through the multiplayer flip. Multiplayer
+        # twins rename freely like hired teammates — except back to the
+        # reserved shared default, which would recreate the ambiguity the
+        # flip ceremony exists to prevent.
+        if existing_assistant.is_private_coordinator and any(
+            update_data.get(field) not in (None, getattr(existing_assistant, field))
+            for field in ("first_name", "surname")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="coordinator_name_is_platform_managed",
+            )
+        if (
+            not existing_assistant.is_private_coordinator
+            and is_reserved_coordinator_name(
+                update_data.get("first_name"),
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="coordinator_name_is_reserved",
+            )
+        # Renames share the natural-name uniqueness creation enforces:
+        # org-wide for organization assistants, per-user for personal ones.
+        # Existing duplicates are grandfathered — only new name writes are
+        # validated.
+        if "first_name" in update_data or "surname" in update_data:
+            conflict = display_name_conflict(
+                session,
+                user_id=existing_assistant.user_id,
+                organization_id=existing_assistant.organization_id,
+                first_name=update_data.get(
+                    "first_name",
+                    existing_assistant.first_name,
+                ),
+                surname=update_data.get("surname", existing_assistant.surname),
+                exclude_agent_id=existing_assistant.agent_id,
+            )
+            if conflict is not None:
+                taken = " ".join(
+                    part for part in (conflict.first_name, conflict.surname) if part
+                ).strip()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Another assistant in this workspace is already "
+                        f"named {taken!r}; pick a name teammates can tell "
+                        f"apart."
+                    ),
+                )
         if "weekly_limit" in update_data and update.weekly_limit is not None:
             update_data["weekly_limit"] = Decimal(update.weekly_limit)
         if (

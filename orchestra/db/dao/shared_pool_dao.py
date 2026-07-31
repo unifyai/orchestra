@@ -374,6 +374,7 @@ class SharedPoolDAO:
             .filter(
                 Assistant.user_id == user_id,
                 Assistant.is_coordinator.is_(True),
+                Assistant.is_multiplayer.is_(False),
                 AssistantContact.contact_type == self.platform,
                 AssistantContact.contact_value == pool_number,
                 AssistantContact.status == "active",
@@ -1159,7 +1160,7 @@ class SharedPoolDAO:
             .filter(Assistant.agent_id == contact.assistant_id)
             .first()
         )
-        return bool(assistant and assistant.is_coordinator)
+        return bool(assistant and assistant.is_private_coordinator)
 
     def _build_universal_unity_owner_route(
         self,
