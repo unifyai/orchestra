@@ -2272,3 +2272,97 @@ async def test_a_team_scoped_run_is_found_by_the_destination_that_dispatches_it(
         "a run that cannot be found there never fires"
     )
     assert execution["task_id"] == 813
+
+
+TEAM_TASKS_CONTEXT = "Teams/11/Tasks"
+
+
+def _open_execution_lookup_destinations(monkeypatch, *, tasks_context, destination):
+    """Run the lookup and report the destination it actually filtered on."""
+
+    seen: list[str | None] = []
+
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "resolve_tasks_context_name",
+        lambda **kwargs: tasks_context,
+    )
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "lookup_task_machine_executions_context_id",
+        lambda **kwargs: 55,
+    )
+    real_derive = task_machine_state_service._destination_from_context_name
+
+    def _spy(context_name):
+        derived = real_derive(context_name)
+        seen.append(derived)
+        return derived
+
+    monkeypatch.setattr(
+        task_machine_state_service,
+        "_destination_from_context_name",
+        _spy,
+    )
+
+    class _Query:
+        def join(self, *args, **kwargs):
+            return self
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return []
+
+    fake_session = SimpleNamespace(query=lambda *a, **k: _Query())
+    task_machine_state_service.get_open_task_execution(
+        session=fake_session,
+        project_id=1,
+        assistant_id="1406",
+        task_id=17,
+        destination=destination,
+    )
+    return seen
+
+
+def test_open_execution_lookup_derives_a_team_destination(monkeypatch):
+    """A team task's executions all carry `destination`, so omitting it is not 'any'.
+
+    The no-destination branch matches rows carrying *none*, which a team task
+    never projects. Without deriving it from the surface path the lookup finds
+    nothing and the caller cannot distinguish that from a task that never
+    materialized -- which is what stalled reproject and the comms repair path.
+    """
+
+    seen = _open_execution_lookup_destinations(
+        monkeypatch,
+        tasks_context=TEAM_TASKS_CONTEXT,
+        destination=None,
+    )
+    assert seen == ["team:11"]
+
+
+def test_an_explicit_destination_is_not_overridden(monkeypatch):
+    """A caller that knows the destination stays authoritative."""
+
+    seen = _open_execution_lookup_destinations(
+        monkeypatch,
+        tasks_context=TEAM_TASKS_CONTEXT,
+        destination="team:99",
+    )
+    assert seen == []
+
+
+def test_a_personal_task_surface_still_matches_destination_less_rows(monkeypatch):
+    """Personal tasks project no destination, so the old behaviour must hold."""
+
+    seen = _open_execution_lookup_destinations(
+        monkeypatch,
+        tasks_context=TASKS_CONTEXT,
+        destination=None,
+    )
+    assert seen == [None]

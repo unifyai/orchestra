@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Project
+from orchestra.routines.task_supervisor_sweep import sweep_task_supervision
 from orchestra.services.task_machine_state_service import (
     create_task_outbound_operation_if_absent,
     create_task_run_if_absent,
@@ -34,6 +35,7 @@ from orchestra.web.api.log.task_machine_schema import (
     TaskOutboundOperationUpdateRequest,
     TaskSourceReleaseRequest,
     TaskSourceReleaseResponse,
+    TaskSupervisorSweepResponse,
 )
 
 router = APIRouter()
@@ -422,6 +424,27 @@ def get_task_execution_by_key(
     """Return one task run row by run_key without creating or adopting."""
 
     return get_task_execution_core(session, request)
+
+
+@router.post(
+    "/task-supervisor/sweep",
+    response_model=TaskSupervisorSweepResponse,
+)
+def trigger_task_supervisor_sweep(
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """Re-project the open head for every enabled, armed task definition.
+
+    The floor under the recurrence relay chain: a dropped baton (a series
+    with no open occurrence and no run in flight) is advanced from its
+    repeat rule; healthy series are untouched. Scheduled via Cloud
+    Scheduler — see ``orchestra.routines.task_supervisor_sweep``.
+    """
+
+    result = sweep_task_supervision(session)
+    session.commit()
+    return result.to_dict()
 
 
 @router.post(

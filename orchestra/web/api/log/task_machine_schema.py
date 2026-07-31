@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -431,4 +431,33 @@ class ProviderEventContextResponse(BaseModel):
     expires_at: datetime | None = Field(
         default=None,
         description="UTC instant when this context becomes unreadable.",
+    )
+
+
+class TaskSupervisorSweepResponse(BaseModel):
+    """Summary of one supervisor sweep over enabled, armed task definitions."""
+
+    started_at: str = Field(description="UTC instant the sweep began.")
+    finished_at: str = Field(description="UTC instant the sweep finished.")
+    projects_scanned: int = Field(
+        description="Task-machine projects visited (one per owner).",
+    )
+    surfaces_scanned: int = Field(
+        description="Task-surface contexts holding enabled, armed definitions.",
+    )
+    definitions_scanned: int = Field(
+        description="Enabled, armed definitions re-projected this pass.",
+    )
+    upserted: int = Field(
+        description=(
+            "Real projection writes. A healthy fleet sweeps to zero; a "
+            "non-zero count is the number of dropped batons just healed."
+        ),
+    )
+    deleted: int = Field(
+        description="Stale open heads removed for gone or ineligible tasks.",
+    )
+    errors: List[str] = Field(
+        default_factory=list,
+        description="Per-surface failures; the sweep continues past them.",
     )

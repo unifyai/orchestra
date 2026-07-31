@@ -83,6 +83,30 @@ def has_ever_paid(session: Session, billing_account_id: int) -> bool:
     )
 
 
+def has_free_trial_grant(session: Session, billing_account_id: int) -> bool:
+    """Whether the account is on an admin-granted open-ended free trial.
+
+    Toggled per-organization through ``PUT``/``DELETE
+    /admin/organization/{id}/free-trial``. Distinct from
+    :func:`is_internal_account`: that one identifies the platform's own
+    staff by email domain, whereas this is an explicit, revocable grant
+    on a *customer* org — white-glove onboarding where the customer
+    evaluates the platform before any card is on file. The grant has no
+    expiry; revoking it re-applies the card gate immediately.
+    """
+    from orchestra.db.models.orchestra_models import Organization
+
+    return (
+        session.execute(
+            select(Organization.id).where(
+                Organization.billing_account_id == billing_account_id,
+                Organization.free_trial.is_(True),
+            ),
+        ).first()
+        is not None
+    )
+
+
 def is_internal_account(session: Session, billing_account_id: int) -> bool:
     """Whether the billing account belongs to the platform's own team.
 
@@ -132,14 +156,17 @@ def has_platform_access(session: Session, ba: BillingAccount) -> bool:
     live (``stripe_subscription_id`` is cleared by the
     ``customer.subscription.deleted`` webhook, so its presence means
     trialing/active/past-due-in-dunning), when the account has real
-    payment history (grandfathered pre-subscription payers), or when the
-    account is internal (see :func:`is_internal_account`).
+    payment history (grandfathered pre-subscription payers), when the org
+    holds an admin-granted free trial (see :func:`has_free_trial_grant`),
+    or when the account is internal (see :func:`is_internal_account`).
     """
     if not settings.require_card_on_file:
         return True
     if ba.stripe_subscription_id:
         return True
     if has_ever_paid(session, ba.id):
+        return True
+    if has_free_trial_grant(session, ba.id):
         return True
     return is_internal_account(session, ba.id)
 
@@ -284,7 +311,9 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
       never-paid accounts so the runtime enforces a daily burn ceiling
       during the trial; both NULL once the account has real payment
       history, and never populated for internal accounts (see
-      :func:`is_internal_account`).
+      :func:`is_internal_account`) or orgs holding an admin-granted free
+      trial (see :func:`has_free_trial_grant`) — a comped evaluation is
+      throttled to nothing by a $25/day ceiling.
     """
     from decimal import Decimal
 
@@ -308,6 +337,7 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
         settings.trial_daily_spend_cap > 0
         and not has_ever_paid(session, ba.id)
         and not is_internal_account(session, ba.id)
+        and not has_free_trial_grant(session, ba.id)
     ):
         day_start = datetime.now(timezone.utc).replace(
             hour=0,

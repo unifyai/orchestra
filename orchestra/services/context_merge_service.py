@@ -545,7 +545,10 @@ def _logical_tasks(
 
 
 def _latest_instance(rows: List[Tuple[int, Dict[str, Any]]]) -> Dict[str, Any]:
-    return max(rows, key=lambda row: row[1].get("instance_id") or 0)[1]
+    # Pre-migration contexts may hold several physical rows per task_id; the
+    # highest log id is the most recently written one. Post-migration rows are
+    # one per task_id, so this reduces to the identity.
+    return max(rows, key=lambda row: row[0])[1]
 
 
 def _task_can_fire(rows: List[Tuple[int, Dict[str, Any]]]) -> bool:

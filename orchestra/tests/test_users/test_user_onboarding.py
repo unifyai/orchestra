@@ -11,7 +11,7 @@ from orchestra.db.models.orchestra_models import (
     Organization,
     Recharge,
 )
-from orchestra.tests.utils import create_test_org, create_test_user
+from orchestra.tests.utils import ADMIN_HEADERS, create_test_org, create_test_user
 
 
 class TestOnboardingStatusDAO:
@@ -279,6 +279,86 @@ class TestOnboardingStatusDAO:
 
         assert status is not None
         assert status.current_step == "heard_about"
+
+
+class TestOnboardingSurvivesAccountFreeze:
+    """A frozen account must still be able to finish onboarding.
+
+    The console pins any user whose onboarding is incomplete to
+    /login/onboarding. If the freeze gate also blocks the onboarding
+    endpoints, such a user can neither finish signup nor reach the card
+    page that would lift the freeze — a closed loop with no exit. The
+    card-gate sweep put ~350 real accounts into exactly that state.
+    """
+
+    async def _freeze(self, client: AsyncClient, user_id: str) -> None:
+        resp = await client.post(
+            "/v0/admin/billing/freeze",
+            params={"freeze": True, "user_id": user_id},
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+
+    @pytest.mark.anyio
+    async def test_frozen_account_is_really_frozen(self, client: AsyncClient):
+        """Guard against the exemption tests passing vacuously.
+
+        If the freeze never took effect in the test environment, the
+        tests below would pass whether or not the exemption exists.
+        """
+        user = await create_test_user(client, "onboarding_frozen_ctl@example.com")
+        await self._freeze(client, user["id"])
+
+        # A non-exempt endpoint on the same router must be blocked.
+        resp = await client.get("/v0/user/basic-info", headers=user["headers"])
+        assert resp.status_code == 403, resp.text
+
+    @pytest.mark.anyio
+    async def test_frozen_account_can_read_onboarding(self, client: AsyncClient):
+        user = await create_test_user(client, "onboarding_frozen_get@example.com")
+        await self._freeze(client, user["id"])
+
+        resp = await client.get("/v0/user/onboarding", headers=user["headers"])
+        assert resp.status_code == 200, resp.text
+
+    @pytest.mark.anyio
+    async def test_frozen_account_can_advance_onboarding(self, client: AsyncClient):
+        """The exact call that 403'd for every deadlocked user."""
+        user = await create_test_user(client, "onboarding_frozen_put@example.com")
+        await self._freeze(client, user["id"])
+
+        resp = await client.put(
+            "/v0/user/onboarding",
+            headers=user["headers"],
+            json={
+                "current_step": "workspace_setup",
+                "step_data": {"heard_about": "friend"},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["current_step"] == "workspace_setup"
+
+    @pytest.mark.anyio
+    async def test_frozen_account_can_complete_onboarding(self, client: AsyncClient):
+        """Completing onboarding is what releases the console redirect."""
+        user = await create_test_user(client, "onboarding_frozen_done@example.com")
+        await self._freeze(client, user["id"])
+
+        resp = await client.put(
+            "/v0/user/onboarding",
+            headers=user["headers"],
+            json={
+                "current_step": "completed",
+                "step_data": {"selected_type": "personal"},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["current_step"] == "completed"
+
+        # The gate still applies everywhere else, so the user lands on
+        # the card-required prompt rather than free platform access.
+        blocked = await client.get("/v0/user/basic-info", headers=user["headers"])
+        assert blocked.status_code == 403, blocked.text
 
 
 class TestOnboardingStatusAPI:

@@ -1188,6 +1188,15 @@ def get_open_task_execution(
     )
     if executions_context_id is None:
         return None
+    # A team-owned task writes `destination` on every execution it projects, so
+    # omitting it here does not mean "any destination" -- the branch below reads
+    # it as "rows carrying none", which no team task ever has. Callers that know
+    # the destination pass it; the rest would silently look up nothing and
+    # conclude the execution is missing, which is indistinguishable from a task
+    # that never materialized. The surface path already encodes the owner, and
+    # projection derives the destination from it the same way.
+    if destination is None:
+        destination = _destination_from_context_name(tasks_context_name)
     query = (
         session.query(LogEvent)
         .join(LogEventContext, log_event_context_join())

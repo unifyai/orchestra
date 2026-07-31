@@ -252,6 +252,16 @@ _FREEZE_EXEMPT_PATHS = frozenset(
         # account via the checkout.session.completed webhook).
         "/v0/billing/access-gate",
         "/v0/billing/trial-checkout",
+        # Account setup must survive the freeze for the same reason.
+        # The console pins any user whose onboarding is incomplete to
+        # /login/onboarding, so a user frozen mid-signup can neither
+        # finish onboarding nor reach the card page that would lift the
+        # freeze. These endpoints only move onboarding state — they
+        # consume no credits and confer no platform access — so the
+        # gate lands where it belongs: on the first real request after
+        # onboarding completes.
+        "/v0/user/onboarding",
+        "/v0/user/onboarding-status",
     },
 )
 
@@ -264,9 +274,10 @@ def check_account_not_frozen(request: Request):
     enforcement for billable actions is handled per-handler (credits
     checks) and by Unity's spending-limit hook — not here.
 
-    Read-only billing endpoints (account-info, portal-session) are
-    exempted so the frontend can display account-status banners and
-    allow users to manage their payment methods to resolve suspensions.
+    Read-only billing endpoints (account-info, portal-session) and the
+    onboarding progress endpoints are exempted so the frontend can
+    display account-status banners, let users finish account setup, and
+    let them manage payment methods to resolve suspensions.
 
     Fails closed: if the DB check itself errors, the request is blocked
     to prevent suspended accounts from exploiting transient DB issues.

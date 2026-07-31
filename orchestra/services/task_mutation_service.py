@@ -172,7 +172,6 @@ class TaskMutationService:
                 project_id=project_id,
                 context_id=context_id,
             )
-        payload.setdefault("instance_id", 0)
 
         trigger = parse_task_trigger(payload.get("trigger"))
         binding_id: str | None = None
