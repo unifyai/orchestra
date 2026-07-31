@@ -327,3 +327,85 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
         fields["trial_daily_spend"] = float(spend)
         fields["trial_daily_cap"] = settings.trial_daily_spend_cap
     return fields
+
+
+def comms_gate_for_assistant(session: Session, assistant) -> dict:
+    """Billing-gate state for an assistant's inbound comms channels.
+
+    Returned to the unify-deploy adapters so a gated account's owner gets
+    an explanatory auto-reply over the channel they wrote on (instead of
+    a silent assistant). ``message`` is owner-facing, channel-agnostic,
+    and short enough for a single SMS segment pair.
+    """
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.models.enums import BillingMode
+    from orchestra.db.models.orchestra_models import Organization, User
+
+    not_gated = {"gated": False, "reason": None, "message": None}
+
+    if not settings.charges_billing:
+        return not_gated
+
+    ba = None
+    if assistant.organization_id is not None:
+        org = session.get(Organization, assistant.organization_id)
+        if org and org.billing_account_id:
+            ba = session.get(BillingAccount, org.billing_account_id)
+    else:
+        user = session.get(User, assistant.user_id)
+        if user and user.billing_account_id:
+            ba = session.get(BillingAccount, user.billing_account_id)
+    if ba is None:
+        return not_gated
+
+    console = settings.console_url
+
+    if ba.account_status != "ACTIVE":
+        if ba.suspension_reason == "card_required":
+            return {
+                "gated": True,
+                "reason": "card_required",
+                "message": (
+                    "Your Unify assistant is paused because your account "
+                    "has no active subscription yet. Add a payment method "
+                    f"at {console}/billing/add-card to start your free "
+                    "trial — your assistant will pick this conversation "
+                    "right back up."
+                ),
+            }
+        return {
+            "gated": True,
+            "reason": "suspended",
+            "message": (
+                "Your Unify account is currently suspended, so your "
+                "assistant can't respond. Please contact support@unify.ai "
+                "to restore access."
+            ),
+        }
+
+    if not has_platform_access(session, ba):
+        return {
+            "gated": True,
+            "reason": "card_required",
+            "message": (
+                "Your Unify assistant is paused because your account has "
+                "no active subscription yet. Add a payment method at "
+                f"{console}/billing/add-card to start your free trial — "
+                "your assistant will pick this conversation right back up."
+            ),
+        }
+
+    mode = BillingAccountDAO(session).resolve_billing_mode(ba)
+    if mode == BillingMode.CREDITS and float(ba.credits) <= 0:
+        return {
+            "gated": True,
+            "reason": "out_of_credits",
+            "message": (
+                "Your Unify assistant is paused because your credits have "
+                f"run out. Visit {console} and open billing settings to "
+                "subscribe or top up, and your assistant will pick this "
+                "conversation right back up."
+            ),
+        }
+
+    return not_gated

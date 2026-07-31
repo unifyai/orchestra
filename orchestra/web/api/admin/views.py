@@ -1009,6 +1009,30 @@ def trigger_credit_expiry_reminder(
         )
 
 
+@router.get(
+    "/billing/comms-gate",
+    summary="Admin: Billing-gate state for an assistant's inbound comms",
+    description=(
+        "Whether the assistant's owning account is billing-gated "
+        "(suspended, card required, or out of credits) and, when gated, "
+        "the owner-facing explanation to auto-reply over the inbound "
+        "channel. Called by the unify-deploy adapters before dispatching "
+        "an inbound message to the runtime."
+    ),
+)
+def get_comms_gate(
+    assistant_id: int,
+    session=Depends(get_db_session),
+) -> dict:
+    from orchestra.db.dao.assistant_dao import AssistantDAO
+    from orchestra.lib.trial_subscription import comms_gate_for_assistant
+
+    assistant = AssistantDAO(session).get_assistant_by_agent_id(assistant_id)
+    if assistant is None:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    return comms_gate_for_assistant(session, assistant)
+
+
 @router.post(
     "/billing/card-gate-freeze-sweep",
     summary="Admin: Freeze ACTIVE never-paid accounts pending card",
