@@ -76,6 +76,9 @@ cover/
 !orchestra/db/migrations/versions/*.sql
 *.txt
 !.agents/shared.txt
+# Vendored + curated disposable-email blocklists must ship in the image
+# (auth_dao loads them at import time).
+!orchestra/db/dao/data/*.txt
 *.json
 !.cursor/worktrees.json
 !orchestra/tests/fixtures/provider_trigger_contract/*.json

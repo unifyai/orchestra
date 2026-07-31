@@ -503,6 +503,31 @@ class Settings(BaseSettings):
         os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
     )
 
+    # ── Card-gated trial onboarding ─────────────────────────────────────
+    #: Master switch for the card gate. When True: new signups must
+    #: complete the trial Checkout (card on file, auto-enrolling
+    #: subscription) before the platform is usable, the signup credit
+    #: grant moves from account creation to checkout completion, and
+    #: never-paid accounts without a subscription are denied LLM access.
+    #: Ships dark (False) so Console can deploy the checkout UI first.
+    require_card_on_file: bool = os.environ.get(
+        "REQUIRE_CARD_ON_FILE",
+        "false",
+    ).lower() in ("1", "true", "yes")
+    #: Tier template every new signup is auto-enrolled on at checkout.
+    trial_tier_template_name: str = os.environ.get(
+        "TRIAL_TIER_TEMPLATE_NAME",
+        "tier_50",
+    )
+    #: Days before the auto-enrolled subscription's first charge.
+    trial_period_days: int = int(os.environ.get("TRIAL_PERIOD_DAYS", "7"))
+    #: Daily LLM spend ceiling for accounts with no real payment history,
+    #: enforced by the runtime via the spend endpoints' limit payload.
+    #: Bounds how fast trial credits can be extracted; 0 disables.
+    trial_daily_spend_cap: float = float(
+        os.environ.get("TRIAL_DAILY_SPEND_CAP", "25"),
+    )
+
     # ── Referral program ────────────────────────────────────────────────
     #: Master switch. When False, referral codes can still exist but no
     #: attribution or reward is processed.

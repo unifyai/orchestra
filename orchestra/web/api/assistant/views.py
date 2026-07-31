@@ -8996,6 +8996,8 @@ async def get_assistant_spend(
             BillingAccountDAO(session).resolve_billing_mode(billing_account).value
         )
 
+    from orchestra.lib.trial_subscription import trial_gate_fields
+
     return AssistantSpendResponse(
         agent_id=agent_id,
         month=month,
@@ -9005,6 +9007,7 @@ async def get_assistant_spend(
         percent_used=percent_used,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        **trial_gate_fields(session, billing_account),
     )
 
 

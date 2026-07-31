@@ -2649,6 +2649,8 @@ async def get_user_spend(
             BillingAccountDAO(session).resolve_billing_mode(user.billing_account).value
         )
 
+    from orchestra.lib.trial_subscription import trial_gate_fields
+
     return UserSpendResponse(
         user_id=user_id,
         month=month,
@@ -2658,6 +2660,7 @@ async def get_user_spend(
         percent_used=percent_used,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        **trial_gate_fields(session, user.billing_account),
     )
 
 

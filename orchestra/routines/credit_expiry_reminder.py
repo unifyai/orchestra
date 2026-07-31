@@ -100,16 +100,33 @@ def build_reminder_email(
     expiring_credits: Decimal,
     expires_at: datetime,
     has_trial: bool,
+    upcoming_charge: bool = False,
 ) -> tuple[str, str]:
     """Subject + HTML body for the pre-expiry credit reminder.
 
     Credit amounts are framed with the display multiplier
     (``format_display_credits``) so the numbers match the console.
+
+    ``upcoming_charge`` — the account is on the card-gated signup trial,
+    so trial end is also the auto-enrolled subscription's first charge.
+    The email must disclose the charge and how to cancel (negative-option
+    trials require a clear pre-charge reminder).
     """
     credits = format_display_credits(expiring_credits)
     when = expires_at.strftime("%B %d, %Y")
     subject = "Your Unify credits expire soon"
-    if has_trial:
+    if upcoming_charge:
+        subject = "Your Unify trial ends soon — first charge upcoming"
+        tail = (
+            "<p>These are your <strong>free trial credits</strong>. When "
+            f"your trial ends on <strong>{when}</strong>, your "
+            "subscription starts automatically and your card will be "
+            "charged the monthly plan price.</p>"
+            "<p>If you don't want to continue, cancel any time before "
+            "then from your billing settings — cancelling takes one "
+            "click and you won't be charged.</p>"
+        )
+    elif has_trial:
         tail = (
             "<p>These are your <strong>free trial credits</strong> — once "
             "they expire they're gone. Subscribe to a plan before then to "
@@ -300,10 +317,19 @@ def _run_with_session(
                 result.skipped_no_recipient += 1
                 continue
 
+            has_trial = any(lot.grant_kind == GRANT_KIND_TRIAL for lot in batch)
             subject, body = build_reminder_email(
                 expiring_credits=expiring_credits,
                 expires_at=soonest,
-                has_trial=any(lot.grant_kind == GRANT_KIND_TRIAL for lot in batch),
+                has_trial=has_trial,
+                # Card-gated signup trial: trial end is also the
+                # subscription's first charge, which must be disclosed.
+                upcoming_charge=(
+                    has_trial
+                    and ba.trial_end_at is not None
+                    and ba.stripe_subscription_id is not None
+                    and not ba.subscription_cancel_at_period_end
+                ),
             )
             if not _deliver(recipient, subject, body):
                 # Delivery failed — don't stamp, so the next run retries.

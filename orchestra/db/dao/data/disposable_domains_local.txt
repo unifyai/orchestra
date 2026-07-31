@@ -1,0 +1,6 @@
+# Curated disposable / abuse email domains observed on this platform.
+# One domain per line; lines starting with '#' are ignored.
+# Supplements the disposable-email-domains package and the vendored
+# community list (disposable_domains_extra.txt).
+nimail.cn
+promail.ink

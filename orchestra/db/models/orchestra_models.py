@@ -113,6 +113,11 @@ class BillingAccount(Base):
     # console can render the next-renewal date without a Stripe round-trip.
     # NULL for unsubscribed/free accounts and METERED enterprise accounts.
     current_period_end = Column(TIMESTAMP(timezone=True), nullable=True)
+    # End of the signup trial (== the auto-enrolled subscription's first
+    # charge date). Stamped when the signup Checkout completes; used by the
+    # pre-charge reminder email and the console's trial countdown. NULL for
+    # accounts that predate the card-gated trial or subscribed directly.
+    trial_end_at = Column(TIMESTAMP(timezone=True), nullable=True)
     # Whether the active subscription is scheduled to cancel at the end of the
     # current period (Stripe ``cancel_at_period_end``). Set immediately on an
     # in-app cancel and kept in sync from the ``customer.subscription.updated``
@@ -855,6 +860,12 @@ class User(Base):
     # === IDENTITY FIELDS ===
     id = Column(String, primary_key=True, default=_new_string_uuid)
     email = Column(String, unique=True, index=True, nullable=False)
+    # Canonical deliverable identity (dots/plus-suffix stripped — see
+    # ``auth_dao.canonicalize_email``). Signup uniqueness runs against this
+    # so one inbox cannot mint unlimited aliased accounts. Not unique at
+    # the DB level: pre-existing alias duplicates are tolerated; new
+    # signups are rejected in the application layer.
+    canonical_email = Column(String, index=True, nullable=True)
     name = Column(String)
     last_name = Column(String)
     job_title = Column(String)

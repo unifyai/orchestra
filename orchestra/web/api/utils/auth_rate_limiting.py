@@ -48,6 +48,19 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def get_client_subnet(request: Request) -> str:
+    """Collapse the client IP to its /24 (IPv4) or /48 (IPv6) prefix.
+
+    Farmers rotating addresses within one allocation share a prefix even
+    when individual IPs differ.
+    """
+    ip = get_client_ip(request)
+    if ":" in ip:
+        return ":".join(ip.split(":")[:3]) + "::/48"
+    parts = ip.rsplit(".", 1)
+    return f"{parts[0]}.0/24" if len(parts) == 2 else ip
+
+
 def enforce_auth_rate_limit(
     session: Session,
     request: Request,
@@ -55,6 +68,7 @@ def enforce_auth_rate_limit(
     max_attempts: int,
     window_minutes: int = 5,
     identifier: Optional[str] = None,
+    use_subnet: bool = False,
 ) -> None:
     """
     Record an auth attempt and raise 429 if the limit is exceeded.
@@ -68,11 +82,13 @@ def enforce_auth_rate_limit(
         max_attempts: Max allowed attempts within the window.
         window_minutes: Rolling window size in minutes.
         identifier: Optional secondary key (email, user_id) combined with IP.
+        use_subnet: Key on the client's /24 (or IPv6 /48) prefix instead
+            of the exact IP, so limits hold across a rotating allocation.
     """
     if settings.is_staging or settings.environment == "dev":
         return
 
-    ip = get_client_ip(request)
+    ip = get_client_subnet(request) if use_subnet else get_client_ip(request)
     key = f"{ip}:{identifier}" if identifier else ip
     bucket = _get_time_bucket()
 

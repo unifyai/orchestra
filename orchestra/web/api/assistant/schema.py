@@ -2719,6 +2719,21 @@ class AssistantSpendResponse(BaseModel):
             "(pre-paid wallet) or METERED (invoiced monthly)."
         ),
     )
+    account_suspended: bool = Field(
+        False,
+        description="Account is frozen (admin freeze, card gate, or abuse "
+        "sweep); the runtime hard-denies LLM calls when set.",
+    )
+    trial_daily_spend: Optional[float] = Field(
+        None,
+        description="Today's LLM spend, populated only for accounts with "
+        "no real payment history (trial daily cap enforcement).",
+    )
+    trial_daily_cap: Optional[float] = Field(
+        None,
+        description="Daily LLM spend ceiling during the trial; null once "
+        "the account has real payment history.",
+    )
 
 
 class AssistantSpendingLimitResponse(BaseModel):

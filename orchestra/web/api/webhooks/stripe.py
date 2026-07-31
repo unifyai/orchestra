@@ -1340,10 +1340,47 @@ def process_cash_balance_transaction_event(
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def process_checkout_completed_event(event: Dict, session: Session) -> Response:
+    """Handle ``checkout.session.completed`` for signup trial Checkouts.
+
+    Links the newly created trialing subscription to the billing account
+    (resolved from the session's ``metadata.billing_account_id``), stamps
+    the trial end, applies the one-time signup credit grant, and reinstates
+    a ``card_required``-frozen account. Non-trial checkout sessions (no
+    billing_account_id metadata) are acknowledged untouched.
+    """
+    from orchestra.lib.trial_subscription import apply_trial_checkout_completed
+
+    data = event["data"]["object"]
+    ba_id = (data.get("metadata") or {}).get("billing_account_id")
+    if not ba_id:
+        session.commit()
+        return Response(status_code=200)
+
+    ba = session.get(BillingAccount, int(ba_id))
+    if ba is None:
+        logger.warning(
+            {
+                "message": "Checkout completed for unknown billing account",
+                "billing_account_id": ba_id,
+                "checkout_session_id": data.get("id"),
+            },
+        )
+        session.commit()
+        return Response(status_code=200)
+
+    apply_trial_checkout_completed(session, ba, data)
+    session.commit()
+    return Response(status_code=200)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
     """Main dispatcher for all Stripe webhook events."""
     event_type = event.get("type", "")
-    if event_type.startswith("invoice."):
+    if event_type == "checkout.session.completed":
+        return process_checkout_completed_event(event, session)
+    elif event_type.startswith("invoice."):
         return process_invoice_event(event, session)
     elif event_type.startswith("review."):
         return process_review_event(event, session)
