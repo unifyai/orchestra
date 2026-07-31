@@ -245,6 +245,13 @@ _FREEZE_EXEMPT_PATHS = frozenset(
     {
         "/v0/billing/account-info",
         "/v0/billing/portal-session",
+        # The card-gate remediation loop must survive the freeze: the
+        # console reads the gate state to explain the lock, and the
+        # trial Checkout is the self-serve path out of a
+        # ``card_required`` suspension (completion reinstates the
+        # account via the checkout.session.completed webhook).
+        "/v0/billing/access-gate",
+        "/v0/billing/trial-checkout",
     },
 )
 
