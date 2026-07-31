@@ -63,6 +63,7 @@ gh api \
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           {"context": "pytest", "integration_id": 15368},
+          {"context": "black", "integration_id": 15368},
           {"context": "staging-source", "integration_id": 15368}
         ]
       }
