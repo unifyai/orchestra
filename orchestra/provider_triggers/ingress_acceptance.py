@@ -501,16 +501,12 @@ def _accept_matched_delivery(
         dict(task_row.data or {}) if task_row is not None else {}
     )
     task_name = str(task_data.get("name")) if task_data.get("name") else None
-    task_description = (
-        str(task_data.get("description")) if task_data.get("description") else None
-    )
     run_payload = {
         "run_key": run_key,
         "assistant_id": str(locked_binding.assistant_id),
         "task_id": locked_binding.task_id,
         "source_task_log_id": locked_binding.source_task_log_id,
         "task_name": task_name,
-        "task_description": task_description,
         "wake": "provider_event",
         "delivery": run_delivery,
         "state": "pending",
