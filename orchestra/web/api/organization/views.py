@@ -1410,6 +1410,43 @@ async def update_member_role(
         )
 
 
+def _apply_ownership_transfer(
+    session: Session,
+    *,
+    organization_id: int,
+    new_owner_id: str,
+    previous_owner_id: str,
+) -> None:
+    """Move organization ownership to an existing member.
+
+    Both ``organization.owner_id`` and the two member roles move together —
+    they are separate sources of truth for the same fact, and letting them
+    drift produces an org whose Owner-role member is not its owner. Callers
+    must have added ``new_owner_id`` as a member first, and are responsible
+    for committing.
+    """
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    if not owner_role or not admin_role:
+        raise ValueError("Required system roles not found")
+
+    org_dao.update(id=organization_id, owner_id=new_owner_id)
+    org_member_dao.update_member_role(
+        user_id=new_owner_id,
+        organization_id=organization_id,
+        role_id=owner_role.id,
+    )
+    org_member_dao.update_member_role(
+        user_id=previous_owner_id,
+        organization_id=organization_id,
+        role_id=admin_role.id,
+    )
+
+
 @router.post(
     "/organizations/{organization_id}/transfer-ownership",
     response_model=OrganizationResponse,
@@ -1435,7 +1472,6 @@ async def transfer_organization_ownership(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -1468,31 +1504,11 @@ async def transfer_organization_ownership(
         )
 
     try:
-        # Get role IDs
-        owner_role = role_dao.get_by_name("Owner", organization_id=None)
-        admin_role = role_dao.get_by_name("Admin", organization_id=None)
-
-        if not owner_role or not admin_role:
-            raise ValueError("Required system roles not found")
-
-        # Update organization: owner_id
-        org_dao.update(
-            id=organization_id,
-            owner_id=transfer.new_owner_id,
-        )
-
-        # Update new owner's role to Owner
-        org_member_dao.update_member_role(
-            user_id=transfer.new_owner_id,
+        _apply_ownership_transfer(
+            session,
             organization_id=organization_id,
-            role_id=owner_role.id,
-        )
-
-        # Update old owner's role to Admin
-        org_member_dao.update_member_role(
-            user_id=user_id,
-            organization_id=organization_id,
-            role_id=admin_role.id,
+            new_owner_id=transfer.new_owner_id,
+            previous_owner_id=user_id,
         )
 
         session.commit()
@@ -1510,6 +1526,40 @@ async def transfer_organization_ownership(
 
 
 # ============== Organization Invite Endpoints ==============
+
+
+def _check_ownership_invite_allowed(
+    session: Session,
+    org,
+    *,
+    actor_user_id: str | None,
+    invite_id_to_ignore: str | None = None,
+) -> None:
+    """Validate a pending-owner invite before it is created or refreshed.
+
+    ``actor_user_id`` is ``None`` for the admin path, which provisions orgs on
+    a customer's behalf and so is not itself the owner.
+    """
+    if actor_user_id is not None and org.owner_id != actor_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the organization owner can invite a new owner",
+        )
+
+    invite_dao = OrganizationInviteDAO(session)
+    outstanding = [
+        inv
+        for inv in invite_dao.list_by_organization(org.id, include_expired=True)
+        if inv.transfers_ownership and inv.id != invite_id_to_ignore
+    ]
+    if outstanding:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This organization already has a pending ownership transfer "
+                f"to {outstanding[0].invitee_email}. Cancel it first."
+            ),
+        )
 
 
 def _build_invite_response(
@@ -1547,6 +1597,7 @@ def _build_invite_response(
         invited_by_name=invited_by_name,
         role_id=invite.role_id,
         role_name=role_name,
+        transfers_ownership=bool(invite.transfers_ownership),
         expires_at=invite.expires_at,
         created_at=invite.created_at,
     )
@@ -1630,10 +1681,18 @@ async def invite_user_to_organization(
     # Check for existing invite
     existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
     if existing_invite:
+        if invite_request.transfers_ownership:
+            _check_ownership_invite_allowed(
+                session,
+                org,
+                actor_user_id=user_id,
+                invite_id_to_ignore=existing_invite.id,
+            )
         # Refresh expiry and update role if specified
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
+        existing_invite.transfers_ownership = invite_request.transfers_ownership
         if resolved_role_id and resolved_role_id != existing_invite.role_id:
             role = role_dao.get(resolved_role_id)
             if not role:
@@ -1676,6 +1735,9 @@ async def invite_user_to_organization(
             detail="Cannot assign Owner role via invite. Use ownership transfer instead.",
         )
 
+    if invite_request.transfers_ownership:
+        _check_ownership_invite_allowed(session, org, actor_user_id=user_id)
+
     # Create invite
     invitee_user_id = None
     if existing_user_row:
@@ -1689,6 +1751,7 @@ async def invite_user_to_organization(
             role_id=role_id,
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
+            transfers_ownership=invite_request.transfers_ownership,
         )
         session.commit()
 
@@ -2061,6 +2124,17 @@ async def accept_invite(
                 actor_user_id=org.owner_id,
             )
             sharing_refresh_payloads.extend(sharing_result.refresh_payloads)
+
+        # Hand the organization over, now that the invitee is a member. The
+        # outgoing owner is read from the org rather than the invite, so a
+        # transfer that happened while this invite was pending is respected.
+        if invite.transfers_ownership and org.owner_id != user_id:
+            _apply_ownership_transfer(
+                session,
+                organization_id=invite.organization_id,
+                new_owner_id=user_id,
+                previous_owner_id=org.owner_id,
+            )
 
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
@@ -2886,9 +2960,17 @@ async def admin_invite_user(
     # Check for existing invite – refresh if found
     existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
     if existing_invite:
+        if invite_request.transfers_ownership:
+            _check_ownership_invite_allowed(
+                session,
+                org,
+                actor_user_id=None,
+                invite_id_to_ignore=existing_invite.id,
+            )
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
+        existing_invite.transfers_ownership = invite_request.transfers_ownership
         if resolved_role_id and resolved_role_id != existing_invite.role_id:
             role = role_dao.get(resolved_role_id)
             if not role:
@@ -2921,6 +3003,9 @@ async def admin_invite_user(
             )
         role_id = member_role.id
 
+    if invite_request.transfers_ownership:
+        _check_ownership_invite_allowed(session, org, actor_user_id=None)
+
     invitee_user_id = None
     if existing_user_row:
         invitee_user_id = existing_user_row[0][0].id
@@ -2933,6 +3018,7 @@ async def admin_invite_user(
             role_id=role_id,
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
+            transfers_ownership=invite_request.transfers_ownership,
         )
         session.commit()
 
@@ -2979,6 +3065,8 @@ def admin_list_invites(
                 "id": inv.id,
                 "email": inv.invitee_email,
                 "status": "expired" if expired else "pending",
+                "role_id": inv.role_id,
+                "transfers_ownership": bool(inv.transfers_ownership),
                 "created_at": inv.created_at.isoformat() if inv.created_at else None,
                 "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
             },

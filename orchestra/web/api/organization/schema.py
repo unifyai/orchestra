@@ -170,6 +170,11 @@ class InviteUserRequest(BaseModel):
         None  # Alternative to role_id; resolved to role_id by the server
     )
     expires_in_days: int = 7  # Default 7 days
+    # Hand the organization over when this invite is accepted. Only the
+    # current owner may set it, and only one such invite may be outstanding.
+    # ``role_id`` still carries the interim role; Owner is assigned by the
+    # transfer itself.
+    transfers_ownership: bool = False
 
 
 class InviteResponse(BaseModel):
@@ -187,6 +192,7 @@ class InviteResponse(BaseModel):
     invited_by_name: Optional[str] = None
     role_id: int
     role_name: Optional[str] = None
+    transfers_ownership: bool = False
     expires_at: datetime
     created_at: datetime
 
