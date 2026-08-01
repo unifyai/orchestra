@@ -1,12 +1,14 @@
-"""Drift guard for the recurrence arithmetic mirrored from Unify.
+"""Golden regression corpus for the recurrence arithmetic.
 
-``orchestra/services/task_repetition.py`` is a deliberate copy of
-``unify/task_scheduler/types/repetition.py``; the two must stay in lockstep or
-Orchestra's release-time head re-projection and Unify's dispatch-time successor
-projection would name different slots for the same series. Both repos check in
-a byte-identical ``repeat_projection_vectors.json`` and run their own
-implementation against every vector, so a change on either side that shifts
-the semantics fails here rather than in production.
+This was a cross-repo drift guard: the arithmetic existed twice, here and in
+``unify/task_scheduler/types/repetition.py``, and both repos checked a
+byte-identical corpus so a semantic change ported to only one side failed.
+
+Successor projection is now owned solely by Orchestra — unify no longer
+computes slots, and its copy is deleted — so the corpus guards this one
+implementation against accidental change instead. The vectors were verified
+identical across both implementations at the point the duplicate was removed,
+so nothing about the semantics moved with the ownership.
 """
 
 from __future__ import annotations

@@ -1,9 +1,10 @@
 """Integration tests for the task supervisor sweep.
 
-The sweep is the floor under the recurrence relay chain: a series whose
-dispatch failed to project its successor (the dropped baton) must be
-advanced by the next sweep, while healthy series, in-flight runs, and
-disabled definitions are left exactly where they are.
+Projection rides the run-start transition, so a series only loses its head
+when that transition never happens — an occurrence terminalized without
+ever running. The sweep is the floor under that: it must advance such a
+series, while healthy series, in-flight runs, and disabled definitions are
+left exactly where they are.
 """
 
 from __future__ import annotations
@@ -121,31 +122,44 @@ async def test_sweep_heals_a_dropped_baton(client: AsyncClient) -> None:
     )
     assert running.status_code == 200, running.json()
 
-    # While the run is in flight its dispatcher owns projection: the sweep
-    # must not mint a successor behind its back.
-    summary = await _sweep(client)
+    # Marking the run running is what makes its successor due, and Orchestra
+    # projects it on that transition — no relay, no dispatcher bookkeeping.
     rows = await _rows_for_task(client, 911)
+    successors = [row for row in rows if row["state"] == "scheduled"]
     assert (
-        len(rows) == 1
-    ), f"the sweep raced an in-flight run and minted a successor: {rows}"
-
-    # The run terminalizes and the dispatcher crashes before projecting the
-    # successor: the dropped baton.
-    dropped = await client.post(
-        "/v0/admin/task-execution/update",
-        json={
-            "project_name": TASK_MACHINE_PROJECT_NAME,
-            "assistant_id": str(head["assistant_id"]),
-            "run_key": head["run_key"],
-            "source_task_log_id": head.get("source_task_log_id"),
-            "updates": {
-                "state": "completed",
-                "completed_at": "2026-04-10T09:02:00+00:00",
-            },
-        },
-        headers=ADMIN_HEADERS,
+        len(successors) == 1
+    ), f"starting the run did not project its successor: {rows}"
+    assert _parse_iso(successors[0]["scheduled_for"]) > _parse_iso(
+        head["scheduled_for"],
     )
-    assert dropped.status_code == 200, dropped.json()
+
+    # Sweeping alongside the in-flight run must converge, not duplicate.
+    before = len(rows)
+    await _sweep(client)
+    assert (
+        len(await _rows_for_task(client, 911)) == before
+    ), "the sweep duplicated the successor an in-flight run had already projected"
+
+    # Finish the run, then drive the series headless the only way that
+    # remains: terminalize the projected successor without it ever starting,
+    # so nothing projects behind it. That is the state the sweep exists for -
+    # a projection that never landed, whatever the cause.
+    for run_key in (head["run_key"], successors[0]["run_key"]):
+        terminal = await client.post(
+            "/v0/admin/task-execution/update",
+            json={
+                "project_name": TASK_MACHINE_PROJECT_NAME,
+                "assistant_id": str(head["assistant_id"]),
+                "run_key": run_key,
+                "source_task_log_id": head.get("source_task_log_id"),
+                "updates": {
+                    "state": "completed",
+                    "completed_at": "2026-04-10T09:02:00+00:00",
+                },
+            },
+            headers=ADMIN_HEADERS,
+        )
+        assert terminal.status_code == 200, terminal.json()
     assert all(
         row["state"] == "completed" for row in await _rows_for_task(client, 911)
     ), "precondition: no open occurrence remains"
@@ -156,11 +170,11 @@ async def test_sweep_heals_a_dropped_baton(client: AsyncClient) -> None:
     rows = await _rows_for_task(client, 911)
     open_rows = [row for row in rows if row["state"] == "scheduled"]
     assert len(open_rows) == 1, f"the sweep did not restore the head: {rows}"
-    successor = open_rows[0]
-    assert _parse_iso(successor["scheduled_for"]) > _parse_iso(
-        head["scheduled_for"],
+    healed = open_rows[0]
+    assert _parse_iso(healed["scheduled_for"]) > _parse_iso(
+        successors[0]["scheduled_for"],
     ), "the healed head must advance past the consumed occurrence, not rebuild it"
-    assert successor["run_key"] != head["run_key"]
+    assert healed["run_key"] not in {head["run_key"], successors[0]["run_key"]}
 
     # Idempotence: a healthy series sweeps to zero writes and no new rows.
     before = len(await _rows_for_task(client, 911))

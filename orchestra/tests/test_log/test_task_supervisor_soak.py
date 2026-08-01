@@ -351,18 +351,34 @@ async def test_supervisor_sweep_soak(client: AsyncClient, capsys) -> None:
         headers=ADMIN_HEADERS,
     )
 
+    # Starting a run is what makes its successor due, and Orchestra projects
+    # it on that transition, so an in-flight run already has exactly one open
+    # head waiting behind it. The dropped baton is structurally impossible
+    # rather than merely floored.
+    started_rows = [
+        row
+        for row in _soak_rows(await _executions(client), task_ids)
+        if row["task_id"] == victim["task_id"]
+    ]
+    assert sum(1 for row in started_rows if row["state"] == "running") == 1
+    open_behind = [row for row in started_rows if row["state"] == "scheduled"]
+    assert (
+        len(open_behind) == 1
+    ), f"starting a run must leave its successor projected: {started_rows}"
+    report["inflight_successor_projected"] = True
+
     before_inflight = len(_soak_rows(await _executions(client), task_ids))
     for _ in range(3):
         await _sweep(client)
     after_inflight = _soak_rows(await _executions(client), task_ids)
     assert (
         len(after_inflight) == before_inflight
-    ), "the sweep projected a successor behind a running dispatcher's back"
+    ), "sweeping alongside a running dispatcher changed the ledger"
     inflight_rows = [
         row for row in after_inflight if row["task_id"] == victim["task_id"]
     ]
     assert sum(1 for row in inflight_rows if row["state"] == "running") == 1
-    report["inflight_holdoff_sweeps"] = 3
+    report["inflight_convergent_sweeps"] = 3
 
     # ---------------------------------------------------------------- #
     # 4. Disarming stops the fleet. Nothing re-arms a disabled series.
@@ -403,7 +419,8 @@ async def test_supervisor_sweep_soak(client: AsyncClient, capsys) -> None:
             "dropped_batons",
             "heals",
             "ledger_rows",
-            "inflight_holdoff_sweeps",
+            "inflight_successor_projected",
+            "inflight_convergent_sweeps",
             "disabled_holdoff_sweeps",
             "sweep_seconds_median",
             "sweep_seconds_max",
