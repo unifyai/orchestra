@@ -528,6 +528,15 @@ class Settings(BaseSettings):
         os.environ.get("TRIAL_DAILY_SPEND_CAP", "25"),
     )
 
+    # ── Staff access ────────────────────────────────────────────────────
+    #: Days a Unify person's seat in a customer org stays authorised
+    #: before the grant lapses. Bounded by default so onboarding access
+    #: cannot become permanent by nobody revisiting it; standing
+    #: arrangements (partnerships) override to an unbounded grant.
+    staff_access_default_days: int = int(
+        os.environ.get("STAFF_ACCESS_DEFAULT_DAYS", "30"),
+    )
+
     # ── Referral program ────────────────────────────────────────────────
     #: Master switch. When False, referral codes can still exist but no
     #: attribution or reward is processed.

@@ -1757,6 +1757,22 @@ class OrganizationMember(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # === STAFF ACCESS ===
+    # Marks a Unify person sitting in a *customer* org to run onboarding or
+    # setup, rather than someone who belongs to the customer. Surfaced to the
+    # customer as a badge so the seat is never mistaken for one of their own.
+    is_staff_access = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+    # When the grant lapses. NULL means it never does — the standing
+    # arrangement for partner engagements, and deliberately opt-in: grants
+    # default to a bounded window so access cannot become permanent through
+    # neglect. Enforced in ResourceAccessDAO.check_org_member_permission, so
+    # a lapsed grant stops authorising immediately and nothing is deleted.
+    staff_access_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
 
 class OrganizationInvite(Base):
     """Model for pending organization invitations.

@@ -160,6 +160,8 @@ class OrganizationMemberDAO:
                 OrganizationMember.organization_id,
                 OrganizationMember.role_id,
                 OrganizationMember.created_at,
+                OrganizationMember.is_staff_access,
+                OrganizationMember.staff_access_expires_at,
                 Role.name.label("role_name"),
                 User.name.label("user_first_name"),
                 User.last_name.label("user_last_name"),
@@ -204,6 +206,8 @@ class OrganizationMemberDAO:
                     "timezone": row.user_timezone,
                     "phone_number": row.user_phone_number,
                     "whatsapp_number": row.user_whatsapp_number,
+                    "is_staff_access": row.is_staff_access,
+                    "staff_access_expires_at": row.staff_access_expires_at,
                 },
             )
 
@@ -227,6 +231,8 @@ class OrganizationMemberDAO:
                 OrganizationMember.organization_id,
                 OrganizationMember.role_id,
                 OrganizationMember.created_at,
+                OrganizationMember.is_staff_access,
+                OrganizationMember.staff_access_expires_at,
                 Role.name.label("role_name"),
                 User.name.label("user_first_name"),
                 User.last_name.label("user_last_name"),
@@ -271,6 +277,8 @@ class OrganizationMemberDAO:
             "timezone": row.user_timezone,
             "phone_number": row.user_phone_number,
             "whatsapp_number": row.user_whatsapp_number,
+            "is_staff_access": row.is_staff_access,
+            "staff_access_expires_at": row.staff_access_expires_at,
         }
 
     def update_member_role(

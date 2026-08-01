@@ -361,6 +361,7 @@ class ResourceAccessDAO:
         from orchestra.db.dao.organization_dao import OrganizationDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
         from orchestra.db.dao.role_dao import RoleDAO
+        from orchestra.services.staff_access_service import staff_access_has_lapsed
 
         org_dao = OrganizationDAO(self.session)
         org_member_dao = OrganizationMemberDAO(self.session)
@@ -387,6 +388,14 @@ class ResourceAccessDAO:
                 f"Organization member {user_id} in org {organization_id} has no role_id. "
                 "This indicates a data integrity issue - all members must have explicit roles.",
             )
+
+        # A lapsed staff grant authorises nothing. Enforcing here rather than
+        # sweeping the membership away means expiry takes effect the moment it
+        # passes, needs no scheduled job to be correct, and is undone by simply
+        # extending the grant. The owner short-circuit above runs first, so an
+        # owner can never be locked out of their own org by this.
+        if member.is_staff_access and staff_access_has_lapsed(member):
+            return False
 
         return role_dao.has_permission(member.role_id, permission_name)
 

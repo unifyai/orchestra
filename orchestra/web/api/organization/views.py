@@ -63,6 +63,11 @@ from orchestra.services.personal_workspace_service import (
     disable_personal_workspace_for_org_member,
     reenable_personal_workspace_if_no_org,
 )
+from orchestra.services.staff_access_service import (
+    apply_staff_access_on_join,
+    lapsed_staff_grants,
+    set_staff_access,
+)
 from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
 from orchestra.services.team_cleanup_service import (
     purge_assistant_overlay as purge_team_member_overlay,
@@ -97,6 +102,7 @@ from orchestra.web.api.organization.schema import (
     OrgSpendingLimitRequest,
     OrgSpendingLimitResponse,
     OrgSpendResponse,
+    StaffAccessUpdate,
 )
 from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.assistant_infra import (
@@ -934,11 +940,12 @@ async def add_organization_member(
 
     # Add member
     try:
-        org_member_dao.create(
+        new_member = org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
             role_id=role_id,
         )
+        apply_staff_access_on_join(session, new_member)
 
         # Create organization API key for the new member
         new_api_key = generate_key()
@@ -1445,6 +1452,14 @@ def _apply_ownership_transfer(
         organization_id=organization_id,
         role_id=admin_role.id,
     )
+
+    # Hand-over is the moment a Unify provisioner stops being the org's
+    # owner and becomes a guest in the customer's tenant, so the staff
+    # marker attaches here rather than at provisioning time — before this
+    # point they owned the org, and badging an owner would misdescribe them.
+    outgoing = org_member_dao.get_member(previous_owner_id, organization_id)
+    if outgoing is not None:
+        apply_staff_access_on_join(session, outgoing)
 
 
 @router.post(
@@ -2064,11 +2079,12 @@ async def accept_invite(
 
     try:
         # Add user as member
-        org_member_dao.create(
+        new_member = org_member_dao.create(
             organization_id=invite.organization_id,
             user_id=user_id,
             role_id=invite.role_id,
         )
+        apply_staff_access_on_join(session, new_member)
 
         # Create organization API key
         new_api_key = generate_key()
@@ -2837,6 +2853,106 @@ def admin_disable_free_trial(
         "organization_id": organization_id,
         "name": org.name,
         "free_trial": False,
+    }
+
+
+# =============================================================================
+# Admin Staff Access
+# =============================================================================
+
+
+@admin_router.put(
+    "/organization/{organization_id}/members/{member_user_id}/staff-access",
+)
+def admin_set_staff_access(
+    organization_id: int,
+    member_user_id: str,
+    request: StaffAccessUpdate,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Admin endpoint: set or clear a member's staff-access grant.
+
+    Joining a customer org as Unify staff grants a bounded window
+    automatically. This overrides it — most importantly to an unbounded
+    grant (``expires_in_days`` omitted) for standing arrangements such as
+    a sales partnership, where Unify sits in the org indefinitely rather
+    than for the length of an onboarding.
+
+    The organization owner cannot be marked: they are not a guest in their
+    own tenant, and an expiry on their seat would eventually revoke the
+    owner's own access.
+    """
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    member = org_member_dao.get_member(member_user_id, organization_id)
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User is not a member of this organization",
+        )
+
+    if request.staff_access and org.owner_id == member_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Cannot mark the organization owner as staff access. "
+                "Transfer ownership first."
+            ),
+        )
+
+    set_staff_access(
+        member,
+        staff_access=request.staff_access,
+        expires_in_days=request.expires_in_days,
+    )
+    session.commit()
+
+    return {
+        "organization_id": organization_id,
+        "user_id": member_user_id,
+        "is_staff_access": member.is_staff_access,
+        "staff_access_expires_at": (
+            member.staff_access_expires_at.isoformat()
+            if member.staff_access_expires_at
+            else None
+        ),
+    }
+
+
+@admin_router.get("/staff-access/lapsed")
+def admin_list_lapsed_staff_access(
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Admin endpoint: staff seats whose grant has lapsed.
+
+    Reporting only. A lapsed grant already authorises nothing — expiry is
+    enforced on every permission check — so this exists to surface seats
+    for proper removal through the member-removal endpoint, which also
+    deprovisions assistants and revokes org-scoped API keys.
+    """
+    lapsed = lapsed_staff_grants(session)
+    return {
+        "count": len(lapsed),
+        "members": [
+            {
+                "organization_id": m.organization_id,
+                "user_id": m.user_id,
+                "expired_at": (
+                    m.staff_access_expires_at.isoformat()
+                    if m.staff_access_expires_at
+                    else None
+                ),
+            }
+            for m in lapsed
+        ],
     }
 
 
