@@ -929,7 +929,7 @@ def sync_task_executions_for_task_ids(
 
     unique_task_ids = sorted({int(task_id) for task_id in task_ids})
     if not unique_task_ids or not is_task_surface_context_name(tasks_context_name):
-        return {"upserted": 0, "deleted": 0}
+        return {"upserted": 0, "deleted": 0, "unchanged": 0}
     normalized_tasks_context_name = (tasks_context_name or "").strip("/")
     source_destination = _destination_from_context_name(normalized_tasks_context_name)
     source_team_id = _team_id_from_context_name(normalized_tasks_context_name)
@@ -940,7 +940,7 @@ def sync_task_executions_for_task_ids(
         name=normalized_tasks_context_name,
     )
     if tasks_context_id is None:
-        return {"upserted": 0, "deleted": 0}
+        return {"upserted": 0, "deleted": 0, "unchanged": 0}
     task_rows = _load_task_rows(
         session=session,
         project_id=project_id,
@@ -955,6 +955,7 @@ def sync_task_executions_for_task_ids(
 
     upserted = 0
     deleted = 0
+    unchanged = 0
     materialization_pairs: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = (
         []
     )
@@ -1043,6 +1044,9 @@ def sync_task_executions_for_task_ids(
         previous_execution: dict[str, Any] | None = None
         if existing_execution is not None:
             previous_execution = dict(existing_execution.data or {})
+            if _projection_is_noop(previous_execution, execution_payload):
+                unchanged += 1
+                continue
         else:
             # Schedule/revision edits mint a new run_key. Carry the prior open
             # Execution into the upsert so Communication gets one replace
@@ -1075,7 +1079,7 @@ def sync_task_executions_for_task_ids(
             previous_execution=previous_execution,
             current_execution=current_execution,
         )
-    return {"upserted": upserted, "deleted": deleted}
+    return {"upserted": upserted, "deleted": deleted, "unchanged": unchanged}
 
 
 def lookup_task_machine_executions_context_id(
@@ -1995,7 +1999,7 @@ def _project_execution_payload(
             row.updated_at or row.created_at,
         ),
     }
-    payload["revision"] = _stable_hash(payload)
+    payload["revision"] = _authored_revision(payload)
     # Post-hash: jitter spreads dispatch without changing the occurrence
     # identity, so it must not perturb the revision (or the run_key digested
     # from it) that concurrent writers converge on.
@@ -3094,6 +3098,83 @@ def _coerce_datetime_string(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+# The authored facts that decide what an occurrence is and does. Anything
+# absent here is either derived (``state`` follows ``wake``), cosmetic
+# (``task_name``), or provenance (``source_task_updated_at``).
+_REVISION_AUTHORED_KEYS = (
+    "assistant_id",
+    "destination",
+    "task_id",
+    "source_task_log_id",
+    "wake",
+    "delivery",
+    "scheduled_for",
+    "entrypoint",
+    "max_runtime_seconds",
+    "requires_filesystem",
+    "requires_computer",
+    "recurring",
+    "trigger_medium",
+    "trigger_from_contact_ids",
+    "trigger_omit_contact_ids",
+    "trigger_recurring",
+    "interrupt",
+)
+
+
+def _authored_revision(payload: Mapping[str, Any]) -> str:
+    """Fingerprint the authored facts that govern one occurrence.
+
+    Deliberately not a hash of the whole projected payload. That payload
+    carries provenance and whatever columns the projection happens to
+    write this month, so hashing it made schema evolution
+    indistinguishable from an authored edit: every armed head in the
+    fleet re-keyed whenever a projected field was added or removed. It
+    also folded in ``source_task_updated_at``, so a sync re-stamp that
+    changed nothing a run cares about still retired the live head.
+
+    Only facts that change what this occurrence *is* or *does* belong
+    here. A rename does not: the same run under a new label is still the
+    same run.
+    """
+
+    return _stable_hash({key: payload.get(key) for key in _REVISION_AUTHORED_KEYS})
+
+
+# Jitter and materialization bookkeeping are deliberately not part of an
+# occurrence's identity, so they never make a re-projection meaningful.
+_PROJECTION_VOLATILE_KEYS = frozenset(
+    {
+        "dispatch_offset_seconds",
+        "last_materialized_at",
+    },
+)
+
+
+def _projection_is_noop(
+    stored: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+) -> bool:
+    """True when the stored head already asserts everything the projection would.
+
+    Projection is idempotent by construction, so re-running it over an
+    unchanged fleet used to rewrite every open head and count each rewrite
+    as an upsert. That made the supervisor sweep a write amplifier at its
+    tick rate, and — worse — made its headline number meaningless: a
+    perfectly healthy fleet reported one "upsert" per definition, which is
+    exactly the signal operators read as "the sweep healed something".
+    """
+
+    if stored is None:
+        return False
+    for key, value in payload.items():
+        if key in _PROJECTION_VOLATILE_KEYS:
+            continue
+        if stored.get(key) != value:
+            return False
+    return True
 
 
 def _stable_hash(value: Mapping[str, Any]) -> str:

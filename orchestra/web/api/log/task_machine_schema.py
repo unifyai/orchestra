@@ -46,6 +46,10 @@ class TaskExecutionReprojectResponse(BaseModel):
 
     upserted: int = Field(description="Number of execution rows upserted.")
     deleted: int = Field(description="Number of execution rows deleted.")
+    unchanged: int = Field(
+        default=0,
+        description="Rows left untouched because projection had nothing to add.",
+    )
     execution: Optional[Dict[str, Any]] = Field(
         default=None,
         description="The execution payload after reprojection, or null when unarmed.",
@@ -452,6 +456,10 @@ class TaskSupervisorSweepResponse(BaseModel):
     )
     deleted: int = Field(
         description="Stale open heads removed for gone or ineligible tasks.",
+    )
+    unchanged: int = Field(
+        default=0,
+        description="Heads the sweep found already correct and left untouched.",
     )
     errors: List[str] = Field(
         default_factory=list,
