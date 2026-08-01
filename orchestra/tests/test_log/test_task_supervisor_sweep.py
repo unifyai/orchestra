@@ -277,3 +277,41 @@ class TestAuthoredRevision:
         assert (
             after != before
         ), f"changing {field} must retire the head and mint a new occurrence"
+
+
+class TestBoundedWakeSummary:
+    """A live wake needs to say what the work is, at a fixed cost."""
+
+    def test_a_short_description_passes_through_intact(self):
+        summary = task_machine_state_service._compact_task_summary(
+            "Quietly start this work when it becomes due.",
+            fallback="Integration scheduled task 7",
+        )
+        assert summary == "Quietly start this work when it becomes due."
+
+    def test_a_long_description_is_bounded_not_dropped(self):
+        """The diet's objection was unbounded copies, not summaries."""
+
+        description = " ".join(f"clause{n}" for n in range(200))
+        summary = task_machine_state_service._compact_task_summary(
+            description,
+            fallback="Some task",
+        )
+        assert len(summary) <= 240, f"summary ran to {len(summary)} chars"
+        assert summary.endswith("...")
+        assert summary.startswith("clause0 clause1")
+
+    def test_whitespace_is_collapsed(self):
+        summary = task_machine_state_service._compact_task_summary(
+            "Send   the\n\n  daily   digest.",
+            fallback="x",
+        )
+        assert summary == "Send the daily digest."
+
+    @pytest.mark.parametrize("empty", [None, "", "   ", "\n\t"])
+    def test_an_empty_description_falls_back_to_the_title(self, empty):
+        summary = task_machine_state_service._compact_task_summary(
+            empty,
+            fallback="GTM SmartLead campaign runtime",
+        )
+        assert summary == "GTM SmartLead campaign runtime"

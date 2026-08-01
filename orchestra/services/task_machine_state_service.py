@@ -685,6 +685,14 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Human-readable task title mirrored into the run row.",
     },
+    "task_summary": {
+        "field_type": "str",
+        "mutable": True,
+        "description": (
+            "Bounded summary of the authored description, carried so a live "
+            "wake can say what the work is without joining the definition."
+        ),
+    },
     "started_at": {
         "field_type": "datetime",
         "mutable": True,
@@ -1982,6 +1990,10 @@ def _project_execution_payload(
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "task_name": _coerce_optional_str(row.data.get("name")),
+        "task_summary": _compact_task_summary(
+            row.data.get("description"),
+            fallback=_coerce_optional_str(row.data.get("name")) or "",
+        ),
         "scheduled_for": scheduled_for,
         "trigger_medium": _coerce_optional_str(trigger.get("medium")),
         "trigger_from_contact_ids": _coerce_optional_list(
@@ -2072,6 +2084,10 @@ def _project_provider_event_execution_payload(
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "task_name": _coerce_optional_str(row.data.get("name")),
+        "task_summary": _compact_task_summary(
+            row.data.get("description"),
+            fallback=_coerce_optional_str(row.data.get("name")) or "",
+        ),
         "entrypoint": entrypoint,
         "recurring": bool(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
@@ -2218,7 +2234,10 @@ def _scheduled_execution_wake_context(
     )
     return {
         "task_label": task_label,
-        "task_summary": task_label,
+        "task_summary": _compact_task_summary(
+            execution.get("task_summary"),
+            fallback=task_label,
+        ),
         "visibility_policy": _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY,
         "recurrence_hint": recurrence_hint,
     }
@@ -3151,6 +3170,25 @@ _PROJECTION_VOLATILE_KEYS = frozenset(
         "last_materialized_at",
     },
 )
+
+
+# A live assistant woken by a scheduled task is handed this text as its
+# immediate context, so it needs to say what the work *is*. The full
+# authored description is a paragraph and does not belong copied onto
+# every occurrence; a bounded summary carries the meaning at a fixed cost.
+_TASK_SUMMARY_MAX_CHARS = 240
+
+
+def _compact_task_summary(text: Any, *, fallback: str) -> str:
+    """Return one bounded wake-summary line for a scheduled occurrence."""
+
+    candidate = " ".join((_coerce_optional_str(text) or "").split())
+    if not candidate:
+        candidate = " ".join(fallback.split())
+    if len(candidate) <= _TASK_SUMMARY_MAX_CHARS:
+        return candidate
+    truncated = candidate[: _TASK_SUMMARY_MAX_CHARS - 3].rstrip(" ,.;:")
+    return f"{truncated}..."
 
 
 def _projection_is_noop(
