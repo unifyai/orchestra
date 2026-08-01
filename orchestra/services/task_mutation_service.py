@@ -162,8 +162,7 @@ class TaskMutationService:
 
         project_id, context_id, tasks_context_name = self._resolve_task_scope(assistant)
         payload = dict(entries)
-        payload.setdefault("_user_id", str(assistant.user_id))
-        payload.setdefault("_assistant_id", str(assistant.agent_id))
+        payload.setdefault("assistant_id", str(assistant.agent_id))
         payload[TaskRowKey.task_revision.value] = 1
         payload.setdefault("enabled", True)
         payload.setdefault("priority", "normal")

@@ -124,10 +124,6 @@ class TaskExecutionCreateOrAdoptRequest(BaseModel):
         default=None,
         description="Human-readable task title mirrored into the run row.",
     )
-    task_description: Optional[str] = Field(
-        default=None,
-        description="Human-readable task description mirrored into the run row.",
-    )
     started_at: Optional[datetime] = Field(
         default=None,
         description="Optional explicit run start timestamp.",

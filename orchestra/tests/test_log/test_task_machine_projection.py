@@ -84,6 +84,9 @@ def _assistant_scoped_scheduled_entries(
     """Return a scheduled task row bound to one explicit assistant scope."""
 
     entries = _scheduled_task_entries(task_id=task_id)
+    # Deliberately the legacy underscore spelling: these rows double as
+    # coverage for the read-side fallback that outlived the write collapse.
+    entries.pop("assistant_id", None)
     entries["_user_id"] = user_id
     entries["_assistant_id"] = str(assistant_id)
     return entries
@@ -175,8 +178,7 @@ def _scheduled_task_entries(
         "task_id": task_id,
         "instance_id": instance_id,
         "status": status,
-        "_user_id": "1",
-        "_assistant_id": "42",
+        "assistant_id": "42",
         "schedule": {
             "start_at": start_at,
         },
@@ -197,8 +199,7 @@ def _trigger_task_entries(
         "task_id": task_id,
         "instance_id": instance_id,
         "status": status,
-        "_user_id": "1",
-        "_assistant_id": "42",
+        "assistant_id": "42",
         "trigger": {
             "medium": medium,
             "from_contact_ids": [17],
@@ -236,18 +237,13 @@ def test_scheduled_execution_upsert_body_includes_wake_context():
             "revision": "rev-1",
             "scheduled_for": "2026-04-10T09:00:00+00:00",
             "task_name": "Morning briefing",
-            "task_description": (
-                "Prepare the morning update before the user checks in."
-            ),
-            "repeat": [{"unit": "day", "count": 1}],
+            "recurring": True,
         },
     )
 
     assert body is not None
     assert body["task_label"] == "Morning briefing"
-    assert (
-        body["task_summary"] == "Prepare the morning update before the user checks in."
-    )
+    assert body["task_summary"] == "Morning briefing"
     assert body["visibility_policy"] == "silent_by_default"
     assert body["recurrence_hint"] == "recurring"
 
@@ -268,7 +264,6 @@ def _scheduled_execution_payload(
         "revision": revision,
         "scheduled_for": next_due_at,
         "task_name": "Morning briefing",
-        "task_description": "Prepare the morning update before the user checks in.",
     }
 
 
@@ -450,7 +445,9 @@ async def test_task_create_projects_scheduled_execution(
     assert execution["delivery"] == "live"
     assert execution["entrypoint"] is None
     assert execution["scheduled_for"] == "2026-04-10T09:00:00+00:00"
-    assert execution["repeat"] == [{"unit": "day", "count": 1}]
+    assert execution["recurring"] is True
+    assert "repeat" not in execution
+    assert "task_description" not in execution
     assert execution["revision"]
     assert materialization_calls == [(None, execution)]
 
@@ -1014,7 +1011,6 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
         "source_contact_id": "17",
         "source_contact_display_name": "Alice Owner",
         "task_name": "Morning briefing",
-        "task_description": "Prepare the team's daily summary.",
         "state": "scheduled",
     }
 
@@ -1035,7 +1031,6 @@ async def test_task_run_create_or_adopt_is_idempotent(client: AsyncClient):
     assert first_run["source_contact_id"] == "17"
     assert first_run["source_contact_display_name"] == "Alice Owner"
     assert first_run["task_name"] == "Morning briefing"
-    assert first_run["task_description"] == "Prepare the team's daily summary."
 
     second = await client.post(
         "/v0/admin/task-execution/create-or-adopt",
@@ -2211,7 +2206,6 @@ def test_create_or_adopt_accepts_every_field_the_runtime_sends() -> None:
         "source_contact_id",
         "source_contact_display_name",
         "task_name",
-        "task_description",
         "started_at",
         "state",
     }

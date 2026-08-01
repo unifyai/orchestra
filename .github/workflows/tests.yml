@@ -365,16 +365,25 @@ jobs:
   # Single, stable required status check for staging->main releases.
   # The matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),
   # which branch protection cannot target by name -- so this job republishes one
-  # "pytest" check that is green iff every shard passed. It does not run (and
-  # therefore does not publish a check) when should-run-tests skipped the
-  # matrix on a non-test push; release PRs must wait for the PR-triggered run.
+  # "pytest" check that is green iff every shard passed.
+  #
+  # This job MUST run unconditionally. GitHub counts a *skipped* required check
+  # as satisfied, so gating it on should-run-tests published a passing "pytest"
+  # context on every non-test push. A release PR shares its head SHA with those
+  # pushes, so that stale pass satisfied branch protection and let four releases
+  # merge with a genuinely failing suite -- one of which put a broken test on
+  # main for thirteen hours. Running always means the context is only ever an
+  # explicit pass or fail, never an implicit pass. A non-test push therefore
+  # reports "pytest" red, which is the honest signal: this commit's tests did
+  # not run, and a release cannot be cut from it until they do.
+  #
   # The Staging->Main ruleset and main branch protection both require this
   # context with strict (latest-commit) semantics; see
   # scripts/ensure_staging_to_main_gates.sh.
   pytest-required:
     name: pytest
     needs: [should-run-tests, pytest]
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
+    if: always()
     runs-on: ubuntu-latest
     steps:
     - name: Require all pytest shards to pass
@@ -383,5 +392,10 @@ jobs:
         echo "pytest matrix aggregate result: $result"
         if [[ "$result" == "success" ]]; then
           exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Tests did not run for this commit, so the release gate"
+          echo "::error::cannot pass. Push with [run-tests] or open a PR into"
+          echo "::error::main/staging to run the suite."
         fi
         exit 1

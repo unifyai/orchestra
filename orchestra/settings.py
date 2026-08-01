@@ -527,15 +527,6 @@ class Settings(BaseSettings):
     trial_daily_spend_cap: float = float(
         os.environ.get("TRIAL_DAILY_SPEND_CAP", "25"),
     )
-    #: Comma-separated email domains whose accounts are exempt from every
-    #: trial anti-abuse gate (card gate, daily burn ceiling). Sign-in is
-    #: OAuth-verified, so domain membership cannot be spoofed by burner
-    #: signups. Covers internal/staff accounts, including org accounts
-    #: owned by a staff member. Empty disables the exemption.
-    trial_exempt_email_domains: str = os.environ.get(
-        "TRIAL_EXEMPT_EMAIL_DOMAINS",
-        "unify.ai",
-    )
 
     # ── Referral program ────────────────────────────────────────────────
     #: Master switch. When False, referral codes can still exist but no
