@@ -194,3 +194,86 @@ async def test_sweep_leaves_disabled_definitions_alone(
         if row["state"] in ("scheduled", "triggerable")
     ]
     assert open_rows == [], f"the sweep armed a disabled definition: {open_rows}"
+
+
+class TestAuthoredRevision:
+    """The occurrence fingerprint tracks authored intent, not payload shape."""
+
+    def _payload(self, **overrides) -> dict:
+        base = {
+            "assistant_id": "1406",
+            "destination": "team:11",
+            "task_id": 12,
+            "source_task_log_id": 555,
+            "wake": "scheduled",
+            "delivery": "offline",
+            "state": "scheduled",
+            "scheduled_for": "2026-08-01T10:00:00+00:00",
+            "entrypoint": 77,
+            "max_runtime_seconds": 3600,
+            "requires_filesystem": False,
+            "requires_computer": False,
+            "recurring": True,
+            "trigger_medium": None,
+            "trigger_from_contact_ids": None,
+            "trigger_omit_contact_ids": None,
+            "trigger_recurring": False,
+            "interrupt": False,
+            "task_name": "GTM SmartLead campaign runtime",
+            "source_task_updated_at": "2026-08-01T09:00:00+00:00",
+        }
+        base.update(overrides)
+        return base
+
+    def test_projection_schema_changes_do_not_rekey_the_fleet(self):
+        """Adding or dropping a projected column must be a non-event.
+
+        Hashing the whole payload made every schema edit look like an
+        authored edit: the column diet re-keyed every armed head in the
+        fleet, and so did adding tags before it.
+        """
+
+        before = task_machine_state_service._authored_revision(self._payload())
+
+        widened = self._payload()
+        widened["some_new_projected_column"] = "added next month"
+        narrowed = self._payload()
+        del narrowed["source_task_updated_at"]
+
+        assert task_machine_state_service._authored_revision(widened) == before
+        assert task_machine_state_service._authored_revision(narrowed) == before
+
+    def test_cosmetic_edits_do_not_retire_a_live_head(self):
+        """A rename is the same run under a new label."""
+
+        before = task_machine_state_service._authored_revision(self._payload())
+        renamed = self._payload(task_name="Renamed but identical work")
+        touched = self._payload(
+            source_task_updated_at="2026-08-01T09:30:00+00:00",
+        )
+
+        assert task_machine_state_service._authored_revision(renamed) == before
+        assert task_machine_state_service._authored_revision(touched) == before
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("scheduled_for", "2026-08-01T10:30:00+00:00"),
+            ("entrypoint", 78),
+            ("delivery", "live"),
+            ("destination", "team:12"),
+            ("requires_computer", True),
+            ("max_runtime_seconds", 1800),
+            ("recurring", False),
+            ("trigger_medium", "api_message"),
+            ("source_task_log_id", 556),
+        ],
+    )
+    def test_authored_changes_mint_a_new_occurrence(self, field, value):
+        before = task_machine_state_service._authored_revision(self._payload())
+        after = task_machine_state_service._authored_revision(
+            self._payload(**{field: value}),
+        )
+        assert (
+            after != before
+        ), f"changing {field} must retire the head and mint a new occurrence"

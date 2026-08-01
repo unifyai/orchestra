@@ -1757,6 +1757,22 @@ class OrganizationMember(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # === STAFF ACCESS ===
+    # Marks a Unify person sitting in a *customer* org to run onboarding or
+    # setup, rather than someone who belongs to the customer. Surfaced to the
+    # customer as a badge so the seat is never mistaken for one of their own.
+    is_staff_access = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+    # When the grant lapses. NULL means it never does — the standing
+    # arrangement for partner engagements, and deliberately opt-in: grants
+    # default to a bounded window so access cannot become permanent through
+    # neglect. Enforced in ResourceAccessDAO.check_org_member_permission, so
+    # a lapsed grant stops authorising immediately and nothing is deleted.
+    staff_access_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
 
 class OrganizationInvite(Base):
     """Model for pending organization invitations.
@@ -1791,8 +1807,30 @@ class OrganizationInvite(Base):
         ForeignKey("role.id", ondelete="RESTRICT"),
         nullable=False,
     )  # Role to assign when invite is accepted
+    # Hand the organization over to the invitee when they accept. The Owner
+    # role is never assignable through role_id (owner_id and the member role
+    # would drift); this flag routes acceptance through the same ownership
+    # transfer the dedicated endpoint performs. At most one invite per
+    # organization may carry it.
+    transfers_ownership = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # One outstanding hand-over per organization: a second acceptance
+        # would silently demote the owner installed by the first.
+        Index(
+            "uq_organization_invite_pending_owner",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("transfers_ownership"),
+        ),
+    )
 
 
 CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"

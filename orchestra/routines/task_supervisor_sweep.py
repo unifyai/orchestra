@@ -75,6 +75,7 @@ class TaskSupervisorSweepResult:
     definitions_scanned: int = 0
     upserted: int = 0
     deleted: int = 0
+    unchanged: int = 0
     errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -86,6 +87,7 @@ class TaskSupervisorSweepResult:
             "definitions_scanned": self.definitions_scanned,
             "upserted": self.upserted,
             "deleted": self.deleted,
+            "unchanged": self.unchanged,
             "errors": self.errors,
         }
 
@@ -101,7 +103,9 @@ def sweep_task_supervision(
 
     Returns:
         :class:`TaskSupervisorSweepResult` summary. ``upserted`` counts
-        real projection writes — a healthy fleet reports zero.
+        real projection writes, so a healthy fleet reports zero and any
+        non-zero count is the number of dropped batons just healed;
+        ``unchanged`` counts the heads that were already correct.
     """
 
     if session is not None:
@@ -198,6 +202,7 @@ def _sweep_with_session(
                 )
                 result.upserted += int(counts.get("upserted") or 0)
                 result.deleted += int(counts.get("deleted") or 0)
+                result.unchanged += int(counts.get("unchanged") or 0)
             except Exception as e:  # noqa: BLE001
                 # Per-surface isolation: one tenant's broken definitions
                 # must not stop the sweep from healing everyone else.
