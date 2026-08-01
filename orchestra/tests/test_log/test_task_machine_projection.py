@@ -237,13 +237,16 @@ def test_scheduled_execution_upsert_body_includes_wake_context():
             "revision": "rev-1",
             "scheduled_for": "2026-04-10T09:00:00+00:00",
             "task_name": "Morning briefing",
+            "task_summary": "Prepare the morning update before the user checks in.",
             "recurring": True,
         },
     )
 
     assert body is not None
     assert body["task_label"] == "Morning briefing"
-    assert body["task_summary"] == "Morning briefing"
+    assert (
+        body["task_summary"] == "Prepare the morning update before the user checks in."
+    ), "a live wake must say what the work is, not repeat the title"
     assert body["visibility_policy"] == "silent_by_default"
     assert body["recurrence_hint"] == "recurring"
 
