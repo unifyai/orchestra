@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import decimal
 import logging
+import os
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -26,6 +27,27 @@ logger = logging.getLogger(__name__)
 
 # Valid account status values
 VALID_ACCOUNT_STATUSES = {"ACTIVE", "SUSPENDED", "CLOSED"}
+
+
+#: How far a CREDITS wallet may fall below zero before the account is
+#: suspended outright.
+#:
+#: The wallet is deliberately allowed to go negative: the pre-call spending
+#: gates key off ``credits <= 0``, so the overshoot from a call that was
+#: authorised while the balance was still positive has to land somewhere.
+#: A single large request can only carry an account a few credits past zero,
+#: and concurrent in-flight calls a few more — so a small negative band is
+#: normal operation, not abuse.
+#:
+#: Beyond that band the balance is no longer explained by overshoot: it means
+#: spend is arriving on a path where the gates were never consulted. Rather
+#: than accumulate indefinitely against a wallet nothing will replenish, the
+#: account is suspended at the point of deduction. This is a backstop, not
+#: the primary control — the gates are — which is why the floor sits well
+#: below zero instead of at it.
+OVERDRAFT_SUSPEND_FLOOR = decimal.Decimal(
+    os.environ.get("CREDIT_OVERDRAFT_FLOOR", "-5"),
+)
 
 
 class BillingAccountDAO:
@@ -388,6 +410,7 @@ class BillingAccountDAO:
         if not is_metered:
             track_balance_before(self.session, billing_account_id, ba.credits)
             ba.credits = ba.credits + amount
+            self._lift_overdraft_suspension(ba)
             track_balance_after(self.session, billing_account_id, ba.credits)
 
         self._record_transaction(
@@ -431,8 +454,9 @@ class BillingAccountDAO:
         template):
 
         * **CREDITS** mode: wallet is mutated (allowed to go negative
-          so the spending-limit hook can block subsequent calls). Returns
-          the new wallet balance.
+          so the spending-limit hook can block subsequent calls, but only
+          as far as :data:`OVERDRAFT_SUSPEND_FLOOR` — past that the account
+          is suspended). Returns the new wallet balance.
         * **METERED** mode: wallet is left untouched; the monthly metered
           invoicer sums these debits at period end and produces a Stripe
           invoice. Returns ``None``.
@@ -477,6 +501,8 @@ class BillingAccountDAO:
                     f"{ba.credits}. Deducted {quantity}.",
                 )
 
+            self._suspend_if_past_overdraft_floor(ba)
+
             track_balance_after(self.session, billing_account_id, ba.credits)
 
         self._record_transaction(
@@ -492,6 +518,69 @@ class BillingAccountDAO:
         )
 
         return None if is_metered else ba.credits
+
+    # ------------------------------------------------------------------
+    # Overdraft floor
+    # ------------------------------------------------------------------
+
+    def _suspend_if_past_overdraft_floor(self, ba: BillingAccount) -> None:
+        """Suspend an account whose wallet has fallen past the floor.
+
+        Internal accounts are exempt for the same reason they are exempt from
+        the trial gates: shared staging tenants, benchmarks and smoke tests
+        run negative as a matter of course, and suspending them breaks
+        internal environments without protecting anything.
+
+        Only ACTIVE accounts are touched, so an existing suspension keeps its
+        original reason rather than being relabelled by the next deduction.
+        """
+        from orchestra.lib.trial_subscription import is_internal_account
+        from orchestra.web.api.admin.schema import SuspensionReason
+
+        if ba.credits >= OVERDRAFT_SUSPEND_FLOOR:
+            return
+        if ba.account_status != "ACTIVE":
+            return
+        if is_internal_account(self.session, ba.id):
+            return
+
+        ba.account_status = "SUSPENDED"
+        ba.suspension_reason = SuspensionReason.OVERDRAWN.value
+        logger.warning(
+            {
+                "message": "Billing account suspended past overdraft floor",
+                "billing_account_id": ba.id,
+                "credits": str(ba.credits),
+                "floor": str(OVERDRAFT_SUSPEND_FLOOR),
+            },
+        )
+
+    def _lift_overdraft_suspension(self, ba: BillingAccount) -> None:
+        """Reactivate an overdrawn account once its wallet is positive again.
+
+        Symmetric with :meth:`_suspend_if_past_overdraft_floor`: the floor is
+        a balance condition, so paying it off has to clear it without an
+        operator in the loop. Suspensions applied for any other reason are
+        left alone — topping up does not answer a dispute or a card gate.
+        """
+        from orchestra.web.api.admin.schema import SuspensionReason
+
+        if ba.account_status != "SUSPENDED":
+            return
+        if ba.suspension_reason != SuspensionReason.OVERDRAWN.value:
+            return
+        if ba.credits <= 0:
+            return
+
+        ba.account_status = "ACTIVE"
+        ba.suspension_reason = None
+        logger.info(
+            {
+                "message": "Overdraft suspension lifted",
+                "billing_account_id": ba.id,
+                "credits": str(ba.credits),
+            },
+        )
 
     # ------------------------------------------------------------------
     # Ledger helpers
