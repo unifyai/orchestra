@@ -1,3 +1,4 @@
+import hashlib
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +12,10 @@ from orchestra.db.models.orchestra_models import (
     LogEvent,
     LogEventContext,
     Project,
+)
+from orchestra.services.task_machine_state_service import (
+    get_open_task_execution,
+    sync_task_executions_for_task_ids,
 )
 from orchestra.services.task_trigger_service import TaskTriggerTarget
 from orchestra.tests.utils import HEADERS
@@ -123,6 +128,82 @@ def _auth_user_id() -> str:
     return str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 
 
+def _project_id_for_auth_user(dbsession: Session) -> int:
+    project = (
+        dbsession.query(Project)
+        .filter(
+            Project.user_id == _auth_user_id(),
+            Project.organization_id.is_(None),
+            Project.name == "Assistants",
+        )
+        .one()
+    )
+    return int(project.id)
+
+
+def _project_scheduled_occurrence(
+    dbsession: Session,
+    *,
+    assistant_id: int,
+    task_id: int,
+) -> dict:
+    """Run the real projection and return the open scheduled execution it wrote."""
+
+    project_id = _project_id_for_auth_user(dbsession)
+    # Projection also asks Communication to materialize a delivery task; only
+    # the Orchestra-side ledger row matters here.
+    with patch(
+        "orchestra.services.task_machine_state_service._post_task_execution_request",
+    ):
+        sync_task_executions_for_task_ids(
+            dbsession,
+            project_id,
+            [task_id],
+            tasks_context_name=f"{_auth_user_id()}/{assistant_id}/Tasks",
+        )
+    dbsession.commit()
+    execution = get_open_task_execution(
+        dbsession,
+        project_id,
+        assistant_id=str(assistant_id),
+        task_id=task_id,
+    )
+    assert execution is not None, "projection wrote no open execution"
+    return dict(execution.data)
+
+
+def _capture_comms_dispatch(monkeypatch) -> dict:
+    """Point offline dispatch at an in-memory Communication and record the post."""
+
+    posted: dict = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = "ok"
+
+    class _FakeClient:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            posted["url"] = url
+            posted["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr(task_views, "COMMS_URL", "https://comms.test")
+    monkeypatch.setattr(task_views, "ADMIN_KEY", "admin-key")
+    monkeypatch.setattr(task_views, "get_async_client", lambda: _FakeClient())
+    return posted
+
+
+def _run_key_revision_digest(revision: str) -> str:
+    """The revision fragment both run-key builders embed.
+
+    Unify's ``build_offline_run_key`` is not importable here, so pin the one
+    part of the key a revision controls. Two runs whose digests differ cannot
+    share a key under either builder.
+    """
+
+    return hashlib.sha256(str(revision or "").encode("utf-8")).hexdigest()[:12]
+
+
 def _make_target(**overrides) -> TaskTriggerTarget:
     base = dict(
         assistant_id=42,
@@ -142,21 +223,19 @@ def _make_target(**overrides) -> TaskTriggerTarget:
     return TaskTriggerTarget(**base)
 
 
-def test_select_current_target_prefers_enabled_team_with_revision():
+def test_select_current_target_prefers_enabled_team_row():
     from orchestra.services.task_trigger_service import _select_current_target
 
     personal = _make_target(
         source_task_log_id=1,
         destination=None,
         enabled=False,
-        revision=None,
         offline=True,
     )
     team = _make_target(
         source_task_log_id=2,
         destination="team:11",
         enabled=True,
-        revision="rev-team",
         offline=True,
     )
     assert _select_current_target([personal, team]) is team
@@ -168,13 +247,11 @@ def test_select_current_target_prefers_newer_definition_when_tied():
     older = _make_target(
         source_task_log_id=10,
         destination="team:11",
-        revision="rev-a",
         offline=True,
     )
     newer = _make_target(
         source_task_log_id=20,
         destination="team:11",
-        revision="rev-b",
         offline=True,
     )
     assert _select_current_target([older, newer]) is newer
@@ -555,12 +632,158 @@ async def test_dispatch_local_offline_emits_system_event():
 
 @pytest.mark.anyio
 async def test_dispatch_hosted_offline_without_revision_raises():
+    """Resolution always mints one, so reaching this guard is a server fault.
+
+    It stays because an empty revision digests to the same twelve characters
+    for every task, which would collide run keys across the whole fleet.
+    """
+
     target = _make_target(offline=True, revision=None)
 
     with pytest.raises(Exception) as exc_info:
         await task_views._dispatch_task_trigger(target)
 
-    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+@pytest.mark.anyio
+async def test_trigger_offline_task_dispatches_with_no_open_execution(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    monkeypatch,
+):
+    """An on-demand run is most needed when the scheduler has queued nothing.
+
+    Sourcing the revision from an open scheduled execution made the trigger
+    fail exactly then, so the only way to run a task by hand was to wait for
+    its schedule to come round.
+    """
+
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=61,
+        offline=True,
+        with_schedule=True,
+    )
+    posted = _capture_comms_dispatch(monkeypatch)
+    assert (
+        get_open_task_execution(
+            dbsession,
+            _project_id_for_auth_user(dbsession),
+            assistant_id=str(assistant_id),
+            task_id=61,
+        )
+        is None
+    )
+
+    response = await client.post(
+        "/v0/tasks/61/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    assert posted["url"] == "https://comms.test/infra/task-execution/offline-dispatch"
+    assert posted["json"]["wake"] == "explicit"
+    assert posted["json"]["delivery"] == "offline"
+    assert posted["json"]["revision"]
+
+
+@pytest.mark.anyio
+async def test_trigger_offline_task_mints_its_own_occurrence(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    monkeypatch,
+):
+    """A queued occurrence is the scheduler's; the trigger names its own.
+
+    Borrowing the scheduled revision declared an ``explicit`` wake under a
+    fingerprint computed for a ``scheduled`` one at a future slot, and left a
+    manual run's identity hostage to whatever the scheduler had pending.
+    """
+
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=62,
+        offline=True,
+        with_schedule=True,
+    )
+    scheduled = _project_scheduled_occurrence(
+        dbsession,
+        assistant_id=assistant_id,
+        task_id=62,
+    )
+    assert scheduled["wake"] == "scheduled"
+    assert scheduled["revision"]
+    posted = _capture_comms_dispatch(monkeypatch)
+
+    response = await client.post(
+        "/v0/tasks/62/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    triggered_revision = posted["json"]["revision"]
+    assert triggered_revision
+    assert triggered_revision != scheduled["revision"]
+    # Neither builder can produce one key from two revisions, so the triggered
+    # run creates its own Execution rather than adopting the queued one.
+    assert _run_key_revision_digest(triggered_revision) != _run_key_revision_digest(
+        scheduled["revision"],
+    )
+    assert _run_key_revision_digest(triggered_revision) not in scheduled["run_key"]
+    assert scheduled["run_key"].startswith("offline:scheduled:")
+
+
+@pytest.mark.anyio
+async def test_trigger_leaves_the_scheduled_occurrence_armed(
+    client: AsyncClient,
+    dbsession: Session,
+    assistant_id: int,
+    monkeypatch,
+):
+    """The queued occurrence survives an on-demand run untouched."""
+
+    _seed_task(
+        dbsession,
+        assistant_id=assistant_id,
+        user_id=_auth_user_id(),
+        task_id=63,
+        offline=True,
+        with_schedule=True,
+    )
+    before = _project_scheduled_occurrence(
+        dbsession,
+        assistant_id=assistant_id,
+        task_id=63,
+    )
+    _capture_comms_dispatch(monkeypatch)
+
+    response = await client.post(
+        "/v0/tasks/63/trigger",
+        headers=HEADERS,
+        json={"assistant_id": assistant_id},
+    )
+
+    assert response.status_code == status.HTTP_202_ACCEPTED, response.json()
+    dbsession.expire_all()
+    after = get_open_task_execution(
+        dbsession,
+        _project_id_for_auth_user(dbsession),
+        assistant_id=str(assistant_id),
+        task_id=63,
+    )
+    assert after is not None
+    assert after.data["run_key"] == before["run_key"]
+    assert after.data["revision"] == before["revision"]
+    assert after.data["state"] == before["state"]
 
 
 @pytest.mark.anyio

@@ -183,6 +183,41 @@ def has_platform_access(session: Session, ba: BillingAccount) -> bool:
     return is_internal_account(session, ba.id)
 
 
+def has_api_access(session: Session, ba: Optional[BillingAccount]) -> bool:
+    """Whether this account may spend credits outside the Console.
+
+    Free credits are meant to be spent through the Console, where a human
+    is present and abuse is observable. The programmatic surfaces — the
+    UniLLM proxy and the runtime-starting endpoints — are the cheap route
+    for burner accounts to extract them, so an account reaches them only
+    once it is no longer purely on free money:
+
+    * real payment history, or a live subscription;
+    * an admin-granted free trial (a comped evaluation is a deliberate
+      decision, and those accounts are known);
+    * internal Unify accounts;
+    * grandfathered accounts that were already calling the API before the
+      gate existed (see the ``api_access_grandfather`` migration).
+
+    Gating on payment rather than on credit balance is deliberate: a
+    burner's problem is that signing up is free, not that credits run
+    out.
+    """
+    if not settings.require_api_payment_history:
+        return True
+    if ba is None:
+        return False
+    if ba.api_access_grandfathered:
+        return True
+    if ba.stripe_subscription_id:
+        return True
+    if has_ever_paid(session, ba.id):
+        return True
+    if has_free_trial_grant(session, ba.id):
+        return True
+    return is_internal_account(session, ba.id)
+
+
 def create_trial_checkout_session(
     session: Session,
     ba: BillingAccount,
@@ -326,6 +361,9 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
       :func:`is_internal_account`) or orgs holding an admin-granted free
       trial (see :func:`has_free_trial_grant`) — a comped evaluation is
       throttled to nothing by a $25/day ceiling.
+    * ``api_access_allowed`` — false while the account is still purely on
+      free credits (see :func:`has_api_access`). Only the gateway proxy
+      acts on it; a false here must never block the Console's own work.
     """
     from decimal import Decimal
 
@@ -338,12 +376,17 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
             "account_suspended": False,
             "trial_daily_spend": None,
             "trial_daily_cap": None,
+            "api_access_allowed": has_api_access(session, None),
         }
 
     fields: dict = {
         "account_suspended": ba.account_status != "ACTIVE",
         "trial_daily_spend": None,
         "trial_daily_cap": None,
+        # Consumed by the gateway proxy, which denies when false. The
+        # runtime ignores it: work started from the Console is exactly
+        # what free credits are for.
+        "api_access_allowed": has_api_access(session, ba),
     }
     if (
         settings.trial_daily_spend_cap > 0

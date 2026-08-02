@@ -76,6 +76,7 @@ from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
     publish_membership_refreshes_best_effort,
 )
+from orchestra.web.api.dependencies import require_console_origin_for_free_accounts
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -281,6 +282,9 @@ async def _create_organization_with_owner_coordinator(
 @router.post(
     "/organizations",
     status_code=status.HTTP_201_CREATED,
+    # Creating an org provisions and wakes its Coordinator, so this is a
+    # runtime start like the assistant endpoints, not just a row insert.
+    dependencies=[Depends(require_console_origin_for_free_accounts)],
 )
 async def create_organization(
     request_fastapi: Request,
@@ -2622,6 +2626,8 @@ async def get_org_spend(
             BillingAccountDAO(session).resolve_billing_mode(org.billing_account).value
         )
 
+    from orchestra.lib.trial_subscription import has_api_access
+
     return OrgSpendResponse(
         organization_id=organization_id,
         month=month,
@@ -2631,6 +2637,10 @@ async def get_org_spend(
         percent_used=percent_used,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        # An org-scoped key routes the limit check through the org and
+        # member endpoints and never touches /user/spend, so the gate
+        # has to be readable from here too or org keys bypass it.
+        api_access_allowed=has_api_access(session, org.billing_account),
     )
 
 

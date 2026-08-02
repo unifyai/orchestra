@@ -325,12 +325,20 @@ class TestCredits:
     ):
         """Deducting more than the balance should succeed and drive the
         balance negative so that the spending-limit hook blocks further
-        LLM calls."""
+        LLM calls.
+
+        Bounded by the overdraft floor: an overshoot past it suspends the
+        account outright, which is exercised in ``test_overdraft_floor``.
+        Here the overshoot stays inside the tolerated band so this keeps
+        testing the overshoot itself.
+        """
+        from orchestra.db.dao.billing_account_dao import OVERDRAFT_SUSPEND_FLOOR
+
         credits_response = await client.get("/v0/credits", headers=HEADERS)
         assert credits_response.status_code == status.HTTP_200_OK
         current_credits = credits_response.json()["credits"]
 
-        overshoot = 10.0
+        overshoot = float(abs(OVERDRAFT_SUSPEND_FLOOR)) / 2
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,

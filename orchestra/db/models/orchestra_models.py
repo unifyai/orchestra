@@ -97,6 +97,16 @@ class BillingAccount(Base):
 
     # === CORE BILLING ===
     credits = Column(Numeric, nullable=False, default=0, server_default="0")
+    # Exempts the account from the never-paid API gate. Backfilled for
+    # accounts that were already spending through the UniLLM proxy when
+    # the gate shipped, so it does not cut off a live integration; set
+    # only by that backfill, never self-serve.
+    api_access_grandfathered = Column(
+        Boolean(),
+        nullable=False,
+        default=False,
+        server_default="f",
+    )
     stripe_customer_id = Column(String, nullable=True, unique=True, index=True)
     # === SELF-SERVE SUBSCRIPTION (CREDITS tier plans) ===
     # The active Stripe Subscription backing a self-serve CREDITS account on
@@ -2272,6 +2282,10 @@ class ResourceAccess(Base):
     )
 
 
+CONSOLE_KEY_KIND = "console"
+PROGRAMMATIC_KEY_KIND = "programmatic"
+
+
 class ApiKey(Base):
     __tablename__ = "api_key"
 
@@ -2281,8 +2295,20 @@ class ApiKey(Base):
     organization_id = Column(Integer, ForeignKey("organization.id", ondelete="CASCADE"))
     key = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # ``console`` keys are held only by the Console server and never shown
+    # to the user; ``programmatic`` keys are the ones printed in Profile.
+    # The split is what lets a request's origin be known at all — see
+    # ``auth_api_key``, which stamps it onto ``request.state.key_kind``.
+    kind = Column(
+        String,
+        nullable=False,
+        server_default=PROGRAMMATIC_KEY_KIND,
+    )
 
-    __table_args__ = (UniqueConstraint("user_id", "name"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "name"),
+        Index("ix_api_key_user_kind", "user_id", "kind"),
+    )
 
 
 class Interface(Base):

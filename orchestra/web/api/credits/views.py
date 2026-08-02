@@ -165,8 +165,10 @@ def deduct_credits(
 
     The amount must be positive. The balance is allowed to go negative so
     that the spending-limit hook (which checks ``credit_balance <= 0``)
-    will correctly block subsequent LLM calls. If the account is on a
-    self-serve subscription with auto-increment enabled, depleting the
+    will correctly block subsequent LLM calls — but only as far as the
+    overdraft floor, past which the account is suspended at deduction time
+    (see ``BillingAccountDAO.OVERDRAFT_SUSPEND_FLOOR``). If the account is
+    on a self-serve subscription with auto-increment enabled, depleting the
     wallet bumps it to the next tier (and emails the holder).
     \f
     :param request_fastapi: FastAPI request object.

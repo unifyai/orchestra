@@ -328,6 +328,16 @@ class OrgSpendResponse(BaseModel):
             "or METERED (invoiced monthly)."
         ),
     )
+    api_access_allowed: bool = Field(
+        True,
+        description=(
+            "Whether this org may spend outside the Console. False while "
+            "it is still purely on free credits; the gateway's UniLLM "
+            "proxy denies with 402 when false. Present here as well as on "
+            "the user-spend response because an org-scoped key never "
+            "reaches the latter."
+        ),
+    )
 
 
 # ============================================================================
