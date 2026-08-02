@@ -436,15 +436,14 @@ def trigger_task_supervisor_sweep(
 ):
     """Re-project the open head for every enabled, armed task definition.
 
-    The floor under the recurrence relay chain: a dropped baton (a series
-    with no open occurrence and no run in flight) is advanced from its
-    repeat rule; healthy series are untouched. Scheduled via Cloud
-    Scheduler — see ``orchestra.routines.task_supervisor_sweep``.
+    The floor under recurrence: projection normally rides the run-start
+    transition, so a series only loses its head if that transition never
+    happened. Such a series is advanced from its repeat rule; healthy
+    series are untouched. The sweep commits each surface as it heals it —
+    see ``orchestra.routines.task_supervisor_sweep``.
     """
 
-    result = sweep_task_supervision(session)
-    session.commit()
-    return result.to_dict()
+    return sweep_task_supervision(session).to_dict()
 
 
 @router.post(
