@@ -703,6 +703,39 @@ run_migrations() {
   fi
 }
 
+# Create the platform-owned system projects (Builtins, AssistantJobs).
+#
+# Migrations create the schema; they do not create these rows. Only the
+# self-host bootstrap does, and nothing on the local.sh path used to call it —
+# so a database that had been reset came back up without Builtins, and the
+# runtime's first catalogue seed failed against a project that did not exist.
+# The bootstrap repairs as well as creates, so running it every start is a
+# cheap no-op once the rows are there.
+bootstrap_platform_projects() {
+  local repo_path="$1"
+  local bootstrap="$repo_path/scripts/bootstrap_self_host.sh"
+
+  if [[ ! -x "$bootstrap" ]]; then
+    log_warn "Missing $bootstrap; skipping platform project bootstrap"
+    return 0
+  fi
+
+  log_info "Bootstrapping platform projects..."
+  # Pass the resolved port through: the bootstrap detects it too, but this run
+  # already knows which container it started.
+  if ORCHESTRA_REPO_PATH="$repo_path" \
+     ORCHESTRA_DB_HOST=localhost \
+     ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT" \
+     ORCHESTRA_DB_CONTAINER="$ORCHESTRA_DB_CONTAINER" \
+     bash "$bootstrap" >/dev/null 2>&1; then
+    log_success "Platform projects ready"
+    return 0
+  fi
+
+  log_warn "Platform project bootstrap failed (Builtins catalogue may not seed)"
+  return 1
+}
+
 ensure_test_user_coordinator() {
   local test_user_id="$1"
 
@@ -1202,7 +1235,7 @@ stop_orchestra_server() {
 # =============================================================================
 
 cmd_seed() {
-  echo "Seeding local Orchestra test user + billing defaults..."
+  echo "Seeding local Orchestra platform projects + test user + billing defaults..."
 
   if ! check_docker; then
     return 1
@@ -1211,6 +1244,12 @@ cmd_seed() {
   if ! start_db_container; then
     return 1
   fi
+
+  # Ahead of the skip check: the system projects are platform data, not part of
+  # the test user, so opting out of the latter must not skip them. This is the
+  # repair path for a database that already exists, which is exactly the state
+  # a reset leaves behind.
+  bootstrap_platform_projects "$ORCHESTRA_REPO_PATH" || true
 
   if [[ "$ORCHESTRA_SKIP_TEST_USER" == "1" ]]; then
     log_info "Skipping local test user seed (ORCHESTRA_SKIP_TEST_USER=1)"
@@ -1259,6 +1298,10 @@ cmd_start() {
     echo "export UNIFY_BASE_URL='$STAGING_URL'"
     return 1
   fi
+
+  # Not fatal: a server without the system projects still serves every ordinary
+  # request, and the failure is worth surfacing rather than blocking a start on.
+  bootstrap_platform_projects "$ORCHESTRA_REPO_PATH" || true
 
   if [[ "$ORCHESTRA_SKIP_TEST_USER" == "1" ]]; then
     log_info "Skipping local test user seed (ORCHESTRA_SKIP_TEST_USER=1)"
