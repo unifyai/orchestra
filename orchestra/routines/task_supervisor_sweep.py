@@ -1,12 +1,14 @@
 """Guarantee every enabled, armed task definition has its open head.
 
-Recurrence is a relay chain: each occurrence's dispatch projects its
-successor onto ``Tasks/Executions``. The chain is fast but droppable —
-key drift, a lost write, a deploy-drain collision, or a crashed worker
-can end a series silently, and every such incident has historically
-needed an operator to notice and re-arm by hand.
+Recurrence advances when an occurrence is marked ``running``: that
+transition projects the successor onto ``Tasks/Executions``, inside the
+component that owns the repeat rule. So a series loses its head only when
+that transition never happens — an occurrence terminalized without ever
+running, or a projection that raised on the way. Both are silent, and
+before this sweep existed they needed an operator to notice and re-arm by
+hand.
 
-This sweep is the floor under the relay chain. For every task-machine
+This sweep is the floor under that. For every task-machine
 project it finds each definition that is **enabled** and **armed**
 (carries a ``schedule`` or a ``trigger``) and re-runs the standard
 projection (:func:`sync_task_executions_for_task_ids`). Projection is
@@ -25,17 +27,23 @@ within one sweep interval instead of waiting for a human.
 Scheduling
 ----------------------------------------------------------------------
 
-Runs **every 15 minutes** via Cloud Scheduler, mirroring the billing
-routines:
+Runs **every 15 minutes** via Cloud Scheduler:
 
-  * Suggested job ``orchestra-production-task-supervisor-sweep`` in
-    project ``gcp-project-saas`` / location ``us-central1``.
+  * Job ``orchestra-production-task-supervisor-sweep`` in project
+    ``gcp-project-saas`` / location ``us-central1``.
   * Schedule ``*/15 * * * *`` UTC.
-  * POSTs to ``https://api.unify.ai/v0/admin/task-supervisor/sweep``
-    with the static admin Bearer token.
+  * POSTs to ``https://api.unify.ai/v0/admin/task-supervisor/sweep`` as
+    ``task-supervisor-sweep@gcp-project-saas``, a dedicated identity holding
+    no project roles, matched against ``CLOUD_SCHEDULER_SERVICE_ACCOUNT``.
+    It carried the org-wide admin key in a header until August 2026; the
+    Cloud Scheduler API hands those back in plaintext to anyone who can
+    read the job, so do not put it back.
 
 Staging has no scheduled trigger — invoke on demand via the same admin
 endpoint.
+
+The schedule only records a status code, which is why a pass that failed
+across the fleet answers 5xx (see :attr:`TaskSupervisorSweepResult.status`).
 """
 
 from __future__ import annotations
@@ -64,6 +72,14 @@ from orchestra.web.lifetime import get_engine
 logger = logging.getLogger(__name__)
 
 
+#: A pass that failed for most of what it walked did not do its job, however
+#: many repairs it managed on the way. Below this, individual tenants are
+#: broken and the sweep still ran, which is a different problem and a
+#: different level: a job that goes red for one bad tenant gets ignored, and
+#: an ignored alarm is worth less than no alarm.
+_BROKEN_ERROR_SHARE = 0.5
+
+
 @dataclass
 class TaskSupervisorSweepResult:
     """Summary returned by :func:`sweep_task_supervision`."""
@@ -78,8 +94,27 @@ class TaskSupervisorSweepResult:
     unchanged: int = 0
     errors: List[str] = field(default_factory=list)
 
+    @property
+    def status(self) -> str:
+        """Whether this pass did its job: ``ok``, ``degraded`` or ``broken``.
+
+        ``upserted`` cannot answer this on its own, which is the whole reason
+        this exists. A healthy fleet repairs nothing, and so does a sweep that
+        aborted on its first tenant — in August 2026 one returned
+        ``projects_scanned: 1552, surfaces_scanned: 1, upserted: 0`` every
+        fifteen minutes for two days and read as a fleet with nothing wrong.
+        """
+
+        if not self.errors:
+            return "ok"
+        walked = max(self.projects_scanned, 1)
+        return (
+            "broken" if len(self.errors) >= walked * _BROKEN_ERROR_SHARE else "degraded"
+        )
+
     def to_dict(self) -> dict:
         return {
+            "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "projects_scanned": self.projects_scanned,
@@ -228,10 +263,27 @@ def _sweep_with_session(
                 continue
 
     result.finished_at = datetime.now(timezone.utc).isoformat()
-    logger.info(
-        {
-            "message": "Task supervisor sweep complete",
-            **result.to_dict(),
-        },
-    )
+    payload = {"message": "Task supervisor sweep complete", **result.to_dict()}
+    # Log at the level the outcome deserves, so a broken pass is not one more
+    # INFO line among the healthy ones it looks identical to.
+    if result.status == "broken":
+        logger.error(payload)
+    elif result.status == "degraded":
+        logger.warning(payload)
+    elif result.upserted:
+        # Since projection moved onto the run-start transition, a repair is no
+        # longer routine work — it means a series lost its head, so a run
+        # started without minting its successor. The sweep catching it is the
+        # floor doing its job, and every catch is a bug somewhere above.
+        logger.warning(
+            {
+                **payload,
+                "message": (
+                    "Task supervisor sweep repaired series that lost their "
+                    "head; run-start projection did not happen for them"
+                ),
+            },
+        )
+    else:
+        logger.info(payload)
     return result
