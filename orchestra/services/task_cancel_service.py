@@ -81,8 +81,6 @@ def resolve_task_cancel_target(
             continue
         targets.append(
             _build_target_from_row(
-                session=session,
-                project_id=project.id,
                 task_id=task_id,
                 row=row,
                 context_name=context_name,
