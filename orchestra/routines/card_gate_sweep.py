@@ -16,6 +16,9 @@ Two admin-triggered sweeps, both idempotent and dry-run-first:
   raw API channel (ledger rows with ``assistant_id`` NULL — the OSS CLI
   path, not the product) and whose wallet is near or below zero.
   Matching accounts are suspended with reason ``abuse_fingerprint``.
+  Comped orgs are exempt: the grant opens the raw API to them and never
+  tops their wallet back up, so a white-glove evaluation driving the CLI
+  arrives at precisely the state this signature keys on.
 
 * :func:`freeze_burner_clusters` — successor signal for when free credits
   are Console-only. Closing the API to never-paid accounts does not just
@@ -182,10 +185,11 @@ def freeze_abuse_fingerprints(
     ).fetchall()
 
     paid = _paid_ba_ids(session)
+    comped = _free_trial_ba_ids(session)
 
     for ba_id, spend, null_rows, total_rows in spend_rows:
         result.scanned += 1
-        if ba_id in paid:
+        if ba_id in paid or ba_id in comped:
             continue
         if float(spend or 0) < ABUSE_MIN_LLM_SPEND:
             continue
