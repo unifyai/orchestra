@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND
 from orchestra.web.api.api_keys.schema import ApiKeyResponse, ApiKeysListResponse
 
 router = APIRouter()
@@ -100,6 +101,15 @@ def revoke_api_key(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only revoke your own API keys",
+        )
+
+    # Console keys are not the user's to revoke: they are never listed, so
+    # an id reaching here is either guessed or stale, and deleting one
+    # would sign the user out of their own Console.
+    if key.kind == CONSOLE_KEY_KIND:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API key not found",
         )
 
     # Delete the key

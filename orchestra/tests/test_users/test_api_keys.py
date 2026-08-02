@@ -507,3 +507,44 @@ async def test_admin_regenerate_nonexistent_key(client: AsyncClient):
         headers=ADMIN_HEADERS,
     )
     assert regen_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_regenerate_preserves_console_key_kind(
+    client: AsyncClient,
+    dbsession,
+):
+    """Regenerating a Console key must not hand it to the user.
+
+    ``regenerate`` recreates the row from stored metadata. Dropping
+    ``kind`` there would turn the Console's own credential into a
+    programmatic one — listed in Profile, copyable into a script, and no
+    longer distinguishable from a curl by the API gate.
+    """
+    from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND
+
+    user = await create_test_user(client, "regen_console_kind@test.com")
+
+    dao = ApiKeyDAO(dbsession)
+    dao.get_or_create_console_key(user["id"])
+    dbsession.flush()
+    console_row = dao.get_console_key(user["id"])
+    assert console_row.kind == CONSOLE_KEY_KIND
+    original_key = console_row.key
+
+    response = await client.post(
+        f"/v0/admin/api-keys/{console_row.id}/regenerate",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    dbsession.expire_all()
+    regenerated = dao.get_console_key(user["id"])
+    assert regenerated is not None
+    assert regenerated.key != original_key
+    assert regenerated.kind == CONSOLE_KEY_KIND
+    # Still invisible to the user: get_personal_keys backs the Profile
+    # listing, and a regenerated Console key must not surface there.
+    assert regenerated.key not in [
+        row[0].key for row in dao.get_personal_keys(user["id"])
+    ]

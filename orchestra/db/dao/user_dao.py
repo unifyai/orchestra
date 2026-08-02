@@ -719,12 +719,15 @@ class UserDAO:
             member = member_row[0]
             org_result = organization_dao.get(member.organization_id)
             if org_result:
-                # Get org-specific API key for this user+org
-                org_keys = api_key_dao.get_organization_keys(
+                # The Console-session key for this workspace. These
+                # endpoints feed the Console, which forwards whatever key
+                # they return; handing back a programmatic key here would
+                # make every org-context Console request indistinguishable
+                # from a script and trip the API gate.
+                org_api_key = api_key_dao.get_or_create_console_key(
                     user_id,
                     organization_id=member.organization_id,
                 )
-                org_api_key = org_keys[0][0].key if org_keys else None
 
                 # Get role name for this membership
                 member_role = role_dao.get(member.role_id)

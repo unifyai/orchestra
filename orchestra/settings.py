@@ -528,6 +528,18 @@ class Settings(BaseSettings):
         os.environ.get("TRIAL_DAILY_SPEND_CAP", "25"),
     )
 
+    # ── Console-only free credits ───────────────────────────────────────
+    #: Restrict the programmatic surfaces (UniLLM proxy, runtime-starting
+    #: endpoints) to accounts with payment history, so free credits are
+    #: spendable only through the Console. Intended as the replacement for
+    #: the card gate: it keeps signup frictionless while removing the
+    #: cheap route a burner uses to extract credits. Ships dark (False)
+    #: so the schema and Console changes can land first.
+    require_api_payment_history: bool = os.environ.get(
+        "REQUIRE_API_PAYMENT_HISTORY",
+        "false",
+    ).lower() in ("1", "true", "yes")
+
     # ── Staff access ────────────────────────────────────────────────────
     #: Days a Unify person's seat in a customer org stays authorised
     #: before the grant lapses. Bounded by default so onboarding access
