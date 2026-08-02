@@ -210,6 +210,75 @@ async def test_sweep_leaves_disabled_definitions_alone(
     assert open_rows == [], f"the sweep armed a disabled definition: {open_rows}"
 
 
+def test_a_failing_surface_does_not_end_the_sweep(dbsession, monkeypatch) -> None:
+    """One tenant's failure must not swallow every tenant behind it.
+
+    Postgres marks a transaction aborted when a statement fails, so a
+    caught exception leaves the session refusing every later statement
+    with ``current transaction is aborted``. The first surface to raise
+    therefore took the whole sweep with it — a production run across 1552
+    projects healed nothing while returning HTTP 200 and a single error.
+
+    This asserts the recovery (a rollback before continuing) rather than
+    the cascade itself, because the cascade cannot be staged here: the
+    test engine is built with ``isolation_level="AUTOCOMMIT"``, which
+    gives every statement its own transaction and so cannot reproduce the
+    very failure mode this guards. Asserting the rollback is what keeps
+    that harness difference from hiding a regression.
+    """
+
+    from orchestra.db.models.core_models import Project
+    from orchestra.routines import task_supervisor_sweep as sweep_module
+
+    # The sweep iterates task-machine projects, so give it one of its own
+    # rather than depending on another test having left one behind.
+    dbsession.add(
+        Project(name=TASK_MACHINE_PROJECT_NAME, user_id="sweep-isolation-probe"),
+    )
+    dbsession.flush()
+
+    monkeypatch.setattr(
+        sweep_module,
+        "_armed_definition_ids_by_surface",
+        lambda session, *, project_id: {"first/Tasks": {1}, "second/Tasks": {2}},
+    )
+
+    attempted: list[str] = []
+
+    def _fail_the_first_surface(session, project_id, task_ids, **kwargs):
+        attempted.append(str(kwargs.get("tasks_context_name")))
+        if len(attempted) == 1:
+            raise RuntimeError("projection blew up for this tenant")
+        return {"upserted": 0, "deleted": 0, "unchanged": 1}
+
+    monkeypatch.setattr(
+        sweep_module,
+        "sync_task_executions_for_task_ids",
+        _fail_the_first_surface,
+    )
+
+    rollbacks: list[int] = []
+    real_rollback = dbsession.rollback
+    monkeypatch.setattr(
+        dbsession,
+        "rollback",
+        lambda: (rollbacks.append(1), real_rollback())[1],
+    )
+
+    result = sweep_module._sweep_with_session(dbsession)
+
+    assert attempted == [
+        "first/Tasks",
+        "second/Tasks",
+    ], f"the sweep skipped a surface entirely: attempted={attempted}"
+    assert rollbacks, (
+        "the sweep continued on an aborted session without rolling back, "
+        "which is what silently ended it in production"
+    )
+    assert len(result.errors) == 1 and "first/Tasks" in result.errors[0]
+    assert result.unchanged == 1, "the surviving surface did no work"
+
+
 class TestAuthoredRevision:
     """The occurrence fingerprint tracks authored intent, not payload shape."""
 

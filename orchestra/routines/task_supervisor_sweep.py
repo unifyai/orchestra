@@ -97,9 +97,12 @@ def sweep_task_supervision(
 ) -> TaskSupervisorSweepResult:
     """Re-project the open head for every enabled, armed task definition.
 
+    Each surface is committed as its own transaction, so healing one
+    tenant is durable before the next is attempted and no tenant's
+    failure can discard or block another's repair.
+
     Args:
-        session: DB session. A new one is created and committed if
-            ``None``.
+        session: DB session. A new one is created if ``None``.
 
     Returns:
         :class:`TaskSupervisorSweepResult` summary. ``upserted`` counts
@@ -109,11 +112,11 @@ def sweep_task_supervision(
     """
 
     if session is not None:
-        return _sweep_with_session(session, commit=False)
+        return _sweep_with_session(session)
 
     SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
     with SessionLocal() as owned_session:
-        return _sweep_with_session(owned_session, commit=True)
+        return _sweep_with_session(owned_session)
 
 
 def _armed_definition_ids_by_surface(
@@ -161,8 +164,6 @@ def _armed_definition_ids_by_surface(
 
 def _sweep_with_session(
     session: Session,
-    *,
-    commit: bool,
 ) -> TaskSupervisorSweepResult:
     result = TaskSupervisorSweepResult(
         started_at=datetime.now(timezone.utc).isoformat(),
@@ -184,6 +185,10 @@ def _sweep_with_session(
                 project_id=project_id,
             )
         except Exception as e:  # noqa: BLE001
+            # Postgres marks the whole transaction aborted, so every later
+            # statement on this session fails until it is rolled back.
+            # Without this, one tenant's failure silently ends the sweep.
+            session.rollback()
             msg = f"Failed to scan task surfaces for project {project_id}: {e}"
             logger.exception(msg)
             result.errors.append(msg)
@@ -203,9 +208,17 @@ def _sweep_with_session(
                 result.upserted += int(counts.get("upserted") or 0)
                 result.deleted += int(counts.get("deleted") or 0)
                 result.unchanged += int(counts.get("unchanged") or 0)
+                # Commit per surface rather than once at the end: a single
+                # transaction spanning every tenant holds its locks for the
+                # whole sweep (which is how this started timing out) and
+                # puts every repair at the mercy of the last one.
+                session.commit()
             except Exception as e:  # noqa: BLE001
                 # Per-surface isolation: one tenant's broken definitions
-                # must not stop the sweep from healing everyone else.
+                # must not stop the sweep from healing everyone else. The
+                # rollback is what makes that true — a caught exception
+                # leaves the session aborted and unusable otherwise.
+                session.rollback()
                 msg = (
                     "Failed to re-project task surface "
                     f"{context_name!r} (project {project_id}): {e}"
@@ -213,9 +226,6 @@ def _sweep_with_session(
                 logger.exception(msg)
                 result.errors.append(msg)
                 continue
-
-    if commit:
-        session.commit()
 
     result.finished_at = datetime.now(timezone.utc).isoformat()
     logger.info(
