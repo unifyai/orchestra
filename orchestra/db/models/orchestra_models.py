@@ -890,6 +890,17 @@ class User(Base):
     voice_sample = Column(String, nullable=True)
     voice_sample_uploaded_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # === SIGNUP PROVENANCE (abuse correlation) ===
+    # Where this account was created from. Free credits are Console-only,
+    # so credit farming no longer shows up on the raw-API channel the
+    # existing fingerprint watches; what remains is only separable by
+    # correlating accounts with each other. ``canonical_email`` already
+    # stops one inbox minting aliases — these close the same loop on
+    # origin. The user agent is a salted hash: the sweep compares it for
+    # equality only, so the raw string is needlessly identifying.
+    signup_ip = Column(String, nullable=True, index=True)
+    signup_user_agent_hash = Column(String, nullable=True, index=True)
+
     # === BILLING (via BillingAccount) ===
     billing_account_id = Column(
         Integer,

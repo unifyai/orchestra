@@ -1080,6 +1080,35 @@ def trigger_abuse_freeze_sweep(
     return {"status": "success", **result.to_dict()}
 
 
+@router.post(
+    "/billing/burner-cluster-freeze-sweep",
+    summary="Admin: Freeze never-paid accounts farming in an origin cluster",
+    description=(
+        "Successor to ``/billing/abuse-freeze-sweep`` for when free "
+        "credits are Console-only: that signature keys on raw-API spend, "
+        "which never-paid accounts can no longer produce. Suspends "
+        "(reason ``abuse_fingerprint``) only accounts in a *cluster* — "
+        "several never-paid accounts sharing a signup origin inside a "
+        "short window, each having drained its grant. Single accounts are "
+        "never frozen, however fast they burn. "
+        "Returns nothing until signup provenance has been recorded for a "
+        "while: pre-existing users have no ``signup_ip`` and are skipped "
+        "rather than grouped under a shared NULL. "
+        "Defaults to ``dry_run=true``."
+    ),
+)
+def trigger_burner_cluster_freeze_sweep(
+    dry_run: bool = True,
+    session=Depends(get_db_session),
+) -> dict:
+    from orchestra.routines.card_gate_sweep import freeze_burner_clusters
+
+    result = freeze_burner_clusters(session, dry_run=dry_run)
+    if not dry_run:
+        session.commit()
+    return {"status": "success", **result.to_dict()}
+
+
 # NOTE: ``POST /admin/billing/health`` was retired alongside the
 # ``orchestra.routines.billing_health`` routine when the v2 billing
 # refactor folded health-snapshot KPIs into Grafana. The reconciliation

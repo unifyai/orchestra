@@ -437,6 +437,17 @@ class ProviderEventContextResponse(BaseModel):
 class TaskSupervisorSweepResponse(BaseModel):
     """Summary of one supervisor sweep over enabled, armed task definitions."""
 
+    status: str = Field(
+        default="ok",
+        description=(
+            "Whether this pass did its job: 'ok', 'degraded' (some tenants "
+            "failed, the sweep still ran) or 'broken' (it failed across most "
+            "of the fleet, and the endpoint answers 5xx). Read this rather "
+            "than inferring health from 'upserted', which is zero both for a "
+            "fleet with nothing to repair and for a sweep that repaired "
+            "nothing because it aborted."
+        ),
+    )
     started_at: str = Field(description="UTC instant the sweep began.")
     finished_at: str = Field(description="UTC instant the sweep finished.")
     projects_scanned: int = Field(

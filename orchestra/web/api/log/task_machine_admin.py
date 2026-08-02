@@ -441,9 +441,20 @@ def trigger_task_supervisor_sweep(
     happened. Such a series is advanced from its repeat rule; healthy
     series are untouched. The sweep commits each surface as it heals it —
     see ``orchestra.routines.task_supervisor_sweep``.
+
+    A pass that failed across most of the fleet answers 5xx, because the
+    caller here is Cloud Scheduler and a 200 is the only thing it records.
+    Answering 200 with the failures in the body is how a sweep repaired
+    nothing for two days while its schedule reported success every fifteen
+    minutes. One broken tenant still answers 200: a job that goes red for
+    that gets ignored, which costs more than it saves.
     """
 
-    return sweep_task_supervision(session).to_dict()
+    result = sweep_task_supervision(session)
+    payload = result.to_dict()
+    if result.status == "broken":
+        raise HTTPException(status_code=500, detail=payload)
+    return payload
 
 
 @router.post(

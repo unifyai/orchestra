@@ -63,6 +63,8 @@ class UserDAO:
         phone_number: Optional[str] = None,
         whatsapp_number: Optional[str] = None,
         discord_id: Optional[str] = None,
+        signup_ip: Optional[str] = None,
+        signup_user_agent_hash: Optional[str] = None,
     ) -> User:
         """
         Create a new user with an associated BillingAccount.
@@ -77,6 +79,9 @@ class UserDAO:
         :param image: Profile image URL.
         :param timezone: IANA timezone string.
         :param phone_number: Phone number (will be validated and formatted).
+        :param signup_ip: Caller IP at registration, for abuse correlation.
+        :param signup_user_agent_hash: Salted hash of the registration
+            user agent, for abuse correlation.
         :return: The created User instance.
         """
         if timezone is not None and timezone not in VALID_TIMEZONES:
@@ -118,6 +123,8 @@ class UserDAO:
             phone_number=phone_number,
             whatsapp_number=whatsapp_number,
             discord_id=discord_id,
+            signup_ip=signup_ip,
+            signup_user_agent_hash=signup_user_agent_hash,
             billing_account_id=billing_account.id,
             store_prompts=True,
         )

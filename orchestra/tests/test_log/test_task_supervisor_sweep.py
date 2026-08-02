@@ -279,6 +279,83 @@ def test_a_failing_surface_does_not_end_the_sweep(dbsession, monkeypatch) -> Non
     assert result.unchanged == 1, "the surviving surface did no work"
 
 
+class TestSweepStatus:
+    """A pass has to say whether it worked, because its counts cannot.
+
+    ``upserted`` is zero for a fleet with nothing to repair and zero for a
+    sweep that aborted on its first tenant, which is how one ran every
+    fifteen minutes for two days looking healthy while fixing nothing.
+    """
+
+    def _result(self, *, errors: int, projects: int) -> object:
+        from orchestra.routines.task_supervisor_sweep import TaskSupervisorSweepResult
+
+        return TaskSupervisorSweepResult(
+            projects_scanned=projects,
+            errors=[f"surface {index} blew up" for index in range(errors)],
+        )
+
+    def test_a_clean_pass_is_ok(self):
+        assert self._result(errors=0, projects=1552).status == "ok"
+
+    def test_one_broken_tenant_does_not_condemn_the_fleet(self):
+        """A job that goes red for one bad tenant gets ignored within a week."""
+
+        assert self._result(errors=1, projects=1552).status == "degraded"
+
+    def test_the_august_cascade_reads_as_broken(self):
+        """The shape that hid for two days: one lock timeout, then everyone."""
+
+        assert self._result(errors=1551, projects=1552).status == "broken"
+
+    def test_a_fleet_that_failed_entirely_is_broken_at_any_size(self):
+        """Scale must not rescue a pass that did nothing.
+
+        An earlier version kept an absolute floor alongside the share, which
+        meant a small fleet failing every single tenant still read as merely
+        degraded, and the endpoint answered 200.
+        """
+
+        assert self._result(errors=1, projects=1).status == "broken"
+        assert self._result(errors=2, projects=3).status == "broken"
+
+
+@pytest.mark.anyio
+async def test_a_broken_sweep_does_not_report_success_to_its_scheduler(
+    client: AsyncClient,
+    monkeypatch,
+) -> None:
+    """Cloud Scheduler records the status code and nothing else.
+
+    Answering 200 with the failures in the body is precisely how a sweep
+    repaired nothing for two days while its schedule reported success on
+    every one of those ticks.
+    """
+
+    await _ensure_task_machine_project(client)
+
+    from orchestra.routines import task_supervisor_sweep as sweep_module
+
+    def _explode(session, *, project_id):
+        raise RuntimeError("scan blew up for this tenant")
+
+    monkeypatch.setattr(
+        sweep_module,
+        "_armed_definition_ids_by_surface",
+        _explode,
+    )
+
+    response = await client.post(
+        "/v0/admin/task-supervisor/sweep",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 500, response.json()
+    detail = response.json()["detail"]
+    assert detail["status"] == "broken"
+    assert detail["errors"], "the failures must survive into the response"
+
+
 class TestAuthoredRevision:
     """The occurrence fingerprint tracks authored intent, not payload shape."""
 

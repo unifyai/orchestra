@@ -540,6 +540,28 @@ class Settings(BaseSettings):
         "false",
     ).lower() in ("1", "true", "yes")
 
+    # ── Burner-cluster detection ────────────────────────────────────────
+    #: How many never-paid accounts must share a signup origin before the
+    #: cluster sweep will consider any of them. Set above any plausible
+    #: shared-office or shared-VPN signup burst — the cost of a false
+    #: positive here is freezing a real customer's whole team.
+    burner_cluster_min_accounts: int = int(
+        os.environ.get("BURNER_CLUSTER_MIN_ACCOUNTS", "5"),
+    )
+    #: Window over which those signups must have clustered, in days.
+    burner_cluster_window_days: int = int(
+        os.environ.get("BURNER_CLUSTER_WINDOW_DAYS", "7"),
+    )
+    #: Minimum LLM spend before a clustered account is considered farmed.
+    #: Below this the account has extracted nothing worth freezing over.
+    burner_cluster_min_llm_spend: float = float(
+        os.environ.get("BURNER_CLUSTER_MIN_LLM_SPEND", "20"),
+    )
+    #: Remaining credits at or below which the grant counts as drained.
+    burner_cluster_max_remaining_credits: float = float(
+        os.environ.get("BURNER_CLUSTER_MAX_REMAINING_CREDITS", "5"),
+    )
+
     # ── Staff access ────────────────────────────────────────────────────
     #: Days a Unify person's seat in a customer org stays authorised
     #: before the grant lapses. Bounded by default so onboarding access

@@ -1577,12 +1577,24 @@ def _project_successor_for_started_run(
         )
     except Exception:  # noqa: BLE001
         # Never fail a live run because its successor could not be projected.
-        # Loud, because a series that stops advancing stops silently — and the
-        # supervisor sweep is the floor that catches exactly this.
+        # Loud, because a series that stops advancing stops silently, and the
+        # supervisor sweep is the floor built to catch exactly this — a floor
+        # that is only load-bearing while it is itself healthy, which is not
+        # something this call site can promise. It ran on schedule and
+        # repaired nothing for two days in August 2026, so read the sweep's
+        # own `status` before assuming this series recovers on its own.
         logger.exception(
-            "Failed to project the successor for task_id=%s after its run "
-            "started; the supervisor sweep will heal the series.",
-            task_id,
+            {
+                "event": "task_successor_projection_failed",
+                "task_id": task_id,
+                "project_id": project_id,
+                "tasks_context_name": tasks_context_name,
+                "message": (
+                    "Failed to project the successor after a run started. "
+                    "This series has no open head until the supervisor sweep "
+                    "restores one."
+                ),
+            },
         )
 
 
