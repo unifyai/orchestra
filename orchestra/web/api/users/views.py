@@ -184,6 +184,7 @@ async def create_user(
         "bio": new_user.bio,
         "image": new_user.image,
         "email": new_user.email,
+        "api_key": new_api_key,
         "timezone": new_user.timezone,
         "phone_number": new_user.phone_number,
         "whatsapp_number": new_user.whatsapp_number,
