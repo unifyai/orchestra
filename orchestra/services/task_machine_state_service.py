@@ -73,6 +73,7 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
 )
 
 _OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
+_RUNNING_STATE = "running"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
@@ -1524,12 +1525,65 @@ def update_task_run(
     if existing is None:
         raise ValueError(f"Task run with run_key='{run_key}' not found.")
 
+    previous_state = str((existing.data or {}).get("state") or "")
     payload = dict(existing.data or {})
     payload.update(dict(updates))
     payload.setdefault("run_id", existing.id)
     _replace_log_payload(existing, payload)
     session.flush()
+
+    if str(payload.get("state") or "") == _RUNNING_STATE != previous_state:
+        _project_successor_for_started_run(
+            session=session,
+            project_id=project_id,
+            payload=payload,
+            tasks_context_name=tasks_context_name,
+        )
     return existing
+
+
+def _project_successor_for_started_run(
+    *,
+    session: Session,
+    project_id: int,
+    payload: Mapping[str, Any],
+    tasks_context_name: str,
+) -> None:
+    """Mint the next occurrence the moment a run starts.
+
+    Recurrence used to advance by relay: the runtime, as part of starting an
+    occurrence, computed and wrote the next one. That handed a load-bearing
+    invariant to whichever client happened to be dispatching, and July found
+    five distinct ways to drop it — a key built differently on each side, a
+    dropped field, an unretried write, a deploy-drain collision, an anchor
+    reset — each of which silently ended a series with no error anywhere.
+
+    The ledger owns it now. Starting a run is the event that makes the next
+    occurrence due, so the same event projects it, in the one place that
+    already knows how to derive a slot from the repeat rule. Projection stays
+    idempotent, so this racing the supervisor sweep converges rather than
+    duplicating.
+    """
+
+    task_id = _coerce_int(payload.get("task_id"))
+    if task_id is None:
+        return
+    try:
+        sync_task_executions_for_task_ids(
+            session,
+            project_id,
+            [task_id],
+            tasks_context_name=tasks_context_name,
+        )
+    except Exception:  # noqa: BLE001
+        # Never fail a live run because its successor could not be projected.
+        # Loud, because a series that stops advancing stops silently — and the
+        # supervisor sweep is the floor that catches exactly this.
+        logger.exception(
+            "Failed to project the successor for task_id=%s after its run "
+            "started; the supervisor sweep will heal the series.",
+            task_id,
+        )
 
 
 def get_task_execution(
@@ -1963,12 +2017,11 @@ def _project_execution_payload(
             source_task_log_id=row.log_event_id,
         )
         if latest is not None and latest >= (_parse_datetime(anchor) or latest):
-            if _has_running_execution(
-                session,
-                project_id=project_id,
-                source_task_log_id=row.log_event_id,
-            ):
-                return KEEP_CURRENT_HEAD
+            # A run being in flight used to mean "leave the successor to the
+            # dispatcher", because the runtime projected it as part of
+            # starting. Projection is now owned here, so deferring would
+            # simply lose the occurrence: the series has already consumed its
+            # head and nothing else is going to mint the next one.
             minted = _next_repeat_occurrence_after(
                 data=row.data,
                 task_id=task_id,
@@ -2361,25 +2414,6 @@ def _next_repeat_occurrence_after(
         patterns=patterns,
     )
     return next_start.isoformat(), offset
-
-
-def _has_running_execution(
-    session: Session,
-    *,
-    project_id: int,
-    source_task_log_id: int,
-) -> bool:
-    """Whether any execution of this definition is currently running."""
-
-    return (
-        session.query(LogEvent.id)
-        .filter(
-            LogEvent.project_id == project_id,
-            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
-            LogEvent.data["state"].astext == "running",
-        )
-        .first()
-    ) is not None
 
 
 def _latest_ledger_occurrence(

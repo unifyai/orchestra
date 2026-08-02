@@ -1,5 +1,5 @@
 {
-  "_contract": "Shared drift guard for the repeat-rule arithmetic mirrored between unify/task_scheduler/types/repetition.py and orchestra/services/task_repetition.py. This file is checked into both repos with byte-identical content; each repo runs its own implementation against every vector. Regenerate from unify and copy to both repos when the semantics deliberately change.",
+  "_contract": "Golden regression corpus for the repeat-rule arithmetic in orchestra/services/task_repetition.py, which is now the only implementation: successor projection is owned by Orchestra and unify no longer computes slots. Regenerate deliberately and review the diff, since the expectations come from the code they guard.",
   "next_occurrence": [
     {
       "name": "minutely_10_advances_one_slot",

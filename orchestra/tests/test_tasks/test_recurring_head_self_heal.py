@@ -1,14 +1,14 @@
 """A repeating series whose worker crashed pre-dispatch must self-heal.
 
-Recurrence normally advances inside the worker: dispatch projects the next
-occurrence just before running the current one. A pod that dies before that
-point — an image pull failure, an OOM at startup, a SIGKILL during boot —
-leaves the definition armed with no open occurrence and nothing to fire one,
-and the series halts silently. Releasing the stuck run is the moment Orchestra
-knows the worker is gone, so the projection now advances the repeat rule
-itself and mints the next future slot. These tests pin that behavior and its
-guard rails: a run in flight keeps ownership of the projection, and a
-non-repeating or exhausted definition still yields nothing.
+Recurrence advances when an occurrence is marked running. A pod that dies
+before reaching that point — an image pull failure, an OOM at startup, a
+SIGKILL during boot — leaves the definition armed with no open occurrence
+and nothing to fire one, and the series halts silently. Releasing the stuck
+run is the moment Orchestra knows the worker is gone, so the projection
+advances the repeat rule itself and mints the next future slot. These tests
+pin that behavior and its guard rails: a consumed series advances even with
+a run in flight, and a non-repeating or exhausted definition still yields
+nothing.
 """
 
 from __future__ import annotations
@@ -63,12 +63,10 @@ def _project(
     row: service._TaskRow,
     *,
     latest: datetime | None,
-    running: bool = False,
 ):
     with (
         patch.object(service, "_open_execution_scheduled_for", return_value=None),
         patch.object(service, "_latest_ledger_occurrence", return_value=latest),
-        patch.object(service, "_has_running_execution", return_value=running),
     ):
         return service._project_execution_payload(
             row=row,
@@ -115,14 +113,21 @@ def test_a_month_long_outage_still_mints_a_future_head() -> None:
     assert (minted - consumed).total_seconds() % 600 == 0
 
 
-def test_a_run_in_flight_keeps_ownership_of_the_projection() -> None:
-    """A definition write must not race the dispatcher already projecting."""
+def test_a_run_in_flight_no_longer_defers_the_projection() -> None:
+    """Projection advances a consumed series even while a run is in flight.
+
+    This used to return KEEP_CURRENT_HEAD: the runtime projected the
+    successor as part of starting a run, so deferring avoided racing it.
+    Projection is owned here now — the relay is gone — so deferring would
+    simply lose the occurrence.
+    """
 
     consumed = datetime.now(timezone.utc) - timedelta(minutes=3)
 
-    payload = _project(_definition_row(), latest=consumed, running=True)
+    payload = _project(_definition_row(), latest=consumed)
 
-    assert payload is KEEP_CURRENT_HEAD
+    assert payload is not KEEP_CURRENT_HEAD
+    assert payload["scheduled_for"] > consumed.isoformat()
 
 
 def test_a_started_non_repeating_definition_keeps_its_head() -> None:
