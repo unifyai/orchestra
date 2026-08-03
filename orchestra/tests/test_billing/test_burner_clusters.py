@@ -24,7 +24,11 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.routines.card_gate_sweep import freeze_burner_clusters
 from orchestra.settings import settings
-from orchestra.tests.test_billing.conftest import make_user_with_billing
+from orchestra.tests.test_billing.conftest import (
+    make_org_with_billing,
+    make_user,
+    make_user_with_billing,
+)
 
 
 @pytest.fixture
@@ -55,6 +59,23 @@ def _make_farmed_account(dbsession, uid: str, *, ip: str, spend: float = 50.0):
     user.created_at = datetime.utcnow()
     dbsession.flush()
     _spend(dbsession, ba, spend)
+    return user, ba
+
+
+def _make_comped_account(dbsession, uid: str, *, ip: str, org_name: str):
+    """A drained never-paid account whose org holds a free-trial grant.
+
+    The grant lives on the *organization*, so the account only reads as
+    comped once a user points at the org's billing account — which is
+    what puts it in the sweep's origin clusters in the first place.
+    """
+    org, ba = make_org_with_billing(dbsession, org_name, None, credits=Decimal("0"))
+    org.free_trial = True
+    user = make_user(dbsession, uid, ba)
+    user.signup_ip = ip
+    user.created_at = datetime.utcnow()
+    dbsession.flush()
+    _spend(dbsession, ba, 50.0)
     return user, ba
 
 
@@ -175,6 +196,50 @@ def test_paid_accounts_are_exempt(dbsession, small_cluster):
             ),
         )
     dbsession.flush()
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert result.frozen == 0
+
+
+def test_comped_account_in_a_cluster_is_not_frozen(dbsession, small_cluster):
+    """An admin-granted free trial clears an account, like payment does.
+
+    Comping an org is a deliberate commercial decision, and it outranks
+    a correlation that is only ever circumstantial.
+    """
+    farmed = [
+        _make_farmed_account(dbsession, f"comped_ring_{i}", ip="203.0.113.90")
+        for i in range(3)
+    ]
+    _user, comped_ba = _make_comped_account(
+        dbsession,
+        "comped_ring_member",
+        ip="203.0.113.90",
+        org_name="bc comped member",
+    )
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert comped_ba.id not in result.billing_account_ids
+    assert {ba.id for _u, ba in farmed} == set(result.billing_account_ids)
+
+
+def test_comped_account_is_not_cluster_evidence(dbsession, small_cluster):
+    """The grant withdraws the account as evidence, not just as a target.
+
+    Two farmed accounts plus a comped one is not a ring of three. A
+    comped org must never be what tips its neighbours over the
+    threshold, or the grant would quietly endanger them.
+    """
+    for i in range(2):
+        _make_farmed_account(dbsession, f"comped_thresh_{i}", ip="203.0.113.100")
+    _make_comped_account(
+        dbsession,
+        "comped_thresh_member",
+        ip="203.0.113.100",
+        org_name="bc comped threshold",
+    )
 
     result = freeze_burner_clusters(dbsession, dry_run=True)
 

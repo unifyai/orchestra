@@ -367,15 +367,24 @@ jobs:
   # which branch protection cannot target by name -- so this job republishes one
   # "pytest" check that is green iff every shard passed.
   #
-  # This job MUST run unconditionally. GitHub counts a *skipped* required check
-  # as satisfied, so gating it on should-run-tests published a passing "pytest"
-  # context on every non-test push. A release PR shares its head SHA with those
-  # pushes, so that stale pass satisfied branch protection and let four releases
-  # merge with a genuinely failing suite -- one of which put a broken test on
-  # main for thirteen hours. Running always means the context is only ever an
-  # explicit pass or fail, never an implicit pass. A non-test push therefore
-  # reports "pytest" red, which is the honest signal: this commit's tests did
-  # not run, and a release cannot be cut from it until they do.
+  # This job must run unconditionally on the triggers where the release gate
+  # actually applies (pull_request and workflow_dispatch), so the context is
+  # always an explicit pass or fail there rather than an implicit pass-by-skip.
+  # GitHub counts a *skipped* required check as satisfied, so gating it on
+  # should-run-tests used to publish a passing "pytest" context on every
+  # non-test push; a release PR shares its head SHA with those pushes, so that
+  # stale pass satisfied branch protection and let four releases merge with a
+  # genuinely failing suite -- one of which put a broken test on main for
+  # thirteen hours.
+  #
+  # It must NOT run on plain push. pytest is gated behind [run-tests] there,
+  # so an unconditional push-triggered run would either republish the same
+  # implicit-pass-by-skip bug, or -- once made to fail closed -- attach a
+  # failing "pytest" run to that push's SHA that persists even after the real
+  # pull_request-triggered run for the same SHA passes, since branch
+  # protection blocks on any matching-name run, not just the latest.
+  # Publishing nothing on push means the context is simply pending until the
+  # pull_request run supplies the real answer.
   #
   # The Staging->Main ruleset and main branch protection both require this
   # context with strict (latest-commit) semantics; see
@@ -383,7 +392,7 @@ jobs:
   pytest-required:
     name: pytest
     needs: [should-run-tests, pytest]
-    if: always()
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
     - name: Require all pytest shards to pass

@@ -2105,7 +2105,7 @@ def access_gate(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ) -> AccessGateResponse:
-    from orchestra.lib.trial_subscription import has_platform_access
+    from orchestra.lib.trial_subscription import has_api_access, has_platform_access
 
     user_id: str = request_fastapi.state.user_id
     organization_id: Optional[int] = getattr(
@@ -2116,7 +2116,11 @@ def access_gate(
 
     ba = BillingAccountDAO(session).resolve(user_id, organization_id)
     if not ba:
-        return AccessGateResponse(allowed=False, reason="card_required")
+        return AccessGateResponse(
+            allowed=False,
+            reason="card_required",
+            api_access_allowed=has_api_access(session, None),
+        )
 
     allowed = has_platform_access(session, ba)
     return AccessGateResponse(
@@ -2124,4 +2128,9 @@ def access_gate(
         reason=None if allowed else "card_required",
         trial_end_at=ba.trial_end_at.isoformat() if ba.trial_end_at else None,
         subscription_active=bool(ba.stripe_subscription_id),
+        # Independent of ``allowed``: the card gate governs the platform,
+        # this governs whether spend may happen off-platform. With the
+        # card gate off, an account is normally allowed here and denied
+        # there.
+        api_access_allowed=has_api_access(session, ba),
     )
