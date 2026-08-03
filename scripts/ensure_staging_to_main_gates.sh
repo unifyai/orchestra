@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep staging->main release gates aligned with .github/workflows/tests.yml.
-# The aggregate "pytest" check comes from the pytest-required job, which runs
-# unconditionally on pull_request/workflow_dispatch and reports an explicit
-# pass or fail there. Individual shards ("pytest (0)".."pytest (N)") are not
-# branch-protection contexts.
+# Keep staging->main release gates aligned with
+# .github/workflows/pytest-release-gate.yml. The aggregate "pytest" check
+# comes from that workflow's pytest-required job. Individual shards
+# ("pytest (0)".."pytest (N)") are not branch-protection contexts.
 #
-# pytest-required must never be gated on should-run-tests (or similar) again.
-# GitHub counts a skipped required check as satisfied, so a job that publishes
-# this context conditionally on whether tests ran gives an implicit pass on
-# every commit where they don't -- and because a release PR shares its head
-# SHA with pushes to staging, that stale pass satisfies this ruleset. That is
-# how #125, #127, #128 and #129 merged into main carrying a failing suite.
+# pytest-required must never be gated on should-run-tests (or similar) again,
+# and the workflow that defines it must never trigger on push. GitHub counts
+# a skipped required check as satisfied, so a job that publishes this context
+# conditionally on whether tests ran gives an implicit pass on every commit
+# where they don't -- and because a release PR shares its head SHA with
+# pushes to staging, that stale pass satisfies this ruleset. That is how
+# #125, #127, #128 and #129 merged into main carrying a failing suite.
 #
-# It also must not run on plain push: that only reintroduces the same bug in
-# fail-closed form, attaching a failing run to a push's SHA that a later
-# passing pull_request run on the same SHA can never supersede (branch
-# protection blocks on any matching-name run, not just the latest). Scoping
-# to pull_request/workflow_dispatch leaves plain pushes with no run at all
-# for this context -- pending, not a stale pass or a false block.
+# Scoping the job's own `if:` to pull_request/workflow_dispatch is NOT
+# sufficient on its own: GitHub Actions still publishes a "skipped" check run
+# for a job whose `if` evaluates false, and a skipped required check is
+# satisfied the same as a pass. The workflow that defines pytest-required
+# must itself only ever trigger on pull_request(main)/workflow_dispatch --
+# see pytest-release-gate.yml -- so an ordinary push produces no check run
+# under this context at all (pending, not a stale pass or a false block).
+# The everyday matrix in tests.yml is a separate, non-required signal for
+# developer feedback on other branches/PRs.
 
 REPO="${REPO:-unifyai/orchestra}"
 RULESET_ID="${RULESET_ID:-17691842}"
