@@ -120,9 +120,17 @@ jobs:
   #         POETRY_VIRTUALENVS_CREATE: false
   #     - name: Run mypy check
   #       run: poetry run mypy --install-types --non-interactive .
-  pytest:
+  pytest-dev:
+    name: pytest-dev
     runs-on: ubuntu-latest-8-cores
     needs: should-run-tests
+    # Named distinctly from the required "pytest" context (published only by
+    # pytest-release-gate.yml): a skipped job publishes a check run under its
+    # own job id even when its matrix never expands, so sharing the job id
+    # "pytest" here would recreate the same stale-skip-satisfies-the-gate bug
+    # this split was meant to fix, just from this job instead of the old
+    # aggregator.
+    #
     # The staging->main release gate runs this same matrix from its own
     # dedicated workflow (pytest-release-gate.yml), which is the sole source
     # of the required "pytest" context and can never be triggered by push.
