@@ -4583,6 +4583,81 @@ class DashboardToken(Base):
     )
 
 
+# Who may read a canvas. Enforced server-side on every read path; a canvas can
+# name its own visibility but cannot widen it, and the frame never sees this at
+# all.
+CANVAS_VISIBILITIES = ("private", "team", "public_link")
+
+# Lifecycle of a canvas. ``draft`` is authored but not servable; ``published`` is
+# live; ``quarantined`` is the kill switch, and it stops the bundle, the data
+# reads and the actions together rather than one at a time.
+CANVAS_STATUSES = ("draft", "published", "quarantined")
+
+
+class CanvasToken(Base):
+    """Token-to-context mapping for a canvas.
+
+    The canvas itself — authored source, compiled bundle, resolved bindings and
+    declared actions — lives in Unify contexts under ``Canvas/*``. This table is
+    only the routing and authorization record console needs in order to turn a
+    token in a URL into a context path plus the identity to read it as.
+
+    Unlike ``DashboardToken`` there is no ``entity_type``: a canvas is the whole
+    view rather than a tile composed into a layout, so the column could only ever
+    hold one value.
+
+    ``visibility`` and ``status`` live here rather than only on the Unify row
+    because every console proxy has to check them before it uses the admin key,
+    and doing that from the routing lookup it already performs avoids a second
+    round trip on the hot read path.
+    """
+
+    __tablename__ = "canvas_token"
+
+    token = Column(String(12), primary_key=True)
+    context_name = Column(String(500), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    visibility = Column(String(20), nullable=False, server_default="private")
+    status = Column(String(20), nullable=False, server_default="draft")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    project = relationship(
+        "Project",
+        backref=backref("canvas_tokens", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        # Enumerations are constrained in the database as well as in the request
+        # schema: these two columns are the authorization decision, so a row that
+        # reached the table by any other path must still be readable safely.
+        sa.CheckConstraint(
+            "visibility IN ('private', 'team', 'public_link')",
+            name="ck_canvas_token_visibility",
+        ),
+        sa.CheckConstraint(
+            "status IN ('draft', 'published', 'quarantined')",
+            name="ck_canvas_token_status",
+        ),
+        Index("idx_canvas_token_project_id", "project_id"),
+        Index("idx_canvas_token_user_id", "user_id"),
+    )
+
+
 # Sentinel `thread_ts` value used by ``SlackThreadRoute`` rows that represent
 # the *root* of a direct-message conversation. Slack DMs do not carry a real
 # thread timestamp; this lets a single unique index cover both channel threads
