@@ -120,10 +120,24 @@ jobs:
   #         POETRY_VIRTUALENVS_CREATE: false
   #     - name: Run mypy check
   #       run: poetry run mypy --install-types --non-interactive .
-  pytest:
+  pytest-dev:
+    name: pytest-dev
     runs-on: ubuntu-latest-8-cores
     needs: should-run-tests
-    if: needs.should-run-tests.outputs.run_tests == 'true'
+    # Named distinctly from the required "pytest" context (published only by
+    # pytest-release-gate.yml): a skipped job publishes a check run under its
+    # own job id even when its matrix never expands, so sharing the job id
+    # "pytest" here would recreate the same stale-skip-satisfies-the-gate bug
+    # this split was meant to fix, just from this job instead of the old
+    # aggregator.
+    #
+    # The staging->main release gate runs this same matrix from its own
+    # dedicated workflow (pytest-release-gate.yml), which is the sole source
+    # of the required "pytest" context and can never be triggered by push.
+    # Skip it here for that case so it doesn't run twice.
+    if: |
+      needs.should-run-tests.outputs.run_tests == 'true' &&
+      !(github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main')
     strategy:
       fail-fast: false
       matrix:
@@ -361,27 +375,3 @@ jobs:
         path: logs/
         if-no-files-found: ignore
         retention-days: 90
-
-  # Single, stable required status check for staging->main releases.
-  # The matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),
-  # which branch protection cannot target by name -- so this job republishes one
-  # "pytest" check that is green iff every shard passed. It does not run (and
-  # therefore does not publish a check) when should-run-tests skipped the
-  # matrix on a non-test push; release PRs must wait for the PR-triggered run.
-  # The Staging->Main ruleset and main branch protection both require this
-  # context with strict (latest-commit) semantics; see
-  # scripts/ensure_staging_to_main_gates.sh.
-  pytest-required:
-    name: pytest
-    needs: [should-run-tests, pytest]
-    if: always() && needs.should-run-tests.outputs.run_tests == 'true'
-    runs-on: ubuntu-latest
-    steps:
-    - name: Require all pytest shards to pass
-      run: |
-        result="${{ needs.pytest.result }}"
-        echo "pytest matrix aggregate result: $result"
-        if [[ "$result" == "success" ]]; then
-          exit 0
-        fi
-        exit 1

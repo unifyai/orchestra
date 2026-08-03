@@ -1009,6 +1009,106 @@ def trigger_credit_expiry_reminder(
         )
 
 
+@router.get(
+    "/billing/comms-gate",
+    summary="Admin: Billing-gate state for an assistant's inbound comms",
+    description=(
+        "Whether the assistant's owning account is billing-gated "
+        "(suspended, card required, or out of credits) and, when gated, "
+        "the owner-facing explanation to auto-reply over the inbound "
+        "channel. Called by the unify-deploy adapters before dispatching "
+        "an inbound message to the runtime."
+    ),
+)
+def get_comms_gate(
+    assistant_id: int,
+    session=Depends(get_db_session),
+) -> dict:
+    from orchestra.db.dao.assistant_dao import AssistantDAO
+    from orchestra.lib.trial_subscription import comms_gate_for_assistant
+
+    assistant = AssistantDAO(session).get_assistant_by_agent_id(assistant_id)
+    if assistant is None:
+        raise HTTPException(status_code=404, detail="Assistant not found.")
+    return comms_gate_for_assistant(session, assistant)
+
+
+@router.post(
+    "/billing/card-gate-freeze-sweep",
+    summary="Admin: Freeze ACTIVE never-paid accounts pending card",
+    description=(
+        "One-shot migration sweep for the card-gated trial rollout: "
+        "suspend (reason ``card_required``) every ACTIVE account with "
+        "neither a linked subscription nor real payment history. "
+        "Refuses unless ``REQUIRE_CARD_ON_FILE`` is enabled. Completing "
+        "the trial Checkout auto-reinstates an account. Defaults to "
+        "``dry_run=true`` — pass ``dry_run=false`` to apply."
+    ),
+)
+def trigger_card_gate_freeze_sweep(
+    dry_run: bool = True,
+    session=Depends(get_db_session),
+) -> dict:
+    from orchestra.routines.card_gate_sweep import freeze_never_paid_accounts
+
+    result = freeze_never_paid_accounts(session, dry_run=dry_run)
+    if not dry_run:
+        session.commit()
+    return {"status": "success", **result.to_dict()}
+
+
+@router.post(
+    "/billing/abuse-freeze-sweep",
+    summary="Admin: Freeze accounts matching the credit-farming signature",
+    description=(
+        "Suspend (reason ``abuse_fingerprint``) never-paid accounts whose "
+        "recent LLM spend is overwhelmingly raw-API (``assistant_id`` "
+        "NULL ledger rows) and whose wallet is near/below zero. Intended "
+        "to run daily via Cloud Scheduler alongside the other billing "
+        "routines. Defaults to ``dry_run=true``."
+    ),
+)
+def trigger_abuse_freeze_sweep(
+    dry_run: bool = True,
+    session=Depends(get_db_session),
+) -> dict:
+    from orchestra.routines.card_gate_sweep import freeze_abuse_fingerprints
+
+    result = freeze_abuse_fingerprints(session, dry_run=dry_run)
+    if not dry_run:
+        session.commit()
+    return {"status": "success", **result.to_dict()}
+
+
+@router.post(
+    "/billing/burner-cluster-freeze-sweep",
+    summary="Admin: Freeze never-paid accounts farming in an origin cluster",
+    description=(
+        "Successor to ``/billing/abuse-freeze-sweep`` for when free "
+        "credits are Console-only: that signature keys on raw-API spend, "
+        "which never-paid accounts can no longer produce. Suspends "
+        "(reason ``abuse_fingerprint``) only accounts in a *cluster* — "
+        "several never-paid accounts sharing a signup origin inside a "
+        "short window, each having drained its grant. Single accounts are "
+        "never frozen, however fast they burn. "
+        "Returns nothing until signup provenance has been recorded for a "
+        "while: pre-existing users have no ``signup_ip`` and are skipped "
+        "rather than grouped under a shared NULL. "
+        "Defaults to ``dry_run=true``."
+    ),
+)
+def trigger_burner_cluster_freeze_sweep(
+    dry_run: bool = True,
+    session=Depends(get_db_session),
+) -> dict:
+    from orchestra.routines.card_gate_sweep import freeze_burner_clusters
+
+    result = freeze_burner_clusters(session, dry_run=dry_run)
+    if not dry_run:
+        session.commit()
+    return {"status": "success", **result.to_dict()}
+
+
 # NOTE: ``POST /admin/billing/health`` was retired alongside the
 # ``orchestra.routines.billing_health`` routine when the v2 billing
 # refactor folded health-snapshot KPIs into Grafana. The reconciliation

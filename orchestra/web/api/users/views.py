@@ -1,8 +1,6 @@
 import asyncio
-import base64
 import datetime
 import logging
-import secrets
 from typing import List, Optional
 
 from fastapi import (
@@ -21,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.api_key_dao import generate_key as _generate_key
 from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.dao.auth_dao import AuthDAO, decrypt_secret
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
@@ -185,6 +184,7 @@ async def create_user(
         "bio": new_user.bio,
         "image": new_user.image,
         "email": new_user.email,
+        "api_key": new_api_key,
         "timezone": new_user.timezone,
         "phone_number": new_user.phone_number,
         "whatsapp_number": new_user.whatsapp_number,
@@ -208,18 +208,9 @@ def get_user(
         raise not_found("User ID")
     user_instance = user[0][0]
 
-    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
-    if personal_keys:
-        api_key_value = personal_keys[0][0].key
-    else:
-        logger.warning(
-            "User %s has no personal API key; generating one.",
-            user_instance.id,
-        )
-        new_key = generate_key()
-        api_key_dao.create(key=new_key, name="", user_id=user_instance.id)
-        session.commit()
-        api_key_value = new_key
+    # The Console authenticates as this user with a console-kind key, not
+    # with the programmatic key shown in Profile.
+    api_key_value = resolve_console_key(session, api_key_dao, user_instance.id)
 
     # Build organizations list with org-specific API keys
     organizations = user_dao.get_user_organizations(
@@ -279,19 +270,9 @@ def get_user_by_email(
         return None
     user_instance = user[0][0]
 
-    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
-    if personal_keys:
-        api_key_value = personal_keys[0][0].key
-    else:
-        logger.warning(
-            "User %s (%s) has no personal API key; generating one.",
-            user_instance.id,
-            email,
-        )
-        new_key = generate_key()
-        api_key_dao.create(key=new_key, name="", user_id=user_instance.id)
-        session.commit()
-        api_key_value = new_key
+    # The Console authenticates as this user with a console-kind key, not
+    # with the programmatic key shown in Profile.
+    api_key_value = resolve_console_key(session, api_key_dao, user_instance.id)
 
     # Build organizations list with org-specific API keys
     organizations = user_dao.get_user_organizations(
@@ -365,18 +346,9 @@ def get_user_by_account(
         return None
     user_instance = user[0][0]
 
-    personal_keys = api_key_dao.get_personal_keys(user_instance.id)
-    if personal_keys:
-        api_key_value = personal_keys[0][0].key
-    else:
-        logger.warning(
-            "User %s has no personal API key; generating one.",
-            user_instance.id,
-        )
-        new_key = generate_key()
-        api_key_dao.create(key=new_key, name="", user_id=user_instance.id)
-        session.commit()
-        api_key_value = new_key
+    # The Console authenticates as this user with a console-kind key, not
+    # with the programmatic key shown in Profile.
+    api_key_value = resolve_console_key(session, api_key_dao, user_instance.id)
 
     # Build organizations list with org-specific API keys
     organizations = user_dao.get_user_organizations(
@@ -872,11 +844,31 @@ async def reset_user_account(
 # Note: link_account and unlink_account endpoints moved to auth/views.py
 
 
-def generate_key(size=32):
-    buffer = secrets.token_bytes(size)
-    key = base64.b64encode(buffer).decode("utf-8")
-    # Replace forward slashes with hyphens to avoid issues with URL encoding
-    return key.replace("/", "-")
+#: Re-exported: key generation lives in the DAO so it can mint Console
+#: keys without importing this module. Kept here because several call
+#: sites already import ``generate_key`` from users.views.
+generate_key = _generate_key
+
+
+def resolve_console_key(session, api_key_dao, user_id: str) -> str:
+    """The key the Console authenticates with for this user, minted on demand.
+
+    This is what makes "free credits are spendable only through the
+    Console" enforceable. The Console reads a user through the admin-keyed
+    ``/user/by-*`` endpoints and then forwards whatever ``api_key`` they
+    return on every subsequent call, so returning a ``console``-kind key
+    here moves the whole Console onto one — with no Console-side change to
+    how keys are plumbed.
+
+    The key is never returned by ``/api-keys`` and never rendered, so it
+    cannot be copied out of the UI and replayed by a script. That is the
+    entire security property: a credential the user holds is
+    ``programmatic`` and gated; a credential only the Console holds is
+    not.
+    """
+    key = api_key_dao.get_or_create_console_key(user_id)
+    session.commit()
+    return key
 
 
 @admin_router.put("/user/quotas/reset")
@@ -1018,6 +1010,11 @@ def regenerate_api_key(
     user_id = old_key.user_id
     organization_id = old_key.organization_id
     name = old_key.name
+    # Carried deliberately: recreating without it would silently downgrade
+    # a Console key to programmatic, handing the user a credential that is
+    # supposed to be unreachable and reopening the gate this key kind
+    # exists to close.
+    kind = old_key.kind
 
     # Delete old key
     api_key_dao.delete(key_id)
@@ -1029,6 +1026,7 @@ def regenerate_api_key(
         name=name,
         user_id=user_id,
         organization_id=organization_id,
+        kind=kind,
     )
     session.commit()
 
@@ -1507,6 +1505,11 @@ def get_user_basic_info(
 
     return {
         "user_id": user.id,
+        # Org context of the *presented key*, not the user's memberships: an
+        # org key and a personal key for the same user resolve different
+        # billing accounts. The gateway's UniLLM proxy reads this to scope
+        # its spending-limit checks to the right wallet.
+        "organization_id": getattr(request.state, "organization_id", None),
         "first": user.name,
         "last": user.last_name,
         "email": user.email,
@@ -2649,6 +2652,8 @@ async def get_user_spend(
             BillingAccountDAO(session).resolve_billing_mode(user.billing_account).value
         )
 
+    from orchestra.lib.trial_subscription import trial_gate_fields
+
     return UserSpendResponse(
         user_id=user_id,
         month=month,
@@ -2658,6 +2663,7 @@ async def get_user_spend(
         percent_used=percent_used,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        **trial_gate_fields(session, user.billing_account),
     )
 
 

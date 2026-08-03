@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra.db.models.orchestra_models import AdminUser
+from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND, AdminUser
 from orchestra.observability.observability import set_user_context
 from orchestra.settings import settings
 from orchestra.web.api.utils.http_responses import (
@@ -112,6 +112,7 @@ def auth_api_key(
         request_fastapi.state.organization_id = None
         request_fastapi.state.api_key = apikey
         request_fastapi.state.is_system_api_key = True
+        request_fastapi.state.key_kind = CONSOLE_KEY_KIND
         set_user_context(
             user_id=request_fastapi.state.user_id,
             user_email=request_fastapi.state.user_email,
@@ -131,6 +132,11 @@ def auth_api_key(
             request_fastapi.state.last_name = db_response[0][3]
             request_fastapi.state.organization_id = db_response[0][4]
             request_fastapi.state.api_key = apikey
+            # Where the request came from. Only a Console-held key carries
+            # ``console``; anything a user can copy out of Profile is
+            # ``programmatic``. Gates that must not be reachable by curl
+            # read this rather than trusting a header.
+            request_fastapi.state.key_kind = db_response[0][5]
 
             # Gate restricted environments (e.g. staging) to Unify members.
             # Runs after we know the user so the 403 is meaningful in logs.
@@ -245,6 +251,23 @@ _FREEZE_EXEMPT_PATHS = frozenset(
     {
         "/v0/billing/account-info",
         "/v0/billing/portal-session",
+        # The card-gate remediation loop must survive the freeze: the
+        # console reads the gate state to explain the lock, and the
+        # trial Checkout is the self-serve path out of a
+        # ``card_required`` suspension (completion reinstates the
+        # account via the checkout.session.completed webhook).
+        "/v0/billing/access-gate",
+        "/v0/billing/trial-checkout",
+        # Account setup must survive the freeze for the same reason.
+        # The console pins any user whose onboarding is incomplete to
+        # /login/onboarding, so a user frozen mid-signup can neither
+        # finish onboarding nor reach the card page that would lift the
+        # freeze. These endpoints only move onboarding state — they
+        # consume no credits and confer no platform access — so the
+        # gate lands where it belongs: on the first real request after
+        # onboarding completes.
+        "/v0/user/onboarding",
+        "/v0/user/onboarding-status",
     },
 )
 
@@ -257,9 +280,10 @@ def check_account_not_frozen(request: Request):
     enforcement for billable actions is handled per-handler (credits
     checks) and by Unity's spending-limit hook — not here.
 
-    Read-only billing endpoints (account-info, portal-session) are
-    exempted so the frontend can display account-status banners and
-    allow users to manage their payment methods to resolve suspensions.
+    Read-only billing endpoints (account-info, portal-session) and the
+    onboarding progress endpoints are exempted so the frontend can
+    display account-status banners, let users finish account setup, and
+    let them manage payment methods to resolve suspensions.
 
     Fails closed: if the DB check itself errors, the request is blocked
     to prevent suspended accounts from exploiting transient DB issues.
@@ -294,3 +318,74 @@ def check_account_not_frozen(request: Request):
             status_code=503,
             detail="Unable to verify account status. Please try again.",
         )
+
+
+#: Human-facing copy for a blocked programmatic start. Shared by every
+#: route that mounts :func:`require_console_origin_for_free_accounts` so
+#: the message a caller sees does not drift between surfaces.
+CONSOLE_ONLY_DETAIL = (
+    "This account's free credits can only be spent through the Unify "
+    "Console. Add a payment method to enable API access."
+)
+
+console_only_while_free = HTTPException(
+    status_code=402,
+    detail=CONSOLE_ONLY_DETAIL,
+)
+
+
+def require_console_origin_for_free_accounts(request: Request) -> None:
+    """Block programmatic starts of metered runtime work on free accounts.
+
+    Starting a runtime is not itself a debit, but it is the act that
+    causes one: the job wakes, works, and bills. Gating the spend alone
+    would be too late and in the wrong process — the runtime authenticates
+    as itself, so by then the request's origin is gone. So the gate goes
+    here, at the point a *caller* asks for work to begin.
+
+    Console requests carry a ``console``-kind key that is never displayed
+    and so cannot be lifted into a script; everything a user can copy out
+    of Profile is ``programmatic``. That distinction is the whole reason
+    :class:`ApiKey.kind` exists.
+
+    Mount this on any endpoint that wakes, creates, or delegates to a
+    runtime. Fails closed on an unexpected error, matching
+    :func:`check_account_not_frozen` — a transient DB fault must not
+    become an open door.
+    """
+    from orchestra.lib.trial_subscription import has_api_access
+
+    if not settings.require_api_payment_history:
+        return
+
+    # Platform/system callers (the admin key) are not customers.
+    if getattr(request.state, "is_system_api_key", False):
+        return
+
+    if getattr(request.state, "key_kind", None) == CONSOLE_KEY_KIND:
+        return
+
+    user_id = getattr(request.state, "user_id", None)
+    organization_id = getattr(request.state, "organization_id", None)
+    if not user_id:
+        return
+
+    try:
+        with _ro_session() as session:
+            ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+            if has_api_access(session, ba):
+                return
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed to check API access for user %s — blocking request "
+            "(fail-closed)",
+            user_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify account status. Please try again.",
+        )
+
+    raise console_only_while_free

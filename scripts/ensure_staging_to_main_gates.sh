@@ -1,14 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep staging->main release gates aligned with .github/workflows/tests.yml.
-# The aggregate "pytest" check comes from the pytest-required job, which only
-# publishes when should-run-tests enabled the matrix. Individual shards
+# Keep staging->main release gates aligned with
+# .github/workflows/pytest-release-gate.yml. The aggregate "pytest" check
+# comes from that workflow's pytest-required job. Individual shards
 # ("pytest (0)".."pytest (N)") are not branch-protection contexts.
+#
+# pytest-required must never be gated on should-run-tests (or similar) again,
+# and the workflow that defines it must never trigger on push. GitHub counts
+# a skipped required check as satisfied, so a job that publishes this context
+# conditionally on whether tests ran gives an implicit pass on every commit
+# where they don't -- and because a release PR shares its head SHA with
+# pushes to staging, that stale pass satisfies this ruleset. That is how
+# #125, #127, #128 and #129 merged into main carrying a failing suite.
+#
+# Scoping the job's own `if:` to pull_request/workflow_dispatch is NOT
+# sufficient on its own: GitHub Actions still publishes a "skipped" check run
+# for a job whose `if` evaluates false, and a skipped required check is
+# satisfied the same as a pass. The workflow that defines pytest-required
+# must itself only ever trigger on pull_request(main)/workflow_dispatch --
+# see pytest-release-gate.yml -- so an ordinary push produces no check run
+# under this context at all (pending, not a stale pass or a false block).
+# The everyday matrix in tests.yml is a separate, non-required signal for
+# developer feedback on other branches/PRs.
 
 REPO="${REPO:-unifyai/orchestra}"
 RULESET_ID="${RULESET_ID:-17691842}"
 
+# dismiss_stale_reviews_on_push mirrors main branch protection's
+# dismiss_stale_reviews below: an approval must not survive a later push, or a
+# reviewer can be shown one diff while a different one merges.
 echo "Updating ${REPO} Staging->Main ruleset (${RULESET_ID})..."
 gh api \
   --method PUT \
@@ -32,7 +53,7 @@ gh api \
       "type": "pull_request",
       "parameters": {
         "required_approving_review_count": 1,
-        "dismiss_stale_reviews_on_push": false,
+        "dismiss_stale_reviews_on_push": true,
         "required_reviewers": [],
         "require_code_owner_review": false,
         "dismissal_restriction": {
@@ -53,7 +74,10 @@ gh api \
         "do_not_enforce_on_create": false,
         "required_status_checks": [
           {"context": "pytest", "integration_id": 15368},
-          {"context": "staging-source", "integration_id": 15368}
+          {"context": "black", "integration_id": 15368},
+          {"context": "should-run-tests", "integration_id": 15368},
+          {"context": "staging-source", "integration_id": 15368},
+          {"context": "unify-orchestra-staging (gcp-project-saas)", "integration_id": 10529}
         ]
       }
     }

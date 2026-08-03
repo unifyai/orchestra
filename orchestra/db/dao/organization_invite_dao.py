@@ -32,6 +32,7 @@ class OrganizationInviteDAO:
         role_id: int,
         expires_in_days: int = 7,
         invitee_user_id: Optional[str] = None,
+        transfers_ownership: bool = False,
     ) -> OrganizationInvite:
         """
         Create a new organization invite.
@@ -42,6 +43,7 @@ class OrganizationInviteDAO:
         :param role_id: Role to assign when invite is accepted.
         :param expires_in_days: Number of days until invite expires.
         :param invitee_user_id: User ID if invitee already exists in system.
+        :param transfers_ownership: Hand the org over to the invitee on accept.
         :return: The created OrganizationInvite object.
         """
         token = self.generate_token()
@@ -54,6 +56,7 @@ class OrganizationInviteDAO:
             invitee_user_id=invitee_user_id,
             invited_by_user_id=invited_by_user_id,
             role_id=role_id,
+            transfers_ownership=transfers_ownership,
             expires_at=expires_at,
         )
         self.session.add(invite)

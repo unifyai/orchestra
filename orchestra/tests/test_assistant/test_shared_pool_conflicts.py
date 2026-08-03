@@ -3867,6 +3867,8 @@ class TestSharedCoordinatorEmailRouting:
             "assistant_id": coordinator.agent_id,
             "role": "owner",
             "action": None,
+            "alias_email": None,
+            "twin_name": None,
         }
 
     async def test_email_resolve_rejects_unknown_sender(
@@ -3934,6 +3936,8 @@ class TestSharedCoordinatorEmailRouting:
             "assistant_id": personal.agent_id,
             "role": "owner",
             "action": None,
+            "alias_email": None,
+            "twin_name": None,
         }
 
     async def test_email_resolve_404_for_non_shared_mailbox(

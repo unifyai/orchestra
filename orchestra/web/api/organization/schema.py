@@ -140,8 +140,25 @@ class OrganizationMemberResponse(BaseModel):
     phone_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
     discord_id: Optional[str] = None
+    # Unify person embedded for onboarding/setup rather than one of the
+    # customer's own people. NULL expiry = standing arrangement.
+    is_staff_access: bool = False
+    staff_access_expires_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class StaffAccessUpdate(BaseModel):
+    """Set or clear a member's staff-access grant.
+
+    ``staff_access=True`` with ``expires_in_days=None`` is the unbounded
+    override for standing arrangements (sales partnerships); it is
+    deliberately explicit, because the default on joining is a bounded
+    window. ``staff_access=False`` clears the marker and its expiry.
+    """
+
+    staff_access: bool = True
+    expires_in_days: Optional[int] = Field(default=None, ge=1, le=3650)
 
 
 class OrgSharingSettingsRequest(BaseModel):
@@ -170,6 +187,11 @@ class InviteUserRequest(BaseModel):
         None  # Alternative to role_id; resolved to role_id by the server
     )
     expires_in_days: int = 7  # Default 7 days
+    # Hand the organization over when this invite is accepted. Only the
+    # current owner may set it, and only one such invite may be outstanding.
+    # ``role_id`` still carries the interim role; Owner is assigned by the
+    # transfer itself.
+    transfers_ownership: bool = False
 
 
 class InviteResponse(BaseModel):
@@ -187,6 +209,7 @@ class InviteResponse(BaseModel):
     invited_by_name: Optional[str] = None
     role_id: int
     role_name: Optional[str] = None
+    transfers_ownership: bool = False
     expires_at: datetime
     created_at: datetime
 
@@ -303,6 +326,16 @@ class OrgSpendResponse(BaseModel):
         description=(
             "Billing mode of the org's account: CREDITS (pre-paid wallet) "
             "or METERED (invoiced monthly)."
+        ),
+    )
+    api_access_allowed: bool = Field(
+        True,
+        description=(
+            "Whether this org may spend outside the Console. False while "
+            "it is still purely on free credits; the gateway's UniLLM "
+            "proxy denies with 402 when false. Present here as well as on "
+            "the user-spend response because an org-scoped key never "
+            "reaches the latter."
         ),
     )
 

@@ -160,12 +160,18 @@ async def _dispatch_offline_task_to_comms(
 ) -> None:
     """Launch one hosted offline task via Communication (admin-authenticated)."""
 
+    # Resolution mints this occurrence's revision from the definition, so an
+    # empty one is a resolver bug rather than a state the caller can clear.
+    # It still must not reach the wire: an empty revision digests to the same
+    # twelve hex characters for every task, collapsing unrelated runs onto one
+    # run key fleet-wide.
     if not target.revision:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=(
-                f"Offline task {target.task_id} has no current execution revision; "
-                "cannot dispatch headless execution."
+                f"Offline task {target.task_id} resolved without an occurrence "
+                "revision; refusing to dispatch a headless execution that would "
+                "share a run key with every other revisionless run."
             ),
         )
     comms_url = (COMMS_URL or "").rstrip("/")

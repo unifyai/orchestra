@@ -240,7 +240,7 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
 
 
 @pytest.mark.anyio
-async def test_signed_composio_webhook_populates_task_name_and_description_on_run(
+async def test_signed_composio_webhook_populates_task_name_on_run(
     dbsession: Session,
     client: AsyncClient,
 ) -> None:
@@ -286,9 +286,8 @@ async def test_signed_composio_webhook_populates_task_name_and_description_on_ru
     run = run_response.json()["run"]
     assert run is not None
     assert run["task_name"] == "Triage GitHub issues"
-    assert (
-        run["task_description"] == "Triage new GitHub issues for the assistant owner."
-    )
+    # The description is a definition column; runs label themselves by name only.
+    assert "task_description" not in run
 
 
 @pytest.mark.anyio

@@ -97,6 +97,16 @@ class BillingAccount(Base):
 
     # === CORE BILLING ===
     credits = Column(Numeric, nullable=False, default=0, server_default="0")
+    # Exempts the account from the never-paid API gate. Backfilled for
+    # accounts that were already spending through the UniLLM proxy when
+    # the gate shipped, so it does not cut off a live integration; set
+    # only by that backfill, never self-serve.
+    api_access_grandfathered = Column(
+        Boolean(),
+        nullable=False,
+        default=False,
+        server_default="f",
+    )
     stripe_customer_id = Column(String, nullable=True, unique=True, index=True)
     # === SELF-SERVE SUBSCRIPTION (CREDITS tier plans) ===
     # The active Stripe Subscription backing a self-serve CREDITS account on
@@ -113,6 +123,11 @@ class BillingAccount(Base):
     # console can render the next-renewal date without a Stripe round-trip.
     # NULL for unsubscribed/free accounts and METERED enterprise accounts.
     current_period_end = Column(TIMESTAMP(timezone=True), nullable=True)
+    # End of the signup trial (== the auto-enrolled subscription's first
+    # charge date). Stamped when the signup Checkout completes; used by the
+    # pre-charge reminder email and the console's trial countdown. NULL for
+    # accounts that predate the card-gated trial or subscribed directly.
+    trial_end_at = Column(TIMESTAMP(timezone=True), nullable=True)
     # Whether the active subscription is scheduled to cancel at the end of the
     # current period (Stripe ``cancel_at_period_end``). Set immediately on an
     # in-app cancel and kept in sync from the ``customer.subscription.updated``
@@ -855,6 +870,12 @@ class User(Base):
     # === IDENTITY FIELDS ===
     id = Column(String, primary_key=True, default=_new_string_uuid)
     email = Column(String, unique=True, index=True, nullable=False)
+    # Canonical deliverable identity (dots/plus-suffix stripped — see
+    # ``auth_dao.canonicalize_email``). Signup uniqueness runs against this
+    # so one inbox cannot mint unlimited aliased accounts. Not unique at
+    # the DB level: pre-existing alias duplicates are tolerated; new
+    # signups are rejected in the application layer.
+    canonical_email = Column(String, index=True, nullable=True)
     name = Column(String)
     last_name = Column(String)
     job_title = Column(String)
@@ -868,6 +889,17 @@ class User(Base):
     # assistants to voice-verify the user's turns on calls.
     voice_sample = Column(String, nullable=True)
     voice_sample_uploaded_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # === SIGNUP PROVENANCE (abuse correlation) ===
+    # Where this account was created from. Free credits are Console-only,
+    # so credit farming no longer shows up on the raw-API channel the
+    # existing fingerprint watches; what remains is only separable by
+    # correlating accounts with each other. ``canonical_email`` already
+    # stops one inbox minting aliases — these close the same loop on
+    # origin. The user agent is a salted hash: the sweep compares it for
+    # equality only, so the raw string is needlessly identifying.
+    signup_ip = Column(String, nullable=True, index=True)
+    signup_user_agent_hash = Column(String, nullable=True, index=True)
 
     # === BILLING (via BillingAccount) ===
     billing_account_id = Column(
@@ -1746,6 +1778,22 @@ class OrganizationMember(Base):
     # When the spending cap was last changed (for notification deduplication)
     monthly_spending_cap_set_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # === STAFF ACCESS ===
+    # Marks a Unify person sitting in a *customer* org to run onboarding or
+    # setup, rather than someone who belongs to the customer. Surfaced to the
+    # customer as a badge so the seat is never mistaken for one of their own.
+    is_staff_access = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+    # When the grant lapses. NULL means it never does — the standing
+    # arrangement for partner engagements, and deliberately opt-in: grants
+    # default to a bounded window so access cannot become permanent through
+    # neglect. Enforced in ResourceAccessDAO.check_org_member_permission, so
+    # a lapsed grant stops authorising immediately and nothing is deleted.
+    staff_access_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
 
 class OrganizationInvite(Base):
     """Model for pending organization invitations.
@@ -1780,8 +1828,30 @@ class OrganizationInvite(Base):
         ForeignKey("role.id", ondelete="RESTRICT"),
         nullable=False,
     )  # Role to assign when invite is accepted
+    # Hand the organization over to the invitee when they accept. The Owner
+    # role is never assignable through role_id (owner_id and the member role
+    # would drift); this flag routes acceptance through the same ownership
+    # transfer the dedicated endpoint performs. At most one invite per
+    # organization may carry it.
+    transfers_ownership = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # One outstanding hand-over per organization: a second acceptance
+        # would silently demote the owner installed by the first.
+        Index(
+            "uq_organization_invite_pending_owner",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("transfers_ownership"),
+        ),
+    )
 
 
 CONTACT_MEMBERSHIP_SCOPE_PERSONAL = "personal"
@@ -2223,6 +2293,10 @@ class ResourceAccess(Base):
     )
 
 
+CONSOLE_KEY_KIND = "console"
+PROGRAMMATIC_KEY_KIND = "programmatic"
+
+
 class ApiKey(Base):
     __tablename__ = "api_key"
 
@@ -2232,8 +2306,20 @@ class ApiKey(Base):
     organization_id = Column(Integer, ForeignKey("organization.id", ondelete="CASCADE"))
     key = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # ``console`` keys are held only by the Console server and never shown
+    # to the user; ``programmatic`` keys are the ones printed in Profile.
+    # The split is what lets a request's origin be known at all — see
+    # ``auth_api_key``, which stamps it onto ``request.state.key_kind``.
+    kind = Column(
+        String,
+        nullable=False,
+        server_default=PROGRAMMATIC_KEY_KIND,
+    )
 
-    __table_args__ = (UniqueConstraint("user_id", "name"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "name"),
+        Index("ix_api_key_user_kind", "user_id", "kind"),
+    )
 
 
 class Interface(Base):

@@ -60,11 +60,15 @@ class TaskRowKey(StrEnum):
 
 
 class TaskRowMetaField(StrEnum):
-    """Internal task-row metadata excluded from patch classification."""
+    """Task-row metadata excluded from patch classification.
+
+    ``assistant_id`` is the executor stamp, written in exactly one
+    spelling; readers keep a legacy fallback for underscore-stamped
+    rows written before the collapse.
+    """
 
     task_id = "task_id"
-    user_id = "_user_id"
-    assistant_id = "_assistant_id"
+    assistant_id = "assistant_id"
 
     @classmethod
     def values(cls) -> frozenset[str]:

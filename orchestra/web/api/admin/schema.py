@@ -177,6 +177,15 @@ class SuspensionReason(StrEnum):
 
     ADMIN_FREEZE = "admin_freeze"
     DISPUTE = "dispute"
+    #: Never-paid account frozen pending the card-gated trial checkout;
+    #: auto-reinstated when the checkout completes.
+    CARD_REQUIRED = "card_required"
+    #: Frozen by the abuse-fingerprint sweep (raw-API credit extraction).
+    ABUSE_FINGERPRINT = "abuse_fingerprint"
+    #: Wallet fell past the overdraft floor. Applied at deduction time as a
+    #: backstop to the pre-call spending gates, and lifted automatically once
+    #: the balance is positive again.
+    OVERDRAWN = "overdrawn"
 
 
 # ---------------------------------------------------------------------------

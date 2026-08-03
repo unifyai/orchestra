@@ -503,6 +503,74 @@ class Settings(BaseSettings):
         os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
     )
 
+    # ── Card-gated trial onboarding ─────────────────────────────────────
+    #: Master switch for the card gate. When True: new signups must
+    #: complete the trial Checkout (card on file, auto-enrolling
+    #: subscription) before the platform is usable, the signup credit
+    #: grant moves from account creation to checkout completion, and
+    #: never-paid accounts without a subscription are denied LLM access.
+    #: Ships dark (False) so Console can deploy the checkout UI first.
+    require_card_on_file: bool = os.environ.get(
+        "REQUIRE_CARD_ON_FILE",
+        "false",
+    ).lower() in ("1", "true", "yes")
+    #: Tier template every new signup is auto-enrolled on at checkout.
+    trial_tier_template_name: str = os.environ.get(
+        "TRIAL_TIER_TEMPLATE_NAME",
+        "tier_50",
+    )
+    #: Days before the auto-enrolled subscription's first charge.
+    trial_period_days: int = int(os.environ.get("TRIAL_PERIOD_DAYS", "7"))
+    #: Daily LLM spend ceiling for accounts with no real payment history,
+    #: enforced by the runtime via the spend endpoints' limit payload.
+    #: Bounds how fast trial credits can be extracted; 0 disables.
+    trial_daily_spend_cap: float = float(
+        os.environ.get("TRIAL_DAILY_SPEND_CAP", "25"),
+    )
+
+    # ── Console-only free credits ───────────────────────────────────────
+    #: Restrict the programmatic surfaces (UniLLM proxy, runtime-starting
+    #: endpoints) to accounts with payment history, so free credits are
+    #: spendable only through the Console. Intended as the replacement for
+    #: the card gate: it keeps signup frictionless while removing the
+    #: cheap route a burner uses to extract credits. Ships dark (False)
+    #: so the schema and Console changes can land first.
+    require_api_payment_history: bool = os.environ.get(
+        "REQUIRE_API_PAYMENT_HISTORY",
+        "false",
+    ).lower() in ("1", "true", "yes")
+
+    # ── Burner-cluster detection ────────────────────────────────────────
+    #: How many never-paid accounts must share a signup origin before the
+    #: cluster sweep will consider any of them. Set above any plausible
+    #: shared-office or shared-VPN signup burst — the cost of a false
+    #: positive here is freezing a real customer's whole team.
+    burner_cluster_min_accounts: int = int(
+        os.environ.get("BURNER_CLUSTER_MIN_ACCOUNTS", "5"),
+    )
+    #: Window over which those signups must have clustered, in days.
+    burner_cluster_window_days: int = int(
+        os.environ.get("BURNER_CLUSTER_WINDOW_DAYS", "7"),
+    )
+    #: Minimum LLM spend before a clustered account is considered farmed.
+    #: Below this the account has extracted nothing worth freezing over.
+    burner_cluster_min_llm_spend: float = float(
+        os.environ.get("BURNER_CLUSTER_MIN_LLM_SPEND", "20"),
+    )
+    #: Remaining credits at or below which the grant counts as drained.
+    burner_cluster_max_remaining_credits: float = float(
+        os.environ.get("BURNER_CLUSTER_MAX_REMAINING_CREDITS", "5"),
+    )
+
+    # ── Staff access ────────────────────────────────────────────────────
+    #: Days a Unify person's seat in a customer org stays authorised
+    #: before the grant lapses. Bounded by default so onboarding access
+    #: cannot become permanent by nobody revisiting it; standing
+    #: arrangements (partnerships) override to an unbounded grant.
+    staff_access_default_days: int = int(
+        os.environ.get("STAFF_ACCESS_DEFAULT_DAYS", "30"),
+    )
+
     # ── Referral program ────────────────────────────────────────────────
     #: Master switch. When False, referral codes can still exist but no
     #: attribution or reward is processed.

@@ -233,7 +233,8 @@ def _assistant_for_task_row(
     session: Session,
     data: dict[str, Any],
 ) -> Assistant | None:
-    assistant_id = data.get("_assistant_id") or data.get("assistant_id")
+    # Legacy rows carry the underscore spelling; new rows carry assistant_id.
+    assistant_id = data.get("assistant_id") or data.get("_assistant_id")
     if assistant_id is None:
         return None
     try:

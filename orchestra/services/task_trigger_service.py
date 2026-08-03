@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -17,11 +18,11 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
     TASKS_CONTEXT_NAME,
+    _authored_revision,
     _coerce_bool,
     _coerce_int,
     _requires_computer_from_row,
     _requires_filesystem_from_row,
-    get_open_task_execution,
     is_task_surface_context_name,
 )
 
@@ -46,6 +47,13 @@ class TaskTriggerNotRunnable(ValueError):
 
 @dataclass(frozen=True)
 class TaskTriggerTarget:
+    """One definition row, plus the occurrence a trigger would run against it.
+
+    Every field but ``revision`` is read straight off the definition.
+    ``revision`` names the occurrence the trigger itself creates and is only
+    minted for offline targets, which are the ones dispatched headlessly.
+    """
+
     assistant_id: int
     task_id: int
     source_task_log_id: int
@@ -107,8 +115,6 @@ def resolve_task_trigger_target(
 
     targets = [
         _build_target_from_row(
-            session=session,
-            project_id=project.id,
             task_id=task_id,
             row=row,
             context_name=context_name,
@@ -125,101 +131,77 @@ def resolve_task_trigger_target(
     if not runnable:
         status = targets[0].status if targets else ""
         raise TaskTriggerNotRunnable(task_id=task_id, status=status)
-    return _select_current_target(runnable)
+    target = _select_current_target(runnable)
+    if not target.offline:
+        return target
+    return replace(target, revision=_explicit_trigger_revision(target))
 
 
 def _build_target_from_row(
     *,
-    session: Session,
-    project_id: int,
     task_id: int,
     row: LogEvent,
     context_name: str,
     assistant: Assistant,
     data: dict[str, Any],
 ) -> TaskTriggerTarget:
-    destination = _destination_from_context_name(context_name)
-    offline = _coerce_bool(data.get("offline"))
-    enabled = True if "enabled" not in data else _coerce_bool(data.get("enabled"))
-    revision = None
-    entrypoint = _coerce_int(data.get("entrypoint"))
-    max_runtime_seconds = _coerce_int(data.get("max_runtime_seconds"))
-    requires_filesystem = _requires_filesystem_from_row(data)
-    requires_computer = _requires_computer_from_row(data)
-    if offline:
-        activation_snapshot = _offline_execution_for_task(
-            session=session,
-            project_id=project_id,
-            assistant_id=int(assistant.agent_id),
-            task_id=task_id,
-            destination=destination,
-        )
-        if activation_snapshot is not None:
-            revision = activation_snapshot.revision
-            if activation_snapshot.entrypoint is not None:
-                entrypoint = activation_snapshot.entrypoint
-            if activation_snapshot.max_runtime_seconds is not None:
-                max_runtime_seconds = activation_snapshot.max_runtime_seconds
-            requires_filesystem = activation_snapshot.requires_filesystem
-            requires_computer = activation_snapshot.requires_computer
     return TaskTriggerTarget(
         assistant_id=int(assistant.agent_id),
         task_id=task_id,
         source_task_log_id=int(row.id),
-        destination=destination,
+        destination=_destination_from_context_name(context_name),
         task_name=str(data.get("name") or f"task {task_id}"),
         task_description=str(data.get("description") or ""),
         status=str(data.get("status") or ""),
         is_local=bool(assistant.is_local),
-        offline=offline,
-        enabled=enabled,
-        revision=revision,
-        entrypoint=entrypoint,
-        max_runtime_seconds=max_runtime_seconds,
-        requires_filesystem=requires_filesystem,
-        requires_computer=requires_computer,
+        offline=_coerce_bool(data.get("offline")),
+        enabled=True if "enabled" not in data else _coerce_bool(data.get("enabled")),
+        entrypoint=_coerce_int(data.get("entrypoint")),
+        max_runtime_seconds=_coerce_int(data.get("max_runtime_seconds")),
+        requires_filesystem=_requires_filesystem_from_row(data),
+        requires_computer=_requires_computer_from_row(data),
     )
 
 
-@dataclass(frozen=True)
-class _OfflineExecutionSnapshot:
-    revision: str
-    entrypoint: int | None
-    max_runtime_seconds: int | None
-    requires_filesystem: bool = False
-    requires_computer: bool = False
+def _explicit_trigger_revision(target: TaskTriggerTarget) -> str:
+    """Fingerprint the occurrence one explicit trigger brings into being.
 
+    An on-demand run is its own occurrence, not a claim on whatever the
+    scheduler happens to have queued. Its identity is therefore the
+    definition's authored facts plus the facts the kick itself asserts: an
+    ``explicit`` wake landing now, one-off, carrying no communication
+    trigger and interrupting nothing.
 
-def _offline_execution_for_task(
-    *,
-    session: Session,
-    project_id: int,
-    assistant_id: int,
-    task_id: int,
-    destination: str | None,
-) -> _OfflineExecutionSnapshot | None:
-    """Return revision + entrypoint for one open offline Execution, if present."""
+    Reading the revision off an open scheduled execution instead made a
+    manual run impossible precisely when it was most useful — nothing
+    queued, nothing to borrow — and, when one *was* queued, named the run
+    after a future slot it was not filling under a wake the fingerprint
+    denied.
+    """
 
-    execution = get_open_task_execution(
-        session,
-        project_id,
-        assistant_id=str(assistant_id),
-        task_id=task_id,
-        destination=destination,
-    )
-    if execution is None or not isinstance(execution.data, dict):
-        return None
-    revision = execution.data.get("revision")
-    if revision in (None, ""):
-        return None
-    return _OfflineExecutionSnapshot(
-        revision=str(revision),
-        entrypoint=_coerce_int(execution.data.get("entrypoint")),
-        max_runtime_seconds=_coerce_int(
-            execution.data.get("max_runtime_seconds"),
-        ),
-        requires_filesystem=_requires_filesystem_from_row(execution.data),
-        requires_computer=_requires_computer_from_row(execution.data),
+    return _authored_revision(
+        {
+            # The projection writes `assistant_id` as a string; matching its
+            # shape keeps an explicit fingerprint different from a scheduled
+            # one for the reasons that matter, not for a type mismatch.
+            "assistant_id": str(target.assistant_id),
+            "destination": target.destination,
+            "task_id": target.task_id,
+            "source_task_log_id": target.source_task_log_id,
+            "wake": "explicit",
+            "delivery": "offline",
+            "scheduled_for": datetime.now(timezone.utc).isoformat(),
+            "entrypoint": target.entrypoint,
+            "max_runtime_seconds": target.max_runtime_seconds,
+            "requires_filesystem": target.requires_filesystem,
+            "requires_computer": target.requires_computer,
+            "recurring": False,
+            "trigger_medium": None,
+            "trigger_from_contact_ids": None,
+            "trigger_omit_contact_ids": None,
+            "trigger_recurring": False,
+            "interrupt": False,
+        },
     )
 
 
@@ -307,7 +289,7 @@ def _destination_from_context_name(context_name: str) -> str | None:
 
 
 def _select_current_target(targets: list[TaskTriggerTarget]) -> TaskTriggerTarget:
-    """Prefer runnable, enabled, team-destined rows that can actually dispatch."""
+    """Prefer runnable, enabled, team-destined rows, newest definition first."""
 
     return sorted(
         targets,
@@ -315,7 +297,6 @@ def _select_current_target(targets: list[TaskTriggerTarget]) -> TaskTriggerTarge
             _row_status_rank(target),
             0 if target.enabled else 1,
             0 if target.destination else 1,
-            0 if target.revision else 1,
             -target.source_task_log_id,
         ),
     )[0]

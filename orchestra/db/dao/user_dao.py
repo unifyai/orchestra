@@ -63,6 +63,8 @@ class UserDAO:
         phone_number: Optional[str] = None,
         whatsapp_number: Optional[str] = None,
         discord_id: Optional[str] = None,
+        signup_ip: Optional[str] = None,
+        signup_user_agent_hash: Optional[str] = None,
     ) -> User:
         """
         Create a new user with an associated BillingAccount.
@@ -77,6 +79,9 @@ class UserDAO:
         :param image: Profile image URL.
         :param timezone: IANA timezone string.
         :param phone_number: Phone number (will be validated and formatted).
+        :param signup_ip: Caller IP at registration, for abuse correlation.
+        :param signup_user_agent_hash: Salted hash of the registration
+            user agent, for abuse correlation.
         :return: The created User instance.
         """
         if timezone is not None and timezone not in VALID_TIMEZONES:
@@ -104,8 +109,11 @@ class UserDAO:
 
         billing_account = BillingAccountDAO(self.session).create()
 
+        from orchestra.db.dao.auth_dao import canonicalize_email
+
         user = User(
             email=email,
+            canonical_email=canonicalize_email(email),
             name=name,
             last_name=last_name,
             job_title=job_title,
@@ -115,6 +123,8 @@ class UserDAO:
             phone_number=phone_number,
             whatsapp_number=whatsapp_number,
             discord_id=discord_id,
+            signup_ip=signup_ip,
+            signup_user_agent_hash=signup_user_agent_hash,
             billing_account_id=billing_account.id,
             store_prompts=True,
         )
@@ -166,6 +176,23 @@ class UserDAO:
 
         rows = self.session.execute(query)
         return rows.fetchall()
+
+    def exists_by_canonical_email(self, email: str) -> bool:
+        """Whether any user's canonical email matches ``email``'s canonical form.
+
+        Catches dotted/plus-suffixed aliases of an already-registered
+        inbox that a plain exact-email lookup misses.
+        """
+        from orchestra.db.dao.auth_dao import canonicalize_email
+
+        return (
+            self.session.execute(
+                select(User.id).where(
+                    User.canonical_email == canonicalize_email(email),
+                ),
+            ).first()
+            is not None
+        )
 
     def get_by_id(self, user_id: str) -> Optional:
         """
@@ -699,12 +726,15 @@ class UserDAO:
             member = member_row[0]
             org_result = organization_dao.get(member.organization_id)
             if org_result:
-                # Get org-specific API key for this user+org
-                org_keys = api_key_dao.get_organization_keys(
+                # The Console-session key for this workspace. These
+                # endpoints feed the Console, which forwards whatever key
+                # they return; handing back a programmatic key here would
+                # make every org-context Console request indistinguishable
+                # from a script and trip the API gate.
+                org_api_key = api_key_dao.get_or_create_console_key(
                     user_id,
                     organization_id=member.organization_id,
                 )
-                org_api_key = org_keys[0][0].key if org_keys else None
 
                 # Get role name for this membership
                 member_role = role_dao.get(member.role_id)

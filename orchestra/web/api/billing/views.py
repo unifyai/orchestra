@@ -34,6 +34,7 @@ from orchestra.lib.billing import (
     sync_billing_profile_to_stripe,
 )
 from orchestra.web.api.billing.schema import (
+    AccessGateResponse,
     AccountInfoResponse,
     AutoIncrementResponse,
     AutoIncrementUpdateRequest,
@@ -55,6 +56,7 @@ from orchestra.web.api.billing.schema import (
     SwitchPlanRequest,
     SwitchPlanResponse,
     TaxIdValidationRequest,
+    TrialCheckoutResponse,
 )
 from orchestra.web.api.utils.business_validation import get_stripe_tax_id_type
 from orchestra.web.api.utils.tax_id_validator import (
@@ -2027,4 +2029,108 @@ def reactivate_subscription_endpoint(
         status="active",
         billing_account_id=ba.id,
         effective_at=effective.isoformat() if effective else None,
+    )
+
+
+# ============================================================================
+# Card-gated trial onboarding
+# ============================================================================
+
+
+@router.post(
+    "/billing/trial-checkout",
+    response_model=TrialCheckoutResponse,
+    summary="Start the signup trial Checkout (card + auto-enroll)",
+    description=(
+        "Create a Stripe Checkout Session that collects a card and billing "
+        "address and auto-enrolls the account on the trial tier "
+        "subscription, with the first charge at trial end. The account "
+        "gains platform access when the session completes "
+        "(``checkout.session.completed`` webhook)."
+    ),
+)
+def trial_checkout(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> TrialCheckoutResponse:
+    from orchestra.lib.subscription_billing import (
+        SubscriptionError,
+        resolve_is_business,
+    )
+    from orchestra.lib.trial_subscription import create_trial_checkout_session
+
+    _init_stripe()
+
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+    _check_org_billing_permission(session, user_id, organization_id, "billing:write")
+
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+    if not ba:
+        raise HTTPException(status_code=400, detail="Billing is not set up")
+
+    user = UserDAO(session).get_user_with_id(user_id)
+
+    try:
+        checkout_url = create_trial_checkout_session(
+            session,
+            ba,
+            is_business=resolve_is_business(ba, organization_id),
+            fallback_email=user.email if user else None,
+            fallback_name=user.name if user else None,
+        )
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except stripe.error.StripeError as exc:
+        logger.error(f"Stripe error creating trial checkout: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Stripe error while creating checkout: {exc}",
+        )
+
+    session.commit()
+    return TrialCheckoutResponse(checkout_url=checkout_url)
+
+
+@router.get(
+    "/billing/access-gate",
+    response_model=AccessGateResponse,
+    summary="Whether this account may use metered platform features",
+)
+def access_gate(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> AccessGateResponse:
+    from orchestra.lib.trial_subscription import has_api_access, has_platform_access
+
+    user_id: str = request_fastapi.state.user_id
+    organization_id: Optional[int] = getattr(
+        request_fastapi.state,
+        "organization_id",
+        None,
+    )
+
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+    if not ba:
+        return AccessGateResponse(
+            allowed=False,
+            reason="card_required",
+            api_access_allowed=has_api_access(session, None),
+        )
+
+    allowed = has_platform_access(session, ba)
+    return AccessGateResponse(
+        allowed=allowed,
+        reason=None if allowed else "card_required",
+        trial_end_at=ba.trial_end_at.isoformat() if ba.trial_end_at else None,
+        subscription_active=bool(ba.stripe_subscription_id),
+        # Independent of ``allowed``: the card gate governs the platform,
+        # this governs whether spend may happen off-platform. With the
+        # card gate off, an account is normally allowed here and denied
+        # there.
+        api_access_allowed=has_api_access(session, ba),
     )

@@ -63,6 +63,11 @@ from orchestra.services.personal_workspace_service import (
     disable_personal_workspace_for_org_member,
     reenable_personal_workspace_if_no_org,
 )
+from orchestra.services.staff_access_service import (
+    apply_staff_access_on_join,
+    lapsed_staff_grants,
+    set_staff_access,
+)
 from orchestra.services.team_cleanup_service import delete_team as run_team_cleanup
 from orchestra.services.team_cleanup_service import (
     purge_assistant_overlay as purge_team_member_overlay,
@@ -71,6 +76,7 @@ from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
     publish_membership_refreshes_best_effort,
 )
+from orchestra.web.api.dependencies import require_console_origin_for_free_accounts
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     AdminOrganizationCreate,
@@ -97,6 +103,7 @@ from orchestra.web.api.organization.schema import (
     OrgSpendingLimitRequest,
     OrgSpendingLimitResponse,
     OrgSpendResponse,
+    StaffAccessUpdate,
 )
 from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.assistant_infra import (
@@ -275,6 +282,9 @@ async def _create_organization_with_owner_coordinator(
 @router.post(
     "/organizations",
     status_code=status.HTTP_201_CREATED,
+    # Creating an org provisions and wakes its Coordinator, so this is a
+    # runtime start like the assistant endpoints, not just a row insert.
+    dependencies=[Depends(require_console_origin_for_free_accounts)],
 )
 async def create_organization(
     request_fastapi: Request,
@@ -934,11 +944,12 @@ async def add_organization_member(
 
     # Add member
     try:
-        org_member_dao.create(
+        new_member = org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
             role_id=role_id,
         )
+        apply_staff_access_on_join(session, new_member)
 
         # Create organization API key for the new member
         new_api_key = generate_key()
@@ -1410,6 +1421,51 @@ async def update_member_role(
         )
 
 
+def _apply_ownership_transfer(
+    session: Session,
+    *,
+    organization_id: int,
+    new_owner_id: str,
+    previous_owner_id: str,
+) -> None:
+    """Move organization ownership to an existing member.
+
+    Both ``organization.owner_id`` and the two member roles move together —
+    they are separate sources of truth for the same fact, and letting them
+    drift produces an org whose Owner-role member is not its owner. Callers
+    must have added ``new_owner_id`` as a member first, and are responsible
+    for committing.
+    """
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    if not owner_role or not admin_role:
+        raise ValueError("Required system roles not found")
+
+    org_dao.update(id=organization_id, owner_id=new_owner_id)
+    org_member_dao.update_member_role(
+        user_id=new_owner_id,
+        organization_id=organization_id,
+        role_id=owner_role.id,
+    )
+    org_member_dao.update_member_role(
+        user_id=previous_owner_id,
+        organization_id=organization_id,
+        role_id=admin_role.id,
+    )
+
+    # Hand-over is the moment a Unify provisioner stops being the org's
+    # owner and becomes a guest in the customer's tenant, so the staff
+    # marker attaches here rather than at provisioning time — before this
+    # point they owned the org, and badging an owner would misdescribe them.
+    outgoing = org_member_dao.get_member(previous_owner_id, organization_id)
+    if outgoing is not None:
+        apply_staff_access_on_join(session, outgoing)
+
+
 @router.post(
     "/organizations/{organization_id}/transfer-ownership",
     response_model=OrganizationResponse,
@@ -1435,7 +1491,6 @@ async def transfer_organization_ownership(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -1468,31 +1523,11 @@ async def transfer_organization_ownership(
         )
 
     try:
-        # Get role IDs
-        owner_role = role_dao.get_by_name("Owner", organization_id=None)
-        admin_role = role_dao.get_by_name("Admin", organization_id=None)
-
-        if not owner_role or not admin_role:
-            raise ValueError("Required system roles not found")
-
-        # Update organization: owner_id
-        org_dao.update(
-            id=organization_id,
-            owner_id=transfer.new_owner_id,
-        )
-
-        # Update new owner's role to Owner
-        org_member_dao.update_member_role(
-            user_id=transfer.new_owner_id,
+        _apply_ownership_transfer(
+            session,
             organization_id=organization_id,
-            role_id=owner_role.id,
-        )
-
-        # Update old owner's role to Admin
-        org_member_dao.update_member_role(
-            user_id=user_id,
-            organization_id=organization_id,
-            role_id=admin_role.id,
+            new_owner_id=transfer.new_owner_id,
+            previous_owner_id=user_id,
         )
 
         session.commit()
@@ -1510,6 +1545,40 @@ async def transfer_organization_ownership(
 
 
 # ============== Organization Invite Endpoints ==============
+
+
+def _check_ownership_invite_allowed(
+    session: Session,
+    org,
+    *,
+    actor_user_id: str | None,
+    invite_id_to_ignore: str | None = None,
+) -> None:
+    """Validate a pending-owner invite before it is created or refreshed.
+
+    ``actor_user_id`` is ``None`` for the admin path, which provisions orgs on
+    a customer's behalf and so is not itself the owner.
+    """
+    if actor_user_id is not None and org.owner_id != actor_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the organization owner can invite a new owner",
+        )
+
+    invite_dao = OrganizationInviteDAO(session)
+    outstanding = [
+        inv
+        for inv in invite_dao.list_by_organization(org.id, include_expired=True)
+        if inv.transfers_ownership and inv.id != invite_id_to_ignore
+    ]
+    if outstanding:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This organization already has a pending ownership transfer "
+                f"to {outstanding[0].invitee_email}. Cancel it first."
+            ),
+        )
 
 
 def _build_invite_response(
@@ -1547,6 +1616,7 @@ def _build_invite_response(
         invited_by_name=invited_by_name,
         role_id=invite.role_id,
         role_name=role_name,
+        transfers_ownership=bool(invite.transfers_ownership),
         expires_at=invite.expires_at,
         created_at=invite.created_at,
     )
@@ -1630,10 +1700,18 @@ async def invite_user_to_organization(
     # Check for existing invite
     existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
     if existing_invite:
+        if invite_request.transfers_ownership:
+            _check_ownership_invite_allowed(
+                session,
+                org,
+                actor_user_id=user_id,
+                invite_id_to_ignore=existing_invite.id,
+            )
         # Refresh expiry and update role if specified
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
+        existing_invite.transfers_ownership = invite_request.transfers_ownership
         if resolved_role_id and resolved_role_id != existing_invite.role_id:
             role = role_dao.get(resolved_role_id)
             if not role:
@@ -1676,6 +1754,9 @@ async def invite_user_to_organization(
             detail="Cannot assign Owner role via invite. Use ownership transfer instead.",
         )
 
+    if invite_request.transfers_ownership:
+        _check_ownership_invite_allowed(session, org, actor_user_id=user_id)
+
     # Create invite
     invitee_user_id = None
     if existing_user_row:
@@ -1689,6 +1770,7 @@ async def invite_user_to_organization(
             role_id=role_id,
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
+            transfers_ownership=invite_request.transfers_ownership,
         )
         session.commit()
 
@@ -2001,11 +2083,12 @@ async def accept_invite(
 
     try:
         # Add user as member
-        org_member_dao.create(
+        new_member = org_member_dao.create(
             organization_id=invite.organization_id,
             user_id=user_id,
             role_id=invite.role_id,
         )
+        apply_staff_access_on_join(session, new_member)
 
         # Create organization API key
         new_api_key = generate_key()
@@ -2061,6 +2144,17 @@ async def accept_invite(
                 actor_user_id=org.owner_id,
             )
             sharing_refresh_payloads.extend(sharing_result.refresh_payloads)
+
+        # Hand the organization over, now that the invitee is a member. The
+        # outgoing owner is read from the org rather than the invite, so a
+        # transfer that happened while this invite was pending is respected.
+        if invite.transfers_ownership and org.owner_id != user_id:
+            _apply_ownership_transfer(
+                session,
+                organization_id=invite.organization_id,
+                new_owner_id=user_id,
+                previous_owner_id=org.owner_id,
+            )
 
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
@@ -2532,6 +2626,8 @@ async def get_org_spend(
             BillingAccountDAO(session).resolve_billing_mode(org.billing_account).value
         )
 
+    from orchestra.lib.trial_subscription import has_api_access
+
     return OrgSpendResponse(
         organization_id=organization_id,
         month=month,
@@ -2541,6 +2637,10 @@ async def get_org_spend(
         percent_used=percent_used,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        # An org-scoped key routes the limit check through the org and
+        # member endpoints and never touches /user/spend, so the gate
+        # has to be readable from here too or org keys bypass it.
+        api_access_allowed=has_api_access(session, org.billing_account),
     )
 
 
@@ -2767,6 +2867,106 @@ def admin_disable_free_trial(
 
 
 # =============================================================================
+# Admin Staff Access
+# =============================================================================
+
+
+@admin_router.put(
+    "/organization/{organization_id}/members/{member_user_id}/staff-access",
+)
+def admin_set_staff_access(
+    organization_id: int,
+    member_user_id: str,
+    request: StaffAccessUpdate,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Admin endpoint: set or clear a member's staff-access grant.
+
+    Joining a customer org as Unify staff grants a bounded window
+    automatically. This overrides it — most importantly to an unbounded
+    grant (``expires_in_days`` omitted) for standing arrangements such as
+    a sales partnership, where Unify sits in the org indefinitely rather
+    than for the length of an onboarding.
+
+    The organization owner cannot be marked: they are not a guest in their
+    own tenant, and an expiry on their seat would eventually revoke the
+    owner's own access.
+    """
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    member = org_member_dao.get_member(member_user_id, organization_id)
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User is not a member of this organization",
+        )
+
+    if request.staff_access and org.owner_id == member_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Cannot mark the organization owner as staff access. "
+                "Transfer ownership first."
+            ),
+        )
+
+    set_staff_access(
+        member,
+        staff_access=request.staff_access,
+        expires_in_days=request.expires_in_days,
+    )
+    session.commit()
+
+    return {
+        "organization_id": organization_id,
+        "user_id": member_user_id,
+        "is_staff_access": member.is_staff_access,
+        "staff_access_expires_at": (
+            member.staff_access_expires_at.isoformat()
+            if member.staff_access_expires_at
+            else None
+        ),
+    }
+
+
+@admin_router.get("/staff-access/lapsed")
+def admin_list_lapsed_staff_access(
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Admin endpoint: staff seats whose grant has lapsed.
+
+    Reporting only. A lapsed grant already authorises nothing — expiry is
+    enforced on every permission check — so this exists to surface seats
+    for proper removal through the member-removal endpoint, which also
+    deprovisions assistants and revokes org-scoped API keys.
+    """
+    lapsed = lapsed_staff_grants(session)
+    return {
+        "count": len(lapsed),
+        "members": [
+            {
+                "organization_id": m.organization_id,
+                "user_id": m.user_id,
+                "expired_at": (
+                    m.staff_access_expires_at.isoformat()
+                    if m.staff_access_expires_at
+                    else None
+                ),
+            }
+            for m in lapsed
+        ],
+    }
+
+
+# =============================================================================
 # Admin Organization Creation (white-glove onboarding)
 # =============================================================================
 
@@ -2886,9 +3086,17 @@ async def admin_invite_user(
     # Check for existing invite – refresh if found
     existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
     if existing_invite:
+        if invite_request.transfers_ownership:
+            _check_ownership_invite_allowed(
+                session,
+                org,
+                actor_user_id=None,
+                invite_id_to_ignore=existing_invite.id,
+            )
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
+        existing_invite.transfers_ownership = invite_request.transfers_ownership
         if resolved_role_id and resolved_role_id != existing_invite.role_id:
             role = role_dao.get(resolved_role_id)
             if not role:
@@ -2921,6 +3129,9 @@ async def admin_invite_user(
             )
         role_id = member_role.id
 
+    if invite_request.transfers_ownership:
+        _check_ownership_invite_allowed(session, org, actor_user_id=None)
+
     invitee_user_id = None
     if existing_user_row:
         invitee_user_id = existing_user_row[0][0].id
@@ -2933,6 +3144,7 @@ async def admin_invite_user(
             role_id=role_id,
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
+            transfers_ownership=invite_request.transfers_ownership,
         )
         session.commit()
 
@@ -2979,6 +3191,8 @@ def admin_list_invites(
                 "id": inv.id,
                 "email": inv.invitee_email,
                 "status": "expired" if expired else "pending",
+                "role_id": inv.role_id,
+                "transfers_ownership": bool(inv.transfers_ownership),
                 "created_at": inv.created_at.isoformat() if inv.created_at else None,
                 "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
             },

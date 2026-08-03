@@ -231,6 +231,7 @@ from orchestra.web.api.assistant.schema import (
     WorkspaceFilePolicy,
     WorkspaceFilePolicyUpdate,
 )
+from orchestra.web.api.dependencies import require_console_origin_for_free_accounts
 from orchestra.web.api.utils.assistant_infra import (
     comms_explicitly_configured,
     create_phone_number,
@@ -1013,6 +1014,7 @@ def _self_heal_coordinator_contacts(
     summary="Create a new assistant",
     description="Creates a new assistant for the authenticated user with the specified configuration.",
     tags=["Assistant Management"],
+    dependencies=[Depends(require_console_origin_for_free_accounts)],
     responses={
         200: {
             "description": "Assistant created successfully",
@@ -2065,6 +2067,7 @@ async def notify_onboarding_session_started_endpoint(
     status_code=status.HTTP_200_OK,
     summary="Wake the Coordinator runtime early",
     tags=["Assistant Management"],
+    dependencies=[Depends(require_console_origin_for_free_accounts)],
 )
 async def wake_coordinator_endpoint(
     coordinator_id: int,
@@ -2097,6 +2100,7 @@ async def wake_coordinator_endpoint(
     status_code=status.HTTP_200_OK,
     summary="Assign asynchronous work to a colleague assistant",
     tags=["Assistant Management"],
+    dependencies=[Depends(require_console_origin_for_free_accounts)],
 )
 async def delegate_to_colleague_endpoint(
     target_assistant_id: int,
@@ -8996,6 +9000,8 @@ async def get_assistant_spend(
             BillingAccountDAO(session).resolve_billing_mode(billing_account).value
         )
 
+    from orchestra.lib.trial_subscription import trial_gate_fields
+
     return AssistantSpendResponse(
         agent_id=agent_id,
         month=month,
@@ -9005,6 +9011,7 @@ async def get_assistant_spend(
         percent_used=percent_used,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        **trial_gate_fields(session, billing_account),
     )
 
 

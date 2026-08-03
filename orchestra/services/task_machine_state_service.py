@@ -73,10 +73,10 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
 )
 
 _OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
+_RUNNING_STATE = "running"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
-_TASK_SUMMARY_MAX_CHARS = 240
 
 
 class _KeepCurrentHead:
@@ -607,10 +607,10 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Optional per-task execution bound.",
     },
-    "repeat": {
-        "field_type": "list",
+    "recurring": {
+        "field_type": "bool",
         "mutable": True,
-        "description": "Repeat patterns mirrored from the task definition.",
+        "description": "Whether the definition repeats; the patterns live on it.",
     },
     "source_task_updated_at": {
         "field_type": "datetime",
@@ -686,10 +686,13 @@ _RUN_FIELD_DEFINITIONS: dict[str, dict[str, Any]] = {
         "mutable": True,
         "description": "Human-readable task title mirrored into the run row.",
     },
-    "task_description": {
+    "task_summary": {
         "field_type": "str",
         "mutable": True,
-        "description": "Human-readable task description mirrored into the run row.",
+        "description": (
+            "Bounded summary of the authored description, carried so a live "
+            "wake can say what the work is without joining the definition."
+        ),
     },
     "started_at": {
         "field_type": "datetime",
@@ -935,7 +938,7 @@ def sync_task_executions_for_task_ids(
 
     unique_task_ids = sorted({int(task_id) for task_id in task_ids})
     if not unique_task_ids or not is_task_surface_context_name(tasks_context_name):
-        return {"upserted": 0, "deleted": 0}
+        return {"upserted": 0, "deleted": 0, "unchanged": 0}
     normalized_tasks_context_name = (tasks_context_name or "").strip("/")
     source_destination = _destination_from_context_name(normalized_tasks_context_name)
     source_team_id = _team_id_from_context_name(normalized_tasks_context_name)
@@ -946,7 +949,7 @@ def sync_task_executions_for_task_ids(
         name=normalized_tasks_context_name,
     )
     if tasks_context_id is None:
-        return {"upserted": 0, "deleted": 0}
+        return {"upserted": 0, "deleted": 0, "unchanged": 0}
     task_rows = _load_task_rows(
         session=session,
         project_id=project_id,
@@ -961,6 +964,7 @@ def sync_task_executions_for_task_ids(
 
     upserted = 0
     deleted = 0
+    unchanged = 0
     materialization_pairs: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = (
         []
     )
@@ -1049,6 +1053,9 @@ def sync_task_executions_for_task_ids(
         previous_execution: dict[str, Any] | None = None
         if existing_execution is not None:
             previous_execution = dict(existing_execution.data or {})
+            if _projection_is_noop(previous_execution, execution_payload):
+                unchanged += 1
+                continue
         else:
             # Schedule/revision edits mint a new run_key. Carry the prior open
             # Execution into the upsert so Communication gets one replace
@@ -1081,7 +1088,7 @@ def sync_task_executions_for_task_ids(
             previous_execution=previous_execution,
             current_execution=current_execution,
         )
-    return {"upserted": upserted, "deleted": deleted}
+    return {"upserted": upserted, "deleted": deleted, "unchanged": unchanged}
 
 
 def lookup_task_machine_executions_context_id(
@@ -1188,6 +1195,15 @@ def get_open_task_execution(
     )
     if executions_context_id is None:
         return None
+    # A team-owned task writes `destination` on every execution it projects, so
+    # omitting it here does not mean "any destination" -- the branch below reads
+    # it as "rows carrying none", which no team task ever has. Callers that know
+    # the destination pass it; the rest would silently look up nothing and
+    # conclude the execution is missing, which is indistinguishable from a task
+    # that never materialized. The surface path already encodes the owner, and
+    # projection derives the destination from it the same way.
+    if destination is None:
+        destination = _destination_from_context_name(tasks_context_name)
     query = (
         session.query(LogEvent)
         .join(LogEventContext, log_event_context_join())
@@ -1509,12 +1525,77 @@ def update_task_run(
     if existing is None:
         raise ValueError(f"Task run with run_key='{run_key}' not found.")
 
+    previous_state = str((existing.data or {}).get("state") or "")
     payload = dict(existing.data or {})
     payload.update(dict(updates))
     payload.setdefault("run_id", existing.id)
     _replace_log_payload(existing, payload)
     session.flush()
+
+    if str(payload.get("state") or "") == _RUNNING_STATE != previous_state:
+        _project_successor_for_started_run(
+            session=session,
+            project_id=project_id,
+            payload=payload,
+            tasks_context_name=tasks_context_name,
+        )
     return existing
+
+
+def _project_successor_for_started_run(
+    *,
+    session: Session,
+    project_id: int,
+    payload: Mapping[str, Any],
+    tasks_context_name: str,
+) -> None:
+    """Mint the next occurrence the moment a run starts.
+
+    Recurrence used to advance by relay: the runtime, as part of starting an
+    occurrence, computed and wrote the next one. That handed a load-bearing
+    invariant to whichever client happened to be dispatching, and July found
+    five distinct ways to drop it — a key built differently on each side, a
+    dropped field, an unretried write, a deploy-drain collision, an anchor
+    reset — each of which silently ended a series with no error anywhere.
+
+    The ledger owns it now. Starting a run is the event that makes the next
+    occurrence due, so the same event projects it, in the one place that
+    already knows how to derive a slot from the repeat rule. Projection stays
+    idempotent, so this racing the supervisor sweep converges rather than
+    duplicating.
+    """
+
+    task_id = _coerce_int(payload.get("task_id"))
+    if task_id is None:
+        return
+    try:
+        sync_task_executions_for_task_ids(
+            session,
+            project_id,
+            [task_id],
+            tasks_context_name=tasks_context_name,
+        )
+    except Exception:  # noqa: BLE001
+        # Never fail a live run because its successor could not be projected.
+        # Loud, because a series that stops advancing stops silently, and the
+        # supervisor sweep is the floor built to catch exactly this — a floor
+        # that is only load-bearing while it is itself healthy, which is not
+        # something this call site can promise. It ran on schedule and
+        # repaired nothing for two days in August 2026, so read the sweep's
+        # own `status` before assuming this series recovers on its own.
+        logger.exception(
+            {
+                "event": "task_successor_projection_failed",
+                "task_id": task_id,
+                "project_id": project_id,
+                "tasks_context_name": tasks_context_name,
+                "message": (
+                    "Failed to project the successor after a run started. "
+                    "This series has no open head until the supervisor sweep "
+                    "restores one."
+                ),
+            },
+        )
 
 
 def get_task_execution(
@@ -1948,12 +2029,11 @@ def _project_execution_payload(
             source_task_log_id=row.log_event_id,
         )
         if latest is not None and latest >= (_parse_datetime(anchor) or latest):
-            if _has_running_execution(
-                session,
-                project_id=project_id,
-                source_task_log_id=row.log_event_id,
-            ):
-                return KEEP_CURRENT_HEAD
+            # A run being in flight used to mean "leave the successor to the
+            # dispatcher", because the runtime projected it as part of
+            # starting. Projection is now owned here, so deferring would
+            # simply lose the occurrence: the series has already consumed its
+            # head and nothing else is going to mint the next one.
             minted = _next_repeat_occurrence_after(
                 data=row.data,
                 task_id=task_id,
@@ -1975,7 +2055,10 @@ def _project_execution_payload(
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "task_name": _coerce_optional_str(row.data.get("name")),
-        "task_description": _coerce_optional_str(row.data.get("description")),
+        "task_summary": _compact_task_summary(
+            row.data.get("description"),
+            fallback=_coerce_optional_str(row.data.get("name")) or "",
+        ),
         "scheduled_for": scheduled_for,
         "trigger_medium": _coerce_optional_str(trigger.get("medium")),
         "trigger_from_contact_ids": _coerce_optional_list(
@@ -1988,12 +2071,12 @@ def _project_execution_payload(
         "trigger_recurring": bool(trigger.get("recurring", False)),
         "entrypoint": entrypoint,
         "max_runtime_seconds": _coerce_int(row.data.get("max_runtime_seconds")),
-        "repeat": _coerce_optional_list(row.data.get("repeat")),
+        "recurring": bool(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
             row.updated_at or row.created_at,
         ),
     }
-    payload["revision"] = _stable_hash(payload)
+    payload["revision"] = _authored_revision(payload)
     # Post-hash: jitter spreads dispatch without changing the occurrence
     # identity, so it must not perturb the revision (or the run_key digested
     # from it) that concurrent writers converge on.
@@ -2066,9 +2149,12 @@ def _project_provider_event_execution_payload(
         "requires_filesystem": requires_filesystem,
         "requires_computer": requires_computer,
         "task_name": _coerce_optional_str(row.data.get("name")),
-        "task_description": _coerce_optional_str(row.data.get("description")),
+        "task_summary": _compact_task_summary(
+            row.data.get("description"),
+            fallback=_coerce_optional_str(row.data.get("name")) or "",
+        ),
         "entrypoint": entrypoint,
-        "repeat": _coerce_optional_list(row.data.get("repeat")),
+        "recurring": bool(row.data.get("repeat")),
         "source_task_updated_at": _coerce_datetime_string(
             row.updated_at or row.created_at,
         ),
@@ -2106,6 +2192,9 @@ def _normalize_execution_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "activation_kind",
         "next_due_at",
         "instance_id",
+        "task_description",
+        "repeat",
+        "previous_error",
     ):
         normalized.pop(obsolete_key, None)
     state = str(normalized.get("state") or "").lower()
@@ -2196,18 +2285,6 @@ def _scheduled_execution_snapshot(
     }
 
 
-def _compact_task_summary(text: Any, *, fallback: str) -> str:
-    """Return one compact wake-summary line for scheduled task delivery."""
-
-    candidate = " ".join((_coerce_optional_str(text) or "").split())
-    if not candidate:
-        candidate = " ".join(fallback.split())
-    if len(candidate) <= _TASK_SUMMARY_MAX_CHARS:
-        return candidate
-    truncated = candidate[: _TASK_SUMMARY_MAX_CHARS - 3].rstrip(" ,.;:")
-    return f"{truncated}..."
-
-
 def _scheduled_execution_wake_context(
     execution: Mapping[str, Any],
 ) -> dict[str, str]:
@@ -2217,12 +2294,13 @@ def _scheduled_execution_wake_context(
     task_label = _coerce_optional_str(execution.get("task_name")) or (
         f"task {task_id}" if task_id is not None else "scheduled task"
     )
-    repeat = _coerce_optional_list(execution.get("repeat")) or []
-    recurrence_hint = _RECURRING_WAKE_HINT if repeat else _ONE_OFF_WAKE_HINT
+    recurrence_hint = (
+        _RECURRING_WAKE_HINT if execution.get("recurring") else _ONE_OFF_WAKE_HINT
+    )
     return {
         "task_label": task_label,
         "task_summary": _compact_task_summary(
-            execution.get("task_description"),
+            execution.get("task_summary"),
             fallback=task_label,
         ),
         "visibility_policy": _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY,
@@ -2348,25 +2426,6 @@ def _next_repeat_occurrence_after(
         patterns=patterns,
     )
     return next_start.isoformat(), offset
-
-
-def _has_running_execution(
-    session: Session,
-    *,
-    project_id: int,
-    source_task_log_id: int,
-) -> bool:
-    """Whether any execution of this definition is currently running."""
-
-    return (
-        session.query(LogEvent.id)
-        .filter(
-            LogEvent.project_id == project_id,
-            LogEvent.data["source_task_log_id"].astext == str(int(source_task_log_id)),
-            LogEvent.data["state"].astext == "running",
-        )
-        .first()
-    ) is not None
 
 
 def _latest_ledger_occurrence(
@@ -3104,6 +3163,102 @@ def _coerce_datetime_string(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+# The authored facts that decide what an occurrence is and does. Anything
+# absent here is either derived (``state`` follows ``wake``), cosmetic
+# (``task_name``), or provenance (``source_task_updated_at``).
+_REVISION_AUTHORED_KEYS = (
+    "assistant_id",
+    "destination",
+    "task_id",
+    "source_task_log_id",
+    "wake",
+    "delivery",
+    "scheduled_for",
+    "entrypoint",
+    "max_runtime_seconds",
+    "requires_filesystem",
+    "requires_computer",
+    "recurring",
+    "trigger_medium",
+    "trigger_from_contact_ids",
+    "trigger_omit_contact_ids",
+    "trigger_recurring",
+    "interrupt",
+)
+
+
+def _authored_revision(payload: Mapping[str, Any]) -> str:
+    """Fingerprint the authored facts that govern one occurrence.
+
+    Deliberately not a hash of the whole projected payload. That payload
+    carries provenance and whatever columns the projection happens to
+    write this month, so hashing it made schema evolution
+    indistinguishable from an authored edit: every armed head in the
+    fleet re-keyed whenever a projected field was added or removed. It
+    also folded in ``source_task_updated_at``, so a sync re-stamp that
+    changed nothing a run cares about still retired the live head.
+
+    Only facts that change what this occurrence *is* or *does* belong
+    here. A rename does not: the same run under a new label is still the
+    same run.
+    """
+
+    return _stable_hash({key: payload.get(key) for key in _REVISION_AUTHORED_KEYS})
+
+
+# Jitter and materialization bookkeeping are deliberately not part of an
+# occurrence's identity, so they never make a re-projection meaningful.
+_PROJECTION_VOLATILE_KEYS = frozenset(
+    {
+        "dispatch_offset_seconds",
+        "last_materialized_at",
+    },
+)
+
+
+# A live assistant woken by a scheduled task is handed this text as its
+# immediate context, so it needs to say what the work *is*. The full
+# authored description is a paragraph and does not belong copied onto
+# every occurrence; a bounded summary carries the meaning at a fixed cost.
+_TASK_SUMMARY_MAX_CHARS = 240
+
+
+def _compact_task_summary(text: Any, *, fallback: str) -> str:
+    """Return one bounded wake-summary line for a scheduled occurrence."""
+
+    candidate = " ".join((_coerce_optional_str(text) or "").split())
+    if not candidate:
+        candidate = " ".join(fallback.split())
+    if len(candidate) <= _TASK_SUMMARY_MAX_CHARS:
+        return candidate
+    truncated = candidate[: _TASK_SUMMARY_MAX_CHARS - 3].rstrip(" ,.;:")
+    return f"{truncated}..."
+
+
+def _projection_is_noop(
+    stored: Mapping[str, Any] | None,
+    payload: Mapping[str, Any],
+) -> bool:
+    """True when the stored head already asserts everything the projection would.
+
+    Projection is idempotent by construction, so re-running it over an
+    unchanged fleet used to rewrite every open head and count each rewrite
+    as an upsert. That made the supervisor sweep a write amplifier at its
+    tick rate, and — worse — made its headline number meaningless: a
+    perfectly healthy fleet reported one "upsert" per definition, which is
+    exactly the signal operators read as "the sweep healed something".
+    """
+
+    if stored is None:
+        return False
+    for key, value in payload.items():
+        if key in _PROJECTION_VOLATILE_KEYS:
+            continue
+        if stored.get(key) != value:
+            return False
+    return True
 
 
 def _stable_hash(value: Mapping[str, Any]) -> str:

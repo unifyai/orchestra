@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -46,6 +46,10 @@ class TaskExecutionReprojectResponse(BaseModel):
 
     upserted: int = Field(description="Number of execution rows upserted.")
     deleted: int = Field(description="Number of execution rows deleted.")
+    unchanged: int = Field(
+        default=0,
+        description="Rows left untouched because projection had nothing to add.",
+    )
     execution: Optional[Dict[str, Any]] = Field(
         default=None,
         description="The execution payload after reprojection, or null when unarmed.",
@@ -123,10 +127,6 @@ class TaskExecutionCreateOrAdoptRequest(BaseModel):
     task_name: Optional[str] = Field(
         default=None,
         description="Human-readable task title mirrored into the run row.",
-    )
-    task_description: Optional[str] = Field(
-        default=None,
-        description="Human-readable task description mirrored into the run row.",
     )
     started_at: Optional[datetime] = Field(
         default=None,
@@ -431,4 +431,48 @@ class ProviderEventContextResponse(BaseModel):
     expires_at: datetime | None = Field(
         default=None,
         description="UTC instant when this context becomes unreadable.",
+    )
+
+
+class TaskSupervisorSweepResponse(BaseModel):
+    """Summary of one supervisor sweep over enabled, armed task definitions."""
+
+    status: str = Field(
+        default="ok",
+        description=(
+            "Whether this pass did its job: 'ok', 'degraded' (some tenants "
+            "failed, the sweep still ran) or 'broken' (it failed across most "
+            "of the fleet, and the endpoint answers 5xx). Read this rather "
+            "than inferring health from 'upserted', which is zero both for a "
+            "fleet with nothing to repair and for a sweep that repaired "
+            "nothing because it aborted."
+        ),
+    )
+    started_at: str = Field(description="UTC instant the sweep began.")
+    finished_at: str = Field(description="UTC instant the sweep finished.")
+    projects_scanned: int = Field(
+        description="Task-machine projects visited (one per owner).",
+    )
+    surfaces_scanned: int = Field(
+        description="Task-surface contexts holding enabled, armed definitions.",
+    )
+    definitions_scanned: int = Field(
+        description="Enabled, armed definitions re-projected this pass.",
+    )
+    upserted: int = Field(
+        description=(
+            "Real projection writes. A healthy fleet sweeps to zero; a "
+            "non-zero count is the number of dropped batons just healed."
+        ),
+    )
+    deleted: int = Field(
+        description="Stale open heads removed for gone or ineligible tasks.",
+    )
+    unchanged: int = Field(
+        default=0,
+        description="Heads the sweep found already correct and left untouched.",
+    )
+    errors: List[str] = Field(
+        default_factory=list,
+        description="Per-surface failures; the sweep continues past them.",
     )
