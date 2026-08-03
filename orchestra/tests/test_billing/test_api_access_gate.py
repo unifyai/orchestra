@@ -15,7 +15,11 @@ import pytest
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND, PROGRAMMATIC_KEY_KIND
-from orchestra.lib.trial_subscription import has_api_access, trial_gate_fields
+from orchestra.lib.trial_subscription import (
+    has_api_access,
+    has_platform_access,
+    trial_gate_fields,
+)
 from orchestra.settings import settings
 from orchestra.tests.test_billing.conftest import (
     make_org_with_billing,
@@ -282,3 +286,42 @@ def test_dependency_exempts_the_platform_system_key(
             is_system_api_key=True,
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# The Console-facing gate response
+# ---------------------------------------------------------------------------
+
+
+def test_access_gate_response_defaults_to_permissive():
+    """The Console reads this to decide whether to warn about the API key.
+
+    Defaulting the other way would have an older Orchestra build — which
+    omits the field entirely — make the Console announce a restriction
+    that is not actually in force.
+    """
+    from orchestra.web.api.billing.schema import AccessGateResponse
+
+    assert AccessGateResponse(allowed=True).api_access_allowed is True
+
+
+def test_access_gate_reports_the_api_verdict_independently(dbsession, api_gate_on):
+    """Platform access and API access are separate questions.
+
+    With the card gate off and the API gate on, an account is allowed to
+    use the platform and denied off-platform — so the two fields must not
+    be derived from one another.
+    """
+    from orchestra.settings import settings
+    from orchestra.web.api.billing.schema import AccessGateResponse
+
+    _, ba = make_org_with_billing(dbsession, "gate response split", None)
+    settings.require_card_on_file = False
+
+    response = AccessGateResponse(
+        allowed=has_platform_access(dbsession, ba),
+        api_access_allowed=has_api_access(dbsession, ba),
+    )
+
+    assert response.allowed is True
+    assert response.api_access_allowed is False

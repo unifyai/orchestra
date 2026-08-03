@@ -517,3 +517,11 @@ class AccessGateResponse(BaseModel):
         False,
         description="Whether a subscription (trialing or active) is linked.",
     )
+    api_access_allowed: bool = Field(
+        True,
+        description="Whether this account may spend outside the Console. "
+        "False while it is still purely on free credits, in which case a "
+        "programmatic key exists but every call it makes is refused with "
+        "402. Surfaced so the Console can say so where the key is shown, "
+        "rather than letting the user discover it from a failed request.",
+    )
