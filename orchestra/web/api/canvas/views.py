@@ -43,6 +43,9 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.canvas.schema import (
     CanvasActionDescriptor,
     CanvasActionsResponse,
+    CanvasAliasResult,
+    CanvasBatchQueryRequest,
+    CanvasBatchQueryResponse,
     CanvasInvocationResponse,
     CanvasQueryRequest,
     CanvasQueryResponse,
@@ -358,13 +361,6 @@ def _servable(session: Session, token: str):
     return entry
 
 
-def _flatten(logs: list) -> list:
-    """Merge stored and derived entries into plain rows for JS consumption."""
-    return [
-        {**log.get("entries", {}), **log.get("derived_entries", {})} for log in logs
-    ]
-
-
 def _fields(names) -> Optional[str]:
     """Join field names the way the log query expects.
 
@@ -389,20 +385,24 @@ def _rows_from(
     offset: int,
     session: Session,
 ) -> tuple[list, int]:
-    """Run one row query as the canvas owner, through the standard log path."""
-    from orchestra.web.api.log.utils.logging_utils import _format_logs, _get_logs_query
+    """Run one row query as the canvas owner, through the shared bridge path.
+
+    ``query_flat_rows`` owns the query → format → flatten sequence and defaults
+    to no value truncation, which matters here: everything read through this is
+    machine-consumed (bindings and schemas are parsed, invocation args are
+    replayed, binding rows are handed to the frame), and a display-style limit
+    once truncated a canvas's bindings declaration into unparseable JSON.
+    """
+    from orchestra.web.api.log.utils.logging_utils import query_flat_rows
 
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
-    project = entry.project
-
-    rows, total = _get_logs_query(
+    return query_flat_rows(
         request_fastapi=_as_owner(entry),
-        project_name=project.name,
+        project_name=entry.project.name,
+        project_id=entry.project.id,
         context=context,
         filter=filter_expr,
         sorting=sorting,
-        from_ids=None,
-        exclude_ids=None,
         from_fields=from_fields,
         exclude_fields=exclude_fields,
         limit=limit,
@@ -411,34 +411,7 @@ def _rows_from(
         field_type_dao=field_type_dao,
         context_dao=context_dao,
         session=session,
-        randomize=False,
     )
-
-    context_rows = context_dao.filter(name=context, project_id=project.id)
-    context_id = context_rows[0][0].id if context_rows else None
-    field_types = field_type_dao.get_field_types(
-        project.id,
-        context_id=context_id,
-        return_mutable=True,
-    )
-    logs_out, _ = _format_logs(
-        rows=rows,
-        field_types=field_types,
-        # Never truncate: every value read here is machine-consumed — bindings
-        # and action schemas are parsed as JSON, invocation args are replayed,
-        # binding rows are handed to the frame. A display-style value limit
-        # turned an eight-binding bindings_json (2.5 kB) into unparseable JSON,
-        # which read back as "this canvas declares no bindings" on every view.
-        value_limit=None,
-        column_context=None,
-        field_order_map=field_type_dao.get_ordered_field_names(
-            project.id,
-            context_id=context_id,
-        ),
-        from_fields=from_fields,
-        exclude_fields=exclude_fields,
-    )
-    return _flatten(logs_out), total
 
 
 def _canvas_bindings(entry, token: str, session: Session) -> dict:
@@ -507,8 +480,12 @@ def _run_binding(binding: dict, entry, session: Session) -> tuple[list, bool]:
         order_by = args.get("order_by")
         sorting = None
         if order_by:
-            sorting = (
-                f"{order_by} desc" if args.get("descending") else f"{order_by} asc"
+            # The log query takes sorting as a JSON object mapping field name to
+            # direction. A SQL-style "week asc" string fails its JSON parse, so
+            # every binding that declared an ordering 400'd at view time while
+            # the author-time dry-run (which sorts through DataManager) passed.
+            sorting = json.dumps(
+                {order_by: "descending" if args.get("descending") else "ascending"},
             )
 
         rows, _ = _rows_from(
@@ -675,6 +652,65 @@ def admin_canvas_query(
         )
 
     return CanvasQueryResponse(alias=body.alias, rows=rows, truncated=truncated)
+
+
+@admin_router.post(
+    "/canvas/{token}/queries",
+    response_model=CanvasBatchQueryResponse,
+    responses={
+        200: {"description": "Per-alias results, keyed by alias"},
+        403: {"description": "Canvas is not published"},
+        404: {"description": "Token or canvas record not found"},
+    },
+)
+def admin_canvas_queries(
+    body: CanvasBatchQueryRequest,
+    token: str = Path(..., pattern=TOKEN_PATTERN),
+    session: Session = Depends(get_db_session),
+) -> CanvasBatchQueryResponse:
+    """Execute several of a canvas's declared bindings in one round trip.
+
+    A canvas typically declares one binding per panel and the frame wants them
+    all on mount; issuing them individually costs a request pair per panel and
+    reads the bindings declaration once per alias. Here the record is read once
+    and each alias executes against it.
+
+    Failures are per-alias: an unknown alias or a binding whose table has since
+    vanished reports an error on its own entry rather than failing the batch,
+    because one broken panel must not blank the panels whose bindings are fine.
+    Whole-request failures remain only what applies to the whole canvas — an
+    unknown token or an unpublished record.
+    """
+    entry = _servable(session, token)
+    bindings = _canvas_bindings(entry, token, session)
+
+    results: dict[str, CanvasAliasResult] = {}
+    for alias in dict.fromkeys(body.aliases):
+        binding = bindings.get(alias)
+        if binding is None:
+            results[alias] = CanvasAliasResult(
+                error=f"Canvas declares no binding named '{alias}'",
+            )
+            continue
+        try:
+            rows, truncated = _run_binding(binding, entry, session)
+        except HTTPException as error:
+            results[alias] = CanvasAliasResult(error=str(error.detail))
+        except ValueError as error:
+            results[alias] = CanvasAliasResult(error=str(error))
+        except Exception as error:  # noqa: BLE001 - reported on the alias entry
+            logger.exception(
+                "Canvas query failed for token %s alias %s",
+                token,
+                alias,
+            )
+            results[alias] = CanvasAliasResult(
+                error=f"Error executing binding: {error}",
+            )
+        else:
+            results[alias] = CanvasAliasResult(rows=rows, truncated=truncated)
+
+    return CanvasBatchQueryResponse(results=results)
 
 
 # ===========================================================================

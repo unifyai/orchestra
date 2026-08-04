@@ -517,3 +517,117 @@ async def test_large_values_survive_the_read_untruncated(
     rows = resp.json()["rows"]
     assert len(rows) == 1
     assert rows[0]["body"] == long_text
+
+
+@pytest.mark.anyio
+async def test_a_declared_ordering_is_applied(client: AsyncClient, dbsession: Session):
+    """Guards the sorting contract between the binding and the log query.
+
+    The log query takes sorting as a JSON object mapping field name to
+    direction. The first implementation handed it a SQL-style "points desc"
+    string, which failed the JSON parse — so every binding that declared an
+    ordering 400'd at view time, while unordered bindings on the same canvas
+    worked and the author-time dry-run (which sorts through DataManager)
+    passed. Observed live before any test pinned it.
+    """
+    user = await _seed(client, "cq_sort@test.com", "cq-sort-proj")
+    binding = _filter_binding()
+    binding["args"]["order_by"] = "points"
+    binding["args"]["descending"] = True
+    await _seed_canvas(client, user, "cq-sort-proj", "cq_sort_0001", [binding])
+
+    resp = await client.post(
+        "/v0/admin/canvas/cq_sort_0001/query",
+        json={"alias": "tasks"},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    points = [row["points"] for row in resp.json()["rows"]]
+    assert points == sorted(points, reverse=True), points
+
+
+# ===========================================================================
+# The batch form: several aliases, one record read, per-alias failure
+# ===========================================================================
+
+
+@pytest.mark.anyio
+async def test_a_batch_returns_every_alias_in_one_round_trip(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    user = await _seed(client, "cq_batch@test.com", "cq-batch-proj")
+    await _seed_canvas(
+        client,
+        user,
+        "cq-batch-proj",
+        "cq_batch_001",
+        [_filter_binding(), _filter_binding(alias="open", filter="status == 'open'")],
+    )
+
+    resp = await client.post(
+        "/v0/admin/canvas/cq_batch_001/queries",
+        json={"aliases": ["tasks", "open"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    results = resp.json()["results"]
+    assert set(results) == {"tasks", "open"}
+    assert len(results["tasks"]["rows"]) == len(TASKS)
+    assert results["tasks"]["error"] is None
+    assert {row["status"] for row in results["open"]["rows"]} == {"open"}
+
+
+@pytest.mark.anyio
+async def test_a_batch_reports_failures_per_alias(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """One broken alias must not blank the panels whose bindings are fine."""
+    user = await _seed(client, "cq_mixed@test.com", "cq-mixed-proj")
+    await _seed_canvas(
+        client,
+        user,
+        "cq-mixed-proj",
+        "cq_mixed_001",
+        [_filter_binding()],
+    )
+
+    resp = await client.post(
+        "/v0/admin/canvas/cq_mixed_001/queries",
+        json={"aliases": ["tasks", "ghost"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    results = resp.json()["results"]
+    assert len(results["tasks"]["rows"]) == len(TASKS)
+    assert results["ghost"]["rows"] == []
+    assert "declares no binding" in results["ghost"]["error"]
+
+
+@pytest.mark.anyio
+async def test_a_batch_on_an_unpublished_canvas_fails_whole(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Servability is a property of the canvas, not of any one alias."""
+    user = await _seed(client, "cq_quarantine@test.com", "cq-quar-proj")
+    await _seed_canvas(
+        client,
+        user,
+        "cq-quar-proj",
+        "cq_quar_0001",
+        [_filter_binding()],
+        canvas_status="quarantined",
+    )
+
+    resp = await client.post(
+        "/v0/admin/canvas/cq_quar_0001/queries",
+        json={"aliases": ["tasks"]},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert resp.status_code == status.HTTP_403_FORBIDDEN, resp.text

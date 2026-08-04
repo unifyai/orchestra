@@ -257,7 +257,7 @@ def admin_filter_bridge(
     via the same internal query path used by GET /v0/logs, and returns
     flattened row entries for ergonomic JS consumption.
     """
-    from orchestra.web.api.log.utils.logging_utils import _format_logs, _get_logs_query
+    from orchestra.web.api.log.utils.logging_utils import query_flat_rows
 
     entry = _resolve_tile_token(session, token)
     project_dao, field_type_dao, context_dao = _bridge_daos(session)
@@ -269,66 +269,26 @@ def admin_filter_bridge(
         ),
     )
 
-    project_name = entry.project.name
-
-    rows, total_count = _get_logs_query(
+    flat_rows, total_count = query_flat_rows(
         request_fastapi=fake_request,
-        project_name=project_name,
+        project_name=entry.project.name,
         context=body.context,
         filter=body.filter,
         sorting=body.sorting,
-        from_ids=None,
-        exclude_ids=None,
         from_fields=body.from_fields,
         exclude_fields=body.exclude_fields,
         limit=body.limit,
         offset=body.offset or 0,
+        randomize=body.randomize or False,
+        column_context=body.column_context,
+        # Tiles are display HTML rendered from these rows, so preview clipping
+        # is a feature here, unlike the canvas bindings path.
+        value_limit=1000,
         project_dao=project_dao,
         field_type_dao=field_type_dao,
         context_dao=context_dao,
         session=session,
-        randomize=body.randomize or False,
     )
-
-    project_id = project_dao.get_by_user_and_name(
-        name=project_name,
-        user_id=entry.user_id,
-        organization_id=entry.organization_id,
-    ).id
-
-    context_id = None
-    if body.context:
-        context_obj = context_dao.filter(name=body.context, project_id=project_id)
-        if context_obj:
-            context_id = context_obj[0][0].id
-    else:
-        context_obj = context_dao.filter(name="", project_id=project_id)
-        if context_obj:
-            context_id = context_obj[0][0].id
-
-    field_types = field_type_dao.get_field_types(
-        project_id,
-        context_id=context_id,
-        return_mutable=True,
-    )
-    field_order_map = field_type_dao.get_ordered_field_names(
-        project_id,
-        context_id=context_id,
-    )
-
-    logs_out, _ = _format_logs(
-        rows=rows,
-        field_types=field_types,
-        value_limit=1000,
-        column_context=body.column_context,
-        field_order_map=field_order_map,
-        from_fields=body.from_fields,
-        exclude_fields=body.exclude_fields,
-    )
-
-    flat_rows = [
-        {**log.get("entries", {}), **log.get("derived_entries", {})} for log in logs_out
-    ]
 
     return FilterBridgeResponse(rows=flat_rows, total_count=total_count)
 

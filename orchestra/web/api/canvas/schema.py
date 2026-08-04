@@ -91,6 +91,43 @@ class CanvasQueryResponse(BaseModel):
     truncated: bool = False
 
 
+class CanvasBatchQueryRequest(BaseModel):
+    """Request body for POST /admin/canvas/{token}/queries.
+
+    The batch form of the alias contract: a canvas typically declares several
+    bindings and the frame wants them all on mount, so one round trip carries
+    every alias instead of one request per panel. The same rule applies as the
+    single form — aliases and nothing else; each named binding executes exactly
+    as it was validated and stored at author time.
+    """
+
+    aliases: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=32,
+        description="Names of bindings declared on this canvas.",
+    )
+
+
+class CanvasAliasResult(BaseModel):
+    """Outcome for one alias inside a batch query.
+
+    Failures are per-alias rather than per-request: one revoked table or typo'd
+    alias must not blank the five panels whose bindings are fine, and the frame
+    protocol already reports data errors to each panel individually.
+    """
+
+    rows: list[dict] = Field(default_factory=list)
+    truncated: bool = False
+    error: Optional[str] = None
+
+
+class CanvasBatchQueryResponse(BaseModel):
+    """Results for a batch of aliases, keyed by alias."""
+
+    results: dict[str, CanvasAliasResult]
+
+
 class CanvasTokenResolutionResponse(BaseModel):
     """Response for admin token resolution.
 
