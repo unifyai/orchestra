@@ -55,9 +55,15 @@ class DefaultModelOption:
     model: Optional[str]
     reasoning_effort: Optional[str]
     label: str
-    approx_credits_per_task: int
+    # None when Artificial Analysis has not published a Cost per Intelligence
+    # Index Task figure for the model yet. Token rates are shown instead of a
+    # task estimate invented from token math, which would not be comparable
+    # with the anchored figures on the other rows.
+    approx_credits_per_task: Optional[int]
     approx_credits_per_message: int
     artificial_analysis_url: str
+    input_usd_per_m: float
+    output_usd_per_m: float
 
 
 def _aa_url(slug: str) -> str:
@@ -78,12 +84,33 @@ def _msg_credits(
     return max(1, round(usd * _CREDITS_PER_USD))
 
 
+def credits_per_message_from_token_costs(
+    input_cost_per_token: Optional[float],
+    output_cost_per_token: Optional[float],
+    reasoning_effort: Optional[str] = None,
+) -> Optional[int]:
+    """Message credits for a catalog model, from its live per-token rates.
+
+    Catalog models have no Artificial Analysis task anchor, so only the
+    token-derived message estimate is meaningful for them; per-task cost stays
+    unknown rather than guessed.
+    """
+
+    if input_cost_per_token is None or output_cost_per_token is None:
+        return None
+    return _msg_credits(
+        input_cost_per_token * 1_000_000,
+        output_cost_per_token * 1_000_000,
+        reasoning_effort,
+    )
+
+
 def _opt(
     *,
     model: Optional[str],
     reasoning_effort: Optional[str],
     label: str,
-    approx_credits_per_task: int,
+    approx_credits_per_task: Optional[int],
     input_usd_per_m: float,
     output_usd_per_m: float,
     aa_slug: str,
@@ -99,6 +126,8 @@ def _opt(
             reasoning_effort,
         ),
         artificial_analysis_url=_aa_url(aa_slug),
+        input_usd_per_m=input_usd_per_m,
+        output_usd_per_m=output_usd_per_m,
     )
 
 
@@ -358,6 +387,63 @@ DEFAULT_MODEL_OPTIONS: Tuple[DefaultModelOption, ...] = (
         input_usd_per_m=10.0,
         output_usd_per_m=50.0,
         aa_slug="claude-fable-5",
+    ),
+    # Recent releases Artificial Analysis benchmarks but has not yet published a
+    # per-task cost for. They carry no task estimate, and the runtime's own
+    # per-call-site effort levels apply, as with MiniMax-M3 and Kimi K3 above.
+    _opt(
+        model="x-ai/grok-4.5@openrouter",
+        reasoning_effort=None,
+        label="Grok 4.5",
+        approx_credits_per_task=None,
+        input_usd_per_m=2.00,
+        output_usd_per_m=6.00,
+        aa_slug="grok-4-5",
+    ),
+    _opt(
+        model="google/gemini-3.6-flash@openrouter",
+        reasoning_effort=None,
+        label="Gemini 3.6 Flash",
+        approx_credits_per_task=None,
+        input_usd_per_m=1.50,
+        output_usd_per_m=7.50,
+        aa_slug="gemini-3-6-flash",
+    ),
+    _opt(
+        model="google/gemini-3.5-flash-lite@openrouter",
+        reasoning_effort=None,
+        label="Gemini 3.5 Flash Lite",
+        approx_credits_per_task=None,
+        input_usd_per_m=0.30,
+        output_usd_per_m=2.50,
+        aa_slug="gemini-3-5-flash-lite",
+    ),
+    _opt(
+        model="meta/muse-spark-1.1@openrouter",
+        reasoning_effort=None,
+        label="Muse Spark 1.1",
+        approx_credits_per_task=None,
+        input_usd_per_m=1.25,
+        output_usd_per_m=4.25,
+        aa_slug="muse-spark-1-1",
+    ),
+    _opt(
+        model="thinkingmachines/inkling@openrouter",
+        reasoning_effort=None,
+        label="Inkling",
+        approx_credits_per_task=None,
+        input_usd_per_m=1.00,
+        output_usd_per_m=4.05,
+        aa_slug="inkling",
+    ),
+    _opt(
+        model="thinkingmachines/inkling-small@openrouter",
+        reasoning_effort=None,
+        label="Inkling Small",
+        approx_credits_per_task=None,
+        input_usd_per_m=0.50,
+        output_usd_per_m=1.20,
+        aa_slug="inkling-small",
     ),
 )
 

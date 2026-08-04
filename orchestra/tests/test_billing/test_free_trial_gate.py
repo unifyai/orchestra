@@ -78,27 +78,34 @@ def test_revoking_grant_reapplies_gate(dbsession, card_gate_on):
     assert has_platform_access(dbsession, ba) is False
 
 
-def test_daily_cap_applies_without_grant(dbsession, card_gate_on, monkeypatch):
-    monkeypatch.setattr(settings, "trial_daily_spend_cap", 25.0)
-    _, ba = make_org_with_billing(dbsession, "ft cap applied", None)
+def test_never_paid_set_without_grant(dbsession, card_gate_on):
+    _, ba = make_org_with_billing(dbsession, "ft never paid", None)
 
     fields = trial_gate_fields(dbsession, ba)
 
-    assert fields["trial_daily_cap"] == 25.0
+    assert fields["never_paid"] is True
 
 
-def test_daily_cap_lifted_by_free_trial(dbsession, card_gate_on, monkeypatch):
-    """A comped evaluation is not throttled to a $25/day ceiling."""
-    monkeypatch.setattr(settings, "trial_daily_spend_cap", 25.0)
-    org, ba = make_org_with_billing(dbsession, "ft cap lifted", None)
+def test_never_paid_cleared_by_free_trial(dbsession, card_gate_on):
+    """A comped evaluation keeps full model access."""
+    org, ba = make_org_with_billing(dbsession, "ft never paid comped", None)
 
     org.free_trial = True
     dbsession.flush()
 
     fields = trial_gate_fields(dbsession, ba)
 
-    assert fields["trial_daily_cap"] is None
-    assert fields["trial_daily_spend"] is None
+    assert fields["never_paid"] is False
+
+
+def test_no_daily_spend_ceiling_is_published(dbsession, card_gate_on):
+    """The trial burn ceiling is gone: no cap fields reach the runtime."""
+    _, ba = make_org_with_billing(dbsession, "ft no ceiling", None)
+
+    fields = trial_gate_fields(dbsession, ba)
+
+    assert "trial_daily_cap" not in fields
+    assert "trial_daily_spend" not in fields
 
 
 def test_freeze_sweep_skips_free_trial_org(dbsession, card_gate_on):

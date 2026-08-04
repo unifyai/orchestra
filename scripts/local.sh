@@ -306,7 +306,6 @@ BEGIN
       id, name, display_name, description,
       billing_mode,
       commit_amount, currency, commit_period, commit_schedule,
-      base_pricing_factor, overage_pricing_factor,
       collection_method,
       proration_policy, credits_rollover_policy,
       fx_policy, fx_locked_rate,
@@ -316,7 +315,6 @@ BEGIN
       'Platform-default pay-as-you-go plan. Credit-based wallet with auto-recharge support.',
       'CREDITS',
       NULL, 'USD', NULL, NULL,
-      1.0, 1.0,
       'AUTO_CARD',
       'PRORATE', NULL,
       NULL, NULL,
@@ -678,18 +676,38 @@ purge_db_container() {
 # Database Migrations and Seeding
 # =============================================================================
 
+export_db_env() {
+  export ORCHESTRA_DB_HOST=localhost
+  export ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT"
+  export ORCHESTRA_DB_USER=orchestra
+  export ORCHESTRA_DB_PASS=orchestra
+  export ORCHESTRA_DB_BASE=orchestra
+}
+
+# Print the database's revision and the checkout's head, space separated, so a
+# caller can tell whether the schema matches the code without upgrading.
+schema_revisions() {
+  local repo_path="$1"
+
+  cd "$repo_path"
+  export_db_env
+
+  local alembic_cmd
+  alembic_cmd=$(get_venv_executable "$repo_path" "alembic")
+
+  local current head
+  current=$($alembic_cmd current 2>/dev/null | grep -oE "^[a-z0-9_]+" | tail -1)
+  head=$($alembic_cmd heads 2>/dev/null | grep -oE "^[a-z0-9_]+" | tail -1)
+  echo "$current $head"
+}
+
 run_migrations() {
   local repo_path="$1"
 
   log_info "Running database migrations..."
 
   cd "$repo_path"
-
-  export ORCHESTRA_DB_HOST=localhost
-  export ORCHESTRA_DB_PORT="$ORCHESTRA_DB_PORT"
-  export ORCHESTRA_DB_USER=orchestra
-  export ORCHESTRA_DB_PASS=orchestra
-  export ORCHESTRA_DB_BASE=orchestra
+  export_db_env
 
   local alembic_cmd
   alembic_cmd=$(get_venv_executable "$repo_path" "alembic")
@@ -1243,6 +1261,40 @@ cmd_seed() {
 
   if ! start_db_container; then
     return 1
+  fi
+
+  # Seeding goes through the ORM, which selects every column the models
+  # declare, so it needs the schema the current code expects. A database that
+  # already exists is exactly the one that can be behind — it keeps whatever
+  # schema it had when it was last migrated while the code moves on — and the
+  # seed then dies on a column the models have and the database does not.
+  #
+  # Who may fix that depends on who owns the database. An isolated database is
+  # ours to upgrade, and upgrading is a no-op once it is current. The full
+  # stack's database is not: it is being served right now by the code the stack
+  # started with, so migrating underneath it can drop a column that running
+  # code still selects. There the honest move is to report the drift and let
+  # the stack restart, which migrates and reloads the server together.
+  if ! check_orchestra_repo "$ORCHESTRA_REPO_PATH"; then
+    return 1
+  fi
+
+  if refuse_isolated_when_full_stack_active "migrate" >/dev/null 2>&1; then
+    if ! run_migrations "$ORCHESTRA_REPO_PATH"; then
+      return 1
+    fi
+  else
+    local revisions current head
+    revisions=$(schema_revisions "$ORCHESTRA_REPO_PATH")
+    current=${revisions% *}
+    head=${revisions#* }
+    if [[ -n "$head" && "$current" != "$head" ]]; then
+      log_error "Database schema is behind this checkout ($current, head is $head)."
+      log_info "The running stack is serving that schema, so upgrading it here would break the live server."
+      log_info "Restart the stack to migrate and reload together:"
+      log_info "  bash unify-deploy/selfhost/stack.sh up --durable"
+      return 1
+    fi
   fi
 
   # Ahead of the skip check: the system projects are platform data, not part of

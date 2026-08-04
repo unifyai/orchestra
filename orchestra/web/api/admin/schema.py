@@ -228,18 +228,6 @@ class BillingPlanTemplateCreate(BaseModel):
     currency: str = "USD"  # Invoice currency for the whole template
     commit_period: Optional[str] = None  # CommitPeriod: MONTHLY | QUARTERLY | ANNUAL
     commit_schedule: Optional[str] = None
-    # Two-rate pricing that **stacks** on overage:
-    # * ``base_pricing_factor`` applies to ALL usage (commit-included
-    #   + overage + PAYG). 0.80 = 20% discount, 1.10 = 10% premium, etc.
-    # * ``overage_pricing_factor`` is an ADDITIONAL multiplier on top
-    #   of base, only for the overage portion. 1.0 = "no overage
-    #   penalty" (base discount continues above commit); >1.0 = uplift
-    #   (1.25 = 25% premium over the base rate above commit).
-    # Effective above-commit rate = base × overage. Defaults of 1.0/1.0
-    # reproduce list-price behaviour with no overage uplift. Both must
-    # be > 0 (DB check constraint).
-    base_pricing_factor: Money = Decimal("1.0")
-    overage_pricing_factor: Money = Decimal("1.0")
     collection_method: str = "AUTO_CARD"
     proration_policy: str = "PRORATE"
     # Unused-credits behaviour at period-end. Only meaningful for
@@ -272,8 +260,6 @@ class BillingPlanTemplateResponse(BaseModel):
     currency: str
     commit_period: Optional[str] = None
     commit_schedule: Optional[str] = None
-    base_pricing_factor: Money
-    overage_pricing_factor: Money
     collection_method: str
     proration_policy: str
     credits_rollover_policy: Optional[str] = None
@@ -308,8 +294,6 @@ class BillingPlanTemplateResponse(BaseModel):
             currency=template.currency,
             commit_period=template.commit_period,
             commit_schedule=template.commit_schedule,
-            base_pricing_factor=template.base_pricing_factor,
-            overage_pricing_factor=template.overage_pricing_factor,
             collection_method=template.collection_method,
             proration_policy=template.proration_policy,
             credits_rollover_policy=template.credits_rollover_policy,
@@ -746,7 +730,7 @@ class AdminInvoiceListItem(BaseModel):
     currency named by ``currency``. For COMMITMENT METERED rows that's
     ``commit_charge_local + overage_charge_local - grants_local`` (the
     invoicer's ``invoiced_local``); for PAYG METERED rows it's
-    ``raw_usage_local * base_pricing_factor``. Equivalent to what the
+    ``raw_usage_local``. Equivalent to what the
     customer is actually billed for the period — the historical path
     reads it from ``Recharge.detail.invoiced_local`` (METERED) and
     falls back to ``Recharge.amount_usd`` labelled ``USD`` for every

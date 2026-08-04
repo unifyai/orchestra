@@ -1300,28 +1300,8 @@ def list_available_plans(
         None,
     )
 
-    # Pull pricing factors from the templates so the UI can show the
-    # effective rate side-by-side with the current plan. We didn't put
-    # them on PlanGroupAvailableMember to keep it minimal; load in one
-    # batch query rather than N+1.
-    from sqlalchemy import select as _select
-
-    from orchestra.db.models.orchestra_models import BillingPlanTemplate
-
-    template_rows = {
-        t.id: t
-        for t in session.execute(
-            _select(BillingPlanTemplate).where(
-                BillingPlanTemplate.id.in_([m.template_id for m in members]),
-            ),
-        )
-        .scalars()
-        .all()
-    }
-
     items: list[AvailablePlanItem] = []
     for m in members:
-        t = template_rows.get(m.template_id)
         items.append(
             AvailablePlanItem(
                 template_id=m.template_id,
@@ -1332,12 +1312,6 @@ def list_available_plans(
                 currency=m.currency,
                 commit_period=m.commit_period,
                 commit_schedule=m.commit_schedule,
-                base_pricing_factor=(
-                    float(t.base_pricing_factor) if t is not None else 1.0
-                ),
-                overage_pricing_factor=(
-                    float(t.overage_pricing_factor) if t is not None else 1.0
-                ),
                 position=m.position,
                 is_current=m.is_current,
                 classification=_classify_switch(

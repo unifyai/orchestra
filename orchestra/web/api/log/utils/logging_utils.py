@@ -942,6 +942,13 @@ def _get_logs_query(
                 filter,
                 field_names=list(field_types.keys()),
             )
+        except HTTPException:
+            # str_filter_exp_to_dict() already raises a formatted 400 with a
+            # useful detail message; re-raise as-is instead of re-wrapping it
+            # (str(HTTPException) renders as "400: <detail>", so wrapping it
+            # again here double-prefixes the message).
+            session.rollback()
+            raise
         except Exception as e:
             session.rollback()
             raise HTTPException(
@@ -5177,3 +5184,88 @@ def _join_query_internal(
         raise ValueError(
             f"Failed to execute join query: {traceback.format_exc()}",
         )
+
+
+def query_flat_rows(
+    *,
+    request_fastapi,
+    project_name: str,
+    context: Optional[str],
+    filter: Optional[str],
+    sorting: Optional[str],
+    limit: int,
+    offset: int = 0,
+    from_fields: Optional[str] = None,
+    exclude_fields: Optional[str] = None,
+    randomize: bool = False,
+    column_context: Optional[str] = None,
+    value_limit: Optional[int] = None,
+    project_id: Optional[int] = None,
+    project_dao,
+    field_type_dao,
+    context_dao,
+    session,
+) -> tuple:
+    """Run one row query as the given identity and return flat rows plus total.
+
+    The one place the query → field-type resolution → formatting → flattening
+    sequence lives for internal bridges (canvas bindings, dashboard tiles) that
+    execute a stored query on a caller's behalf. Each bridge hand-rolling the
+    sequence is how they drift: a display-oriented ``value_limit`` copied into a
+    machine-consumed read once truncated a canvas's bindings declaration into
+    unparseable JSON. The default here is therefore no truncation — a UI bridge
+    that wants preview clipping opts in explicitly.
+
+    ``project_id`` skips the ownership lookup when the caller already holds the
+    resolved project; identity always comes from ``request_fastapi.state``.
+    """
+    rows, total = _get_logs_query(
+        request_fastapi=request_fastapi,
+        project_name=project_name,
+        context=context,
+        filter=filter,
+        sorting=sorting,
+        from_ids=None,
+        exclude_ids=None,
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+        limit=limit,
+        offset=offset,
+        project_dao=project_dao,
+        field_type_dao=field_type_dao,
+        context_dao=context_dao,
+        session=session,
+        randomize=randomize,
+    )
+
+    if project_id is None:
+        project_id = project_dao.get_by_user_and_name(
+            name=project_name,
+            user_id=request_fastapi.state.user_id,
+            organization_id=request_fastapi.state.organization_id,
+        ).id
+
+    context_rows = context_dao.filter(name=context or "", project_id=project_id)
+    context_id = context_rows[0][0].id if context_rows else None
+
+    field_types = field_type_dao.get_field_types(
+        project_id,
+        context_id=context_id,
+        return_mutable=True,
+    )
+    logs_out, _ = _format_logs(
+        rows=rows,
+        field_types=field_types,
+        value_limit=value_limit,
+        column_context=column_context,
+        field_order_map=field_type_dao.get_ordered_field_names(
+            project_id,
+            context_id=context_id,
+        ),
+        from_fields=from_fields,
+        exclude_fields=exclude_fields,
+    )
+    flat = [
+        {**log.get("entries", {}), **log.get("derived_entries", {})} for log in logs_out
+    ]
+    return flat, total

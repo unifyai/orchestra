@@ -1909,8 +1909,6 @@ def admin_create_billing_template(
             currency=body.currency,
             commit_period=body.commit_period,
             commit_schedule=body.commit_schedule,
-            base_pricing_factor=_D(str(body.base_pricing_factor)),
-            overage_pricing_factor=_D(str(body.overage_pricing_factor)),
             collection_method=_enum_or_400(
                 CollectionMethod,
                 body.collection_method,

@@ -2451,8 +2451,6 @@ def _make_metered_template(
     name: str,
     commit: Decimal = Decimal("1000"),
     collection: CollectionMethod = CollectionMethod.SEND_INVOICE_NET_30,
-    base_pricing_factor: Decimal = Decimal("1.0"),
-    overage_pricing_factor: Decimal = Decimal("1.0"),
     display_name: str | None = None,
 ):
     return BillingPlanTemplateDAO(dbsession).create_template(
@@ -2461,8 +2459,6 @@ def _make_metered_template(
         billing_mode=BillingMode.METERED,
         commit_amount=commit,
         commit_period="MONTHLY",
-        base_pricing_factor=base_pricing_factor,
-        overage_pricing_factor=overage_pricing_factor,
         collection_method=collection,
         is_custom=True,
         is_active=True,
@@ -2525,8 +2521,6 @@ class TestAdminBillingTemplates:
             "commit_amount": 5000.0,
             "commit_period": "MONTHLY",
             "collection_method": "SEND_INVOICE_NET_30",
-            "base_pricing_factor": 1.2,
-            "overage_pricing_factor": 1.5,
         }
         resp = await client.post(
             "/v0/admin/billing/plans/templates",
@@ -2540,8 +2534,6 @@ class TestAdminBillingTemplates:
         assert data["is_active"] is True
         assert data["commit_amount"] == 5000.0
         assert data["collection_method"] == "SEND_INVOICE_NET_30"
-        assert data["base_pricing_factor"] == 1.2
-        assert data["overage_pricing_factor"] == 1.5
 
     @pytest.mark.anyio
     async def test_create_template_rejects_duplicate_name(
@@ -3419,8 +3411,6 @@ class TestAccountInfoPlanSummary:
             name="surfaced-metered",
             commit=Decimal("1500"),
             collection=CollectionMethod.SEND_INVOICE_NET_30,
-            base_pricing_factor=Decimal("0.9"),
-            overage_pricing_factor=Decimal("1.1"),
         )
         BillingPlanAssignmentDAO(dbsession).set_plan(
             billing_account_id=ba.id,
@@ -3444,13 +3434,7 @@ class TestAccountInfoPlanSummary:
         assert plan["billing_mode"] == "METERED"
         assert plan["commit_amount"] == 1500.0
         assert plan["collection_method"] == "SEND_INVOICE_NET_30"
-        # ``commit_schedule`` is surfaced; ``base_pricing_factor`` and
-        # ``overage_pricing_factor`` are intentionally NOT — they're
-        # internal pricing knobs that shouldn't be exposed on the
-        # customer billing page.
         assert "commit_schedule" in plan
-        assert "base_pricing_factor" not in plan
-        assert "overage_pricing_factor" not in plan
         assert plan["assignment_id"] is not None
 
 

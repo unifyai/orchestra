@@ -356,11 +356,10 @@ class Recharge(Base):
         index=True,
     )
     # Optional audit JSONB. For METERED recharges produced by the metered
-    # invoicer, captures: ``raw_usage_usd``, ``base_pricing_factor``,
-    # ``overage_pricing_factor``, ``contract_usage_local``, ``commit_amount``,
-    # ``overage_local``, ``fx_rate``, ``period_start``, ``period_end``. Lets
-    # a customer dispute recompute the invoice from first principles without
-    # relying on transient state.
+    # invoicer, captures: ``raw_usage_usd``, ``contract_usage_local``,
+    # ``commit_amount``, ``overage_local``, ``fx_rate``, ``period_start``,
+    # ``period_end``. Lets a customer dispute recompute the invoice from
+    # first principles without relying on transient state.
     detail = Column(JSONB, nullable=True)
 
     # ORM relationships
@@ -391,7 +390,6 @@ class BillingPlanTemplate(Base):
     * **Settlement**       — ``billing_mode``  (CREDITS vs METERED)
     * **Commit shape**     — ``commit_amount``, ``commit_period``,
                              ``commit_schedule``  (all NULL ⇒ PAYG)
-    * **Pricing**          — ``base_pricing_factor``, ``overage_pricing_factor``
     * **Currency & FX**    — ``currency``, ``fx_policy``, ``fx_locked_rate``
     * **Collection**       — ``collection_method``
     * **Lifecycle**        — ``proration_policy``, ``credits_rollover_policy``
@@ -441,43 +439,10 @@ class BillingPlanTemplate(Base):
     #: When the commit is invoiced relative to its period (AMORTISED / UPFRONT).
     commit_schedule = Column(String, nullable=True)
 
-    # ── Pricing ─────────────────────────────────────────────────────────
-    # No overage_policy / monthly cap — the platform never blocks usage
-    # based on plan terms; usage above commit always invoices at
-    # ``base × overage`` rate. Operators can void specific Stripe
-    # invoices when a charge shouldn't stand.
-    #
-    # Two-rate split lets enterprise contracts express the standard
-    # "discount within commit, premium above commit" structure that
-    # AWS Reserved Instances, Snowflake, Databricks etc. all use. The
-    # rates **stack** on overage: ``base_pricing_factor`` applies to
-    # all usage uniformly (commit-included + overage + PAYG), and
-    # ``overage_pricing_factor`` is an additional uplift on top, only
-    # for the overage portion. PAYG plans only ever exercise
-    # ``base_pricing_factor``; ``overage_pricing_factor`` is irrelevant
-    # for them and conventionally left at 1.0.
-    #: Multiplier on raw USD usage for ALL usage (commit-included,
-    #: overage, and PAYG). 1.00 = list price; 0.80 = 20% discount;
-    #: 1.10 = 10% premium; etc. Combined with ``overage_pricing_factor``
-    #: above commit (effective overage rate = base × overage).
-    base_pricing_factor = Column(
-        Numeric,
-        nullable=False,
-        server_default="1.0",
-    )
-    #: ADDITIONAL multiplier stacked on top of ``base_pricing_factor``
-    #: for usage ABOVE commit only. Only meaningful for COMMITMENT
-    #: plans; defaults to 1.00 (no overage penalty — base discount /
-    #: markup continues to apply uniformly above commit). Set > 1.00
-    #: to charge a premium for over-consumption (e.g. 1.25 = "25%
-    #: uplift over the base rate above commit"); a customer on a
-    #: ``base=0.80, overage=1.25`` plan pays ``0.80×1.25 = 1.00`` of
-    #: list price for above-commit usage, vs. ``0.80`` within commit.
-    overage_pricing_factor = Column(
-        Numeric,
-        nullable=False,
-        server_default="1.0",
-    )
+    # Usage invoices at list price. There is no overage_policy / monthly
+    # cap either — the platform never blocks usage based on plan terms.
+    # Operators can void specific Stripe invoices when a charge
+    # shouldn't stand.
 
     # ── Currency & FX ───────────────────────────────────────────────────
     # USD templates run with ``fx_policy IS NULL``; non-USD templates
@@ -569,13 +534,6 @@ class BillingPlanTemplate(Base):
             "credits_rollover_policy IS NULL OR credits_rollover_policy IN "
             "('ROLL_OVER', 'FORFEIT_AT_PERIOD_END')",
             name="ck_plan_template_credits_rollover_policy",
-        ),
-        # Pricing factors must be strictly positive (zero would silently
-        # waive every charge — never what an operator wants; if a plan
-        # truly shouldn't bill it should be marked inactive instead).
-        sa.CheckConstraint(
-            "base_pricing_factor > 0 AND overage_pricing_factor > 0",
-            name="ck_plan_template_pricing_factors_positive",
         ),
         # Commit + period travel together: a positive commit amount
         # requires a period to attach to.
@@ -4580,6 +4538,81 @@ class DashboardToken(Base):
     __table_args__ = (
         Index("idx_dashboard_token_project_id", "project_id"),
         Index("idx_dashboard_token_user_id", "user_id"),
+    )
+
+
+# Who may read a canvas. Enforced server-side on every read path; a canvas can
+# name its own visibility but cannot widen it, and the frame never sees this at
+# all.
+CANVAS_VISIBILITIES = ("private", "team", "public_link")
+
+# Lifecycle of a canvas. ``draft`` is authored but not servable; ``published`` is
+# live; ``quarantined`` is the kill switch, and it stops the bundle, the data
+# reads and the actions together rather than one at a time.
+CANVAS_STATUSES = ("draft", "published", "quarantined")
+
+
+class CanvasToken(Base):
+    """Token-to-context mapping for a canvas.
+
+    The canvas itself — authored source, compiled bundle, resolved bindings and
+    declared actions — lives in Unify contexts under ``Canvas/*``. This table is
+    only the routing and authorization record console needs in order to turn a
+    token in a URL into a context path plus the identity to read it as.
+
+    Unlike ``DashboardToken`` there is no ``entity_type``: a canvas is the whole
+    view rather than a tile composed into a layout, so the column could only ever
+    hold one value.
+
+    ``visibility`` and ``status`` live here rather than only on the Unify row
+    because every console proxy has to check them before it uses the admin key,
+    and doing that from the routing lookup it already performs avoids a second
+    round trip on the hot read path.
+    """
+
+    __tablename__ = "canvas_token"
+
+    token = Column(String(12), primary_key=True)
+    context_name = Column(String(500), nullable=False)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    visibility = Column(String(20), nullable=False, server_default="private")
+    status = Column(String(20), nullable=False, server_default="draft")
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    project = relationship(
+        "Project",
+        backref=backref("canvas_tokens", passive_deletes=True),
+    )
+
+    __table_args__ = (
+        # Enumerations are constrained in the database as well as in the request
+        # schema: these two columns are the authorization decision, so a row that
+        # reached the table by any other path must still be readable safely.
+        sa.CheckConstraint(
+            "visibility IN ('private', 'team', 'public_link')",
+            name="ck_canvas_token_visibility",
+        ),
+        sa.CheckConstraint(
+            "status IN ('draft', 'published', 'quarantined')",
+            name="ck_canvas_token_status",
+        ),
+        Index("idx_canvas_token_project_id", "project_id"),
+        Index("idx_canvas_token_user_id", "user_id"),
     )
 
 

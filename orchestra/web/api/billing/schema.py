@@ -186,8 +186,6 @@ class AvailablePlanItem(BaseModel):
     currency: str
     commit_period: Optional[str] = None
     commit_schedule: Optional[str] = None
-    base_pricing_factor: float = 1.0
-    overage_pricing_factor: float = 1.0
     position: Optional[int] = None
     is_current: bool = False
     # Server-derived label for the switch direction. ``"current"`` for

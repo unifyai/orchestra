@@ -1,5 +1,7 @@
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from httpx import AsyncClient
 
@@ -72,8 +74,16 @@ async def test_list_default_model_options(client: AsyncClient):
     assert ("claude-sonnet-5@anthropic", "high") in pairs
     assert ("gemini-3-pro@vertex-ai", "medium") in pairs
     assert all(o["label"] for o in options)
-    assert all(o["approx_credits_per_task"] > 0 for o in options)
+    # A task estimate needs an Artificial Analysis per-task figure to anchor it;
+    # rows for models AA has not published one for omit it rather than guess.
+    assert all(
+        o["approx_credits_per_task"] is None or o["approx_credits_per_task"] > 0
+        for o in options
+    )
     assert all(o["approx_credits_per_message"] > 0 for o in options)
+    # Every row still prices per token, so the picker always has a cost to show.
+    assert all(o["input_cost_per_token"] > 0 for o in options)
+    assert all(o["output_cost_per_token"] > 0 for o in options)
     assert all(
         o["artificial_analysis_url"].startswith("https://artificialanalysis.ai/models/")
         for o in options
@@ -314,3 +324,194 @@ async def test_clear_slow_brain_model(client: AsyncClient):
     updated = patch_resp.json()["info"]
     assert updated["slow_brain_model"] is None
     assert updated["slow_brain_reasoning_effort"] is None
+
+
+def _catalog_entry(
+    model_id: str,
+    *,
+    created: int,
+    image: bool = True,
+    tools: bool = True,
+    reasoning: bool = True,
+    input_cost: float = 5.0 / 1_000_000,
+    output_cost: float = 25.0 / 1_000_000,
+) -> dict:
+    return {
+        "id": model_id,
+        "name": model_id,
+        "created": created,
+        "context_length": 1_000_000,
+        "input_cost_per_token": input_cost,
+        "output_cost_per_token": output_cost,
+        "input_modalities": ["text", "image"] if image else ["text"],
+        "supports_image_input": image,
+        "supports_tools": tools,
+        "supports_reasoning": reasoning,
+    }
+
+
+_FAKE_CATALOG = {
+    "vendor/old-model": _catalog_entry("vendor/old-model", created=1_000),
+    "vendor/new-model": _catalog_entry("vendor/new-model", created=9_000),
+    "vendor/text-only": _catalog_entry("vendor/text-only", created=8_000, image=False),
+    "~vendor/model-latest": _catalog_entry("~vendor/model-latest", created=9_500),
+    "openrouter/auto": _catalog_entry("openrouter/auto", created=9_900),
+}
+
+
+@pytest.fixture
+def fake_catalog():
+    with patch(
+        "orchestra.services.openrouter_catalog.get_catalog",
+        return_value=_FAKE_CATALOG,
+    ):
+        yield
+
+
+@pytest.mark.anyio
+async def test_search_with_empty_query_lists_catalog_newest_first(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Opening the picker browses the catalog without needing a search term."""
+    resp = await client.get(
+        "/v0/assistant/default-model-options/search",
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    rows = resp.json()["info"]
+
+    ids = [row["model"] for row in rows]
+    assert ids == [
+        "vendor/new-model@openrouter",
+        "vendor/old-model@openrouter",
+        "vendor/text-only@openrouter",
+    ]
+    assert [row["eligible"] for row in rows] == [True, True, False]
+    assert rows[-1]["disabled_reason"] == "No native image input"
+
+
+@pytest.mark.anyio
+async def test_search_excludes_floating_aliases_and_auto_routers(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Aliases that re-point, and per-request routers, are not pinnable models."""
+    resp = await client.get(
+        "/v0/assistant/default-model-options/search",
+        headers=HEADERS,
+    )
+    ids = [row["model"] for row in resp.json()["info"]]
+    assert not any(model_id.startswith("~") for model_id in ids)
+    assert "openrouter/auto@openrouter" not in ids
+
+
+@pytest.mark.anyio
+async def test_search_rows_carry_derived_pricing(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Catalog rows price per token and derive message credits from those rates."""
+    resp = await client.get(
+        "/v0/assistant/default-model-options/search",
+        headers=HEADERS,
+    )
+    row = next(
+        r for r in resp.json()["info"] if r["model"] == "vendor/new-model@openrouter"
+    )
+    assert row["input_cost_per_token"] == pytest.approx(5.0 / 1_000_000)
+    assert row["output_cost_per_token"] == pytest.approx(25.0 / 1_000_000)
+    assert row["context_length"] == 1_000_000
+    # 12k input @ $5/M + 600 output @ $25/M = $0.075 -> 30 credits at 400/USD.
+    assert row["approx_credits_per_message"] == 30
+    # No benchmark anchor exists for a catalog model, so task cost stays unknown.
+    assert row["approx_credits_per_task"] is None
+
+
+@pytest.mark.anyio
+async def test_floating_alias_cannot_be_set_as_default_model(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Validation matches the picker: an unlisted alias is not selectable."""
+    resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Aliasy",
+            "surname": "Tester",
+            "create_infra": False,
+            "default_model": "~vendor/model-latest@openrouter",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_recent_curated_models_carry_a_wellformed_benchmark_link():
+    """Every curated row carries an Artificial Analysis link in AA's slug form.
+
+    This is the offline half of the rule: it pins that no row ships without a
+    benchmark link and that the slug follows AA's dotted-version-to-dash
+    convention. Whether the page exists is a third-party fact, checked by
+    ``test_curated_benchmark_pages_resolve``.
+    """
+    for option in DEFAULT_MODEL_OPTIONS:
+        assert option.artificial_analysis_url.startswith(
+            "https://artificialanalysis.ai/models/",
+        ), option.label
+        slug = option.artificial_analysis_url.rsplit("/", 1)[1]
+        assert slug, option.label
+        assert "." not in slug, option.label
+        assert slug == slug.lower(), option.label
+
+
+# ---------------------------------------------------------------------------
+# Live third-party checks: opt in, so an upstream outage cannot redden a
+# release. Both assert facts only the real service can answer, and both fail
+# for every curated row when the network is unavailable.
+# ---------------------------------------------------------------------------
+_needs_live_catalog = pytest.mark.skipif(
+    os.getenv("MODEL_CATALOG_CHECKS") != "1",
+    reason="Calls Artificial Analysis / OpenRouter; opt in with "
+    "MODEL_CATALOG_CHECKS=1.",
+)
+
+
+@pytest.mark.integration
+@_needs_live_catalog
+@pytest.mark.parametrize(
+    ("label", "url"),
+    [(o.label, o.artificial_analysis_url) for o in DEFAULT_MODEL_OPTIONS],
+)
+def test_curated_benchmark_pages_resolve(label: str, url: str):
+    """The AA page each curated row cites must actually exist.
+
+    A model is only promoted into the recommended list once AA benchmarks it,
+    so the label a user picks by can be checked against a third party. AA
+    answers a clean 404 for unknown slugs, which makes this a real check
+    rather than a reachability smoke test.
+    """
+    response = httpx.get(url, timeout=30.0, follow_redirects=True)
+    assert response.status_code == 200, f"{label}: {url} -> {response.status_code}"
+
+
+@pytest.mark.integration
+@_needs_live_catalog
+def test_curated_openrouter_models_pass_selection_policy():
+    """Recommended OpenRouter rows must satisfy the same policy as search rows.
+
+    The list endpoint reports curated rows as eligible without re-checking, so
+    an entry that failed the multimodal/tools policy would be offered and then
+    rejected on save. Also catches a curated row whose model OpenRouter has
+    renamed or retired.
+    """
+    from orchestra.services.openrouter_catalog import is_eligible_assistant_model
+
+    failures = []
+    for option in DEFAULT_MODEL_OPTIONS:
+        if not (option.model or "").endswith("@openrouter"):
+            continue
+        ok, reason = is_eligible_assistant_model(option.model, require_tools=True)
+        if not ok:
+            failures.append(f"{option.label}: {reason}")
+    assert not failures, "\n".join(failures)

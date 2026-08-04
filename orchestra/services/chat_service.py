@@ -11,6 +11,7 @@ into their own Transcripts as memory.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,6 +23,7 @@ from orchestra.db.dao.chat_dao import (
     KIND_DM,
     KIND_GROUP,
     KIND_TEAM,
+    ChatDAO,
 )
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.models.orchestra_models import (
@@ -34,6 +36,23 @@ from orchestra.db.models.orchestra_models import (
 
 SENDER_KIND_USER = "user"
 SENDER_KIND_ASSISTANT = "assistant"
+
+logger = logging.getLogger(__name__)
+
+# Consecutive assistant-authored messages after which a room stops fanning out.
+#
+# A room message reaches every member assistant, and an assistant's reply is
+# itself a room message — so it reaches the others under the same "there is an
+# unanswered message" pressure a human's would. Two assistants in one room can
+# therefore volley indefinitely, spending tokens on a conversation nobody asked
+# for. Prompt guidance is the right way to make the common case behave, but it
+# is probabilistic and this failure mode is unbounded, so the brake belongs
+# here, where the thread history is.
+#
+# Three allows a genuine short exchange between assistants (A answers, B adds
+# something, A acknowledges) before the brake engages. Any human message resets
+# the count, because the run is only consecutive assistant messages.
+MAX_CONSECUTIVE_ASSISTANT_ROOM_MESSAGES = 3
 
 
 def user_display_name(user: User) -> str:
@@ -200,6 +219,23 @@ def assistant_can_access_thread(
     return False
 
 
+def _room_volley_is_all_assistants(session: Session, *, thread: ChatThread) -> bool:
+    """True when a room's newest messages are nothing but assistants talking.
+
+    Read after the triggering message is persisted, so it counts that message
+    too: the question being asked is "has this room heard from a human in its
+    last few messages", and the answer decides whether another assistant should
+    be woken to add a fourth.
+    """
+    recent = ChatDAO(session).list_messages(
+        thread_id=thread.id,
+        limit=MAX_CONSECUTIVE_ASSISTANT_ROOM_MESSAGES,
+    )
+    if len(recent) < MAX_CONSECUTIVE_ASSISTANT_ROOM_MESSAGES:
+        return False
+    return all(message.sender_assistant_id is not None for message in recent)
+
+
 def _fanout_assistant_ids(
     session: Session,
     *,
@@ -212,6 +248,9 @@ def _fanout_assistant_ids(
     (minus the author); assistant DMs fan out to the single assistant when a
     human sent the message; assistant peer DMs fan out to the other peer.
     Human DMs never involve an assistant.
+
+    Rooms additionally stop fanning out once their recent history is only
+    assistants — see ``MAX_CONSECUTIVE_ASSISTANT_ROOM_MESSAGES``.
     """
     if thread.kind == KIND_ASSISTANT_DM:
         ids = [thread.assistant_id]
@@ -240,7 +279,25 @@ def _fanout_assistant_ids(
         ids = [entry["assistant_id"] for entry in participants["assistants"]]
     else:
         return []
-    return [aid for aid in ids if aid is not None and aid != exclude_assistant_id]
+    recipients = [aid for aid in ids if aid is not None and aid != exclude_assistant_id]
+
+    if (
+        recipients
+        and thread.kind in (KIND_TEAM, KIND_GROUP)
+        and _room_volley_is_all_assistants(session, thread=thread)
+    ):
+        # Logged, not silent: a room that goes quiet because the brake engaged
+        # looks exactly like a room where nobody had anything to add.
+        logger.warning(
+            "Suppressed chat fan-out to assistants %s: thread %s (kind=%s) has "
+            "%d consecutive assistant messages with no human turn",
+            recipients,
+            thread.id,
+            thread.kind,
+            MAX_CONSECUTIVE_ASSISTANT_ROOM_MESSAGES,
+        )
+        return []
+    return recipients
 
 
 def build_chat_dispatch_payload(
@@ -302,6 +359,12 @@ def build_chat_dispatch_payload(
             "sender_assistant_id": message.get("sender_assistant_id"),
             "sender_email": sender_email,
             "sender_name": message.get("sender_name") or "",
+            # Who the sender picked out. A room fans out to every member
+            # assistant, so being addressed is what separates "this is for me"
+            # from "I am cc'd" — and the runtime could not tell the difference
+            # without this, because only the literal "@Name" in the body ever
+            # reached it, to be matched by the model as prose.
+            "mentions": message.get("mentions") or [],
             "attachments": message.get("attachments") or [],
         },
     }

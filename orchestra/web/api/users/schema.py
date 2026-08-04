@@ -287,15 +287,11 @@ class UserSpendResponse(BaseModel):
         description="Account is frozen (admin freeze, card gate, or abuse "
         "sweep); the runtime hard-denies LLM calls when set.",
     )
-    trial_daily_spend: Optional[float] = Field(
-        None,
-        description="Today's LLM spend, populated only for accounts with "
-        "no real payment history (trial daily cap enforcement).",
-    )
-    trial_daily_cap: Optional[float] = Field(
-        None,
-        description="Daily LLM spend ceiling during the trial; null once "
-        "the account has real payment history.",
+    never_paid: bool = Field(
+        False,
+        description="Account has no real payment history; the runtime holds "
+        "paid-only providers behind it. False for internal accounts and for "
+        "orgs on an admin-granted free trial.",
     )
     api_access_allowed: bool = Field(
         True,

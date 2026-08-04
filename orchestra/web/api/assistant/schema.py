@@ -1573,6 +1573,24 @@ class DefaultModelOptionRead(BaseModel):
         None,
         description="Whether reasoning_effort may be set for this model.",
     )
+    input_cost_per_token: Optional[float] = Field(
+        None,
+        description=(
+            "Provider input price per token, for catalog options whose "
+            "per-task credit cost has no benchmark anchor. Null when unknown."
+        ),
+        example=0.000005,
+    )
+    output_cost_per_token: Optional[float] = Field(
+        None,
+        description="Provider output price per token. Null when unknown.",
+        example=0.000025,
+    )
+    context_length: Optional[int] = Field(
+        None,
+        description="Maximum context window in tokens, when the catalog reports it.",
+        example=1_000_000,
+    )
 
 
 class VoiceCloneRequestData(BaseModel):
@@ -2724,15 +2742,11 @@ class AssistantSpendResponse(BaseModel):
         description="Account is frozen (admin freeze, card gate, or abuse "
         "sweep); the runtime hard-denies LLM calls when set.",
     )
-    trial_daily_spend: Optional[float] = Field(
-        None,
-        description="Today's LLM spend, populated only for accounts with "
-        "no real payment history (trial daily cap enforcement).",
-    )
-    trial_daily_cap: Optional[float] = Field(
-        None,
-        description="Daily LLM spend ceiling during the trial; null once "
-        "the account has real payment history.",
+    never_paid: bool = Field(
+        False,
+        description="Account has no real payment history; the runtime holds "
+        "paid-only providers behind it. False for internal accounts and for "
+        "orgs on an admin-granted free trial.",
     )
     api_access_allowed: bool = Field(
         True,
