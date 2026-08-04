@@ -146,8 +146,12 @@ PHASE_INTEGRATIONS = "Integrations"
 PHASE_TASKS = "Tasks"
 PHASE_LEARNING = "Learning"
 PHASE_CANVAS = "Canvas"
-PHASE_MY_COMPUTER = "Your Computer"
-PHASE_YOUR_COMPUTER = "Their Computer"
+# Labels name the machine from the reader's seat: the checklist is read by the
+# user, so their own machine is "Your Computer" and the twin's managed VM is
+# "Twin's Computer". The constant names and phase ids stay in the twin's voice
+# ("my"/"your") because the ids are persisted in Coordinator/State.
+PHASE_MY_COMPUTER = "Twin's Computer"
+PHASE_YOUR_COMPUTER = "Your Computer"
 PHASE_TEAMS = "Teams"
 PHASE_HIRING = "Hiring"
 
@@ -368,7 +372,7 @@ LEARNING_BEAT_CHANNEL = "learning_beat"
 # The My Computer beat is a call-anchored live desktop demo on T-W1N's managed
 # VM. One constant so the phase framing and the beat event tell the same story.
 MY_COMPUTER_FRAMING = (
-    "The My Computer phase shows T-W1N has a real computer of its own — the user "
+    "The Twin's Computer phase shows T-W1N has a real computer of its own — the user "
     "just watched it use it on a call. "
     "Rule 1 — Off-call click: in the same turn, send ONE short ack (tutorial intro: "
     "this step shows I have a real computer of my own; you'll watch me use it live) "
@@ -524,24 +528,24 @@ MY_COMPUTER_FRAMING = (
     "Rule 7 — Honest failure: if the VM won't boot, the site is unreachable, or the "
     "act fails, say so plainly, offer to retry later, and do not mark the step done. "
     "Rule 8 — Scope: nothing touching the user's own machine (that is the separate "
-    "Your Computer phase). One beat, one concept."
+    "Your Computer phase, i.e. the user's own machine). One beat, one concept."
 )
 
-# The Their Computer phase (phase id ``your-computer``, label "Their Computer")
+# The Your Computer phase (phase id ``your-computer``, label "Your Computer")
 # reaches into the *user's own* machine over the desktop link their app opened:
 # T-W1N lists real files on their Desktop, names a few, pulls one small safe
 # file, and sends it back as a chat attachment. Read-only SFTP over the tunnel -
 # no GUI input, no boot, no ring. One constant so the phase framing and the beat
 # event tell the same story.
 YOUR_COMPUTER_FRAMING = (
-    "The Their Computer phase proves T-W1N can reach into the user's OWN "
+    "The Your Computer phase proves T-W1N can reach into the user's OWN "
     "machine over the secure link their desktop app opened - it reads real "
     "files on their Desktop, names a few, and sends one back to them here. "
     "Rule 1 - Channel-agnostic, no ring, no boot: the click works from chat or "
     "mid-call. On a call, narrate the beats via guide_voice_agent; off-call, "
     "send short narrated chat beats. Either way the attachment goes to chat as "
     "the durable proof. Never call start_unify_meet from this beat - both modes "
-    "carry the complete script (workspace-demo pattern, not My Computer's call "
+    "carry the complete script (workspace-demo pattern, not Twin's Computer's call "
     "anchor). "
     "Rule 2 - Narrated persist-act, two substeps. Substep 1: call "
     "primitives.computer.user_desktop.list_linked() to verify the link and "
@@ -570,7 +574,7 @@ YOUR_COMPUTER_FRAMING = (
     'desktop app opened". '
     "Rule 7 - Scope fence: no GUI input on the user's machine, no macOS unlock "
     "flow, no execute_code on the user-desktop surface, no files.push. "
-    "Read-only fetch, one beat, one concept. My Computer's managed-VM demo is "
+    "Read-only fetch, one beat, one concept. Twin's Computer's managed-VM demo is "
     "the separate my-computer phase."
 )
 
@@ -641,14 +645,14 @@ ONBOARDING_PHASES: tuple[OnboardingPhase, ...] = (
     OnboardingPhase(
         id="your-computer",
         label=PHASE_YOUR_COMPUTER,
-        title="Their Computer",
+        title="Your Computer",
         description="Let me help on your computer.",
         framing=YOUR_COMPUTER_FRAMING,
     ),
     OnboardingPhase(
         id="my-computer",
         label=PHASE_MY_COMPUTER,
-        title="Your Computer",
+        title="Twin's Computer",
         description="Ask me to operate from my computer.",
         framing=MY_COMPUTER_FRAMING,
     ),
@@ -1011,7 +1015,7 @@ def _my_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
 
 
 def _your_computer_beat_event(step_id: str, title: str) -> OnboardingEventSpec:
-    """Event fired when the user clicks the Their Computer beat row.
+    """Event fired when the user clicks the Your Computer beat row.
 
     The click starts the filesystem fetch-and-return demo - T-W1N lists the
     user's own Desktop over the existing SFTP tunnel, names real files it can
@@ -1761,12 +1765,12 @@ MANUAL_COMPLETION_STEP_IDS: tuple[str, ...] = (
 )
 
 # Steps whose completion comes ONLY from durable domain state and never from a
-# manual PATCH. The Their Computer link/filesys rows are driven entirely by the
+# manual PATCH. The Your Computer link/filesys rows are driven entirely by the
 # desktop-linker dialog (the registered ``assistant_user_desktops`` row and its
 # ``filesys_sync`` toggle); Twin must never mark them done by hand, since a
 # hand-set tick would claim a link/toggle that isn't really there and stall the
 # gated demo. (The derivation probes that tick them live are wired in the
-# follow-up Their Computer derivation ticket.)
+# follow-up Your Computer derivation ticket.)
 DERIVATION_ONLY_STEP_IDS: tuple[str, ...] = (
     "your-computer-link",
     "your-computer-filesys",
