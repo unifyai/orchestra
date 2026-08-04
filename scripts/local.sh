@@ -1243,6 +1243,21 @@ cmd_seed() {
     return 1
   fi
 
+  # Seeding goes through the ORM, which selects every column the models
+  # declare, so it needs the schema the current code expects. A database that
+  # already exists is exactly the one that can be behind — it keeps whatever
+  # schema it had when it was last migrated while the code moves on — and the
+  # seed then dies on a column the models have and the database does not.
+  # Upgrading is a no-op once the database is current, the same way the
+  # platform bootstrap below repairs as well as creates.
+  if ! check_orchestra_repo "$ORCHESTRA_REPO_PATH"; then
+    return 1
+  fi
+
+  if ! run_migrations "$ORCHESTRA_REPO_PATH"; then
+    return 1
+  fi
+
   # Ahead of the skip check: the system projects are platform data, not part of
   # the test user, so opting out of the latter must not skip them. This is the
   # repair path for a database that already exists, which is exactly the state
