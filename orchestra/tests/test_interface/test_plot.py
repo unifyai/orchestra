@@ -3056,9 +3056,9 @@ async def test_create_plot_with_axis_customization(client: AsyncClient, dbsessio
             "plot_config": {
                 "type": "bar",
                 "x_axis": "time_day",
-                "y_axis": "billed_cost",
+                "y_axis": "provider_cost",
                 "x_label": "Day",
-                "y_label": "Billed Cost ($)",
+                "y_label": "Cost ($)",
                 "show_x_label": False,
                 "show_y_label": False,
                 "y_tick_format": "$",
@@ -3074,7 +3074,7 @@ async def test_create_plot_with_axis_customization(client: AsyncClient, dbsessio
 
     # Verify axis customization fields are preserved
     assert data["plot_config"]["x_label"] == "Day"
-    assert data["plot_config"]["y_label"] == "Billed Cost ($)"
+    assert data["plot_config"]["y_label"] == "Cost ($)"
     assert data["plot_config"]["show_x_label"] is False
     assert data["plot_config"]["show_y_label"] is False
     assert data["plot_config"]["y_tick_format"] == "$"
@@ -3087,16 +3087,16 @@ def test_plot_config_input_axis_customization():
     # x_label/y_label apply to both axis labels AND tooltips
     config = PlotConfigInput(
         x_axis="time_day",
-        y_axis="billed_cost",
+        y_axis="provider_cost",
         x_label="Day",
-        y_label="Billed Cost ($)",
+        y_label="Cost ($)",
         show_x_label=False,
         show_y_label=True,
         y_tick_format="$",
     )
 
     assert config.x_label == "Day"
-    assert config.y_label == "Billed Cost ($)"
+    assert config.y_label == "Cost ($)"
     assert config.show_x_label is False
     assert config.show_y_label is True
     assert config.y_tick_format == "$"
