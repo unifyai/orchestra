@@ -1167,8 +1167,6 @@ def _commit_template(
     name: str,
     commit: Decimal | None = Decimal("1000"),
     collection=None,
-    pricing_factor: Decimal = Decimal("1.0"),
-    overage_pricing_factor: Decimal | None = None,
     display_name: str | None = None,
     commit_period: str | None = None,
     commit_schedule: str | None = None,
@@ -1186,16 +1184,6 @@ def _commit_template(
     helper auto-bumps ``proration_policy`` to ``FULL_FIRST`` for UPFRONT
     so the new DB CHECK constraint is satisfied without forcing every
     caller to remember it.
-
-    ``pricing_factor`` is wired into ``base_pricing_factor`` (kept under
-    the legacy parameter name for test ergonomics).
-    ``overage_pricing_factor`` defaults to ``Decimal("1.0")`` — the
-    "no overage uplift over base" identity. The factors **stack** on
-    overage in the new pricing model (effective above-commit rate =
-    ``base × overage``), so leaving overage at 1.0 means above-commit
-    usage gets the same effective rate as committed usage. Tests that
-    want a premium overage uplift pass an explicit value (typically
-    > 1.0).
     """
     from orchestra.db.dao.billing_plan_template_dao import BillingPlanTemplateDAO
     from orchestra.db.models.orchestra_models import (
@@ -1219,8 +1207,6 @@ def _commit_template(
         commit_amount=commit,
         commit_period=(commit_period or "MONTHLY" if is_commitment else None),
         commit_schedule=commit_schedule if is_commitment else None,
-        base_pricing_factor=pricing_factor,
-        overage_pricing_factor=overage_pricing_factor or Decimal("1.0"),
         collection_method=collection,
         proration_policy=proration_policy,
         is_custom=True,
@@ -2464,27 +2450,16 @@ class TestMeteredInvoicerCommitSchedule:
         assert stripe._ii_calls == []
         assert stripe._inv_calls == []
 
-    def test_pricing_factors_stack_on_overage(
+    def test_overage_bills_usage_above_the_commit(
         self,
         dbsession: Session,
         monkeypatch,
     ):
-        """Base discount applies uniformly; overage is an *additional* uplift on top.
+        """Usage above the commit invoices at list price, on its own line.
 
-        Pricing model: ``base_pricing_factor`` applies to ALL usage
-        (commit-included + overage); ``overage_pricing_factor`` is a
-        multiplier *stacked on top* of base, only for the overage
-        portion. So a customer on ``base=0.80, overage=1.25`` pays:
-
-        * within commit: ``0.80×`` of list price
-        * above commit: ``0.80 × 1.25 = 1.00×`` of list price
-          (the overage uplift cancels the base discount, putting
-          above-commit usage back at list price)
-
-        The commit floor itself is denominated in contract currency
-        — it doesn't move when the base factor changes (the operator
-        priced the commit in dollars they wanted to charge), so this
-        test exercises the overage line specifically.
+        The commit buys exactly its own value in usage, so the overage is
+        just what the account spent beyond it: a $1000/mo commit against
+        $1500 of usage bills the $1000 commit plus a $500 overage.
         """
         import datetime as _dt
 
@@ -2497,19 +2472,12 @@ class TestMeteredInvoicerCommitSchedule:
         ba = make_billing_account(
             dbsession,
             credits=0,
-            stripe_customer_id="cus_pricing_stack",
+            stripe_customer_id="cus_overage_list_price",
         )
-        # $1000/mo commit, base=0.80 (20% discount), overage=1.25
-        # (25% uplift over base = back to list).
-        # included_capacity_local = 1000 / 0.80 = $1250 raw USD covered
-        # raw usage = $1500 → overage_raw = $250
-        # overage_charge = 250 × 0.80 × 1.25 = $250 (= list price)
         tpl = _commit_template(
             dbsession,
-            name="stacked-rates",
+            name="overage-at-list",
             commit=Decimal("1000"),
-            pricing_factor=Decimal("0.80"),
-            overage_pricing_factor=Decimal("1.25"),
         )
         _assign_for_period(
             dbsession,
@@ -2531,71 +2499,9 @@ class TestMeteredInvoicerCommitSchedule:
         assert result.accounts_invoiced == 1, result.errors
         assert len(stripe._ii_calls) == 2
         commit_line, overage_line = stripe._ii_calls
-        assert commit_line["amount"] == 100000  # $1000 commit floor (verbatim)
-        # $250 overage_raw × 0.80 base × 1.25 uplift = $250.00 → 25000 cents.
-        assert overage_line["amount"] == 25000
-        # When overage uplift differs from 1.0, the line description
-        # surfaces the multiplier so the customer can see why
-        # above-commit costs are different from the base rate they
-        # signed up for.
-        assert "1.25" in overage_line["description"]
-        assert "base rate" in overage_line["description"].lower()
-
-    def test_overage_with_no_uplift_uses_base_only(
-        self,
-        dbsession: Session,
-        monkeypatch,
-    ):
-        """``overage_pricing_factor=1.0`` means "no uplift" — base discount applies above commit too."""
-        import datetime as _dt
-
-        from orchestra.routines.monthly_metered_invoicer import invoice_metered_month
-
-        stripe = _metered_stripe_mock()
-        _patch_metered_stripe(monkeypatch, stripe)
-        _mute_metered_metrics(monkeypatch)
-
-        ba = make_billing_account(
-            dbsession,
-            credits=0,
-            stripe_customer_id="cus_no_uplift",
-        )
-        # base=0.50 (50% discount), overage=1.0 (no uplift) →
-        # included_capacity = 1000/0.5 = $2000 raw covered
-        # raw = $2400 → overage_raw = $400
-        # overage_charge = 400 × 0.5 × 1.0 = $200
-        tpl = _commit_template(
-            dbsession,
-            name="no-uplift",
-            commit=Decimal("1000"),
-            pricing_factor=Decimal("0.50"),
-            overage_pricing_factor=Decimal("1.0"),
-        )
-        _assign_for_period(
-            dbsession,
-            ba,
-            tpl,
-            period_year=2026,
-            period_month=4,
-        )
-        dbsession.refresh(ba)
-        _record_metered_usage(dbsession, ba.id, Decimal("2400"))
-        _backdate_ledger_to_period(
-            dbsession,
-            billing_account_id=ba.id,
-            when=_dt.datetime(2026, 4, 15, tzinfo=_dt.timezone.utc),
-        )
-        dbsession.commit()
-
-        result = invoice_metered_month(2026, 4, session=dbsession)
-        assert result.accounts_invoiced == 1, result.errors
-        commit_line, overage_line = stripe._ii_calls
         assert commit_line["amount"] == 100000  # $1000 commit floor
-        assert overage_line["amount"] == 20000  # $200 above-commit
-        # 1.0 overage uplift = "no overage penalty" → terse line
-        # description (no rate noise).
-        assert "1.0" not in overage_line["description"]
-        assert "base rate" not in overage_line["description"].lower()
+        assert overage_line["amount"] == 50000  # $500 above the commit
+        assert "usage overage" in overage_line["description"]
 
     def test_upfront_quarterly_anniversary_billing(
         self,
@@ -3128,8 +3034,6 @@ def _provision_fx_account(
         commit_amount=commit_amount,
         currency=currency,
         commit_period="MONTHLY",
-        base_pricing_factor=Decimal("1.0"),
-        overage_pricing_factor=Decimal("1.0"),
         collection_method=CollectionMethod.SEND_INVOICE_NET_30,
         is_custom=True,
         is_active=True,
@@ -3715,8 +3619,6 @@ class TestPlanConfigurationMatrix:
             currency=case["currency"],
             commit_period=commit_period,
             commit_schedule=commit_schedule,
-            base_pricing_factor=Decimal("1.0"),
-            overage_pricing_factor=Decimal("1.0"),
             collection_method=collection,
             proration_policy=proration_policy,
             is_custom=True,

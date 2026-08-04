@@ -2318,8 +2318,6 @@ def _make_metered_template(dbsession, *, name: str):
         billing_mode=BillingMode.METERED,
         commit_amount=Decimal("1000"),
         commit_period="MONTHLY",
-        base_pricing_factor=Decimal("1.0"),
-        overage_pricing_factor=Decimal("1.0"),
         collection_method=CollectionMethod.SEND_INVOICE_NET_30,
         is_custom=True,
         is_active=True,

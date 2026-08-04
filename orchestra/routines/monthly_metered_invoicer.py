@@ -57,15 +57,10 @@ For each eligible account, the routine:
 3. Sums signed ``CreditTransaction.amount`` for the period:
    * positive = grants/refunds (reduce invoice)
    * negative = usage (drive invoice)
-4. Applies the plan formula. ``base_pricing_factor`` applies to
-   **all** usage (commit-included on COMMITMENT plans, the entire
-   line on PAYG); ``overage_pricing_factor`` is an *additional*
-   multiplier stacked on top of the base rate for the overage portion
-   only. So a customer on a 20% base discount + 25% overage uplift
-   pays ``0.80 × 1.25 = 1.0×`` (back to list price) for above-commit
-   usage. ``overage_pricing_factor = 1.0`` means "no overage
-   penalty" — the discount/markup baked into ``base_pricing_factor``
-   continues to apply uniformly.
+4. Applies the plan formula. Usage invoices at list price, so the
+   only shape a plan imposes is its commit: PAYG bills the whole
+   line, and COMMITMENT bills the commit plus whatever usage exceeded
+   it.
 
    Two **independent** dimensions shape the COMMITMENT case:
 
@@ -80,14 +75,10 @@ For each eligible account, the routine:
      the commit appears on an invoice; it never affects the overage
      calculation.
 
-       base_factor    = template.base_pricing_factor    (× fx_rate folded in)
-       overage_factor = template.overage_pricing_factor (additional uplift)
        monthly_commit = commit_amount / months_in_period(commit_period)
 
        # COMMITMENT — overage logic is identical for both schedules
-       included_capacity_local = monthly_commit / base_factor
-       overage_raw             = max(0, raw_usage_local - included_capacity_local)
-       overage_charge_local    = overage_raw * base_factor * overage_factor
+       overage_charge_local    = max(0, raw_usage_local - monthly_commit)
 
        # COMMITMENT — commit charge depends on schedule
        if commit_schedule == 'AMORTISED':
@@ -99,8 +90,8 @@ For each eligible account, the routine:
 
        contract_usage_local    = commit_charge_local + overage_charge_local
 
-       # PAY_AS_YOU_GO — base only, no commit, no overage
-       contract_usage_local    = raw_usage_local * base_factor
+       # PAY_AS_YOU_GO — the whole line, no commit, no overage
+       contract_usage_local    = raw_usage_local
 
        invoiced_local          = contract_usage_local - grants_local
 
@@ -339,25 +330,16 @@ class _LineCalculation:
     The ``invoiced_*`` and ``commit_amount`` figures live in the
     contract currency because Stripe needs an invoice in one currency.
 
-    Two pricing factors travel together: ``base_pricing_factor``
-    applies to *all* usage (PAYG, commit-included, and overage);
-    ``overage_pricing_factor`` is an *additional* multiplier stacked
-    on top of base for the overage portion only (so the effective
-    above-commit rate is ``base × overage``; ``overage = 1.0`` means
-    no penalty over the base discount). Both are pinned into the
-    audit dict so a re-run after a template price change still
-    reconstructs what we *actually* charged at the time.
-
     The ``contract_usage_local`` total is decomposed into three
     mutually-exclusive components so ``_build_invoice_lines`` can
     render distinct Stripe ``InvoiceItem`` rows:
 
-    * ``payg_charge_local``   — PAYG only: ``raw_usage_local × base_factor``.
+    * ``payg_charge_local``   — PAYG only: ``raw_usage_local``.
     * ``commit_charge_local`` — COMMITMENT only: ``monthly_commit_local``
       for AMORTISED schedules, ``commit_amount`` on UPFRONT
       anniversary periods, ``0`` on UPFRONT non-anniversary periods.
     * ``overage_charge_local`` — COMMITMENT only:
-      ``max(0, raw_usage - monthly_commit / base_factor) × overage_factor``.
+      ``max(0, raw_usage_local - monthly_commit_local)``.
 
     ``monthly_commit_local`` (per-month equivalent of the period
     commit) and ``is_commit_billing_period`` (anniversary marker, only
@@ -370,8 +352,6 @@ class _LineCalculation:
     grants_usd: Decimal
     raw_usage_local: Decimal
     grants_local: Decimal
-    base_pricing_factor: Decimal
-    overage_pricing_factor: Decimal
     contract_usage_local: Decimal
     payg_charge_local: Decimal
     commit_charge_local: Decimal
@@ -394,8 +374,6 @@ class _LineCalculation:
             "grants_usd": str(self.grants_usd),
             "raw_usage_local": str(self.raw_usage_local),
             "grants_local": str(self.grants_local),
-            "base_pricing_factor": str(self.base_pricing_factor),
-            "overage_pricing_factor": str(self.overage_pricing_factor),
             "contract_usage_local": str(self.contract_usage_local),
             "payg_charge_local": str(self.payg_charge_local),
             "commit_charge_local": str(self.commit_charge_local),
@@ -1064,19 +1042,6 @@ def _compute_invoice_line(
     ``resolved_fx.rate`` first; the formula then operates on ``_local``
     quantities, which is the currency Stripe will invoice in.
 
-    Two pricing factors that **stack** on overage:
-
-    * ``base_pricing_factor`` — applied to all usage uniformly:
-      PAYG, the commit-included portion, and the overage portion.
-      Set < 1.0 for a volume discount, > 1.0 for an above-list
-      premium, 1.0 for list price.
-    * ``overage_pricing_factor`` — an *additional* multiplier applied
-      to the overage portion only, on top of ``base_pricing_factor``.
-      Set 1.0 for "no overage penalty" (the base discount continues
-      to apply); set > 1.0 to charge a premium for above-commit
-      consumption (e.g. 1.25 = 25% uplift over the base rate). The
-      effective rate above commit is ``base × overage``.
-
     Two independent COMMITMENT dimensions:
 
     * ``commit_period`` (MONTHLY/QUARTERLY/ANNUAL) sets the
@@ -1093,11 +1058,11 @@ def _compute_invoice_line(
 
     Formula by quadrant:
 
-    * **PAY_AS_YOU_GO** — ``contract_usage = raw_usage * base``;
+    * **PAY_AS_YOU_GO** — ``contract_usage = raw_usage``;
       ``commit_charge = 0``, ``overage_charge = 0``.
     * **COMMITMENT, AMORTISED** — every month bills
       ``monthly_commit + overage`` where ``overage`` is
-      ``max(0, raw_usage - monthly_commit/base) * overage_factor``.
+      ``max(0, raw_usage - monthly_commit)``.
     * **COMMITMENT, UPFRONT, anniversary month** — bills
       ``commit_amount + overage`` (full period commit + that month's
       overage).
@@ -1132,9 +1097,6 @@ def _compute_invoice_line(
         else (grants_usd * fx_rate).quantize(Decimal("0.01"))
     )
 
-    base_factor = Decimal(str(template.base_pricing_factor))
-    overage_factor = Decimal(str(template.overage_pricing_factor))
-
     commit_amount = (
         Decimal(str(template.commit_amount))
         if template.commit_amount is not None
@@ -1148,7 +1110,7 @@ def _compute_invoice_line(
     if not is_commitment:
         # PAY_AS_YOU_GO — single rate, no commit, no overage,
         # no anniversary semantics.
-        payg_charge_local = raw_usage_local * base_factor
+        payg_charge_local = raw_usage_local
         commit_charge_local = Decimal("0")
         overage_charge_local = Decimal("0")
         monthly_commit_local = Decimal("0")
@@ -1166,21 +1128,11 @@ def _compute_invoice_line(
             Decimal("0.01"),
         )
 
-        # Overage logic — identical regardless of schedule.
-        # ``base_pricing_factor`` applies to ALL usage (commit-included
-        # + overage); ``overage_pricing_factor`` is an *additional*
-        # multiplier stacked on top for the overage portion only
-        # (typically ``1.0`` = no penalty, ``> 1.0`` = premium uplift
-        # over the base rate). So the effective overage rate is
-        # ``base_factor × overage_factor``.
-        included_capacity_local = (
-            monthly_commit_local / base_factor if base_factor > 0 else Decimal("0")
-        )
-        overage_raw = raw_usage_local - included_capacity_local
-        if overage_raw > 0:
-            overage_charge_local = overage_raw * base_factor * overage_factor
-        else:
-            overage_charge_local = Decimal("0")
+        # Overage logic — identical regardless of schedule. Usage
+        # bills at list price, so the commit buys exactly its own
+        # value in usage and anything beyond it is the overage.
+        overage_raw = raw_usage_local - monthly_commit_local
+        overage_charge_local = overage_raw if overage_raw > 0 else Decimal("0")
 
         # Commit-billing logic — depends on schedule.
         # Treat NULL / unknown schedule as AMORTISED for back-compat
@@ -1229,8 +1181,6 @@ def _compute_invoice_line(
         grants_usd=grants_usd,
         raw_usage_local=raw_usage_local,
         grants_local=grants_local,
-        base_pricing_factor=base_factor,
-        overage_pricing_factor=overage_factor,
         contract_usage_local=contract_usage_local,
         payg_charge_local=payg_charge_local,
         commit_charge_local=commit_charge_local,
@@ -1346,22 +1296,9 @@ def _build_invoice_lines(
             )
 
         if calc.overage_charge_local > 0:
-            # ``overage_pricing_factor`` stacks on top of base — when
-            # it's > 1.0 the customer is paying a premium *over* the
-            # base rate they signed up for, which is worth surfacing
-            # on the line description so the higher per-unit cost is
-            # explained at a glance. ``= 1.0`` means "same uplift as
-            # base" (no extra penalty), which we keep terse.
-            if calc.overage_pricing_factor != Decimal("1"):
-                overage_desc = (
-                    f"{label} — {period_label} "
-                    f"(usage overage @ {calc.overage_pricing_factor}× base rate)"
-                )
-            else:
-                overage_desc = f"{label} — {period_label} (usage overage)"
             lines.append(
                 _InvoiceLine(
-                    description=overage_desc,
+                    description=f"{label} — {period_label} (usage overage)",
                     amount=calc.overage_charge_local,
                     kind="overage",
                 ),

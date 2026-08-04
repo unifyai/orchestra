@@ -159,8 +159,6 @@ class EffectivePlan:
     commit_period: Optional[str]
     commit_schedule: Optional[str]
     collection_method: str
-    base_pricing_factor: Decimal
-    overage_pricing_factor: Decimal
     started_at: Optional[datetime]
     ended_at: Optional[datetime]
 
@@ -302,8 +300,6 @@ class BillingPlanAssignmentDAO:
             commit_period=template.commit_period,
             commit_schedule=template.commit_schedule,
             collection_method=template.collection_method,
-            base_pricing_factor=Decimal(str(template.base_pricing_factor)),
-            overage_pricing_factor=Decimal(str(template.overage_pricing_factor)),
             started_at=_ensure_utc(active.started_at),
             ended_at=_ensure_utc(active.ended_at),
         )
