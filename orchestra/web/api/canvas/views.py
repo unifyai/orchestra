@@ -424,7 +424,12 @@ def _rows_from(
     logs_out, _ = _format_logs(
         rows=rows,
         field_types=field_types,
-        value_limit=1000,
+        # Never truncate: every value read here is machine-consumed — bindings
+        # and action schemas are parsed as JSON, invocation args are replayed,
+        # binding rows are handed to the frame. A display-style value limit
+        # turned an eight-binding bindings_json (2.5 kB) into unparseable JSON,
+        # which read back as "this canvas declares no bindings" on every view.
+        value_limit=None,
         column_context=None,
         field_order_map=field_type_dao.get_ordered_field_names(
             project.id,

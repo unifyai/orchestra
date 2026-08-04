@@ -453,3 +453,67 @@ async def test_a_binding_that_selects_several_columns_still_returns_rows(
     assert len(rows) == len(TASKS)
     # Projected to exactly the named columns, and nothing else leaks through.
     assert all(set(row) == {"name", "status"} for row in rows), rows
+
+
+@pytest.mark.anyio
+async def test_large_values_survive_the_read_untruncated(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Guards against a display-style value limit on machine-consumed reads.
+
+    The record read once trimmed every value to 1000 characters, so a canvas
+    declaring eight bindings (2.5 kB of bindings_json) read back as truncated,
+    unparseable JSON — and every alias 404'd as undeclared while the stored row
+    was perfectly intact. The same limit silently corrupted any data cell past
+    1000 characters with a trailing ellipsis. Both halves are pinned here: a
+    bindings declaration past the old limit still resolves, and a long cell
+    value comes back byte-complete.
+    """
+    project = "cq-big-proj"
+    long_context = "Canvas/Data/Long"
+    long_text = "x" * 1500
+
+    user = await _seed(client, "cq_big@test.com", project)
+    resp = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project,
+            "context": long_context,
+            "entries": {"name": "novel", "body": long_text},
+        },
+        headers=user["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+
+    long_binding = dict(
+        _filter_binding(alias="long"),
+        table=long_context,
+        resolved_context=long_context,
+    )
+    padding = [
+        _filter_binding(alias=f"padding_{i}", filter=f"status == 'open-{i:04d}'")
+        for i in range(20)
+    ]
+    bindings = [_filter_binding(), long_binding, *padding]
+    assert len(json.dumps(bindings)) > 1000
+
+    await _seed_canvas(client, user, project, "cq_big_00001", bindings)
+
+    resp = await client.post(
+        "/v0/admin/canvas/cq_big_00001/query",
+        json={"alias": "tasks"},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    assert len(resp.json()["rows"]) == len(TASKS)
+
+    resp = await client.post(
+        "/v0/admin/canvas/cq_big_00001/query",
+        json={"alias": "long"},
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    rows = resp.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["body"] == long_text
