@@ -521,12 +521,6 @@ class Settings(BaseSettings):
     )
     #: Days before the auto-enrolled subscription's first charge.
     trial_period_days: int = int(os.environ.get("TRIAL_PERIOD_DAYS", "7"))
-    #: Daily LLM spend ceiling for accounts with no real payment history,
-    #: enforced by the runtime via the spend endpoints' limit payload.
-    #: Bounds how fast trial credits can be extracted; 0 disables.
-    trial_daily_spend_cap: float = float(
-        os.environ.get("TRIAL_DAILY_SPEND_CAP", "25"),
-    )
 
     # ── Console-only free credits ───────────────────────────────────────
     #: Restrict the programmatic surfaces (UniLLM proxy, runtime-starting

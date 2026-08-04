@@ -354,64 +354,34 @@ def trial_gate_fields(session: Session, ba: Optional[BillingAccount]) -> dict:
     """Anti-abuse fields for the spend endpoints' limit-check payload.
 
     * ``account_suspended`` — hard deny (frozen by an admin or a sweep).
-    * ``trial_daily_spend`` / ``trial_daily_cap`` — populated for
-      never-paid accounts so the runtime enforces a daily burn ceiling
-      during the trial; both NULL once the account has real payment
-      history, and never populated for internal accounts (see
-      :func:`is_internal_account`) or orgs holding an admin-granted free
-      trial (see :func:`has_free_trial_grant`) — a comped evaluation is
-      throttled to nothing by a $25/day ceiling.
+    * ``never_paid`` — true while the account has no real payment history.
+      The runtime holds paid-only providers behind it. False for internal
+      accounts (see :func:`is_internal_account`) and for orgs holding an
+      admin-granted free trial (see :func:`has_free_trial_grant`), so a
+      comped evaluation keeps full model access.
     * ``api_access_allowed`` — false while the account is still purely on
       free credits (see :func:`has_api_access`). Only the gateway proxy
       acts on it; a false here must never block the Console's own work.
     """
-    from decimal import Decimal
-
-    from sqlalchemy import func
-
-    from orchestra.db.models.orchestra_models import CreditTransaction
-
     if ba is None:
         return {
             "account_suspended": False,
-            "trial_daily_spend": None,
-            "trial_daily_cap": None,
+            "never_paid": False,
             "api_access_allowed": has_api_access(session, None),
         }
 
-    fields: dict = {
+    return {
         "account_suspended": ba.account_status != "ACTIVE",
-        "trial_daily_spend": None,
-        "trial_daily_cap": None,
+        "never_paid": (
+            not has_ever_paid(session, ba.id)
+            and not is_internal_account(session, ba.id)
+            and not has_free_trial_grant(session, ba.id)
+        ),
         # Consumed by the gateway proxy, which denies when false. The
         # runtime ignores it: work started from the Console is exactly
         # what free credits are for.
         "api_access_allowed": has_api_access(session, ba),
     }
-    if (
-        settings.trial_daily_spend_cap > 0
-        and not has_ever_paid(session, ba.id)
-        and not is_internal_account(session, ba.id)
-        and not has_free_trial_grant(session, ba.id)
-    ):
-        day_start = datetime.now(timezone.utc).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        spend = session.execute(
-            select(
-                func.coalesce(func.sum(-CreditTransaction.amount), 0),
-            ).where(
-                CreditTransaction.billing_account_id == ba.id,
-                CreditTransaction.category == "llm",
-                CreditTransaction.at >= day_start,
-            ),
-        ).scalar() or Decimal(0)
-        fields["trial_daily_spend"] = float(spend)
-        fields["trial_daily_cap"] = settings.trial_daily_spend_cap
-    return fields
 
 
 def comms_gate_for_assistant(session: Session, assistant) -> dict:
