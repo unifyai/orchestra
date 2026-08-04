@@ -78,6 +78,27 @@ def _msg_credits(
     return max(1, round(usd * _CREDITS_PER_USD))
 
 
+def credits_per_message_from_token_costs(
+    input_cost_per_token: Optional[float],
+    output_cost_per_token: Optional[float],
+    reasoning_effort: Optional[str] = None,
+) -> Optional[int]:
+    """Message credits for a catalog model, from its live per-token rates.
+
+    Catalog models have no Artificial Analysis task anchor, so only the
+    token-derived message estimate is meaningful for them; per-task cost stays
+    unknown rather than guessed.
+    """
+
+    if input_cost_per_token is None or output_cost_per_token is None:
+        return None
+    return _msg_credits(
+        input_cost_per_token * 1_000_000,
+        output_cost_per_token * 1_000_000,
+        reasoning_effort,
+    )
+
+
 def _opt(
     *,
     model: Optional[str],

@@ -55,9 +55,14 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
         except (TypeError, ValueError):
             return None
 
+    created = raw.get("created")
+    if not isinstance(created, (int, float)):
+        created = 0
+
     return {
         "id": model_id,
         "name": raw.get("name") or model_id,
+        "created": int(created),
         "context_length": raw.get("context_length"),
         "input_cost_per_token": _f("prompt"),
         "output_cost_per_token": _f("completion"),
@@ -158,6 +163,12 @@ def is_eligible_assistant_model(
             False,
             "Only *@openrouter endpoints are accepted from the OpenRouter catalog.",
         )
+    if not _is_selectable_model_id(model_id):
+        return (
+            False,
+            "Floating '~*-latest' aliases and 'openrouter/auto*' routers cannot be "
+            "pinned to an assistant; choose a concrete model.",
+        )
     info = get_model(model_id)
     if info is None:
         return False, f"Unknown OpenRouter model {model_id!r}."
@@ -168,18 +179,37 @@ def is_eligible_assistant_model(
     return True, None
 
 
+def _is_selectable_model_id(model_id: str) -> bool:
+    """Whether a catalog id names a concrete model an assistant can be pinned to.
+
+    ``~vendor/model-latest`` aliases re-point to whatever is current, which
+    silently changes an assistant's model, its cost, and its cache identity.
+    ``openrouter/auto*`` routes per request, so neither the capability policy
+    nor the credit estimate shown against it would hold.
+    """
+
+    return not model_id.startswith("~") and not model_id.startswith("openrouter/")
+
+
 def search_models(
     query: str,
     *,
     limit: int = 50,
     require_tools: bool = False,
 ) -> list[dict[str, Any]]:
-    """Search catalog models; incompatible rows included with disabled_reason."""
+    """Search catalog models; incompatible rows included with disabled_reason.
+
+    An empty query returns the whole catalog, so the caller can offer it as a
+    browsable list. Selectable rows come first and newer models before older
+    ones, which keeps recent releases at the top of that list.
+    """
 
     q = query.strip().lower()
     catalog = get_catalog()
     results: list[dict[str, Any]] = []
     for model_id, info in catalog.items():
+        if not _is_selectable_model_id(model_id):
+            continue
         hay = f"{model_id} {info.get('name') or ''}".lower()
         if q and q not in hay:
             continue
@@ -197,5 +227,7 @@ def search_models(
                 "disabled_reason": reason,
             },
         )
-    results.sort(key=lambda row: (not row["eligible"], row["id"]))
+    results.sort(
+        key=lambda row: (not row["eligible"], -int(row.get("created") or 0), row["id"]),
+    )
     return results[: max(1, min(limit, 200))]

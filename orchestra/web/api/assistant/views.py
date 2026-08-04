@@ -6108,6 +6108,9 @@ def search_default_model_options(
     limit: int = Query(50, ge=1, le=200),
 ) -> InfoResponse[List[DefaultModelOptionRead]]:
     from orchestra.services.openrouter_catalog import search_models
+    from orchestra.web.api.assistant.default_models import (
+        credits_per_message_from_token_costs,
+    )
 
     rows = search_models(
         q,
@@ -6121,12 +6124,18 @@ def search_default_model_options(
                 reasoning_effort=None,
                 label=str(row.get("name") or row["id"]),
                 approx_credits_per_task=None,
-                approx_credits_per_message=None,
+                approx_credits_per_message=credits_per_message_from_token_costs(
+                    row.get("input_cost_per_token"),
+                    row.get("output_cost_per_token"),
+                ),
                 artificial_analysis_url=None,
                 recommended=False,
                 eligible=bool(row.get("eligible")),
                 disabled_reason=row.get("disabled_reason"),
                 supports_reasoning=bool(row.get("supports_reasoning")),
+                input_cost_per_token=row.get("input_cost_per_token"),
+                output_cost_per_token=row.get("output_cost_per_token"),
+                context_length=row.get("context_length"),
             )
             for row in rows
         ],

@@ -314,3 +314,124 @@ async def test_clear_slow_brain_model(client: AsyncClient):
     updated = patch_resp.json()["info"]
     assert updated["slow_brain_model"] is None
     assert updated["slow_brain_reasoning_effort"] is None
+
+
+def _catalog_entry(
+    model_id: str,
+    *,
+    created: int,
+    image: bool = True,
+    tools: bool = True,
+    reasoning: bool = True,
+    input_cost: float = 5.0 / 1_000_000,
+    output_cost: float = 25.0 / 1_000_000,
+) -> dict:
+    return {
+        "id": model_id,
+        "name": model_id,
+        "created": created,
+        "context_length": 1_000_000,
+        "input_cost_per_token": input_cost,
+        "output_cost_per_token": output_cost,
+        "input_modalities": ["text", "image"] if image else ["text"],
+        "supports_image_input": image,
+        "supports_tools": tools,
+        "supports_reasoning": reasoning,
+    }
+
+
+_FAKE_CATALOG = {
+    "vendor/old-model": _catalog_entry("vendor/old-model", created=1_000),
+    "vendor/new-model": _catalog_entry("vendor/new-model", created=9_000),
+    "vendor/text-only": _catalog_entry("vendor/text-only", created=8_000, image=False),
+    "~vendor/model-latest": _catalog_entry("~vendor/model-latest", created=9_500),
+    "openrouter/auto": _catalog_entry("openrouter/auto", created=9_900),
+}
+
+
+@pytest.fixture
+def fake_catalog():
+    with patch(
+        "orchestra.services.openrouter_catalog.get_catalog",
+        return_value=_FAKE_CATALOG,
+    ):
+        yield
+
+
+@pytest.mark.anyio
+async def test_search_with_empty_query_lists_catalog_newest_first(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Opening the picker browses the catalog without needing a search term."""
+    resp = await client.get(
+        "/v0/assistant/default-model-options/search",
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    rows = resp.json()["info"]
+
+    ids = [row["model"] for row in rows]
+    assert ids == [
+        "vendor/new-model@openrouter",
+        "vendor/old-model@openrouter",
+        "vendor/text-only@openrouter",
+    ]
+    assert [row["eligible"] for row in rows] == [True, True, False]
+    assert rows[-1]["disabled_reason"] == "No native image input"
+
+
+@pytest.mark.anyio
+async def test_search_excludes_floating_aliases_and_auto_routers(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Aliases that re-point, and per-request routers, are not pinnable models."""
+    resp = await client.get(
+        "/v0/assistant/default-model-options/search",
+        headers=HEADERS,
+    )
+    ids = [row["model"] for row in resp.json()["info"]]
+    assert not any(model_id.startswith("~") for model_id in ids)
+    assert "openrouter/auto@openrouter" not in ids
+
+
+@pytest.mark.anyio
+async def test_search_rows_carry_derived_pricing(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Catalog rows price per token and derive message credits from those rates."""
+    resp = await client.get(
+        "/v0/assistant/default-model-options/search",
+        headers=HEADERS,
+    )
+    row = next(
+        r for r in resp.json()["info"] if r["model"] == "vendor/new-model@openrouter"
+    )
+    assert row["input_cost_per_token"] == pytest.approx(5.0 / 1_000_000)
+    assert row["output_cost_per_token"] == pytest.approx(25.0 / 1_000_000)
+    assert row["context_length"] == 1_000_000
+    # 12k input @ $5/M + 600 output @ $25/M = $0.075 -> 30 credits at 400/USD.
+    assert row["approx_credits_per_message"] == 30
+    # No benchmark anchor exists for a catalog model, so task cost stays unknown.
+    assert row["approx_credits_per_task"] is None
+
+
+@pytest.mark.anyio
+async def test_floating_alias_cannot_be_set_as_default_model(
+    client: AsyncClient,
+    fake_catalog,
+):
+    """Validation matches the picker: an unlisted alias is not selectable."""
+    resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Aliasy",
+            "surname": "Tester",
+            "create_infra": False,
+            "default_model": "~vendor/model-latest@openrouter",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 422, resp.text

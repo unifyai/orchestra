@@ -1573,6 +1573,24 @@ class DefaultModelOptionRead(BaseModel):
         None,
         description="Whether reasoning_effort may be set for this model.",
     )
+    input_cost_per_token: Optional[float] = Field(
+        None,
+        description=(
+            "Provider input price per token, for catalog options whose "
+            "per-task credit cost has no benchmark anchor. Null when unknown."
+        ),
+        example=0.000005,
+    )
+    output_cost_per_token: Optional[float] = Field(
+        None,
+        description="Provider output price per token. Null when unknown.",
+        example=0.000025,
+    )
+    context_length: Optional[int] = Field(
+        None,
+        description="Maximum context window in tokens, when the catalog reports it.",
+        example=1_000_000,
+    )
 
 
 class VoiceCloneRequestData(BaseModel):
