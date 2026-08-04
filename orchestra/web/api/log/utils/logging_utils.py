@@ -942,6 +942,13 @@ def _get_logs_query(
                 filter,
                 field_names=list(field_types.keys()),
             )
+        except HTTPException:
+            # str_filter_exp_to_dict() already raises a formatted 400 with a
+            # useful detail message; re-raise as-is instead of re-wrapping it
+            # (str(HTTPException) renders as "400: <detail>", so wrapping it
+            # again here double-prefixes the message).
+            session.rollback()
+            raise
         except Exception as e:
             session.rollback()
             raise HTTPException(
