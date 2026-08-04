@@ -6081,6 +6081,8 @@ def list_default_model_options(
                 eligible=True,
                 disabled_reason=None,
                 supports_reasoning=True,
+                input_cost_per_token=option.input_usd_per_m / 1_000_000,
+                output_cost_per_token=option.output_usd_per_m / 1_000_000,
             )
             for option in list_model_options(usage)
         ],

@@ -1,5 +1,7 @@
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from httpx import AsyncClient
 
@@ -72,8 +74,16 @@ async def test_list_default_model_options(client: AsyncClient):
     assert ("claude-sonnet-5@anthropic", "high") in pairs
     assert ("gemini-3-pro@vertex-ai", "medium") in pairs
     assert all(o["label"] for o in options)
-    assert all(o["approx_credits_per_task"] > 0 for o in options)
+    # A task estimate needs an Artificial Analysis per-task figure to anchor it;
+    # rows for models AA has not published one for omit it rather than guess.
+    assert all(
+        o["approx_credits_per_task"] is None or o["approx_credits_per_task"] > 0
+        for o in options
+    )
     assert all(o["approx_credits_per_message"] > 0 for o in options)
+    # Every row still prices per token, so the picker always has a cost to show.
+    assert all(o["input_cost_per_token"] > 0 for o in options)
+    assert all(o["output_cost_per_token"] > 0 for o in options)
     assert all(
         o["artificial_analysis_url"].startswith("https://artificialanalysis.ai/models/")
         for o in options
@@ -435,3 +445,73 @@ async def test_floating_alias_cannot_be_set_as_default_model(
         headers=HEADERS,
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_recent_curated_models_carry_a_wellformed_benchmark_link():
+    """Every curated row carries an Artificial Analysis link in AA's slug form.
+
+    This is the offline half of the rule: it pins that no row ships without a
+    benchmark link and that the slug follows AA's dotted-version-to-dash
+    convention. Whether the page exists is a third-party fact, checked by
+    ``test_curated_benchmark_pages_resolve``.
+    """
+    for option in DEFAULT_MODEL_OPTIONS:
+        assert option.artificial_analysis_url.startswith(
+            "https://artificialanalysis.ai/models/",
+        ), option.label
+        slug = option.artificial_analysis_url.rsplit("/", 1)[1]
+        assert slug, option.label
+        assert "." not in slug, option.label
+        assert slug == slug.lower(), option.label
+
+
+# ---------------------------------------------------------------------------
+# Live third-party checks: opt in, so an upstream outage cannot redden a
+# release. Both assert facts only the real service can answer, and both fail
+# for every curated row when the network is unavailable.
+# ---------------------------------------------------------------------------
+_needs_live_catalog = pytest.mark.skipif(
+    os.getenv("MODEL_CATALOG_CHECKS") != "1",
+    reason="Calls Artificial Analysis / OpenRouter; opt in with "
+    "MODEL_CATALOG_CHECKS=1.",
+)
+
+
+@pytest.mark.integration
+@_needs_live_catalog
+@pytest.mark.parametrize(
+    ("label", "url"),
+    [(o.label, o.artificial_analysis_url) for o in DEFAULT_MODEL_OPTIONS],
+)
+def test_curated_benchmark_pages_resolve(label: str, url: str):
+    """The AA page each curated row cites must actually exist.
+
+    A model is only promoted into the recommended list once AA benchmarks it,
+    so the label a user picks by can be checked against a third party. AA
+    answers a clean 404 for unknown slugs, which makes this a real check
+    rather than a reachability smoke test.
+    """
+    response = httpx.get(url, timeout=30.0, follow_redirects=True)
+    assert response.status_code == 200, f"{label}: {url} -> {response.status_code}"
+
+
+@pytest.mark.integration
+@_needs_live_catalog
+def test_curated_openrouter_models_pass_selection_policy():
+    """Recommended OpenRouter rows must satisfy the same policy as search rows.
+
+    The list endpoint reports curated rows as eligible without re-checking, so
+    an entry that failed the multimodal/tools policy would be offered and then
+    rejected on save. Also catches a curated row whose model OpenRouter has
+    renamed or retired.
+    """
+    from orchestra.services.openrouter_catalog import is_eligible_assistant_model
+
+    failures = []
+    for option in DEFAULT_MODEL_OPTIONS:
+        if not (option.model or "").endswith("@openrouter"):
+            continue
+        ok, reason = is_eligible_assistant_model(option.model, require_tools=True)
+        if not ok:
+            failures.append(f"{option.label}: {reason}")
+    assert not failures, "\n".join(failures)
