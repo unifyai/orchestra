@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -611,6 +612,168 @@ async def test_thread_calls_reports_missed_and_enforces_membership(
         headers=outsider["headers"],
     )
     assert outsider_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_room_call_the_host_was_in_is_not_a_missed_call(
+    client: AsyncClient,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    """A room call is answered on creation — its host is already in it.
+
+    The regression: ``missed`` was ``answered_at is None``, and only /answer and
+    /join ever set that. A host starting a team call never calls either (those
+    are for other people), so a room call nobody else joined logged as "Missed
+    call" with zero duration — in a single-human org, every room call, however
+    long the host and the assistants actually talked.
+    """
+    owner, _member, org = await _create_org_with_member(client, "room-not-missed")
+    team = await _create_team(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Room Call Team",
+    )
+    thread = await _resolve_thread(
+        client,
+        org["headers"],
+        kind="team",
+        team_id=team["id"],
+    )
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={"kind": "team", "team_id": team["id"]},
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    call_id = create_response.json()["call_id"]
+    # Invitees must still ring: the fix sets answered_at without promoting the
+    # session out of "ringing".
+    assert create_response.json()["status"] == "ringing"
+
+    # Nobody else answers or joins — the host simply hangs up.
+    end_response = await client.post(
+        f"/v0/calls/{call_id}/end",
+        headers=org["headers"],
+    )
+    assert end_response.status_code == status.HTTP_200_OK, end_response.json()
+
+    calls_response = await client.get(
+        f"/v0/chat/threads/{thread['thread_id']}/calls",
+        headers=org["headers"],
+    )
+    assert calls_response.status_code == status.HTTP_200_OK, calls_response.json()
+    summary = calls_response.json()["calls"][0]
+
+    assert summary["call_id"] == call_id
+    assert summary["scope"] == "team"
+    assert summary["missed"] is False
+    assert summary["started_at"] is not None
+
+
+@pytest.mark.anyio
+async def test_an_unanswered_dm_is_still_a_missed_call(
+    client: AsyncClient,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    """The room fix must not blunt the DM case, where a ring really can go unanswered."""
+    owner, member, org = await _create_org_with_member(client, "dm-still-missed")
+    thread = await _resolve_thread(
+        client,
+        org["headers"],
+        kind="dm",
+        organization_id=org["id"],
+        peer_user_id=member["id"],
+    )
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={
+            "kind": "dm",
+            "organization_id": org["id"],
+            "peer_user_id": member["id"],
+        },
+    )
+    call_id = create_response.json()["call_id"]
+    await client.post(f"/v0/calls/{call_id}/end", headers=org["headers"])
+
+    calls_response = await client.get(
+        f"/v0/chat/threads/{thread['thread_id']}/calls",
+        headers=org["headers"],
+    )
+    summary = calls_response.json()["calls"][0]
+
+    assert summary["missed"] is True
+    assert summary["duration_seconds"] == 0
+
+
+@pytest.mark.anyio
+async def test_a_late_joiner_does_not_restart_a_room_call_clock(
+    client: AsyncClient,
+    org_chat_dispatch_mock: AsyncMock,
+):
+    """``answered_at`` is stamped once, at creation, and never re-stamped.
+
+    Overwriting it on the first join would hide everything that happened before
+    somebody else arrived.
+    """
+    owner, member, org = await _create_org_with_member(client, "room-late-join")
+    team = await _create_team(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Late Join Team",
+    )
+    add_member = await client.post(
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/members",
+        headers=org["headers"],
+        json={"user_ids": [member["id"]]},
+    )
+    assert add_member.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), add_member.json()
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={"kind": "team", "team_id": team["id"]},
+    )
+    call_id = create_response.json()["call_id"]
+
+    # A measurable gap between the host starting the call and anyone else
+    # arriving. Duration is the only observable that distinguishes the two
+    # possible clock starts, so the gap has to be real time rather than a
+    # stubbed one.
+    await anyio.sleep(1.2)
+
+    join_response = await client.post(
+        f"/v0/calls/{call_id}/join",
+        headers=member["headers"],
+    )
+    assert join_response.status_code == status.HTTP_200_OK, join_response.json()
+    await client.post(f"/v0/calls/{call_id}/end", headers=org["headers"])
+
+    thread = await _resolve_thread(
+        client,
+        org["headers"],
+        kind="team",
+        team_id=team["id"],
+    )
+    calls_response = await client.get(
+        f"/v0/chat/threads/{thread['thread_id']}/calls",
+        headers=org["headers"],
+    )
+    summary = calls_response.json()["calls"][0]
+
+    assert summary["missed"] is False
+    # Counted from creation, so it spans the gap. Re-stamped at the join it
+    # would round to zero and the pill would claim a call that barely happened.
+    assert summary["duration_seconds"] >= 1
 
 
 @pytest.mark.anyio

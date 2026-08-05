@@ -525,6 +525,14 @@ async def create_call(
             created_by_user_id=user_id,
             livekit_room="pending",
             status="ringing",
+            # A room call is answered the moment it exists: its host is a
+            # participant, not a caller waiting for someone to pick up. Left
+            # unset, a call nobody else joined reported as missed with zero
+            # duration however long the host and the assistants talked — and in
+            # a one-human org that is every room call. ``status`` deliberately
+            # stays "ringing" so invitees still ring and the stale-call sweep
+            # keeps using the ring window.
+            answered_at=now,
             assistant_ids=[],
         )
         session.add(call_session)
@@ -588,6 +596,9 @@ async def create_call(
             created_by_user_id=user_id,
             livekit_room="pending",
             status="ringing",
+            # Answered on creation for the same reason as a team call — see the
+            # team branch above.
+            answered_at=now,
             assistant_ids=[],
         )
         session.add(call_session)
@@ -812,7 +823,10 @@ async def answer_call(
     participant.left_at = None
     if call_session.status == "ringing":
         call_session.status = "active"
-        call_session.answered_at = now
+        # Never re-stamped: a room call is already answered at creation, and
+        # overwriting here would restart its clock at the first join, hiding
+        # everything the host and the assistants did before that.
+        call_session.answered_at = call_session.answered_at or now
     session.commit()
     call_session = _require_call_session(session, call_id)
 
@@ -882,7 +896,10 @@ async def join_call(
     participant.left_at = None
     if call_session.status == "ringing":
         call_session.status = "active"
-        call_session.answered_at = now
+        # Never re-stamped: a room call is already answered at creation, and
+        # overwriting here would restart its clock at the first join, hiding
+        # everything the host and the assistants did before that.
+        call_session.answered_at = call_session.answered_at or now
     session.commit()
     call_session = _require_call_session(session, call_id)
 
