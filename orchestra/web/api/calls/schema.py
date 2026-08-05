@@ -6,13 +6,50 @@ scope (human DM, team, group, or 1:1 assistant DM) and binds to that scope's
 and are dispatched into the LiveKit room server-side.
 """
 
+import re
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 CallScopeKind = Literal["dm", "team", "group", "assistant_dm"]
 CallStatus = Literal["ringing", "active", "ended"]
 CallParticipantStatus = Literal["invited", "joined", "declined", "left"]
+
+#: Fields of ``opening_config``, in the casing the runtime reads them by.
+_OPENING_CONFIG_FIELDS = frozenset(
+    {
+        "mode",
+        "opener_text",
+        "briefing",
+        "simulated_utterance",
+        "source",
+        "transcript",
+        "recording_asset",
+        "recording_path",
+        "recording_url",
+    },
+)
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def normalise_opening_config(value: Optional[dict]) -> Optional[dict]:
+    """Store the opening config in the casing the runtime reads it by.
+
+    This object is persisted verbatim and dispatched verbatim, and the runtime
+    looks its fields up by snake_case name. A client that forwards its own
+    camelCase spelling therefore writes a config that travels the whole way and
+    then cannot be read: the asset naming what to play is simply absent, and the
+    voice agent refuses the call. Converting here — the one point every client
+    passes through — is what stops that depending on each of them getting it
+    right. Fields that are not recognised are left untouched.
+    """
+    if not isinstance(value, dict):
+        return value
+    converted: dict[str, Any] = {}
+    for key, item in value.items():
+        snake = _CAMEL_BOUNDARY.sub(r"\1_\2", key).lower()
+        converted[snake if snake in _OPENING_CONFIG_FIELDS else key] = item
+    return converted
 
 
 class CallCreate(BaseModel):
@@ -27,6 +64,10 @@ class CallCreate(BaseModel):
     # Voice-agent opening behavior forwarded on assistant dispatch.
     opening_config: Optional[dict[str, Any]] = None
 
+    _normalise_opening_config = field_validator("opening_config")(
+        lambda cls, v: normalise_opening_config(v),
+    )
+
 
 class AssistantCallCreate(BaseModel):
     """Assistant-initiated ring (runtime, admin auth): ring the thread human."""
@@ -35,12 +76,20 @@ class AssistantCallCreate(BaseModel):
     user_id: Optional[str] = None
     opening_config: Optional[dict[str, Any]] = None
 
+    _normalise_opening_config = field_validator("opening_config")(
+        lambda cls, v: normalise_opening_config(v),
+    )
+
 
 class OwnedAssistantCallCreate(BaseModel):
     """Assistant-initiated ring via the owner-scoped route."""
 
     user_id: Optional[str] = None
     opening_config: Optional[dict[str, Any]] = None
+
+    _normalise_opening_config = field_validator("opening_config")(
+        lambda cls, v: normalise_opening_config(v),
+    )
 
 
 class CallParticipantResponse(BaseModel):
