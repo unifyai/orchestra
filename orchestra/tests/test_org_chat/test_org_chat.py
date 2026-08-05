@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import anyio
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -637,13 +638,13 @@ async def test_room_call_the_host_was_in_is_not_a_missed_call(
         client,
         org["headers"],
         kind="team",
-        team_id=team["team_id"],
+        team_id=team["id"],
     )
 
     create_response = await client.post(
         "/v0/calls",
         headers=org["headers"],
-        json={"kind": "team", "team_id": team["team_id"]},
+        json={"kind": "team", "team_id": team["id"]},
     )
     assert (
         create_response.status_code == status.HTTP_201_CREATED
@@ -728,9 +729,9 @@ async def test_a_late_joiner_does_not_restart_a_room_call_clock(
         name="Late Join Team",
     )
     add_member = await client.post(
-        f"/v0/teams/{team['team_id']}/members",
+        f"/v0/organizations/{org['id']}/teams/{team['id']}/members",
         headers=org["headers"],
-        json={"user_id": member["id"]},
+        json={"user_ids": [member["id"]]},
     )
     assert add_member.status_code in (
         status.HTTP_200_OK,
@@ -740,10 +741,15 @@ async def test_a_late_joiner_does_not_restart_a_room_call_clock(
     create_response = await client.post(
         "/v0/calls",
         headers=org["headers"],
-        json={"kind": "team", "team_id": team["team_id"]},
+        json={"kind": "team", "team_id": team["id"]},
     )
     call_id = create_response.json()["call_id"]
-    created_started_at = create_response.json().get("started_at")
+
+    # A measurable gap between the host starting the call and anyone else
+    # arriving. Duration is the only observable that distinguishes the two
+    # possible clock starts, so the gap has to be real time rather than a
+    # stubbed one.
+    await anyio.sleep(1.2)
 
     join_response = await client.post(
         f"/v0/calls/{call_id}/join",
@@ -756,7 +762,7 @@ async def test_a_late_joiner_does_not_restart_a_room_call_clock(
         client,
         org["headers"],
         kind="team",
-        team_id=team["team_id"],
+        team_id=team["id"],
     )
     calls_response = await client.get(
         f"/v0/chat/threads/{thread['thread_id']}/calls",
@@ -765,8 +771,9 @@ async def test_a_late_joiner_does_not_restart_a_room_call_clock(
     summary = calls_response.json()["calls"][0]
 
     assert summary["missed"] is False
-    if created_started_at:
-        assert summary["started_at"] == created_started_at
+    # Counted from creation, so it spans the gap. Re-stamped at the join it
+    # would round to zero and the pill would claim a call that barely happened.
+    assert summary["duration_seconds"] >= 1
 
 
 @pytest.mark.anyio
