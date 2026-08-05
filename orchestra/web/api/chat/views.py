@@ -218,6 +218,12 @@ def _thread_call_summary(call_session: CallSession) -> ThreadCallSummary:
 
     Talk time is ``answered_at`` → ``ended_at``; a session that was never
     answered is reported as ``missed`` with zero duration.
+
+    "Answered" is a property of the session, not of anyone accepting a ring: a
+    DM is answered when its callee picks up, while a room call is answered on
+    creation because its host is already a participant. Reading missed-ness off
+    a ring instead once reported every room call in a single-human org as
+    missed, however long it actually ran.
     """
     answered_at = call_session.answered_at
     ended_at = call_session.ended_at
