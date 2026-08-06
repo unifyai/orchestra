@@ -5,6 +5,7 @@ Tests for admin assistant endpoints:
 """
 
 import importlib.util
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +27,7 @@ from orchestra.db.models.orchestra_models import (
     CONTACT_MEMBERSHIP_SCOPE_TEAM,
     AssistantConsoleConfig,
     ContactMembership,
+    MsTeamsBotInstall,
     Organization,
     SlackInstall,
     Team,
@@ -2651,6 +2653,130 @@ async def test_admin_assistant_slack_bot_user_id_none_without_install(
     )
     assert admin_resp.status_code == 200
     result = admin_resp.json()["info"][0]
+
+
+# =============================================================================
+# Microsoft Teams bot install bootstrap resolution
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_resolves_ms_teams_install_for_personal_owner(
+    client: AsyncClient,
+    dbsession,
+):
+    """The runtime bootstrap read surfaces the owner's active Teams install.
+
+    Without this the capability is only ever discovered by receiving an
+    inbound Teams activity, which a headless task run never does.
+    """
+    owner = await create_test_user(client, "teams_bootstrap_personal@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "TeamsBoot",
+            "surname": "Personal",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    dbsession.add(
+        MsTeamsBotInstall(
+            user_id=owner["id"],
+            tenant_id="tenant-boot-personal",
+            tenant_name="Bootstrap Tenant",
+            bot_app_id="app-guid-boot",
+            service_url="https://smba.trafficmanager.net/amer/",
+            bound_at=datetime.now(timezone.utc),
+        ),
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_has_ms_teams_bot"] is True
+    assert result["assistant_ms_teams_tenant_id"] == "tenant-boot-personal"
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_ms_teams_absent_without_install(
+    client: AsyncClient,
+):
+    """No active install ⇒ resolved-and-absent, not merely unresolved."""
+    owner = await create_test_user(client, "teams_bootstrap_noinstall@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "TeamsBoot",
+            "surname": "NoInstall",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_has_ms_teams_bot"] is False
+    assert result["assistant_ms_teams_tenant_id"] is None
+
+
+@pytest.mark.anyio
+async def test_admin_assistant_ms_teams_fields_via_from_fields(
+    client: AsyncClient,
+    dbsession,
+):
+    """The slim lookup the hosted runtime actually issues carries the fields."""
+    owner = await create_test_user(client, "teams_bootstrap_slim@test.com")
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "TeamsBoot",
+            "surname": "Slim",
+            "create_infra": False,
+        },
+        headers=owner["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    dbsession.add(
+        MsTeamsBotInstall(
+            user_id=owner["id"],
+            tenant_id="tenant-boot-slim",
+            tenant_name="Slim Tenant",
+            bot_app_id="app-guid-slim",
+            service_url="https://smba.trafficmanager.net/amer/",
+            bound_at=datetime.now(timezone.utc),
+        ),
+    )
+    dbsession.commit()
+
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={agent_id}"
+        "&from_fields=agent_id,assistant_has_ms_teams_bot,"
+        "assistant_ms_teams_tenant_id",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    result = admin_resp.json()["info"][0]
+    assert result["assistant_has_ms_teams_bot"] is True
+    assert result["assistant_ms_teams_tenant_id"] == "tenant-boot-slim"
 
 
 # =============================================================================

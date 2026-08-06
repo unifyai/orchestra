@@ -4975,6 +4975,14 @@ class MsTeamsBotConversationRoute(Base):
     reply *proactively* into the same conversation without the user having
     to message first. Rows expire after a TTL (default 14 days, refreshed
     on every send/receive that hits the route).
+
+    The sender columns record who the conversation is with, so a route can
+    be found from the assistant side rather than only by an id the caller
+    already holds. That is what lets an assistant with no inbound activity
+    in context — a scheduled offline run — target a Teams conversation.
+    All are best-effort: Teams supplies no sender email on the first
+    dispatch pass of an org install, and rows created before the columns
+    existed carry nulls.
     """
 
     __tablename__ = "ms_teams_bot_conversation_routes"
@@ -4994,6 +5002,18 @@ class MsTeamsBotConversationRoute(Base):
         index=True,
     )
     conversation_reference = Column(Text, nullable=True)
+    conversation_type = Column(String, nullable=True)
+    """``personal`` (1:1), ``groupChat``, or ``channel``."""
+
+    sender_aad_object_id = Column(String, nullable=True)
+    """AAD object id of the human who last addressed the bot here."""
+
+    sender_email = Column(String, nullable=True)
+    """Sender email, when a roster / Graph lookup resolved one."""
+
+    sender_is_owner = Column(Boolean, nullable=False, server_default="false")
+    """True when that sender is the boss of the pinned assistant."""
+
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_used_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
@@ -5008,6 +5028,11 @@ class MsTeamsBotConversationRoute(Base):
             name="uq_ms_teams_bot_conversation_route",
         ),
         Index("ix_ms_teams_bot_conversation_routes_expires", "expires_at"),
+        Index(
+            "ix_ms_teams_bot_conversation_routes_assistant_lookup",
+            "assistant_id",
+            "conversation_type",
+        ),
     )
 
 

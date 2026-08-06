@@ -182,6 +182,48 @@ class TestInstallDAO:
         assert bound.bind_nonce is None
         assert bound.bound_at is not None
 
+    def test_get_install_for_owner_falls_back_to_personal(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """An org member's boss can bind the tenant from their personal
+        workspace, so an org-scoped caller must still see that install."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "ownerfb")
+        org = _make_org(dbsession, user, "ownerfb")
+        personal = _make_install(dbsession, user=user, tenant_id="tenant-ownerfb")
+
+        found = dao.get_install_for_owner(org.id, user.id)
+        assert found is not None
+        assert found.id == personal.id
+
+    def test_get_install_for_owner_prefers_org_install(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "ownerorg")
+        org = _make_org(dbsession, user, "ownerorg")
+        _make_install(dbsession, user=user, tenant_id="tenant-ownerorg-personal")
+        org_install = _make_install(
+            dbsession,
+            organization=org,
+            tenant_id="tenant-ownerorg-shared",
+        )
+
+        found = dao.get_install_for_owner(org.id, user.id)
+        assert found is not None
+        assert found.id == org_install.id
+
+    def test_get_install_for_owner_none_when_unclaimed(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "ownernone")
+        org = _make_org(dbsession, user, "ownernone")
+        assert dao.get_install_for_owner(org.id, user.id) is None
+
     def test_bind_install_requires_exactly_one_owner(
         self,
         dbsession: Session,
@@ -517,6 +559,180 @@ class TestRoutingStateDAO:
         route.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         dbsession.flush()
         assert dao.get_conversation_route(install.id, "conv-e") is None
+
+    def test_find_conversation_route_by_owner(self, dbsession: Session) -> None:
+        """The assistant-side lookup an outbound-only caller needs.
+
+        A scheduled task knows who it wants to reach and has no inbound
+        activity to read a conversation id off, so the boss's own 1:1 has
+        to be reachable from the assistant alone.
+        """
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "findowner")
+        org = _make_org(dbsession, user, "findowner")
+        assistant = _make_assistant(dbsession, user, first_name="Fin", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-find")
+        boss_route = dao.upsert_conversation_route(
+            install.id,
+            "conv-boss",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            boss_route,
+            conversation_type="personal",
+            sender_is_owner=True,
+        )
+        third_party = dao.upsert_conversation_route(
+            install.id,
+            "conv-third-party",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            third_party,
+            conversation_type="personal",
+            sender_is_owner=False,
+        )
+
+        found = dao.find_conversation_route(
+            assistant.agent_id,
+            conversation_type="personal",
+            owner_only=True,
+        )
+        assert found is not None
+        assert found.conversation_id == "conv-boss"
+
+    def test_find_conversation_route_ignores_expired(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A conversation past its TTL is not a valid proactive-reply target."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "findexp")
+        org = _make_org(dbsession, user, "findexp")
+        assistant = _make_assistant(dbsession, user, first_name="Fay", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-findexp")
+        route = dao.upsert_conversation_route(
+            install.id,
+            "conv-stale",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            route,
+            conversation_type="personal",
+            sender_is_owner=True,
+        )
+        route.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        dbsession.flush()
+
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="personal",
+                owner_only=True,
+            )
+            is None
+        )
+
+    def test_find_conversation_route_by_sender_email(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "findmail")
+        org = _make_org(dbsession, user, "findmail")
+        assistant = _make_assistant(dbsession, user, first_name="Mel", organization=org)
+        install = _make_install(
+            dbsession,
+            organization=org,
+            tenant_id="tenant-findmail",
+        )
+        route = dao.upsert_conversation_route(
+            install.id,
+            "conv-mail",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            route,
+            conversation_type="personal",
+            sender_email="Person@Corp.Test",
+        )
+
+        # Email casing is not stable across a roster lookup and an address
+        # book, so the match cannot be.
+        found = dao.find_conversation_route(
+            assistant.agent_id,
+            conversation_type="personal",
+            sender_email="person@corp.test",
+        )
+        assert found is not None
+        assert found.conversation_id == "conv-mail"
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="personal",
+                sender_email="someone.else@corp.test",
+            )
+            is None
+        )
+
+    def test_find_conversation_route_prefers_most_recent(
+        self,
+        dbsession: Session,
+    ) -> None:
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "findrecent")
+        org = _make_org(dbsession, user, "findrecent")
+        assistant = _make_assistant(dbsession, user, first_name="Ros", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-recent")
+        now = datetime.now(timezone.utc)
+        for conversation_id, age_days in (("conv-old", 5), ("conv-new", 1)):
+            route = dao.upsert_conversation_route(
+                install.id,
+                conversation_id,
+                assistant.agent_id,
+            )
+            dao.annotate_conversation_route(
+                route,
+                conversation_type="personal",
+                sender_is_owner=True,
+            )
+            route.last_used_at = now - timedelta(days=age_days)
+        dbsession.flush()
+
+        found = dao.find_conversation_route(
+            assistant.agent_id,
+            conversation_type="personal",
+            owner_only=True,
+        )
+        assert found is not None
+        assert found.conversation_id == "conv-new"
+
+    def test_annotate_conversation_route_keeps_known_identity(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A later pass that lacks an email must not erase the one we have."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "annot")
+        org = _make_org(dbsession, user, "annot")
+        assistant = _make_assistant(dbsession, user, first_name="Ann", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-annot")
+        route = dao.upsert_conversation_route(
+            install.id,
+            "conv-annot",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            route,
+            conversation_type="personal",
+            sender_email="known@corp.test",
+            sender_is_owner=True,
+        )
+        dao.annotate_conversation_route(route, sender_email=None)
+
+        assert route.sender_email == "known@corp.test"
+        assert route.conversation_type == "personal"
+        assert route.sender_is_owner is True
 
     def test_delete_expired_routes_prunes(self, dbsession: Session) -> None:
         dao = MsTeamsBotDAO(dbsession)
@@ -859,6 +1075,101 @@ class TestDispatcher:
         # resolved workspace assistant the sender is the owner (boss).
         assert second.sender_is_owner is True
 
+        # The second pass is the first one carrying an email, so it is also
+        # what makes the conversation findable by that address later.
+        route = MsTeamsBotDAO(dbsession).get_conversation_route(
+            second.install.id,
+            "conv-h",
+        )
+        assert route is not None
+        assert route.sender_email == "m2@corp.test"
+        assert route.conversation_type == "personal"
+        assert route.sender_is_owner is True
+
+    def test_personal_route_records_sender_identity(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Inbound is the only moment this identity exists — if the dispatcher
+        does not record it, nothing downstream can reconstruct it."""
+        user = _make_user(dbsession, "ident")
+        coord = _make_assistant(
+            dbsession,
+            user,
+            first_name="Coord",
+            is_coordinator=True,
+        )
+        install = _make_install(dbsession, user=user, tenant_id="tenant-ident")
+        resolve_inbound(
+            dbsession,
+            tenant_id="tenant-ident",
+            conversation_id="conv-ident",
+            conversation_type="personal",
+            channel_id=None,
+            sender_aad_object_id="aad-ident",
+            bot_mentioned=False,
+            addressed_text="hello",
+            conversation_reference='{"ref": 1}',
+        )
+
+        dao = MsTeamsBotDAO(dbsession)
+        route = dao.get_conversation_route(install.id, "conv-ident")
+        assert route is not None
+        assert route.conversation_type == "personal"
+        assert route.sender_aad_object_id == "aad-ident"
+        assert route.sender_is_owner is True
+        # And that is enough to reach the conversation from the assistant.
+        found = dao.find_conversation_route(
+            coord.agent_id,
+            conversation_type="personal",
+            owner_only=True,
+        )
+        assert found is not None
+        assert found.conversation_id == "conv-ident"
+
+    def test_channel_route_is_not_a_personal_match(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """A group thread must never satisfy a lookup for the boss's 1:1."""
+        user = _make_user(dbsession, "chansep")
+        org = _make_org(dbsession, user, "chansep")
+        assistant = _make_assistant(
+            dbsession,
+            user,
+            first_name="Chan",
+            organization=org,
+        )
+        _make_install(dbsession, organization=org, tenant_id="tenant-chansep")
+        result = resolve_inbound(
+            dbsession,
+            tenant_id="tenant-chansep",
+            conversation_id="conv-chansep",
+            conversation_type="channel",
+            channel_id="19:c@thread.tacv2",
+            sender_aad_object_id="aad-chansep",
+            bot_mentioned=True,
+            addressed_text="Chan please look at this",
+        )
+        assert result is not None
+        assert result.assistant_id == assistant.agent_id
+
+        dao = MsTeamsBotDAO(dbsession)
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="personal",
+            )
+            is None
+        )
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="channel",
+            )
+            is not None
+        )
+
 
 # ============================================================================
 # Admin HTTP surface
@@ -1140,6 +1451,62 @@ class TestAdminEndpoints:
         )
         assert pruned.status_code == status.HTTP_200_OK
         assert "deleted" in pruned.json()
+
+    async def test_conversation_route_for_assistant_lookup(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ) -> None:
+        """The outbound-only caller's path: assistant in, full routing out."""
+        user = _make_user(dbsession, "http-find")
+        org = _make_org(dbsession, user, "http-find")
+        assistant = _make_assistant(
+            dbsession,
+            user,
+            first_name="Fin",
+            organization=org,
+        )
+        install = _make_install(
+            dbsession,
+            organization=org,
+            tenant_id="tenant-http-find",
+        )
+        dbsession.commit()
+
+        missing = await client.get(
+            "/v0/admin/ms-teams-bot/conversation-routes/for-assistant",
+            params={"assistant_id": assistant.agent_id, "owner_only": True},
+            headers=ADMIN_HEADERS,
+        )
+        assert missing.status_code == status.HTTP_404_NOT_FOUND
+
+        dao = MsTeamsBotDAO(dbsession)
+        route = dao.upsert_conversation_route(
+            install.id,
+            "conv-http-find",
+            assistant.agent_id,
+            conversation_reference='{"ref": 1}',
+        )
+        dao.annotate_conversation_route(
+            route,
+            conversation_type="personal",
+            sender_email="boss@corp.test",
+            sender_is_owner=True,
+        )
+        dbsession.commit()
+
+        found = await client.get(
+            "/v0/admin/ms-teams-bot/conversation-routes/for-assistant",
+            params={"assistant_id": assistant.agent_id, "owner_only": True},
+            headers=ADMIN_HEADERS,
+        )
+        assert found.status_code == status.HTTP_200_OK
+        body = found.json()
+        assert body["conversation_id"] == "conv-http-find"
+        # Both halves of the outbound routing pair, in one round trip.
+        assert body["tenant_id"] == "tenant-http-find"
+        assert body["sender_is_owner"] is True
+        assert body["conversation_reference"] == '{"ref": 1}'
 
     async def test_revoke_install(
         self,

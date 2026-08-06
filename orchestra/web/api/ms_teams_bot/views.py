@@ -263,11 +263,35 @@ class ConversationRouteResponse(BaseModel):
     assistant_id: int
     conversation_reference: Optional[str] = None
     expires_at: Optional[str] = None
+    # An outbound reply routes on (tenant_id, conversation_id). The tenant
+    # lives on the install, so a caller that reached the route from the
+    # assistant side would otherwise need a second round trip for it.
+    tenant_id: Optional[str] = None
+    conversation_type: Optional[str] = None
+    sender_email: Optional[str] = None
+    sender_is_owner: bool = False
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _route_to_response(route) -> ConversationRouteResponse:
+    """Serialize a conversation route, resolving the tenant from its install."""
+    install = route.install
+    return ConversationRouteResponse(
+        id=route.id,
+        install_id=route.install_id,
+        conversation_id=route.conversation_id,
+        assistant_id=route.assistant_id,
+        conversation_reference=route.conversation_reference,
+        expires_at=route.expires_at.isoformat() if route.expires_at else None,
+        tenant_id=install.tenant_id if install else None,
+        conversation_type=route.conversation_type,
+        sender_email=route.sender_email,
+        sender_is_owner=bool(route.sender_is_owner),
+    )
 
 
 def _build_connect_url(nonce: str) -> str:
@@ -687,14 +711,7 @@ def upsert_conversation_route(
         ttl_days=body.ttl_days,
     )
     session.commit()
-    return ConversationRouteResponse(
-        id=route.id,
-        install_id=route.install_id,
-        conversation_id=route.conversation_id,
-        assistant_id=route.assistant_id,
-        conversation_reference=route.conversation_reference,
-        expires_at=route.expires_at.isoformat() if route.expires_at else None,
-    )
+    return _route_to_response(route)
 
 
 @admin_router.get("/ms-teams-bot/conversation-routes")
@@ -715,14 +732,42 @@ def get_conversation_route(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No live conversation route found.",
         )
-    return ConversationRouteResponse(
-        id=route.id,
-        install_id=route.install_id,
-        conversation_id=route.conversation_id,
-        assistant_id=route.assistant_id,
-        conversation_reference=route.conversation_reference,
-        expires_at=route.expires_at.isoformat() if route.expires_at else None,
+    return _route_to_response(route)
+
+
+@admin_router.get("/ms-teams-bot/conversation-routes/for-assistant")
+def find_conversation_route_for_assistant(
+    assistant_id: int = Query(...),
+    conversation_type: Optional[str] = Query("personal"),
+    sender_email: Optional[str] = Query(None),
+    owner_only: bool = Query(False),
+    session: Session = Depends(get_db_session),
+) -> ConversationRouteResponse:
+    """Find a live route from the assistant side.
+
+    The reverse of the lookup above, for callers that know who they want
+    to reach but hold no conversation id — an assistant sending outbound
+    with no inbound Teams activity in context, such as a scheduled task.
+    Returns the most recently used match, with the install's ``tenant_id``
+    so the caller has the full (tenant, conversation) routing pair.
+
+    A 404 here is a real answer, not a lookup failure: no Teams
+    conversation with this person is on record, or the one that was has
+    passed its TTL and is no longer a valid proactive-reply target.
+    """
+    dao = MsTeamsBotDAO(session)
+    route = dao.find_conversation_route(
+        assistant_id,
+        conversation_type=conversation_type,
+        sender_email=sender_email,
+        owner_only=owner_only,
     )
+    if route is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No live conversation route found for this assistant.",
+        )
+    return _route_to_response(route)
 
 
 @admin_router.post("/ms-teams-bot/conversation-routes/prune")

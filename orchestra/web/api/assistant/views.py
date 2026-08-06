@@ -41,6 +41,7 @@ from orchestra.db.dao.assistant_workspace_file_access_dao import (
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.desktop_dao import DesktopDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.ms_teams_bot_dao import MsTeamsBotDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -643,6 +644,7 @@ def _build_assistant_read(
     workspace_secrets: Optional[dict] = None,
     resolve_workspace_secrets: bool = True,
     resolve_slack_install: bool = False,
+    resolve_ms_teams_install: bool = False,
     include_internal: bool = False,
     requesting_user_id: Optional[str] = None,
 ) -> AssistantRead:
@@ -796,6 +798,24 @@ def _build_assistant_read(
         assistant_slack_bot_user_id = install.bot_user_id if install else None
         assistant_slack_team_id = install.slack_team_id if install else None
 
+    # The Teams bot is an org-installed app, so — like Slack's bot_user_id —
+    # its existence lives on the owner's install row rather than on any
+    # per-assistant contact. Resolving it here is what lets a headless task
+    # know the channel exists at all; without it the capability is only ever
+    # discovered by receiving an inbound Teams activity, which a scheduled
+    # run never does. Gated to the runtime bootstrap read path.
+    assistant_has_ms_teams_bot: Optional[bool] = None
+    assistant_ms_teams_tenant_id: Optional[str] = None
+    if resolve_ms_teams_install:
+        ms_teams_install = MsTeamsBotDAO(session).get_install_for_owner(
+            a.organization_id,
+            a.user_id,
+        )
+        assistant_has_ms_teams_bot = ms_teams_install is not None
+        assistant_ms_teams_tenant_id = (
+            ms_teams_install.tenant_id if ms_teams_install else None
+        )
+
     return AssistantRead(
         agent_id=str(a.agent_id),
         user_id=a.user_id,
@@ -835,6 +855,8 @@ def _build_assistant_read(
         ),
         assistant_slack_bot_user_id=assistant_slack_bot_user_id,
         assistant_slack_team_id=assistant_slack_team_id,
+        assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
+        assistant_ms_teams_tenant_id=assistant_ms_teams_tenant_id,
         voice_id=a.voice_id,
         voice_provider=a.voice_provider,
         default_model=a.default_model,
@@ -8335,6 +8357,13 @@ def admin_list_all_assistants(
                 & requested_fields,
             )
         )
+        resolve_ms_teams_install = not use_slim_hydration or (
+            requested_fields is not None
+            and bool(
+                {"assistant_has_ms_teams_bot", "assistant_ms_teams_tenant_id"}
+                & requested_fields,
+            )
+        )
         include_internal = not use_slim_hydration or (
             requested_fields is not None
             and ({"user_desktops", "user_desktop_filesync_keys"} & requested_fields)
@@ -8460,6 +8489,7 @@ def admin_list_all_assistants(
                 ),
                 resolve_workspace_secrets=not skip_secrets,
                 resolve_slack_install=resolve_slack_install,
+                resolve_ms_teams_install=resolve_ms_teams_install,
                 include_internal=include_internal,
             )
             for i, a in enumerate(assistants)

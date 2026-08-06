@@ -551,6 +551,24 @@ class AssistantRead(AssistantCreate):
             "team for outbound Slack sends without asking the user."
         ),
     )
+    assistant_has_ms_teams_bot: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the assistant's owner (org or personal user) has an "
+            "active Microsoft Teams bot install. Resolved from "
+            "ms_teams_bot_installs so the runtime knows the channel exists "
+            "before any inbound Teams activity arrives."
+        ),
+    )
+    assistant_ms_teams_tenant_id: Optional[str] = Field(
+        None,
+        description=(
+            "Microsoft AAD tenant ID of that active Teams bot install. Half "
+            "of the (tenant_id, conversation_id) pair an outbound Teams bot "
+            "reply routes on; the conversation half comes from the "
+            "conversation route."
+        ),
+    )
     api_key: Optional[str] = Field(
         None,
         description="API key associated with this assistant (personal or org key)",

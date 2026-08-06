@@ -21,7 +21,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete, func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -129,6 +129,28 @@ class MsTeamsBotDAO:
             )
             .first()
         )
+
+    def get_install_for_owner(
+        self,
+        organization_id: Optional[int],
+        user_id: Optional[str],
+    ) -> Optional[MsTeamsBotInstall]:
+        """Find the active install reachable from an owner pair, org first.
+
+        Deliberately *not* an XOR on the caller's scope. Console binds a
+        pending install to the active workspace owner, which is not always
+        the scope the caller sits in: an org member's boss can complete the
+        tenant handshake while in their personal workspace, and the install
+        that plainly exists would otherwise read as absent. Falling back to
+        the personal install keeps the capability visible in both shapes.
+        """
+        if organization_id is not None:
+            install = self.get_install_for_org(organization_id)
+            if install is not None:
+                return install
+        if user_id:
+            return self.get_install_for_user(user_id)
+        return None
 
     def list_installs(self) -> list[MsTeamsBotInstall]:
         return (
@@ -537,6 +559,75 @@ class MsTeamsBotDAO:
         self.session.add(route)
         self.session.flush()
         return route
+
+    def annotate_conversation_route(
+        self,
+        route: MsTeamsBotConversationRoute,
+        *,
+        conversation_type: Optional[str] = None,
+        sender_aad_object_id: Optional[str] = None,
+        sender_email: Optional[str] = None,
+        sender_is_owner: Optional[bool] = None,
+    ) -> MsTeamsBotConversationRoute:
+        """Record who a route's conversation is with.
+
+        Only non-``None`` values are written. An org install dispatches
+        twice — the first pass carries no sender email — so a blanket
+        assignment would erase the identity the second pass resolved.
+        """
+        if conversation_type is not None:
+            route.conversation_type = conversation_type
+        if sender_aad_object_id is not None:
+            route.sender_aad_object_id = sender_aad_object_id
+        if sender_email is not None:
+            route.sender_email = sender_email
+        if sender_is_owner is not None:
+            route.sender_is_owner = sender_is_owner
+        self.session.flush()
+        return route
+
+    def find_conversation_route(
+        self,
+        assistant_id: int,
+        *,
+        conversation_type: Optional[str] = None,
+        sender_email: Optional[str] = None,
+        owner_only: bool = False,
+    ) -> Optional[MsTeamsBotConversationRoute]:
+        """Find a live route from the assistant side, most recent first.
+
+        The reverse of :meth:`get_conversation_route`: instead of naming a
+        conversation, name the assistant and who it is talking to. This is
+        the lookup an outbound-only caller needs — a scheduled task has a
+        recipient in mind and no inbound activity to read ids off.
+
+        ``owner_only`` restricts to the boss's own conversation, which is
+        the reliable anchor for a personal install (one human, so every
+        1:1 is boss-authored). ``sender_email`` targets a specific person
+        and only matches routes where a roster lookup resolved one.
+        Expired routes never match: a conversation past its TTL is not a
+        valid proactive-reply target.
+        """
+        query = self.session.query(MsTeamsBotConversationRoute).filter(
+            MsTeamsBotConversationRoute.assistant_id == assistant_id,
+            MsTeamsBotConversationRoute.expires_at > datetime.now(timezone.utc),
+        )
+        if conversation_type is not None:
+            query = query.filter(
+                MsTeamsBotConversationRoute.conversation_type == conversation_type,
+            )
+        if owner_only:
+            query = query.filter(
+                MsTeamsBotConversationRoute.sender_is_owner.is_(True),
+            )
+        if sender_email:
+            query = query.filter(
+                func.lower(MsTeamsBotConversationRoute.sender_email)
+                == sender_email.strip().lower(),
+            )
+        return query.order_by(
+            MsTeamsBotConversationRoute.last_used_at.desc(),
+        ).first()
 
     def touch_conversation_route(
         self,
