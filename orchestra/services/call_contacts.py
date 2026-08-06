@@ -11,6 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from orchestra.db.log_queries import project_scoped_log_events
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    AssistantContact,
     CallSession,
     LogEvent,
     LogEventContext,
@@ -34,9 +35,17 @@ from orchestra.services.assistant_bootstrap import (
 from orchestra.services.contact_membership_service import PERSONAL_BOSS_CONTACT_ID
 from orchestra.web.api.calls.schema import CallRosterMember
 
-# Metadata keys stored on Contacts rows for stable org-call attribution.
-ORG_CALL_USER_ID_KEY = "org_user_id"
-ORG_CALL_PEER_ASSISTANT_ID_KEY = "peer_assistant_id"
+# Platform identity columns on Contacts rows. These are the ``Contact`` model's
+# own fields, which the assistant runtime already stamps on every system
+# contact it seeds — attribution must key off them rather than a parallel
+# vocabulary, or the two sides cannot see each other's rows.
+CONTACT_USER_ID_FIELD = "user_id"
+CONTACT_AGENT_ID_FIELD = "agent_id"
+CONTACT_EMAIL_FIELD = "email_address"
+
+# Response behaviour belongs to the assistant's owner. An adopted row keeps
+# whatever they set, so joining a call never un-mutes a silenced contact.
+OWNER_OWNED_CONTACT_FIELDS = ("should_respond", "response_policy")
 
 
 def _next_contact_id(
@@ -44,13 +53,18 @@ def _next_contact_id(
     *,
     context_id: int,
     project_id: int,
-    owner_key: str | None = None,
 ) -> int:
+    """The next free ``contact_id`` in this context.
+
+    Deliberately not owner-pruned: ``contact_id`` uniqueness is enforced
+    context-scoped, so a max taken over one owner sub-partition can sit below
+    rows filed under another and hand back an id that is already taken —
+    every insert then collides on a value the pruned reads cannot even see.
+    """
     max_id = session.scalar(
         project_scoped_log_events(
             project_id,
             func.max(cast(LogEvent.data.op("->>")("contact_id"), Numeric)),
-            owner_key=owner_key,
         ).where(
             LogEventContext.context_id == context_id,
             LogEvent.data.has_key("contact_id"),
@@ -61,25 +75,36 @@ def _next_contact_id(
     return int(max_id) + 1
 
 
-def _find_contact_by_meta(
+def _find_contact_by_field(
     session: Session,
     *,
     context,
     key: str,
     value: str,
 ) -> LogEvent | None:
-    return session.scalars(
-        project_scoped_log_events(
-            context.project_id,
-            owner_key=single_owner_key(context.owner_scope, context.owner_id),
-        )
-        .where(
-            LogEventContext.context_id == context.id,
-            LogEvent.data.op("->>")(key) == value,
-        )
-        .order_by(LogEvent.id.asc())
-        .limit(1),
-    ).first()
+    """Find a Contacts row by one identity field.
+
+    Owner-pruned first (partition prune), then without the owner
+    sub-partition: Contacts uniqueness is enforced context-scoped, so a row
+    can sit under a different ``owner_key`` than the context currently
+    resolves to — invisible to the pruned read while still blocking an
+    insert.
+    """
+    owner_key = single_owner_key(context.owner_scope, context.owner_id)
+    owner_keys = [owner_key, None] if owner_key is not None else [None]
+    for candidate in owner_keys:
+        row = session.scalars(
+            project_scoped_log_events(context.project_id, owner_key=candidate)
+            .where(
+                LogEventContext.context_id == context.id,
+                LogEvent.data.op("->>")(key) == value,
+            )
+            .order_by(LogEvent.id.asc())
+            .limit(1),
+        ).first()
+        if row is not None:
+            return row
+    return None
 
 
 def _find_contact_log_any_owner(
@@ -109,15 +134,38 @@ def _find_contact_log_any_owner(
     ).first()
 
 
+def _merged_contact_data(
+    existing: dict[str, Any],
+    entries: dict[str, Any],
+    *,
+    contact_id: int,
+) -> dict[str, Any]:
+    """Layer call attribution onto a row without demoting what it already holds."""
+    merged = {**existing, **entries, "contact_id": contact_id}
+    for field in OWNER_OWNED_CONTACT_FIELDS:
+        if existing.get(field) is not None:
+            merged[field] = existing[field]
+    return merged
+
+
 def _upsert_contact(
     session: Session,
     *,
     assistant: Assistant,
     entries: dict[str, Any],
-    lookup_key: str,
-    lookup_value: str,
+    identities: list[tuple[str, str]],
 ) -> int:
-    """Create or refresh a Contacts row; return contact_id."""
+    """Create or adopt this participant's Contacts row; return contact_id.
+
+    ``identities`` is ordered most authoritative first: the platform id column
+    (``user_id`` / ``agent_id``), then the identity fields a fresh insert would
+    collide on. The fallback is what keeps a call startable — the runtime seeds
+    org members into an assistant's Contacts keyed by ``email_address``, and
+    those rows carry no platform id until something backfills it, so resolving
+    on the id alone walks past the very row whose ``email_address`` the schema
+    declares unique. Adoption stamps the platform id, so the cheap lookup wins
+    every subsequent call.
+    """
     _lock_assistant_context(
         session,
         assistant=assistant,
@@ -133,15 +181,17 @@ def _upsert_contact(
         auto_counting=CONTACTS_AUTO_COUNTING,
     )
 
-    existing = _find_contact_by_meta(
-        session,
-        context=context,
-        key=lookup_key,
-        value=lookup_value,
-    )
-    if existing is not None:
+    for key, value in identities:
+        existing = _find_contact_by_field(
+            session,
+            context=context,
+            key=key,
+            value=value,
+        )
+        if existing is None:
+            continue
         contact_id = int(existing.data.get("contact_id"))
-        merged = {**existing.data, **entries, "contact_id": contact_id}
+        merged = _merged_contact_data(existing.data, entries, contact_id=contact_id)
         if merged != existing.data:
             existing.data = merged
             flag_modified(existing, "data")
@@ -152,7 +202,6 @@ def _upsert_contact(
         session,
         context_id=context.id,
         project_id=project.id,
-        owner_key=single_owner_key(context.owner_scope, context.owner_id),
     )
     entries = {**entries, "contact_id": contact_id}
     try:
@@ -185,7 +234,7 @@ def _upsert_contact(
             contact_id=contact_id,
         )
         if raced is not None:
-            merged = {**raced.data, **entries}
+            merged = _merged_contact_data(raced.data, entries, contact_id=contact_id)
             if merged != raced.data:
                 raced.data = merged
                 flag_modified(raced, "data")
@@ -209,35 +258,67 @@ def _upsert_contact(
     return contact_id
 
 
+def _assistant_display_name(assistant: Assistant) -> str:
+    return (
+        " ".join(
+            part
+            for part in [assistant.first_name or "", assistant.surname or ""]
+            if part
+        ).strip()
+        or f"Assistant {assistant.agent_id}"
+    )
+
+
+def _assistant_email(session: Session, assistant: Assistant) -> str | None:
+    """The assistant's provisioned email, as its Contacts rows carry it."""
+    return session.scalar(
+        select(AssistantContact.contact_value)
+        .where(
+            AssistantContact.assistant_id == assistant.agent_id,
+            AssistantContact.contact_type == "email",
+            AssistantContact.status == "active",
+        )
+        .order_by(AssistantContact.id.asc())
+        .limit(1),
+    )
+
+
+def _without_nulls(entries: dict[str, Any]) -> dict[str, Any]:
+    """Drop empty fields.
+
+    A null carries no information, and writing one would overwrite a richer
+    value on a row adopted from the runtime (which fills bios, timezones and
+    phone numbers this side never sees).
+    """
+    return {key: value for key, value in entries.items() if value is not None}
+
+
 def _human_entries(user: User) -> dict[str, Any]:
-    return {
-        "first_name": user.name or "",
-        "surname": user.last_name or "",
-        "email_address": user.email,
-        "job_title": user.job_title,
-        "bio": user.bio,
-        "timezone": user.timezone,
-        "is_system": True,
-        "should_respond": True,
-        ORG_CALL_USER_ID_KEY: user.id,
-    }
+    return _without_nulls(
+        {
+            "first_name": user.name,
+            "surname": user.last_name,
+            "email_address": user.email,
+            "job_title": user.job_title,
+            "bio": user.bio,
+            "timezone": user.timezone,
+            "is_system": True,
+            "should_respond": True,
+            CONTACT_USER_ID_FIELD: user.id,
+        },
+    )
 
 
 def _peer_assistant_entries(peer: Assistant) -> dict[str, Any]:
-    display = (
-        " ".join(
-            part for part in [peer.first_name or "", peer.surname or ""] if part
-        ).strip()
-        or f"Assistant {peer.agent_id}"
+    return _without_nulls(
+        {
+            "first_name": peer.first_name or _assistant_display_name(peer),
+            "surname": peer.surname,
+            "is_system": True,
+            "should_respond": False,
+            CONTACT_AGENT_ID_FIELD: str(peer.agent_id),
+        },
     )
-    return {
-        "first_name": peer.first_name or display,
-        "surname": peer.surname or "",
-        "email_address": None,
-        "is_system": True,
-        "should_respond": False,
-        ORG_CALL_PEER_ASSISTANT_ID_KEY: str(peer.agent_id),
-    }
 
 
 def _ensure_owner_boss_contact(
@@ -249,10 +330,9 @@ def _ensure_owner_boss_contact(
     """Map the assistant's own owner onto the reserved personal boss contact.
 
     The owner is already represented by ``PERSONAL_BOSS_CONTACT_ID``; minting a
-    parallel ``org_user_id``-keyed human would duplicate them (and, since the
-    boss row carries no ``org_user_id``, the org-keyed lookup would re-mint on
-    every call). Ensure the boss row exists, then stamp the org-call metadata
-    and latest human fields onto it so future org-keyed lookups resolve here.
+    second row for them would duplicate them. Ensure the boss row exists, then
+    stamp the platform id and latest human fields onto it so id-keyed lookups
+    resolve here.
     """
     # Seed/refresh the boss row (returns its LogEvent id, not the contact_id).
     ensure_owner_contact_row(session, assistant=assistant)
@@ -276,7 +356,7 @@ def _ensure_owner_boss_contact(
         contact_id=contact_id,
     )
     if boss is not None:
-        merged = {**boss.data, **entries, "contact_id": contact_id}
+        merged = _merged_contact_data(boss.data, entries, contact_id=contact_id)
         if merged != boss.data:
             boss.data = merged
             flag_modified(boss, "data")
@@ -309,12 +389,14 @@ def _ensure_humans_for_assistant(
                 entries=_human_entries(user),
             )
         else:
+            identities = [(CONTACT_USER_ID_FIELD, user.id)]
+            if user.email:
+                identities.append((CONTACT_EMAIL_FIELD, user.email))
             contact_id = _upsert_contact(
                 session,
                 assistant=assistant,
                 entries=_human_entries(user),
-                lookup_key=ORG_CALL_USER_ID_KEY,
-                lookup_value=user.id,
+                identities=identities,
             )
         display = " ".join(
             part for part in [user.name or "", user.last_name or ""] if part
@@ -347,28 +429,24 @@ def _ensure_peer_assistants_for_assistant(
         if p.agent_id != assistant.agent_id
     ]
     for peer in peers:
+        identities = [(CONTACT_AGENT_ID_FIELD, str(peer.agent_id))]
+        peer_email = _assistant_email(session, peer)
+        if peer_email:
+            identities.append((CONTACT_EMAIL_FIELD, peer_email))
         contact_id = _upsert_contact(
             session,
             assistant=assistant,
             entries=_peer_assistant_entries(peer),
-            lookup_key=ORG_CALL_PEER_ASSISTANT_ID_KEY,
-            lookup_value=str(peer.agent_id),
+            identities=identities,
         )
         roster.append(
             CallRosterMember(
                 kind="assistant",
                 user_id=None,
                 assistant_id=peer.agent_id,
-                display_name=(
-                    " ".join(
-                        part
-                        for part in [peer.first_name or "", peer.surname or ""]
-                        if part
-                    ).strip()
-                    or f"Assistant {peer.agent_id}"
-                ),
+                display_name=_assistant_display_name(peer),
                 contact_id=contact_id,
-                email=None,
+                email=peer_email,
             ),
         )
     return roster
