@@ -17,6 +17,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
@@ -920,6 +921,33 @@ def fetch_provider_catalog(
         auth_configs_created=adapter.last_auth_configs_created,
         auth_configs_reused=adapter.last_auth_configs_reused,
     )
+
+
+@contextmanager
+def _provider_fetch_session(session_factory: Callable[[], Session]):
+    """Session scope for provider catalog fetches.
+
+    The fetch only touches the database at its start, then holds the
+    checked-out connection idle through a multi-minute HTTP pull — long
+    enough for the Cloud SQL proxy to reap it. A normal ``close()`` then
+    rolls back on the dead socket and raises out of the ``with`` block even
+    though the fetch itself succeeded. Fall back to ``invalidate()``, which
+    abandons the broken connection so the pool opens a fresh one at the
+    next checkout.
+    """
+
+    session = session_factory()
+    try:
+        yield session
+    finally:
+        try:
+            session.close()
+        except Exception as exc:
+            logger.warning(
+                "Provider fetch session close failed; invalidating: %s",
+                exc,
+            )
+            session.invalidate()
 
 
 def _fetch_provider_catalog_with_retry(
@@ -2122,9 +2150,9 @@ def run_builtins_sync(
     # The provider fetch takes minutes; a session held across it idles its
     # checked-out connection past the Cloud SQL proxy's idle window and the
     # next query dies mid-transaction (pool_pre_ping only validates at
-    # checkout). Scope the fetch to its own session so the connection returns
-    # to the pool before the pull, and let pre-ping refresh it afterwards.
-    with session_factory() as session:
+    # checkout). Scope the fetch to its own dead-connection-tolerant session
+    # so the write work below starts on a freshly validated connection.
+    with _provider_fetch_session(session_factory) as session:
         app_fetch = _fetch_provider_catalog_with_retry(session, app_body)
     with session_factory() as session:
         contexts = ensure_builtins_catalog_contexts(session)
@@ -2250,7 +2278,7 @@ def run_builtins_sync(
             # Same connection-idling hazard as the app phase: the tool fetch
             # for a batch can outlast the Cloud SQL proxy's idle window, so it
             # gets its own session and the write work below starts fresh.
-            with session_factory() as session:
+            with _provider_fetch_session(session_factory) as session:
                 fetch = _fetch_provider_catalog_with_retry(session, body)
             with session_factory() as session:
                 contexts = ensure_builtins_catalog_contexts(session)
