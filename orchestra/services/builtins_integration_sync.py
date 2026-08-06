@@ -2119,8 +2119,14 @@ def run_builtins_sync(
         sync_tools=False,
         full=not request.app_slugs,
     )
+    # The provider fetch takes minutes; a session held across it idles its
+    # checked-out connection past the Cloud SQL proxy's idle window and the
+    # next query dies mid-transaction (pool_pre_ping only validates at
+    # checkout). Scope the fetch to its own session so the connection returns
+    # to the pool before the pull, and let pre-ping refresh it afterwards.
     with session_factory() as session:
         app_fetch = _fetch_provider_catalog_with_retry(session, app_body)
+    with session_factory() as session:
         contexts = ensure_builtins_catalog_contexts(session)
         project = contexts["project"]
         app_counts = _materialize_apps(
@@ -2235,13 +2241,20 @@ def run_builtins_sync(
                 ):
                     return {"skipped": True, "matched_app_slugs": batch_slugs}
 
-                batch_started_at = time.perf_counter()
-                body = _build_sync_payload(
-                    request,
-                    sync_tools=True,
-                    app_slugs=[slug.upper() for slug in batch_slugs],
-                )
+            batch_started_at = time.perf_counter()
+            body = _build_sync_payload(
+                request,
+                sync_tools=True,
+                app_slugs=[slug.upper() for slug in batch_slugs],
+            )
+            # Same connection-idling hazard as the app phase: the tool fetch
+            # for a batch can outlast the Cloud SQL proxy's idle window, so it
+            # gets its own session and the write work below starts fresh.
+            with session_factory() as session:
                 fetch = _fetch_provider_catalog_with_retry(session, body)
+            with session_factory() as session:
+                contexts = ensure_builtins_catalog_contexts(session)
+                project = contexts["project"]
                 counts = _materialize_tools(
                     session,
                     project_id=project.id,
