@@ -137,7 +137,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_INVALID_PAYLOAD
 
-    engine = create_engine(str(settings.db_url), pool_pre_ping=True)
+    # The sync holds a checked-out connection across multi-minute provider
+    # catalog pulls (Composio/Pipedream HTTP fetches happen inside an open
+    # session). Idle TCP flows on that path are reaped after ~2-3 minutes,
+    # killing the connection before its next query; pool_pre_ping cannot
+    # help because the connection never returns to the pool. TCP keepalives
+    # keep the flow alive through the fetch. libpq ignores these parameters
+    # on unix-socket (Cloud SQL proxy) connections.
+    engine = create_engine(
+        str(settings.db_url),
+        pool_pre_ping=True,
+        connect_args={
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+        },
+    )
     session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     logger.info(
         "Starting Builtins artifacts seed job artifact=%s backend=%s environment=%s "

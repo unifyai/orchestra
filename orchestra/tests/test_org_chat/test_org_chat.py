@@ -100,6 +100,9 @@ async def _create_org_with_member(client: AsyncClient, prefix: str):
         status.HTTP_200_OK,
         status.HTTP_201_CREATED,
     ), add_response.json()
+    member["org_headers"] = {
+        "Authorization": f"Bearer {add_response.json()['api_key']}",
+    }
     return owner, member, org
 
 
@@ -947,6 +950,213 @@ async def test_assistant_dm_call_create_dispatches_assistant(
     assert end_response.json()["status"] == "ended"
 
 
+def _seed_runtime_contact(
+    dbsession,
+    *,
+    agent_id: int,
+    entries: dict,
+) -> int:
+    """Write a Contacts row the way the assistant runtime seeds one.
+
+    The runtime keys org-member contacts on ``email_address`` and stamps the
+    platform ``user_id``; a row seeded before this side ever sees the person is
+    exactly what a call has to adopt rather than duplicate.
+    """
+    from orchestra.db.dao.field_type_dao import FieldTypeDAO
+    from orchestra.db.models.orchestra_models import Assistant
+    from orchestra.services.assistant_bootstrap import (
+        CONTACTS_AUTO_COUNTING,
+        CONTACTS_CONTEXT_SUFFIX,
+        CONTACTS_UNIQUE_KEYS,
+        _assistant_context_name,
+        _create_log_entry,
+        _resolve_assistants_project,
+        ensure_context,
+    )
+
+    assistant = dbsession.get(Assistant, agent_id)
+    project = _resolve_assistants_project(dbsession, assistant=assistant)
+    context_name = _assistant_context_name(assistant, CONTACTS_CONTEXT_SUFFIX)
+    context = ensure_context(
+        dbsession,
+        project_id=project.id,
+        context_name=context_name,
+        unique_keys=CONTACTS_UNIQUE_KEYS,
+        auto_counting=CONTACTS_AUTO_COUNTING,
+    )
+    # The runtime declares the Contacts schema from the `Contact` model before
+    # writing any row, and `email_address` is unique there. Declaring it up
+    # front is what makes the row register a uniqueness constraint, so a
+    # duplicate insert is rejected the way it is in production rather than
+    # quietly succeeding.
+    FieldTypeDAO(dbsession).bulk_create_field_types(
+        [
+            {
+                "project_id": project.id,
+                "context_id": context.id,
+                "field_name": "email_address",
+                "value": "",
+                "field_type": "str",
+                "unique": True,
+                "field_category": "entry",
+            },
+        ],
+    )
+    dbsession.flush()
+
+    contact_id = 7
+    _create_log_entry(
+        dbsession,
+        project=project,
+        context=context,
+        context_name=context_name,
+        entries={**entries, "contact_id": contact_id},
+    )
+    dbsession.commit()
+    return contact_id
+
+
+def _contact_rows_for_email(dbsession, *, agent_id: int, email: str) -> list[dict]:
+    from sqlalchemy import select
+
+    from orchestra.db.models.orchestra_models import (
+        Assistant,
+        Context,
+        LogEvent,
+        LogEventContext,
+    )
+    from orchestra.services.assistant_bootstrap import (
+        CONTACTS_CONTEXT_SUFFIX,
+        _assistant_context_name,
+    )
+
+    assistant = dbsession.get(Assistant, agent_id)
+    context_name = _assistant_context_name(assistant, CONTACTS_CONTEXT_SUFFIX)
+    rows = dbsession.scalars(
+        select(LogEvent)
+        .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+        .join(Context, Context.id == LogEventContext.context_id)
+        .where(Context.name == context_name),
+    ).all()
+    return [
+        dict(row.data) for row in rows if (row.data or {}).get("email_address") == email
+    ]
+
+
+@pytest.mark.anyio
+async def test_member_calls_another_users_shared_assistant(
+    client: AsyncClient,
+    dbsession,
+    call_meet_dispatch_mock: AsyncMock,
+):
+    """A non-owner org member can call a shared assistant.
+
+    The callee's Contacts live in its *owner's* namespace, so this is the only
+    call shape that has to mint a contact for someone who is not the
+    assistant's owner.
+    """
+    owner, member, org = await _create_org_with_member(client, "shared-call")
+    await ensure_assistants_project(client, org["headers"])
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Shared", "surname": "Callee", "create_infra": False},
+        headers=org["headers"],
+    )
+    assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    call_resp = await client.post(
+        "/v0/calls",
+        headers=member["org_headers"],
+        json={"kind": "assistant_dm", "assistant_id": agent_id},
+    )
+    assert call_resp.status_code == status.HTTP_201_CREATED, call_resp.json()
+    body = call_resp.json()
+    assert body["assistant_ids"] == [agent_id]
+    assert body["user_ids"] == [member["id"]]
+
+    roster = call_meet_dispatch_mock.await_args.kwargs["roster"]
+    caller = [m for m in roster if m.user_id == member["id"]]
+    assert len(caller) == 1
+    assert caller[0].contact_id is not None
+
+    # The caller is a distinct contact from the assistant's owner.
+    assert caller[0].contact_id != 1
+    assert owner["id"] not in {m.user_id for m in roster}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("seed_platform_id", [True, False])
+async def test_shared_assistant_call_adopts_existing_contact(
+    client: AsyncClient,
+    dbsession,
+    call_meet_dispatch_mock: AsyncMock,
+    seed_platform_id: bool,
+):
+    """A contact the runtime already seeded is adopted, not duplicated.
+
+    The runtime files org members by ``email_address``; resolving only on the
+    platform id walks past those rows and mints a second contact for the same
+    human — the identity split that made shared-assistant calls unstartable.
+    Adoption also has to leave owner-configured response behaviour alone.
+    """
+    prefix = "adopt-id" if seed_platform_id else "adopt-email"
+    _owner, member, org = await _create_org_with_member(client, prefix)
+    await ensure_assistants_project(client, org["headers"])
+
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Adopt", "surname": "Callee", "create_infra": False},
+        headers=org["headers"],
+    )
+    assert create_resp.status_code == status.HTTP_200_OK, create_resp.json()
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    seeded = {
+        "first_name": "Seeded",
+        "email_address": member["email"],
+        "bio": "Known from a prior conversation.",
+        "is_system": True,
+        # Deliberately muted by the assistant's owner.
+        "should_respond": False,
+        "response_policy": "Only reply about billing.",
+    }
+    if seed_platform_id:
+        seeded["user_id"] = member["id"]
+    seeded_contact_id = _seed_runtime_contact(
+        dbsession,
+        agent_id=agent_id,
+        entries=seeded,
+    )
+
+    call_resp = await client.post(
+        "/v0/calls",
+        headers=member["org_headers"],
+        json={"kind": "assistant_dm", "assistant_id": agent_id},
+    )
+    assert call_resp.status_code == status.HTTP_201_CREATED, call_resp.json()
+
+    roster = call_meet_dispatch_mock.await_args.kwargs["roster"]
+    caller = [m for m in roster if m.user_id == member["id"]]
+    assert len(caller) == 1
+    assert caller[0].contact_id == seeded_contact_id
+
+    rows = _contact_rows_for_email(
+        dbsession,
+        agent_id=agent_id,
+        email=member["email"],
+    )
+    assert len(rows) == 1, rows
+    row = rows[0]
+    # The platform id is stamped on adoption, so the cheap lookup wins next time.
+    assert row["user_id"] == member["id"]
+    # Owner-configured response behaviour survives; richer fields are not nulled.
+    assert row["should_respond"] is False
+    assert row["response_policy"] == "Only reply about billing."
+    assert row["bio"] == "Known from a prior conversation."
+
+
 @pytest.mark.anyio
 async def test_assistant_ring_lifecycle(
     client: AsyncClient,
@@ -1108,8 +1318,8 @@ async def test_team_call_accepts_multiple_assistants(
 
     from orchestra.db.models.orchestra_models import Assistant, TeamAssistantMembership
     from orchestra.services.call_contacts import (
-        ORG_CALL_PEER_ASSISTANT_ID_KEY,
-        ORG_CALL_USER_ID_KEY,
+        CONTACT_AGENT_ID_FIELD,
+        CONTACT_USER_ID_FIELD,
     )
 
     a1 = Assistant(
@@ -1192,19 +1402,19 @@ async def test_team_call_accepts_multiple_assistants(
 
     logs = dbsession.scalars(
         select(LogEvent).where(
-            LogEvent.data.has_key(ORG_CALL_USER_ID_KEY)
-            | LogEvent.data.has_key(ORG_CALL_PEER_ASSISTANT_ID_KEY),
+            LogEvent.data.has_key(CONTACT_USER_ID_FIELD)
+            | LogEvent.data.has_key(CONTACT_AGENT_ID_FIELD),
         ),
     ).all()
     human_ids = {
-        str(log.data.get(ORG_CALL_USER_ID_KEY))
+        str(log.data.get(CONTACT_USER_ID_FIELD))
         for log in logs
-        if log.data.get(ORG_CALL_USER_ID_KEY)
+        if log.data.get(CONTACT_USER_ID_FIELD)
     }
     peer_ids = {
-        str(log.data.get(ORG_CALL_PEER_ASSISTANT_ID_KEY))
+        str(log.data.get(CONTACT_AGENT_ID_FIELD))
         for log in logs
-        if log.data.get(ORG_CALL_PEER_ASSISTANT_ID_KEY)
+        if log.data.get(CONTACT_AGENT_ID_FIELD)
     }
     assert owner["id"] in human_ids
     assert str(a1.agent_id) in peer_ids

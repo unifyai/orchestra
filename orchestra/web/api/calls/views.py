@@ -341,6 +341,37 @@ async def _post_meet_dispatch(
         )
 
 
+def _ensure_call_contacts_best_effort(
+    session: Session,
+    *,
+    call_session: CallSession,
+    assistant_id: int,
+) -> list[CallRosterMember]:
+    """Ensure Contacts for one assistant, degrading to an empty roster.
+
+    Contacts are attribution bookkeeping and run *after* the call session is
+    committed, with the caller already waiting on the room. A failure here
+    must cost the assistant its roster names, not make the call unstartable —
+    the same trade `_post_meet_dispatch` makes for the adapters hop.
+    """
+    try:
+        roster = ensure_call_contacts(
+            session,
+            call_session=call_session,
+            for_assistant_id=assistant_id,
+        )
+        session.commit()
+        return roster
+    except Exception:
+        session.rollback()
+        logger.exception(
+            "Failed to ensure call contacts for assistant %s on call %s",
+            assistant_id,
+            call_session.id,
+        )
+        return []
+
+
 async def _dispatch_assistants_to_meet(
     session: Session,
     *,
@@ -349,12 +380,11 @@ async def _dispatch_assistants_to_meet(
 ) -> None:
     """Ensure Contacts and dispatch/refresh each assistant into the room."""
     for assistant_id in assistant_ids:
-        roster = ensure_call_contacts(
+        roster = _ensure_call_contacts_best_effort(
             session,
             call_session=call_session,
-            for_assistant_id=assistant_id,
+            assistant_id=assistant_id,
         )
-        session.commit()
         await _post_meet_dispatch(
             call_session,
             assistant_id=assistant_id,
@@ -1174,12 +1204,11 @@ async def add_assistant_to_call(
 
     # Dispatch the (new or recovering) assistant with a contact-bearing
     # roster, then refresh peers so their rosters include it.
-    roster = ensure_call_contacts(
+    roster = _ensure_call_contacts_best_effort(
         session,
         call_session=call_session,
-        for_assistant_id=body.assistant_id,
+        assistant_id=body.assistant_id,
     )
-    session.commit()
     await _post_meet_dispatch(
         call_session,
         assistant_id=body.assistant_id,

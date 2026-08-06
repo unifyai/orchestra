@@ -279,6 +279,24 @@ def resolve_inbound(
             resolution.assistant_id,
             identity,
         )
+        # Annotated here rather than at each upsert site because ownership is
+        # only known once the recipient is resolved, and every branch that
+        # persists a route converges on this point — including the ones that
+        # reused an existing row, where a second dispatch pass may finally
+        # supply the sender email the first pass lacked.
+        if resolution.route_persisted:
+            route = dao.get_conversation_route(
+                install.id,
+                resolution.conversation_id_for_route,
+            )
+            if route is not None:
+                dao.annotate_conversation_route(
+                    route,
+                    conversation_type=conversation_type,
+                    sender_aad_object_id=sender_aad_object_id or None,
+                    sender_email=identity.email,
+                    sender_is_owner=resolution.sender_is_owner,
+                )
     return resolution
 
 
