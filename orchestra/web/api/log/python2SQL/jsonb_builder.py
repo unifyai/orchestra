@@ -338,6 +338,42 @@ def _build_jsonb_field_expression(
     return jsonb_col.op("->>")(key)
 
 
+def _vector_field_key(
+    arg_dict,
+    session,
+    project_id: Optional[int],
+    context_id: Optional[int],
+) -> Optional[str]:
+    """Return the field name when *arg_dict* is an identifier of a vector field.
+
+    Vector-typed derived columns store their values in the ``embedding`` table;
+    ``log_event.data`` holds at most a JSON ``null`` marker (or nothing at all
+    on the async path). Any presence/nullity test that resolves them against
+    ``data`` is therefore a tautology — callers use this probe to route those
+    tests to the embedding table instead.
+    """
+    if not (isinstance(arg_dict, dict) and arg_dict.get("type") == "identifier"):
+        return None
+    key = arg_dict["value"]
+    if _get_field_type_from_db(key, session, project_id, context_id) == "vector":
+        return key
+    return None
+
+
+def _vector_presence_clause(key: str, log_event_alias, project_id: Optional[int]):
+    """Boolean clause: this log row has a live vector for *key*."""
+    return (
+        select(literal(1))
+        .where(
+            Embedding.ref_id == log_event_alias.id,
+            Embedding.key == literal(key),
+            embedding_scope(Embedding, project_id),
+            Embedding.is_deleted == False,  # noqa: E712
+        )
+        .exists()
+    )
+
+
 def _handle_comparison_operator_jsonb(
     filter_dict,
     log_event_alias,
@@ -517,6 +553,24 @@ def _handle_comparison_operator_jsonb(
                 field_expr = None  # Neither side is None, skip this handling
 
             if field_expr is not None:
+                # Vector fields: the JSONB cell is always null/absent (values
+                # live in the embedding table), so the text-cast test below
+                # would match every row. Answer from the embedding table.
+                field_dict = lhs_dict if rhs_type == "NoneType" else rhs_dict
+                vec_key = _vector_field_key(
+                    field_dict,
+                    session,
+                    project_id,
+                    context_id,
+                )
+                if vec_key is not None:
+                    present = _vector_presence_clause(
+                        vec_key,
+                        log_event_alias,
+                        project_id,
+                    )
+                    return not_(present) if is_equality else present
+
                 # Cast field to text for comparison (handles both SQL NULL and JSONB "null")
                 field_as_text = cast(field_expr, Text)
                 if is_equality:
@@ -1695,6 +1749,10 @@ def _handle_functions_jsonb(
         arg = _get_single_arg(rhs_dict)
         if isinstance(arg, dict) and arg.get("type") == "identifier":
             key = arg["value"]
+            # Vector fields live in the embedding table; `data ? key` sees only
+            # the sync path's null marker (and nothing on the async path).
+            if _vector_field_key(arg, session, project_id, context_id):
+                return _vector_presence_clause(key, log_event_alias, project_id)
             # PostgreSQL ? operator checks if key exists in JSONB object
             return log_event_alias.data.op("?")(literal(key))
         else:
@@ -2131,6 +2189,14 @@ def _handle_functions_jsonb(
         # isNone(x) checks if x is None/NULL and returns a boolean
         # Example: "isNone(field1)" returns True if field1 is NULL
         # Returns True if the value is NULL/None
+        _isnone_arg = _get_single_arg(rhs_dict)
+        _vec_key = _vector_field_key(_isnone_arg, session, project_id, context_id)
+        if _vec_key is not None:
+            # Vector fields: nullity is decided by the embedding table, not the
+            # JSONB cell (which is always null/absent for vectors).
+            return not_(
+                _vector_presence_clause(_vec_key, log_event_alias, project_id),
+            )
         arg_expr = _build_sql_query(
             _get_single_arg(rhs_dict),
             log_event_alias,
