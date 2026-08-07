@@ -117,3 +117,52 @@ async def test_vector_derived_write_leaves_no_jsonb_marker(
         "carries no value, rewrites the whole log row (no HOT updates), and "
         "made data-based nullity checks a tautology"
     )
+
+
+@pytest.mark.anyio
+async def test_repeat_derived_write_persists_after_field_type_exists(
+    client: AsyncClient,
+    dbsession,
+):
+    project_name = "test_repeat_derived_write"
+    await _create_project(client, project_name, user=1)
+
+    first, second = [], []
+    for text in ("one", "three"):
+        response = await _create_log(
+            client,
+            project_name,
+            entries={"content": text},
+        )
+        assert response.status_code == 200
+        (first if not first else second).extend(response.json()["log_event_ids"])
+
+    key = "content_len"
+    # First call creates the FieldType for `content_len`.
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        "len({lg:content})",
+        {"lg": first},
+    )
+    assert response.status_code == 200, response.text
+
+    # Second call runs with the FieldType already present — the old code fed
+    # bulk_update a name→type-string map, its `.get("mutable")` raised, and
+    # the write was silently recorded as failed.
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        "len({lg:content})",
+        {"lg": second},
+    )
+    assert response.status_code == 200, response.text
+
+    logs = await fetch_logs(client, project_name)
+    by_id = {log["id"]: log for log in logs}
+    assert by_id[first[0]]["derived_entries"][key] == 3
+    assert (
+        by_id[second[0]]["derived_entries"][key] == 5
+    ), "repeat derived write must persist once the FieldType exists"

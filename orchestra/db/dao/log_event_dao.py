@@ -1611,8 +1611,16 @@ class LogEventDAO:
                     if not key:
                         continue
 
+                    # `field_types` arrives in two shapes: metadata dicts from
+                    # get_field_types(return_mutable=True) on the user-facing
+                    # update path (mutability enforced), or plain name→type
+                    # strings from derived writers (system recomputation may
+                    # always write). The old unconditional `.get` raised
+                    # AttributeError on the string shape, which the per-row
+                    # handler swallowed — silently no-opping every repeat
+                    # derived write.
                     ft_info = field_types.get(key)
-                    if ft_info and not ft_info.get("mutable", True):
+                    if isinstance(ft_info, dict) and not ft_info.get("mutable", True):
                         raise ImmutableFieldError(f"Field '{key}' is immutable")
 
                     key_explicit_type = explicit_types.get(key, {})
