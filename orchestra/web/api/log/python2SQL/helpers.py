@@ -2274,7 +2274,31 @@ def _queue_embeddings_for_generation(
     ]
 
     stmt = insert(EmbeddingQueue).values(queue_entries)
-    stmt = stmt.on_conflict_do_nothing(constraint="uq_embedding_queue")
+    # A queue row may already exist for (project, ref, key, model). DO NOTHING
+    # here used to make a re-queue a silent no-op: a `failed` row could never
+    # be revived, and a stale row kept generating a vector for outdated text.
+    # Refresh the row instead — but never touch rows a worker holds mid-flight
+    # ('generating'/'inserting'), and leave identical still-viable rows alone.
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_embedding_queue",
+        set_={
+            "text": stmt.excluded.text,
+            "dimensions": stmt.excluded.dimensions,
+            "status": "pending",
+            "retry_count": 0,
+            "error_message": None,
+            "processing_started_at": None,
+            "generated_vector": None,
+            "vector_generated_at": None,
+        },
+        where=or_(
+            EmbeddingQueue.status.in_(("failed", "cancelled")),
+            and_(
+                EmbeddingQueue.text != stmt.excluded.text,
+                EmbeddingQueue.status.notin_(("generating", "inserting")),
+            ),
+        ),
+    )
     session.execute(stmt)
     session.commit()
 
