@@ -21,7 +21,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from . import HEADERS, _create_log, _create_project
+from . import HEADERS, _create_derived_entry, _create_log, _create_project
 
 
 async def _put_entries(client, log_id, entries):
@@ -45,6 +45,144 @@ def _count_embed_calls(monkeypatch):
 
     monkeypatch.setattr(helpers, "_get_embeddings_batch", counting)
     return calls
+
+
+@pytest.mark.anyio
+async def test_put_with_unchanged_source_does_not_reembed(
+    client: AsyncClient,
+    dbsession,
+    monkeypatch,
+):
+    from orchestra.db.models.orchestra_models import Embedding
+
+    project_name = "test_put_unchanged_no_reembed"
+    await _create_project(client, project_name, user=1)
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"content": "stable text", "note": "v1"},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    key = "_content_emb"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        "embed({lg:content})",
+        {"lg": [log_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    calls = _count_embed_calls(monkeypatch)
+
+    # Whole-row PUT with the identical source value (clients do this
+    # constantly) — must not re-embed.
+    response = await _put_entries(
+        client,
+        log_id,
+        {"content": "stable text", "note": "v2"},
+    )
+    assert response.status_code == 200, response.text
+    assert calls["n"] == 0, "identical source text must not be re-embedded"
+
+    row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert row is not None, "embedding must survive an unchanged-source PUT"
+
+    # A real change to the source text must refresh the vector — via the
+    # queue (Stage-2 upsert), never a synchronous provider call + HNSW write
+    # inside the PUT request.
+    from orchestra.db.models.orchestra_models import EmbeddingQueue
+
+    response = await _put_entries(
+        client,
+        log_id,
+        {"content": "completely different text"},
+    )
+    assert response.status_code == 200, response.text
+    assert calls["n"] == 0, "changed text refreshes via the queue, not inline"
+
+    queued = dbsession.execute(
+        select(EmbeddingQueue).where(
+            EmbeddingQueue.ref_id == log_id,
+            EmbeddingQueue.key == key,
+        ),
+    ).scalar_one_or_none()
+    assert queued is not None, "changed source text must be enqueued"
+    assert queued.text == "completely different text"
+    assert queued.status == "pending"
+
+    row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert row is not None, (
+        "the stale vector stays live until the queue replaces it — "
+        "no soft-delete window with missing embeddings"
+    )
+
+
+@pytest.mark.anyio
+async def test_new_rows_enqueue_for_embedding_templates(
+    client: AsyncClient,
+    dbsession,
+):
+    """POST /logs feeds the embedding queue for template-covered contexts.
+
+    Coverage is a write-side responsibility: without this, a new row was
+    invisible to semantic search until some later backfill noticed it.
+    """
+    from orchestra.db.models.orchestra_models import EmbeddingQueue
+
+    project_name = "test_new_rows_enqueue"
+    await _create_project(client, project_name, user=1)
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"content": "seed row"},
+    )
+    assert response.status_code == 200
+    seed_id = response.json()["log_event_ids"][0]
+
+    key = "_content_emb"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        "embed({lg:content})",
+        {"lg": [seed_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    # A later plain create (no recompute_derived flag) must be enqueued.
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"content": "later row"},
+    )
+    assert response.status_code == 200
+    new_id = response.json()["log_event_ids"][0]
+
+    queued = dbsession.execute(
+        select(EmbeddingQueue).where(
+            EmbeddingQueue.ref_id == new_id,
+            EmbeddingQueue.key == key,
+        ),
+    ).scalar_one_or_none()
+    assert queued is not None, "new rows must be enqueued for embedding"
+    assert queued.text == "later row"
 
 
 @pytest.mark.anyio

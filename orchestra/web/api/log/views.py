@@ -267,12 +267,17 @@ def _recompute_derived_for_logs(
     entry_keys: set,
     derived_log_dao,
     field_type_dao,
+    embedding_only: bool = False,
 ):
     """Recompute derived columns for the given log IDs.
 
     Finds ActiveDerivedLog templates whose ``referenced_keys`` overlap with
     *entry_keys* and calls ``recompute_derived_logs`` for each template,
     scoped to *log_ids*.  Used by both the create and update handlers.
+
+    With ``embedding_only=True`` only embedding templates run — used by the
+    create path, where general recomputation is opt-in but embedding coverage
+    is a write-side responsibility (a cheap queue insert per row).
     """
     if not entry_keys or not log_ids:
         return
@@ -286,15 +291,25 @@ def _recompute_derived_for_logs(
             for key in entry_keys
         ]
 
-        dependent_templates = (
-            session.query(ActiveDerivedLog)
-            .filter(
-                ActiveDerivedLog.project_id == project_id,
-                ActiveDerivedLog.context_id == context_id,
-                ActiveDerivedLog.is_active == True,
-                or_(*key_conditions),
+        template_filters = [
+            ActiveDerivedLog.project_id == project_id,
+            ActiveDerivedLog.context_id == context_id,
+            ActiveDerivedLog.is_active == True,
+            or_(*key_conditions),
+        ]
+        if embedding_only:
+            template_filters.append(
+                or_(
+                    ActiveDerivedLog.equation.contains("embed(", autoescape=True),
+                    ActiveDerivedLog.equation.contains(
+                        "embed_image(",
+                        autoescape=True,
+                    ),
+                ),
             )
-            .all()
+
+        dependent_templates = (
+            session.query(ActiveDerivedLog).filter(*template_filters).all()
         )
 
         processed_template_ids: set = set()
@@ -524,8 +539,12 @@ def create_logs(
             first_error = result["failed"][0].get("error", "Log creation failed")
             raise HTTPException(status_code=400, detail=first_error)
 
-        # Opt-in derived column recomputation for the newly created logs.
-        if request.recompute_derived and result.get("log_event_ids"):
+        # Derived column recomputation for the newly created logs. General
+        # recomputation stays opt-in, but embedding templates always run:
+        # their "recompute" is a cheap queue insert, and without it a new row
+        # is invisible to semantic search until some later backfill notices —
+        # coverage is a write-side responsibility.
+        if result.get("log_event_ids"):
             entries_list = (
                 request.entries
                 if isinstance(request.entries, list)
@@ -536,16 +555,18 @@ def create_logs(
                 if isinstance(entry, dict):
                     entry_keys.update(entry.keys())
 
-            derived_log_dao = LogEventDAO(session, context_dao)
-            _recompute_derived_for_logs(
-                session=session,
-                project_id=project_id,
-                context_id=context_id,
-                log_ids=result["log_event_ids"],
-                entry_keys=entry_keys,
-                derived_log_dao=derived_log_dao,
-                field_type_dao=field_type_dao,
-            )
+            if entry_keys:
+                derived_log_dao = LogEventDAO(session, context_dao)
+                _recompute_derived_for_logs(
+                    session=session,
+                    project_id=project_id,
+                    context_id=context_id,
+                    log_ids=result["log_event_ids"],
+                    entry_keys=entry_keys,
+                    derived_log_dao=derived_log_dao,
+                    field_type_dao=field_type_dao,
+                    embedding_only=not request.recompute_derived,
+                )
 
         if (
             project.name == TASK_MACHINE_PROJECT_NAME
@@ -2707,6 +2728,10 @@ def _update_logs(
                 new_values=new_values,
             )
 
+    # Flat keys whose PUT value matched the stored value; derived
+    # recomputation skips these (populated by the flat-update branch).
+    unchanged_flat_keys: Set[str] = set()
+
     # First, handle flat updates using JSONB method
     if all_flat_updates:
         # Enforce unique field constraints for updated values (JSONB mode)
@@ -2839,6 +2864,17 @@ def _update_logs(
             # Add bulk_update failures to our failed_updates list
             failed_updates.extend(bulk_result["failed"])
 
+            # Flat keys that were rewritten with identical values: excluded
+            # from derived recomputation below, so a whole-row PUT that didn't
+            # actually change an embedding's source text no longer soft-deletes
+            # and re-embeds the context's vectors.
+            attempted_flat_keys = {
+                u.get("key") for u in all_flat_updates if u.get("key")
+            }
+            unchanged_flat_keys = attempted_flat_keys - set(
+                bulk_result.get("changed_keys", []),
+            )
+
             # Check for duplicates using batch method (single query for all IDs)
             if (
                 ctx_obj_cache
@@ -2949,7 +2985,7 @@ def _update_logs(
             project_id=project_id,
             context_id=ctx_id,
             log_ids=event_ids,
-            entry_keys=updated_entry_keys,
+            entry_keys=updated_entry_keys - unchanged_flat_keys,
             derived_log_dao=derived_log_dao,
             field_type_dao=field_type_dao,
         )

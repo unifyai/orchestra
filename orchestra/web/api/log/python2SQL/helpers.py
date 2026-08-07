@@ -2193,6 +2193,7 @@ def _queue_embeddings_for_generation(
     dimensions: Optional[int],
     key: str,
     project_id: Optional[int] = None,
+    force: bool = False,
 ) -> None:
     """
     Queue embeddings for background generation instead of creating them synchronously.
@@ -2216,25 +2217,30 @@ def _queue_embeddings_for_generation(
 
     model_name = model or DEFAULT_EMBEDDING_MODEL
 
-    # 1. Find which embeddings already exist (excluding soft-deleted)
+    # 1. Find which embeddings already exist (excluding soft-deleted).
+    # ``force=True`` bypasses this: the caller knows the source text changed,
+    # so an existing vector is stale and must be regenerated (the Stage-2
+    # inserter upserts, replacing it in place).
     all_ids = list(id_to_text.keys())
-    existing_refs = (
-        session.execute(
-            select(Embedding.ref_id).where(
-                and_(
-                    Embedding.key == key,
-                    Embedding.model == model_name,
-                    Embedding.ref_id.in_(all_ids),
-                    embedding_scope(Embedding, project_id),
-                    Embedding.is_deleted
-                    == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
+    existing_set: set = set()
+    if not force:
+        existing_refs = (
+            session.execute(
+                select(Embedding.ref_id).where(
+                    and_(
+                        Embedding.key == key,
+                        Embedding.model == model_name,
+                        Embedding.ref_id.in_(all_ids),
+                        embedding_scope(Embedding, project_id),
+                        Embedding.is_deleted
+                        == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
+                    ),
                 ),
-            ),
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    existing_set = set(existing_refs)
+        existing_set = set(existing_refs)
 
     # 2. Queue only missing embeddings
     ids_to_queue = [
