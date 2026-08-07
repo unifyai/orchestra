@@ -1302,9 +1302,17 @@ def _get_logs_query(
                 # Apply LIMIT before pagination to leverage HNSW index
                 top_k = (offset or 0) + (limit or 100)
 
-                # Get filtered event IDs from base query
-                filtered_event_ids_subq = query.with_entities(LogEvent.id).subquery(
-                    "filtered_events",
+                # Get filtered event IDs from base query. MATERIALIZED is
+                # load-bearing: as a plain IN-subquery the planner correlates
+                # the membership check into the ANN scan as an un-hashed
+                # nested-loop inner (re-scanning the owner's log_event rows
+                # once per embedding row — observed at 8.8M buffer hits /
+                # 10.7s for an 83-row key in prod). Materializing computes
+                # membership exactly once (~400ms for the same query).
+                filtered_event_ids_subq = (
+                    query.with_entities(LogEvent.id)
+                    .cte("filtered_events")
+                    .prefix_with("MATERIALIZED")
                 )
 
                 # `embedding` has a single, unpartitioned HNSW index shared by
