@@ -21,7 +21,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import delete, func, text
+from sqlalchemy import delete, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -594,40 +594,67 @@ class MsTeamsBotDAO:
         sender_email: Optional[str] = None,
         owner_only: bool = False,
     ) -> Optional[MsTeamsBotConversationRoute]:
-        """Find a live route from the assistant side, most recent first.
+        """Find a live route from the assistant side, best match first.
 
         The reverse of :meth:`get_conversation_route`: instead of naming a
         conversation, name the assistant and who it is talking to. This is
         the lookup an outbound-only caller needs — a scheduled task has a
         recipient in mind and no inbound activity to read ids off.
 
-        ``owner_only`` restricts to the boss's own conversation, which is
-        the reliable anchor for a personal install (one human, so every
-        1:1 is boss-authored). ``sender_email`` targets a specific person
-        and only matches routes where a roster lookup resolved one.
+        ``conversation_type``, ``sender_email`` and ``owner_only`` **rank**
+        rather than filter. Sender identity is captured on inbound, so every
+        route that predates that capture carries ``NULL`` identity and no
+        amount of waiting fills it in; filtering on it hides exactly the
+        established conversations this lookup exists to find. A route whose
+        identity contradicts the request is still excluded — the ranking
+        only tolerates *absent* identity, never wrong identity.
+
         Expired routes never match: a conversation past its TTL is not a
-        valid proactive-reply target.
+        valid proactive-reply target, whatever its identity says.
         """
-        query = self.session.query(MsTeamsBotConversationRoute).filter(
-            MsTeamsBotConversationRoute.assistant_id == assistant_id,
-            MsTeamsBotConversationRoute.expires_at > datetime.now(timezone.utc),
+        routes = (
+            self.session.query(MsTeamsBotConversationRoute)
+            .filter(
+                MsTeamsBotConversationRoute.assistant_id == assistant_id,
+                MsTeamsBotConversationRoute.expires_at > datetime.now(timezone.utc),
+            )
+            .order_by(MsTeamsBotConversationRoute.last_used_at.desc())
+            .all()
         )
-        if conversation_type is not None:
-            query = query.filter(
-                MsTeamsBotConversationRoute.conversation_type == conversation_type,
-            )
-        if owner_only:
-            query = query.filter(
-                MsTeamsBotConversationRoute.sender_is_owner.is_(True),
-            )
-        if sender_email:
-            query = query.filter(
-                func.lower(MsTeamsBotConversationRoute.sender_email)
-                == sender_email.strip().lower(),
-            )
-        return query.order_by(
-            MsTeamsBotConversationRoute.last_used_at.desc(),
-        ).first()
+        wanted_email = (sender_email or "").strip().lower()
+
+        def _rank(route: MsTeamsBotConversationRoute) -> Optional[int]:
+            """Lower is better; ``None`` excludes the route outright."""
+            score = 0
+            if route.conversation_type:
+                if conversation_type and route.conversation_type != conversation_type:
+                    return None
+            else:
+                score += 1
+            route_email = (route.sender_email or "").strip().lower()
+            if wanted_email:
+                if route_email:
+                    if route_email != wanted_email:
+                        return None
+                else:
+                    score += 1
+            elif owner_only and route_email and not route.sender_is_owner:
+                # Asked for the boss, but this route is annotated as a named
+                # third party — never substitute one person for another. A
+                # route with an email *and* sender_is_owner is the boss's own.
+                return None
+            if owner_only and not route.sender_is_owner:
+                score += 1
+            return score
+
+        ranked = [
+            (rank, index, route)
+            for index, route in enumerate(routes)
+            if (rank := _rank(route)) is not None
+        ]
+        if not ranked:
+            return None
+        return min(ranked)[2]
 
     def touch_conversation_route(
         self,

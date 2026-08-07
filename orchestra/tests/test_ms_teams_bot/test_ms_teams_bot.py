@@ -707,6 +707,151 @@ class TestRoutingStateDAO:
         assert found is not None
         assert found.conversation_id == "conv-new"
 
+    def test_find_conversation_route_accepts_unannotated_legacy_row(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Routes created before sender identity was captured carry NULLs
+        forever. Filtering them out hides precisely the established
+        conversations this lookup exists to find."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "legacy")
+        org = _make_org(dbsession, user, "legacy")
+        assistant = _make_assistant(dbsession, user, first_name="Leg", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-legacy")
+        dao.upsert_conversation_route(
+            install.id,
+            "conv-legacy",
+            assistant.agent_id,
+        )
+
+        found = dao.find_conversation_route(
+            assistant.agent_id,
+            conversation_type="personal",
+            owner_only=True,
+        )
+        assert found is not None
+        assert found.conversation_id == "conv-legacy"
+
+    def test_find_conversation_route_prefers_annotated_over_legacy(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Tolerating absent identity must not outrank a confirmed match."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "rank")
+        org = _make_org(dbsession, user, "rank")
+        assistant = _make_assistant(dbsession, user, first_name="Ran", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-rank")
+        now = datetime.now(timezone.utc)
+
+        legacy = dao.upsert_conversation_route(
+            install.id,
+            "conv-legacy",
+            assistant.agent_id,
+        )
+        # The legacy row is the more recent of the two, so recency alone
+        # would pick it — confirmed identity has to win instead.
+        legacy.last_used_at = now
+        annotated = dao.upsert_conversation_route(
+            install.id,
+            "conv-annotated",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            annotated,
+            conversation_type="personal",
+            sender_is_owner=True,
+        )
+        annotated.last_used_at = now - timedelta(days=3)
+        dbsession.flush()
+
+        found = dao.find_conversation_route(
+            assistant.agent_id,
+            conversation_type="personal",
+            owner_only=True,
+        )
+        assert found is not None
+        assert found.conversation_id == "conv-annotated"
+
+    def test_find_conversation_route_never_substitutes_a_third_party(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """Tolerating unknown identity is not the same as ignoring known
+        identity — messaging the wrong person is worse than not sending."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "third")
+        org = _make_org(dbsession, user, "third")
+        assistant = _make_assistant(dbsession, user, first_name="Thi", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-third")
+        route = dao.upsert_conversation_route(
+            install.id,
+            "conv-third",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(
+            route,
+            conversation_type="personal",
+            sender_email="someone.else@corp.test",
+            sender_is_owner=False,
+        )
+
+        # Asked for the boss; the only live route is a named third party.
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="personal",
+                owner_only=True,
+            )
+            is None
+        )
+        # A named sender who *is* the owner is the boss's own route, not a
+        # third party — an email on the row must not exclude it.
+        dao.annotate_conversation_route(route, sender_is_owner=True)
+        owned = dao.find_conversation_route(
+            assistant.agent_id,
+            conversation_type="personal",
+            owner_only=True,
+        )
+        assert owned is not None
+        assert owned.conversation_id == "conv-third"
+        dao.annotate_conversation_route(route, sender_is_owner=False)
+        # Asked for a specific person; a different named person must not match.
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="personal",
+                sender_email="wanted@corp.test",
+            )
+            is None
+        )
+
+    def test_find_conversation_route_excludes_wrong_conversation_type(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """An annotated channel thread is known not to be a 1:1."""
+        dao = MsTeamsBotDAO(dbsession)
+        user = _make_user(dbsession, "typed")
+        org = _make_org(dbsession, user, "typed")
+        assistant = _make_assistant(dbsession, user, first_name="Typ", organization=org)
+        install = _make_install(dbsession, organization=org, tenant_id="tenant-typed")
+        route = dao.upsert_conversation_route(
+            install.id,
+            "conv-channel",
+            assistant.agent_id,
+        )
+        dao.annotate_conversation_route(route, conversation_type="channel")
+
+        assert (
+            dao.find_conversation_route(
+                assistant.agent_id,
+                conversation_type="personal",
+            )
+            is None
+        )
+
     def test_annotate_conversation_route_keeps_known_identity(
         self,
         dbsession: Session,
