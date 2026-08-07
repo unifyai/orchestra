@@ -2020,7 +2020,6 @@ class LogEventDAO:
             for log_event_id, value in computed_values:
                 try:
                     if isinstance(value, np.ndarray):
-                        val = None
                         non_null_val = value.tolist()
                         if is_image_embedding:
                             embedding_objects.append(
@@ -2033,10 +2032,17 @@ class LogEventDAO:
                                     owner_key=template_owner_key,
                                 ),
                             )
-                    else:
-                        val = json.loads(json.dumps(value, cls=json_encoder))
-                        if val is not None:
-                            non_null_val = val
+                        # Vectors live only in the Embedding table: no JSONB
+                        # null marker. Writing one rewrote every log row per
+                        # recompute (no HOT updates) for a value that carries
+                        # no information; presence checks resolve against the
+                        # embedding table.
+                        updates_count += 1
+                        continue
+
+                    val = json.loads(json.dumps(value, cls=json_encoder))
+                    if val is not None:
+                        non_null_val = val
 
                     merge_entries.append(
                         {

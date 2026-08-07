@@ -15,6 +15,7 @@ Also pins two side-contracts of the same fix:
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from . import _create_derived_entry, _create_log, _create_project, fetch_logs
 
@@ -69,3 +70,50 @@ async def test_vector_nullity_filters_resolve_against_embedding_table(
         project_name,
         f"({key} == None) and (content != None)",
     ) == [unembedded]
+
+
+@pytest.mark.anyio
+async def test_vector_derived_write_leaves_no_jsonb_marker(
+    client: AsyncClient,
+    dbsession,
+):
+    from orchestra.db.models.orchestra_models import Embedding, LogEvent
+
+    project_name = "test_vector_no_jsonb_marker"
+    await _create_project(client, project_name, user=1)
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"content": "marker-free storage"},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    key = "_content_emb"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        "embed({lg:content})",
+        {"lg": [log_id]},
+    )
+    assert response.status_code == 200, response.text
+
+    vector_row = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_id,
+            Embedding.key == key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert vector_row is not None and vector_row.vector is not None
+
+    data = dbsession.execute(
+        select(LogEvent.data).where(LogEvent.id == log_id),
+    ).scalar_one()
+    assert key not in (data or {}), (
+        "vector derived writes must not leave a JSONB null marker: the marker "
+        "carries no value, rewrites the whole log row (no HOT updates), and "
+        "made data-based nullity checks a tautology"
+    )

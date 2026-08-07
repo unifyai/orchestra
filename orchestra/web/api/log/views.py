@@ -1051,6 +1051,7 @@ def create_from_logs(
             updates = []
             embedding_objects = []  # Collect embeddings for bulk insertion
             non_null_val = None
+            vector_count = 0  # Vector values persisted via the Embedding table
             placeholders = _extract_placeholders(body.equation)
             referenced_logs = {
                 ph.split(":")[1]: v
@@ -1074,8 +1075,6 @@ def create_from_logs(
                             # Check for vector FIRST to skip expensive JSON serialization
                             if isinstance(value, np.ndarray):
                                 # Vectors are stored in Embedding table, not in LogEvent.data
-                                # (JSONB can't hold numpy arrays; we store NULL as a marker)
-                                val = None
                                 non_null_val = value.tolist()
 
                                 # NOTE: This special handling for image embeddings is confusing.
@@ -1115,13 +1114,21 @@ def create_from_logs(
                                         ),
                                     )
                                     embedding_objects.append(embedding_obj)
-                            else:
-                                # Standard path for non-vector data
-                                val = json.loads(
-                                    json.dumps(value, cls=CustomEncoder),
-                                )
-                                if val is not None:
-                                    non_null_val = val
+                                # Vectors live only in the Embedding table:
+                                # do NOT write a JSONB null marker. The marker
+                                # carried no value, defeated HOT updates on
+                                # log_event, and made `data`-based nullity
+                                # checks a tautology. Presence checks resolve
+                                # against the embedding table instead.
+                                vector_count += 1
+                                continue
+
+                            # Standard path for non-vector data
+                            val = json.loads(
+                                json.dumps(value, cls=CustomEncoder),
+                            )
+                            if val is not None:
+                                non_null_val = val
 
                             # Add to bulk update list
                             updates.append(
@@ -1207,7 +1214,7 @@ def create_from_logs(
             session.commit()
 
             response = {
-                "info": f"Created {len(updates)} derived logs with key='{body.key}'.",
+                "info": f"Created {len(updates) + vector_count} derived logs with key='{body.key}'.",
             }
             if not_found_ids:
                 response["not_found"] = not_found_ids
