@@ -1465,7 +1465,26 @@ def _provider_connect_url(
                     owner.owner_scope,
                     error,
                 )
-                raise ValueError(error["message"])
+                # A provider that refused the authorization request is an
+                # upstream failure, not a missing resource. Raising a bare
+                # ValueError landed on the view's catch-all, which answers
+                # 404 — so the browser was told "Not Found" for a Composio
+                # 400, with no code to branch on and nothing in the message
+                # a user could act on. Every sibling failure on this path
+                # already raises ProviderConnectError; this one was the
+                # exception.
+                app_label = (
+                    app.display_name
+                    if app and getattr(app, "display_name", None)
+                    else connection.provider_app_id
+                )
+                raise ProviderConnectError(
+                    f"Could not start the {app_label} connection: the provider "
+                    "rejected the authorization request. If a previous attempt "
+                    "is still pending, cancel it and try again.",
+                    status_code=502,
+                    code="provider_auth_link_failed",
+                )
             if connected_account_id:
                 connection.provider_connection_id = connected_account_id
             if connect_url:
@@ -1492,7 +1511,23 @@ def _provider_connect_url(
                 allowed_origins=config.get("allowed_origins") or None,
             )
             if error:
-                raise ValueError(error["message"])
+                logger.warning(
+                    "Pipedream connect link returned provider error backend_id=%s "
+                    "provider_app_id=%s canonical_app_slug=%s connection_id=%s "
+                    "owner_scope=%s error=%s",
+                    connection.backend_id,
+                    connection.provider_app_id,
+                    app.canonical_app_slug if app else connection.canonical_app_slug,
+                    connection.connection_id,
+                    owner.owner_scope,
+                    error,
+                )
+                raise ProviderConnectError(
+                    f"Could not start the {connection.provider_app_id} connection: "
+                    "the provider rejected the authorization request.",
+                    status_code=502,
+                    code="provider_connect_link_failed",
+                )
             if connect_link_url:
                 return connect_link_url
         base = "/integrations/provider-oauth/pipedream"

@@ -703,12 +703,25 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             response.raise_for_status()
             data = response.json()
         except Exception as exc:
+            # `requests` stringifies an HTTPError to the status and URL only,
+            # so the provider's own reason reached neither the log nor the
+            # caller: a 400 here read as an unexplained "Bad Request" with
+            # nothing to act on. The body is where Composio says what it
+            # objected to, so carry it.
+            provider_response = getattr(exc, "response", None)
+            body = (
+                (provider_response.text or "").strip()[:600]
+                if provider_response
+                else ""
+            )
             return (
                 None,
                 None,
                 {
                     "code": "provider_auth_link_failed",
-                    "message": f"Failed to create Composio auth link: {exc}",
+                    "message": f"Failed to create Composio auth link: {exc}"
+                    + (f" — {body}" if body else ""),
+                    "provider_response": body,
                 },
             )
         redirect_url = data.get("redirect_url") or data.get("redirectUrl")

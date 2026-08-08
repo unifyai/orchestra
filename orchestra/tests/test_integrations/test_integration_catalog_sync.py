@@ -1500,6 +1500,81 @@ def test_composio_connect_logs_auth_config_creation_failure(
     assert "invalid toolkit auth config" in caplog.text
 
 
+def test_composio_auth_link_rejection_is_a_provider_error_not_a_missing_resource(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A provider that refuses the authorization request is 502, not 404.
+
+    This branch raised a bare ValueError, which the view's catch-all maps to
+    404. The browser was told "Not Found" for a Composio 400 — no code to
+    branch on, and a message naming neither the app nor anything to do about
+    it. Every sibling failure on this path already raised ProviderConnectError.
+    """
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeApp:
+        canonical_app_slug = "gmail"
+        display_name = "Gmail"
+        raw_provider_metadata_json = {"auth_config_id": "ac_gmail"}
+
+    class FakeConnection:
+        backend_id = "composio"
+        provider_app_id = "GMAIL"
+        canonical_app_slug = "gmail"
+        connection_id = "ic_wedged"
+        provider_connection_id = None
+
+    class FakeAdapter:
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            return "ac_gmail"
+
+        def create_auth_link(self, **_kwargs):
+            return (
+                None,
+                None,
+                {
+                    "code": "provider_auth_link_failed",
+                    "message": (
+                        "Failed to create Composio auth link: 400 Client Error: "
+                        'Bad Request — {"message":"alias already in use"}'
+                    ),
+                    "provider_response": '{"message":"alias already in use"}',
+                },
+            )
+
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+    caplog.set_level(logging.WARNING, logger=operations.__name__)
+
+    with pytest.raises(operations.ProviderConnectError) as excinfo:
+        operations._provider_connect_url(
+            backend=FakeBackend(),
+            app=FakeApp(),
+            owner=operations.OwnerContext(owner_scope="assistant", user_id="user-1"),
+            connection=FakeConnection(),
+            redirect_url="https://console.example/callback",
+        )
+
+    assert excinfo.value.status_code == 502
+    assert excinfo.value.code == "provider_auth_link_failed"
+    # Names the app, and the one thing that actually clears a wedged attempt.
+    assert "Gmail" in str(excinfo.value)
+    assert "cancel it" in str(excinfo.value)
+
+    # The provider's own reason must reach the log; `requests` stringifies an
+    # HTTPError to the status and URL alone, so without the body a 400 here
+    # was unexplainable after the fact.
+    assert "alias already in use" in caplog.text
+    assert "connection_id=ic_wedged" in caplog.text
+
+
 def test_composio_adapter_fetches_catalog_and_manages_auth_configs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
