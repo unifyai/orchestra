@@ -1933,6 +1933,46 @@ def complete_connection_by_provider_connection_id(
     )
 
 
+def _release_provider_account(session: Session, conn: Any, *, reason: str) -> None:
+    """Delete the upstream account this row points at, if the backend has one.
+
+    Disconnecting used to write our own row and stop there, so every
+    disconnect left a live account behind at the provider: its OAuth grant
+    intact, counted against the workspace, and — while ACTIVE — still
+    reserving its alias, which is enough to refuse the reconnect meant to
+    replace it.
+
+    Best effort by design. The user asked to disconnect; a provider that is
+    down or has already removed the account must not keep our row connected.
+    A failure is logged with the ids needed to sweep it later.
+    """
+    provider_connection_id = getattr(conn, "provider_connection_id", None)
+    if not provider_connection_id:
+        return
+    dao = IntegrationProviderDAO(session)
+    backend = dao.get_backend(conn.backend_id)
+    try:
+        adapter = get_provider_adapter(
+            conn.backend_id,
+            backend_config=(backend.config_json if backend else {}),
+            backend_status=backend.status if backend else "enabled",
+        )
+        deleter = getattr(adapter, "delete_connected_account", None)
+        if deleter is None:
+            return
+        deleter(provider_connection_id)
+    except Exception:
+        logger.exception(
+            "Failed to delete upstream connected account reason=%s backend_id=%s "
+            "connection_id=%s provider_connection_id=%s canonical_app_slug=%s",
+            reason,
+            conn.backend_id,
+            conn.connection_id,
+            provider_connection_id,
+            conn.canonical_app_slug,
+        )
+
+
 def disconnect_connection(
     session: Session,
     connection_id: str,
@@ -1949,10 +1989,12 @@ def disconnect_connection(
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
+    _release_provider_account(session, conn, reason="user_disconnected")
     dao.update_connection_fields(
         conn,
         status="disconnected",
         reconnect_reason="user_disconnected",
+        provider_connection_id=None,
     )
     session.commit()
     response = _connection_to_response(conn)
@@ -1984,10 +2026,12 @@ def cancel_connection(
         raise ValueError(
             f"Connection {connection_id} cannot be cancelled from status {conn.status}.",
         )
+    _release_provider_account(session, conn, reason="setup_cancelled")
     dao.update_connection_fields(
         conn,
         status="disconnected",
         reconnect_reason="setup_cancelled",
+        provider_connection_id=None,
     )
     session.commit()
     return _connection_to_response(conn)

@@ -1500,6 +1500,100 @@ def test_composio_connect_logs_auth_config_creation_failure(
     assert "invalid toolkit auth config" in caplog.text
 
 
+def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disconnecting must not leave a live account at the provider.
+
+    Disconnect and cancel only ever wrote our own row. The upstream account
+    stayed: OAuth grant intact, counted against the workspace, and while
+    ACTIVE still reserving its alias — enough to refuse the reconnect meant
+    to replace it. Best effort, because the user asked to disconnect: a
+    provider that is down must not keep the local row connected.
+    """
+
+    deleted: list[str] = []
+
+    class FakeAdapter:
+        def delete_connected_account(self, provider_connection_id: str) -> None:
+            deleted.append(provider_connection_id)
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_row"
+        provider_connection_id = "ca_upstream"
+        canonical_app_slug = "gmail"
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+
+    operations._release_provider_account(None, Conn(), reason="user_disconnected")
+    assert deleted == ["ca_upstream"]
+
+    # A row that never linked upstream has nothing to release.
+    class Unlinked(Conn):
+        provider_connection_id = None
+
+    deleted.clear()
+    operations._release_provider_account(None, Unlinked(), reason="setup_cancelled")
+    assert deleted == []
+
+
+def test_release_provider_account_never_blocks_the_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class ExplodingAdapter:
+        def delete_connected_account(self, _provider_connection_id: str) -> None:
+            raise RuntimeError("provider unreachable")
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_row"
+        provider_connection_id = "ca_upstream"
+        canonical_app_slug = "gmail"
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: ExplodingAdapter(),
+    )
+    caplog.set_level(logging.ERROR, logger=operations.__name__)
+
+    # Raising here would strand the user connected to something they asked to
+    # drop; the ids needed to sweep the orphan go to the log instead.
+    operations._release_provider_account(None, Conn(), reason="user_disconnected")
+    assert "provider_connection_id=ca_upstream" in caplog.text
+    assert "connection_id=ic_row" in caplog.text
+
+
 def test_provider_link_alias_is_spent_once_an_upstream_account_exists() -> None:
     """The alias and connection_id have opposite lifecycles.
 
