@@ -1337,6 +1337,34 @@ def delete_custom_auth_config(
                 )
 
 
+def _provider_link_alias(connection: Any) -> str:
+    """The alias to hand the provider when creating a connected account.
+
+    ``connection_id`` is Orchestra's stable identity: tasks and bindings
+    store it, which is exactly why ``start_connection`` reuses the row
+    rather than minting a new one. A provider alias is the opposite kind of
+    name — Composio consumes it permanently when it creates an account, and
+    refuses (bodyless HTTP 400) any later link that asks for the same one.
+
+    Sending one as the other conflated the two lifecycles, and the failure
+    was terminal rather than transient: once an account existed upstream,
+    every later attempt on that row asked for a taken alias, and no amount
+    of cancelling helped — cancel keeps ``connection_id`` by design, so the
+    next attempt reproduced the collision exactly.
+
+    So the alias stays ``connection_id`` while the row has never produced an
+    upstream account — the common path, and stable across a double-submit,
+    which is what stops a double-click minting two accounts. Once
+    ``provider_connection_id`` is set that alias is spent, and a re-link
+    gets a fresh one. ``connection_id`` never changes, so nothing that
+    stored it is disturbed.
+    """
+    connection_id = str(getattr(connection, "connection_id", "") or "")
+    if not getattr(connection, "provider_connection_id", None):
+        return connection_id
+    return f"{connection_id}-{uuid.uuid4().hex[:8]}"
+
+
 def _provider_connect_url(
     *,
     backend: IntegrationBackend | None,
@@ -1442,7 +1470,7 @@ def _provider_connect_url(
                     user_id=external_user_id,
                     auth_config_id=str(auth_config_id),
                     callback_url=callback_url,
-                    alias=connection.connection_id,
+                    alias=_provider_link_alias(connection),
                 )
             except Exception as exc:
                 _log_composio_connect_failure(

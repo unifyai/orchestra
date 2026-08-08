@@ -1500,6 +1500,43 @@ def test_composio_connect_logs_auth_config_creation_failure(
     assert "invalid toolkit auth config" in caplog.text
 
 
+def test_provider_link_alias_is_spent_once_an_upstream_account_exists() -> None:
+    """The alias and connection_id have opposite lifecycles.
+
+    connection_id is Orchestra's stable identity — tasks and bindings store
+    it, which is why start_connection reuses the row instead of minting a
+    new one (e33180ca). A Composio alias is consumed permanently by the
+    first account created under it, and a later link asking for the same
+    one is refused with a bodyless 400.
+
+    Sending one as the other made that failure terminal: cancel keeps
+    connection_id by design, so every retry reproduced the collision and no
+    recovery affordance could clear it. A row that has never linked keeps
+    the stable alias (so a double-submit cannot mint two accounts); once it
+    has, the next link asks for a fresh one.
+    """
+
+    class Row:
+        connection_id = "ic_stable"
+        provider_connection_id = None
+
+    fresh = Row()
+    assert operations._provider_link_alias(fresh) == "ic_stable"
+    # Stable across a double-submit while no account exists upstream.
+    assert operations._provider_link_alias(fresh) == "ic_stable"
+
+    linked = Row()
+    linked.provider_connection_id = "ca_already_active"
+    first = operations._provider_link_alias(linked)
+    second = operations._provider_link_alias(linked)
+    assert first != "ic_stable"
+    assert second != first
+    # Still traceable back to the row it belongs to, and the identity that
+    # bindings hold is untouched.
+    assert first.startswith("ic_stable-")
+    assert linked.connection_id == "ic_stable"
+
+
 def test_composio_auth_link_rejection_is_a_provider_error_not_a_missing_resource(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
