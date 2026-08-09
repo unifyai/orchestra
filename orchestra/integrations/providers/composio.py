@@ -663,6 +663,30 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         if response.status_code not in (200, 202, 204, 404):
             response.raise_for_status()
 
+    def delete_connected_account(self, provider_connection_id: str) -> None:
+        """Best-effort delete of a Composio connected account by id.
+
+        Disconnecting only ever wrote our own row, so every disconnect in
+        this product's history left the upstream account behind: still
+        holding its OAuth grant, still counting against the workspace, and
+        still holding its alias — which an ACTIVE account reserves, so the
+        orphan could block the very reconnect meant to replace it.
+        """
+
+        if not self.api_key or not provider_connection_id:
+            return
+
+        import requests
+
+        response = requests.delete(
+            f"{self.base_url}/connected_accounts/{provider_connection_id}",
+            headers=self._api_key_headers(),
+            timeout=self.timeout_seconds,
+        )
+        # Treat an already-removed account as success.
+        if response.status_code not in (200, 202, 204, 404):
+            response.raise_for_status()
+
     def create_auth_link(
         self,
         *,

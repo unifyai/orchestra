@@ -1500,6 +1500,137 @@ def test_composio_connect_logs_auth_config_creation_failure(
     assert "invalid toolkit auth config" in caplog.text
 
 
+def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disconnecting must not leave a live account at the provider.
+
+    Disconnect and cancel only ever wrote our own row. The upstream account
+    stayed: OAuth grant intact, counted against the workspace, and while
+    ACTIVE still reserving its alias — enough to refuse the reconnect meant
+    to replace it. Best effort, because the user asked to disconnect: a
+    provider that is down must not keep the local row connected.
+    """
+
+    deleted: list[str] = []
+
+    class FakeAdapter:
+        def delete_connected_account(self, provider_connection_id: str) -> None:
+            deleted.append(provider_connection_id)
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_row"
+        provider_connection_id = "ca_upstream"
+        canonical_app_slug = "gmail"
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+
+    operations._release_provider_account(None, Conn(), reason="user_disconnected")
+    assert deleted == ["ca_upstream"]
+
+    # A row that never linked upstream has nothing to release.
+    class Unlinked(Conn):
+        provider_connection_id = None
+
+    deleted.clear()
+    operations._release_provider_account(None, Unlinked(), reason="setup_cancelled")
+    assert deleted == []
+
+
+def test_release_provider_account_never_blocks_the_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class ExplodingAdapter:
+        def delete_connected_account(self, _provider_connection_id: str) -> None:
+            raise RuntimeError("provider unreachable")
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_row"
+        provider_connection_id = "ca_upstream"
+        canonical_app_slug = "gmail"
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: ExplodingAdapter(),
+    )
+    caplog.set_level(logging.ERROR, logger=operations.__name__)
+
+    # Raising here would strand the user connected to something they asked to
+    # drop; the ids needed to sweep the orphan go to the log instead.
+    operations._release_provider_account(None, Conn(), reason="user_disconnected")
+    assert "provider_connection_id=ca_upstream" in caplog.text
+    assert "connection_id=ic_row" in caplog.text
+
+
+def test_provider_link_alias_is_spent_once_an_upstream_account_exists() -> None:
+    """The alias and connection_id have opposite lifecycles.
+
+    connection_id is Orchestra's stable identity — tasks and bindings store
+    it, which is why start_connection reuses the row instead of minting a
+    new one (e33180ca). A Composio alias is consumed permanently by the
+    first account created under it, and a later link asking for the same
+    one is refused with a bodyless 400.
+
+    Sending one as the other made that failure terminal: cancel keeps
+    connection_id by design, so every retry reproduced the collision and no
+    recovery affordance could clear it. A row that has never linked keeps
+    the stable alias (so a double-submit cannot mint two accounts); once it
+    has, the next link asks for a fresh one.
+    """
+
+    class Row:
+        connection_id = "ic_stable"
+        provider_connection_id = None
+
+    fresh = Row()
+    assert operations._provider_link_alias(fresh) == "ic_stable"
+    # Stable across a double-submit while no account exists upstream.
+    assert operations._provider_link_alias(fresh) == "ic_stable"
+
+    linked = Row()
+    linked.provider_connection_id = "ca_already_active"
+    first = operations._provider_link_alias(linked)
+    second = operations._provider_link_alias(linked)
+    assert first != "ic_stable"
+    assert second != first
+    # Still traceable back to the row it belongs to, and the identity that
+    # bindings hold is untouched.
+    assert first.startswith("ic_stable-")
+    assert linked.connection_id == "ic_stable"
+
+
 def test_composio_auth_link_rejection_is_a_provider_error_not_a_missing_resource(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
