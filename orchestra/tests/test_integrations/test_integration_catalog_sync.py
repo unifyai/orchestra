@@ -1515,8 +1515,9 @@ def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
     deleted: list[str] = []
 
     class FakeAdapter:
-        def delete_connected_account(self, provider_connection_id: str) -> None:
+        def delete_connected_account(self, provider_connection_id: str) -> bool:
             deleted.append(provider_connection_id)
+            return True
 
     class FakeBackend:
         config_json = {}
@@ -1542,7 +1543,11 @@ def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
         lambda *_args, **_kwargs: FakeAdapter(),
     )
 
-    operations._release_provider_account(None, Conn(), reason="user_disconnected")
+    assert operations._release_provider_account(
+        None,
+        Conn(),
+        reason="user_disconnected",
+    )
     assert deleted == ["ca_upstream"]
 
     # A row that never linked upstream has nothing to release.
@@ -1550,7 +1555,11 @@ def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
         provider_connection_id = None
 
     deleted.clear()
-    operations._release_provider_account(None, Unlinked(), reason="setup_cancelled")
+    assert operations._release_provider_account(
+        None,
+        Unlinked(),
+        reason="setup_cancelled",
+    )
     assert deleted == []
 
 
@@ -1589,9 +1598,114 @@ def test_release_provider_account_never_blocks_the_disconnect(
 
     # Raising here would strand the user connected to something they asked to
     # drop; the ids needed to sweep the orphan go to the log instead.
-    operations._release_provider_account(None, Conn(), reason="user_disconnected")
+    # False keeps the pointer: it is the only thing that makes the leaked
+    # account findable, and the sweep query keys on exactly that.
+    assert not operations._release_provider_account(
+        None,
+        Conn(),
+        reason="user_disconnected",
+    )
     assert "provider_connection_id=ca_upstream" in caplog.text
     assert "connection_id=ic_row" in caplog.text
+
+
+def test_starting_a_connection_never_erases_the_upstream_pointer() -> None:
+    """A retry must not destroy the record of what it is retrying.
+
+    provider_connection_id used to be part of the value dict every start
+    writes, set to None for OAuth. Reuse applies that dict wholesale, so
+    beginning a connection erased the pointer to the account the previous
+    attempt had created — before the new link was even requested. The
+    provider still held that account, ACTIVE and reserving its alias, while
+    the only record of which account it was had just been overwritten by
+    the retry that needed it most. It is why a leaked account could be
+    neither adopted nor swept, and why the sweep query under-reports.
+    """
+    import inspect
+
+    from orchestra.web.api.integrations import operations
+
+    source = inspect.getsource(operations.start_connection)
+    values = source[
+        source.index("connection_values = {") : source.index("existing_connection =")
+    ]
+    assert "provider_connection_id" not in values
+
+    # It still gets one on the paths where it means something: a fresh row,
+    # and an API-key connect that mints a local handle.
+    assert source.count("local_{uuid.uuid4().hex}") == 2
+
+
+def test_release_is_a_backend_capability_not_a_composio_special_case() -> None:
+    """Every backend answers the same question, or admits it cannot.
+
+    The release path used to duck-type its way to a Composio method, which
+    made "release the upstream account" a Composio feature rather than a
+    contract. Pipedream leaked exactly as hard, silently, with nothing in
+    the type system saying so.
+    """
+    from orchestra.integrations.providers.base import BaseIntegrationProviderAdapter
+    from orchestra.integrations.providers.composio import ComposioProviderAdapter
+    from orchestra.integrations.providers.pipedream import PipedreamProviderAdapter
+
+    # Declared once, on the contract every backend implements.
+    assert hasattr(BaseIntegrationProviderAdapter, "delete_connected_account")
+
+    # The default is a refusal, never a false claim of success: a backend
+    # that has not implemented this cannot say the account is gone.
+    class Unimplemented(BaseIntegrationProviderAdapter):
+        def iter_apps(self, **_kwargs):
+            return iter(())
+
+        def iter_tools(self, **_kwargs):
+            return iter(())
+
+        def list_app_entries(self, **_kwargs):
+            return []
+
+        def list_tool_entries(self, **_kwargs):
+            return []
+
+        def create_connect_url(self, **_kwargs):
+            return None
+
+        def execute(self, request):
+            raise NotImplementedError
+
+        def health_check(self, request):
+            raise NotImplementedError
+
+    assert Unimplemented().delete_connected_account("ca_anything") is False
+
+    # And the two real backends both implement it.
+    for adapter in (ComposioProviderAdapter, PipedreamProviderAdapter):
+        assert (
+            adapter.delete_connected_account
+            is not BaseIntegrationProviderAdapter.delete_connected_account
+        ), f"{adapter.__name__} must implement its own release"
+
+
+def test_a_locally_stored_credential_is_not_a_provider_account() -> None:
+    """`local_<uuid>` is a handle this service minted for itself.
+
+    API-key connects store one in the same column as a real provider
+    account id. Sending it to a provider's delete endpoint asks about
+    something that never existed there.
+    """
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_apikey"
+        provider_connection_id = "local_deadbeef"
+        canonical_app_slug = "notion"
+
+    # True — nothing to release — and it must not reach an adapter at all,
+    # which the absence of any monkeypatched adapter here proves.
+    assert operations._release_provider_account(
+        None,
+        Conn(),
+        reason="user_disconnected",
+    )
 
 
 def test_provider_link_alias_is_spent_once_an_upstream_account_exists() -> None:
