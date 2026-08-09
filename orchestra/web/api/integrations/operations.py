@@ -2008,6 +2008,68 @@ def _release_provider_account(session: Session, conn: Any, *, reason: str) -> bo
         return False
 
 
+def release_abandoned_provider_accounts(
+    session: Session,
+    *,
+    older_than_seconds: int = 3600,
+    limit: int = 500,
+) -> dict[str, int]:
+    """Release accounts left behind by connect attempts nobody finished.
+
+    A provider creates the connected account when the auth link is issued,
+    not when the user authorises. So an attempt the user walks away from —
+    closes the popup, never reaches consent — leaves a real account behind
+    that nobody ever disconnects, because from the user's point of view
+    nothing was ever connected.
+
+    Nothing else reclaims these. `expire_stale_pending_connection` flips the
+    local row to ``error`` and stops there, which is the same shape as the
+    disconnect bug this file already fixes: our record changes, the
+    provider's does not. In production this was the largest source of leaked
+    accounts by an order of magnitude — abandoned attempts outnumbered
+    disconnected connections roughly ten to one.
+
+    Only rows that never reached a usable state are eligible: an attempt
+    that succeeded is a connection, not an abandonment, and is released when
+    the user disconnects it. Best effort per row, and a row whose release
+    fails keeps its id so the next pass finds it again.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+    rows = (
+        session.query(IntegrationConnection)
+        .filter(
+            IntegrationConnection.provider_connection_id.isnot(None),
+            IntegrationConnection.credential_storage == "provider_vault",
+            IntegrationConnection.status.in_(("pending", "error", "expired")),
+            IntegrationConnection.updated_at < cutoff,
+        )
+        .order_by(IntegrationConnection.updated_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+    released = 0
+    held = 0
+    for conn in rows:
+        if _release_provider_account(session, conn, reason="attempt_abandoned"):
+            conn.provider_connection_id = None
+            released += 1
+        else:
+            held += 1
+    if rows:
+        logger.info(
+            "released_abandoned_provider_accounts candidates=%d released=%d held=%d "
+            "older_than_seconds=%d",
+            len(rows),
+            released,
+            held,
+            older_than_seconds,
+        )
+    return {"candidates": len(rows), "released": released, "held": held}
+
+
 def release_assistant_connections(
     session: Session,
     *,

@@ -1726,6 +1726,91 @@ def test_only_a_provider_held_credential_has_an_account_to_release() -> None:
     )
 
 
+def test_abandoned_attempts_are_the_leak_nothing_else_reclaims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An attempt nobody finished still created an account at the provider.
+
+    The account exists from the moment the auth link is issued, not from
+    consent, so walking away from the popup leaves a real one behind. No
+    disconnect will ever reach it — the user never believes they connected
+    anything — and expire_stale_pending_connection only rewrites our own
+    row. In production this outnumbered disconnected connections about ten
+    to one.
+
+    A row that reached a usable state is a connection, not an abandonment,
+    and must be left for the user to disconnect.
+    """
+    released: list[str] = []
+
+    class FakeAdapter:
+        def delete_connected_account(self, provider_connection_id: str) -> bool:
+            released.append(provider_connection_id)
+            return True
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class Row:
+        def __init__(self, status, provider_connection_id):
+            self.backend_id = "composio"
+            self.connection_id = f"ic_{status}"
+            self.provider_connection_id = provider_connection_id
+            self.canonical_app_slug = "github"
+            self.credential_storage = "provider_vault"
+            self.status = status
+
+    abandoned = Row("pending", "ca_never_finished")
+    connected = Row("connected", "ca_in_use")
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *_a, **_k):
+            # The filter is what excludes the connected row; model it by
+            # honouring the same status rule the production query uses.
+            return FakeQuery(
+                [r for r in self._rows if r.status in ("pending", "error", "expired")],
+            )
+
+        def order_by(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def query(self, *_a, **_k):
+            return FakeQuery([abandoned, connected])
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+
+    result = operations.release_abandoned_provider_accounts(FakeSession())
+
+    assert released == ["ca_never_finished"]
+    assert result["released"] == 1
+    # Released rows forget the id; a live connection is untouched.
+    assert abandoned.provider_connection_id is None
+    assert connected.provider_connection_id == "ca_in_use"
+
+
 def test_provider_link_alias_is_spent_once_an_upstream_account_exists() -> None:
     """The alias and connection_id have opposite lifecycles.
 
