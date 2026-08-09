@@ -1976,9 +1976,15 @@ def _release_provider_account(session: Session, conn: Any, *, reason: str) -> bo
     provider_connection_id = getattr(conn, "provider_connection_id", None)
     if not provider_connection_id:
         return True
-    # A locally-stored credential has no account at any provider to release;
-    # the id is a handle this service minted for itself.
-    if str(provider_connection_id).startswith("local_"):
+    # Only a credential the provider actually holds has an account to
+    # release. `credential_storage` already records that, so this stays
+    # right for backends that do not exist yet:
+    #   provider_vault             the provider holds it  -> a real account id
+    #   secret_manager             an API key we hold     -> `local_<uuid>`
+    #   assistant_workspace_secrets  workspace OAuth we hold -> `google:<email>`
+    # The last two put a synthetic id in this column; handing either to a
+    # provider asks it about something that never existed there.
+    if getattr(conn, "credential_storage", "provider_vault") != "provider_vault":
         return True
     dao = IntegrationProviderDAO(session)
     backend = dao.get_backend(conn.backend_id)

@@ -1535,6 +1535,7 @@ def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
         connection_id = "ic_row"
         provider_connection_id = "ca_upstream"
         canonical_app_slug = "gmail"
+        credential_storage = "provider_vault"
 
     monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
     monkeypatch.setattr(
@@ -1587,6 +1588,7 @@ def test_release_provider_account_never_blocks_the_disconnect(
         connection_id = "ic_row"
         provider_connection_id = "ca_upstream"
         canonical_app_slug = "gmail"
+        credential_storage = "provider_vault"
 
     monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
     monkeypatch.setattr(
@@ -1685,26 +1687,42 @@ def test_release_is_a_backend_capability_not_a_composio_special_case() -> None:
         ), f"{adapter.__name__} must implement its own release"
 
 
-def test_a_locally_stored_credential_is_not_a_provider_account() -> None:
-    """`local_<uuid>` is a handle this service minted for itself.
+def test_only_a_provider_held_credential_has_an_account_to_release() -> None:
+    """Two of the three storages put a synthetic id in that column.
 
-    API-key connects store one in the same column as a real provider
-    account id. Sending it to a provider's delete endpoint asks about
-    something that never existed there.
+    An API-key connect stores `local_<uuid>`; the workspace facade stores
+    `google:<email>`, which is a prefix and an address, not an account.
+    Handing either to a provider asks it about something that never existed
+    there. `credential_storage` already records who holds the credential, so
+    keying on it stays right for backends that do not exist yet.
     """
 
-    class Conn:
+    class ApiKeyRow:
         backend_id = "composio"
         connection_id = "ic_apikey"
         provider_connection_id = "local_deadbeef"
         canonical_app_slug = "notion"
+        credential_storage = "secret_manager"
 
-    # True — nothing to release — and it must not reach an adapter at all,
-    # which the absence of any monkeypatched adapter here proves.
+    class WorkspaceFacadeRow:
+        backend_id = "native_google"
+        connection_id = "ic_ws_native_google_google_drive_2103"
+        provider_connection_id = "google:someone@example.com"
+        canonical_app_slug = "google_drive"
+        credential_storage = "assistant_workspace_secrets"
+
+    # True — nothing to release — and neither reaches an adapter at all,
+    # which the absence of any monkeypatched adapter here proves: a session
+    # of None would blow up the moment one was resolved.
     assert operations._release_provider_account(
         None,
-        Conn(),
+        ApiKeyRow(),
         reason="user_disconnected",
+    )
+    assert operations._release_provider_account(
+        None,
+        WorkspaceFacadeRow(),
+        reason="assistant_deleted",
     )
 
 
