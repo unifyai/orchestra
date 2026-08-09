@@ -1732,9 +1732,6 @@ def start_connection(
         "canonical_app_slug": canonical_app_slug,
         "backend_id": resolved_backend_id,
         "provider_app_id": resolved_provider_app_id,
-        "provider_connection_id": (
-            f"local_{uuid.uuid4().hex}" if status == "connected" else None
-        ),
         "status": status,
         "granted_scopes_json": effective_requested_scopes,
         "enabled_capabilities_json": [],
@@ -1767,13 +1764,39 @@ def start_connection(
         or _label_key(account_label)
         == _label_key(existing_connection.external_account_label)
     )
+    # `provider_connection_id` is deliberately not part of `connection_values`.
+    #
+    # It used to be, set to None for every OAuth start — and reuse applies
+    # those values wholesale, so beginning a connection erased the pointer to
+    # the account the previous attempt had created upstream, before the new
+    # link was even requested. That is what made a leaked account
+    # unfindable: the provider still held it (ACTIVE, and reserving its
+    # alias), while the only record of which account it was had been
+    # overwritten by the retry that needed it most.
+    #
+    # It now changes only on the three occasions it means something: a fresh
+    # row, an API-key connect that mints a local handle, and a link or
+    # release that genuinely produces or clears one.
     if reuse_existing:
         connection = dao.update_connection_fields(
             existing_connection,
             **connection_values,
+            **(
+                {"provider_connection_id": f"local_{uuid.uuid4().hex}"}
+                if status == "connected"
+                and not existing_connection.provider_connection_id
+                else {}
+            ),
         )
     else:
-        connection = dao.create_connection(connection_values)
+        connection = dao.create_connection(
+            {
+                **connection_values,
+                "provider_connection_id": (
+                    f"local_{uuid.uuid4().hex}" if status == "connected" else None
+                ),
+            },
+        )
     session.commit()
 
     connect_url = None
@@ -1933,7 +1956,7 @@ def complete_connection_by_provider_connection_id(
     )
 
 
-def _release_provider_account(session: Session, conn: Any, *, reason: str) -> None:
+def _release_provider_account(session: Session, conn: Any, *, reason: str) -> bool:
     """Delete the upstream account this row points at, if the backend has one.
 
     Disconnecting used to write our own row and stop there, so every
@@ -1944,11 +1967,25 @@ def _release_provider_account(session: Session, conn: Any, *, reason: str) -> No
 
     Best effort by design. The user asked to disconnect; a provider that is
     down or has already removed the account must not keep our row connected.
-    A failure is logged with the ids needed to sweep it later.
+    Returns whether the row may now forget its provider_connection_id.
+    False keeps the pointer, because a pointer is the only thing that makes
+    a leaked account findable later: clearing it on a failed delete would
+    turn a recoverable orphan into an untraceable one. The sweep query is
+    therefore "disconnected rows that still carry a provider_connection_id".
     """
     provider_connection_id = getattr(conn, "provider_connection_id", None)
     if not provider_connection_id:
-        return
+        return True
+    # Only a credential the provider actually holds has an account to
+    # release. `credential_storage` already records that, so this stays
+    # right for backends that do not exist yet:
+    #   provider_vault             the provider holds it  -> a real account id
+    #   secret_manager             an API key we hold     -> `local_<uuid>`
+    #   assistant_workspace_secrets  workspace OAuth we hold -> `google:<email>`
+    # The last two put a synthetic id in this column; handing either to a
+    # provider asks it about something that never existed there.
+    if getattr(conn, "credential_storage", "provider_vault") != "provider_vault":
+        return True
     dao = IntegrationProviderDAO(session)
     backend = dao.get_backend(conn.backend_id)
     try:
@@ -1957,10 +1994,7 @@ def _release_provider_account(session: Session, conn: Any, *, reason: str) -> No
             backend_config=(backend.config_json if backend else {}),
             backend_status=backend.status if backend else "enabled",
         )
-        deleter = getattr(adapter, "delete_connected_account", None)
-        if deleter is None:
-            return
-        deleter(provider_connection_id)
+        return bool(adapter.delete_connected_account(provider_connection_id))
     except Exception:
         logger.exception(
             "Failed to delete upstream connected account reason=%s backend_id=%s "
@@ -1971,6 +2005,122 @@ def _release_provider_account(session: Session, conn: Any, *, reason: str) -> No
             provider_connection_id,
             conn.canonical_app_slug,
         )
+        return False
+
+
+def release_abandoned_provider_accounts(
+    session: Session,
+    *,
+    older_than_seconds: int = 3600,
+    limit: int = 500,
+) -> dict[str, int]:
+    """Release accounts left behind by connect attempts nobody finished.
+
+    A provider creates the connected account when the auth link is issued,
+    not when the user authorises. So an attempt the user walks away from —
+    closes the popup, never reaches consent — leaves a real account behind
+    that nobody ever disconnects, because from the user's point of view
+    nothing was ever connected.
+
+    Nothing else reclaims these. `expire_stale_pending_connection` flips the
+    local row to ``error`` and stops there, which is the same shape as the
+    disconnect bug this file already fixes: our record changes, the
+    provider's does not. In production this was the largest source of leaked
+    accounts by an order of magnitude — abandoned attempts outnumbered
+    disconnected connections roughly ten to one.
+
+    Only rows that never reached a usable state are eligible: an attempt
+    that succeeded is a connection, not an abandonment, and is released when
+    the user disconnects it. Best effort per row, and a row whose release
+    fails keeps its id so the next pass finds it again.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+    rows = (
+        session.query(IntegrationConnection)
+        .filter(
+            IntegrationConnection.provider_connection_id.isnot(None),
+            IntegrationConnection.credential_storage == "provider_vault",
+            IntegrationConnection.status.in_(("pending", "error", "expired")),
+            IntegrationConnection.updated_at < cutoff,
+        )
+        .order_by(IntegrationConnection.updated_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+    released = 0
+    held = 0
+    for conn in rows:
+        if _release_provider_account(session, conn, reason="attempt_abandoned"):
+            conn.provider_connection_id = None
+            released += 1
+        else:
+            held += 1
+    if rows:
+        logger.info(
+            "released_abandoned_provider_accounts candidates=%d released=%d held=%d "
+            "older_than_seconds=%d",
+            len(rows),
+            released,
+            held,
+            older_than_seconds,
+        )
+    return {"candidates": len(rows), "released": released, "held": held}
+
+
+def release_assistant_connections(
+    session: Session,
+    *,
+    assistant_id: int,
+) -> dict[str, int]:
+    """Release every provider account an assistant holds, before it is deleted.
+
+    Nothing else will. ``integration_connections.assistant_id`` carries no
+    foreign key and no cascade, so deleting an assistant leaves its rows
+    behind and its accounts live at every provider it ever connected to.
+    Afterwards nothing can reach them: no surface lists a deleted
+    assistant's connections and no disconnect can be issued for one, so the
+    accounts leak permanently and silently — and the rows keep reporting
+    ``connected`` for an assistant that no longer exists.
+
+    Backend-agnostic: every row is released through its own adapter, so a
+    Pipedream account is released exactly as a Composio one is.
+
+    Best effort per row, and deliberately not transactional with the delete:
+    a provider being down must not block a user deleting their assistant.
+    Rows whose release failed keep their ``provider_connection_id`` so the
+    sweep can still find them.
+    """
+    rows = (
+        session.query(IntegrationConnection)
+        .filter(IntegrationConnection.assistant_id == assistant_id)
+        .all()
+    )
+    released = 0
+    held = 0
+    for conn in rows:
+        had_pointer = bool(conn.provider_connection_id)
+        if _release_provider_account(session, conn, reason="assistant_deleted"):
+            if had_pointer:
+                released += 1
+            conn.provider_connection_id = None
+        elif had_pointer:
+            held += 1
+        # The assistant is going away, so a row still claiming to be
+        # connected is a claim nothing can honour or retract.
+        conn.status = "disconnected"
+        conn.reconnect_reason = "assistant_deleted"
+    if rows:
+        logger.info(
+            "released_assistant_connections assistant_id=%s rows=%d released=%d held=%d",
+            assistant_id,
+            len(rows),
+            released,
+            held,
+        )
+    return {"rows": len(rows), "released": released, "held": held}
 
 
 def disconnect_connection(
@@ -1989,12 +2139,12 @@ def disconnect_connection(
     conn = dao.get_connection(connection_id)
     if not conn:
         raise ValueError(f"Unknown connection: {connection_id}")
-    _release_provider_account(session, conn, reason="user_disconnected")
+    released = _release_provider_account(session, conn, reason="user_disconnected")
     dao.update_connection_fields(
         conn,
         status="disconnected",
         reconnect_reason="user_disconnected",
-        provider_connection_id=None,
+        **({"provider_connection_id": None} if released else {}),
     )
     session.commit()
     response = _connection_to_response(conn)
@@ -2026,12 +2176,12 @@ def cancel_connection(
         raise ValueError(
             f"Connection {connection_id} cannot be cancelled from status {conn.status}.",
         )
-    _release_provider_account(session, conn, reason="setup_cancelled")
+    released = _release_provider_account(session, conn, reason="setup_cancelled")
     dao.update_connection_fields(
         conn,
         status="disconnected",
         reconnect_reason="setup_cancelled",
-        provider_connection_id=None,
+        **({"provider_connection_id": None} if released else {}),
     )
     session.commit()
     return _connection_to_response(conn)
