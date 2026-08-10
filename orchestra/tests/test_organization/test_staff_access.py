@@ -47,9 +47,15 @@ async def _join(client, dbsession, org_id, owner, joiner, role_name="Admin"):
 
 
 async def _unify_staff(client, dbsession, email):
-    """A user who belongs to the Unify organization."""
-    founder = await create_test_user(client, f"founder_{email}")
-    staff = await create_test_user(client, email)
+    """Staff — a verified unify.ai mailbox — who belongs to the Unify org.
+
+    Staff identity now requires the domain as well as membership, so the
+    caller's label is normalised onto ``@unify.ai`` regardless of what it
+    was passed.
+    """
+    local = email.split("@", 1)[0]
+    founder = await create_test_user(client, f"founder_{local}@unify.ai")
+    staff = await create_test_user(client, f"{local}@unify.ai")
     unify_id = await _make_org(client, founder, UNIFY_ORGANIZATION_NAME)
     await _join(client, dbsession, unify_id, founder, staff, role_name="Member")
     return staff

@@ -1,10 +1,15 @@
 """Scope of the internal-account trial exemption.
 
-``is_internal_account`` is anchored on membership of the literal Unify
-organization. It must not key off the ``@unify.ai`` email domain: staff
-own customer orgs during white-glove onboarding, and an owner-domain
-test silently exempted those customers from the card gate and the daily
-burn ceiling.
+``is_internal_account`` requires *two* signals: membership of the literal
+Unify organization **and** a verified ``@unify.ai`` mailbox on the
+owner/member in question. Neither alone is sufficient:
+
+- The org *name* is user-choosable, so a customer who names their own org
+  "Unify" must not thereby become internal — hence the domain check.
+- The *domain* alone is not enough either: staff own customer orgs during
+  white-glove onboarding, and an owner-domain-only test silently exempted
+  those customers from the card gate and the daily burn ceiling — hence
+  the membership check.
 """
 
 from __future__ import annotations
@@ -28,6 +33,16 @@ def card_gate_on(monkeypatch):
     return settings
 
 
+def _unify_org(dbsession, *, owner_email):
+    """Create the literal Unify org owned by a user with *owner_email*."""
+    return make_org_with_billing(
+        dbsession,
+        UNIFY_ORGANIZATION_NAME,
+        None,
+        owner_email=owner_email,
+    )
+
+
 def _add_to_unify_org(dbsession, unify_org, user):
     from orchestra.db.dao.role_dao import RoleDAO
     from orchestra.db.models.orchestra_models import OrganizationMember
@@ -45,7 +60,7 @@ def _add_to_unify_org(dbsession, unify_org, user):
 
 def _staff_owned_customer_org(dbsession, name):
     """A customer org whose owner is a member of the Unify org."""
-    unify_org, _ = make_org_with_billing(dbsession, UNIFY_ORGANIZATION_NAME, None)
+    unify_org, _ = _unify_org(dbsession, owner_email="founder@unify.ai")
     staff, _ = make_user_with_billing(
         dbsession,
         f"staff_{name.replace(' ', '_').lower()}",
@@ -59,9 +74,21 @@ def _staff_owned_customer_org(dbsession, name):
 
 
 def test_unify_org_account_is_internal(dbsession):
-    _, ba = make_org_with_billing(dbsession, UNIFY_ORGANIZATION_NAME, None)
+    """The genuine Unify org — staff-owned mailbox — is internal."""
+    _, ba = _unify_org(dbsession, owner_email="founder@unify.ai")
 
     assert is_internal_account(dbsession, ba.id) is True
+
+
+def test_squatted_unify_org_name_is_not_internal(dbsession):
+    """An org merely *named* "Unify" by a customer is not internal.
+
+    This is the anti-squatting guard: the name is user-choosable, so the
+    owner must also hold a unify.ai mailbox for the org to count.
+    """
+    _, ba = _unify_org(dbsession, owner_email="squatter@example.com")
+
+    assert is_internal_account(dbsession, ba.id) is False
 
 
 def test_customer_org_owned_by_staff_is_not_internal(dbsession):
@@ -73,7 +100,7 @@ def test_customer_org_owned_by_staff_is_not_internal(dbsession):
 
 def test_staff_personal_account_is_internal(dbsession):
     """Internal environments run off staff personal accounts — keep those."""
-    unify_org, _ = make_org_with_billing(dbsession, UNIFY_ORGANIZATION_NAME, None)
+    unify_org, _ = _unify_org(dbsession, owner_email="founder@unify.ai")
     staff, staff_ba = make_user_with_billing(
         dbsession,
         "staff_personal",
@@ -84,9 +111,26 @@ def test_staff_personal_account_is_internal(dbsession):
     assert is_internal_account(dbsession, staff_ba.id) is True
 
 
+def test_non_staff_member_of_unify_org_is_not_internal(dbsession):
+    """A member of the Unify org without a unify.ai mailbox is not internal.
+
+    Guards the squatting variant where an outsider is added as a member of
+    an org named "Unify": membership without the domain confers nothing.
+    """
+    unify_org, _ = _unify_org(dbsession, owner_email="founder@unify.ai")
+    outsider, outsider_ba = make_user_with_billing(
+        dbsession,
+        "member_outsider",
+        email="outsider@example.com",
+    )
+    _add_to_unify_org(dbsession, unify_org, outsider)
+
+    assert is_internal_account(dbsession, outsider_ba.id) is False
+
+
 def test_unify_domain_alone_does_not_confer_internal(dbsession):
     """An @unify.ai address with no Unify membership is not internal."""
-    make_org_with_billing(dbsession, UNIFY_ORGANIZATION_NAME, None)
+    _unify_org(dbsession, owner_email="founder@unify.ai")
     _, outsider_ba = make_user_with_billing(
         dbsession,
         "domain_only",

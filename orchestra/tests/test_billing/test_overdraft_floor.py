@@ -103,6 +103,7 @@ class TestOverdraftFloor:
             UNIFY_ORGANIZATION_NAME,
             None,
             credits=Decimal("0"),
+            owner_email="founder@unify.ai",
         )
 
         _deduct(dbsession, unify_ba, abs(OVERDRAFT_SUSPEND_FLOOR) + Decimal("50"))

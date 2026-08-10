@@ -20,6 +20,21 @@ from orchestra.services.assistant_cleanup_service import (
 
 PERSONAL_WORKSPACE_DISABLED_REASON_ORG_MEMBER = "organization_membership"
 UNIFY_ORGANIZATION_NAME = "Unify"
+UNIFY_STAFF_EMAIL_DOMAIN = "@unify.ai"
+
+
+def user_is_unify_staff(session: Session, user_id: str) -> bool:
+    """Whether the user holds a verified unify.ai mailbox.
+
+    The email is trustworthy as an identity signal: self-serve signup
+    creates no ``User`` row until the address is verified, and
+    admin-created users are deliberate. Org *names* are not — "Unify" is
+    claimable by anyone wherever the platform's own org does not exist
+    (fresh stacks, self-host), so anything granting internal privileges
+    must check the mailbox, not just membership in an org so named.
+    """
+    email = session.query(User.email).filter(User.id == user_id).scalar()
+    return bool(email) and email.lower().endswith(UNIFY_STAFF_EMAIL_DOMAIN)
 
 
 @dataclass(frozen=True)
@@ -34,6 +49,13 @@ class PersonalWorkspaceDisableResult:
 
 
 def user_is_unify_member(session: Session, user_id: str) -> bool:
+    """Whether the user is Unify staff operating inside the Unify org.
+
+    Membership alone is spoofable (see :func:`user_is_unify_staff`), so
+    it only counts for a verified unify.ai mailbox.
+    """
+    if not user_is_unify_staff(session, user_id):
+        return False
     return (
         session.query(OrganizationMember)
         .join(Organization, Organization.id == OrganizationMember.organization_id)
@@ -47,16 +69,16 @@ def user_is_unify_member(session: Session, user_id: str) -> bool:
 
 
 def user_has_non_unify_membership(session: Session, user_id: str) -> bool:
-    return (
+    query = (
         session.query(OrganizationMember)
         .join(Organization, Organization.id == OrganizationMember.organization_id)
-        .filter(
-            OrganizationMember.user_id == user_id,
-            Organization.name != UNIFY_ORGANIZATION_NAME,
-        )
-        .first()
-        is not None
+        .filter(OrganizationMember.user_id == user_id)
     )
+    # For a non-staff user an org named "Unify" is just an org — only
+    # staff get the carve-out for the platform's own workspace.
+    if user_is_unify_staff(session, user_id):
+        query = query.filter(Organization.name != UNIFY_ORGANIZATION_NAME)
+    return query.first() is not None
 
 
 def personal_workspace_is_disabled(session: Session, user_id: str) -> bool:
