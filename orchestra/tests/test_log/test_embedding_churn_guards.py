@@ -190,7 +190,7 @@ async def test_requeue_revives_failed_and_refreshes_stale_text(
     client: AsyncClient,
     dbsession,
 ):
-    from orchestra.db.models.orchestra_models import EmbeddingQueue
+    from orchestra.db.models.orchestra_models import EmbeddingQueue, LogEvent
     from orchestra.web.api.log.python2SQL.helpers import (
         DEFAULT_EMBEDDING_MODEL,
         _queue_embeddings_for_generation,
@@ -201,6 +201,9 @@ async def test_requeue_revives_failed_and_refreshes_stale_text(
     response = await _create_log(client, project_name, entries={"content": "x"})
     assert response.status_code == 200
     log_id = response.json()["log_event_ids"][0]
+    project_id = dbsession.execute(
+        select(LogEvent.project_id).where(LogEvent.id == log_id),
+    ).scalar_one()
 
     key = "_content_emb"
     # Seed a terminal 'failed' row with stale text.
@@ -210,6 +213,7 @@ async def test_requeue_revives_failed_and_refreshes_stale_text(
         None,
         None,
         key,
+        project_id=project_id,
     )
     row = dbsession.execute(
         select(EmbeddingQueue).where(EmbeddingQueue.ref_id == log_id),
@@ -226,6 +230,7 @@ async def test_requeue_revives_failed_and_refreshes_stale_text(
         None,
         None,
         key,
+        project_id=project_id,
     )
     dbsession.expire_all()
     row = dbsession.execute(
@@ -267,7 +272,7 @@ async def test_failed_items_rejoin_claim_after_cooloff(
     client: AsyncClient,
     dbsession,
 ):
-    from orchestra.db.models.orchestra_models import EmbeddingQueue
+    from orchestra.db.models.orchestra_models import EmbeddingQueue, LogEvent
     from orchestra.web.api.log.python2SQL.helpers import (
         _queue_embeddings_for_generation,
     )
@@ -278,8 +283,18 @@ async def test_failed_items_rejoin_claim_after_cooloff(
     response = await _create_log(client, project_name, entries={"content": "x"})
     assert response.status_code == 200
     log_id = response.json()["log_event_ids"][0]
+    project_id = dbsession.execute(
+        select(LogEvent.project_id).where(LogEvent.id == log_id),
+    ).scalar_one()
 
-    _queue_embeddings_for_generation(dbsession, {log_id: "text"}, None, None, "k1")
+    _queue_embeddings_for_generation(
+        dbsession,
+        {log_id: "text"},
+        None,
+        None,
+        "k1",
+        project_id=project_id,
+    )
     row = dbsession.execute(
         select(EmbeddingQueue).where(EmbeddingQueue.ref_id == log_id),
     ).scalar_one()

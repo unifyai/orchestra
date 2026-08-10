@@ -77,6 +77,15 @@ _ALLOWLIST: tuple[str, ...] = (
     "services/team_cleanup_service.py::_claim_shared_team_contexts",
     # Auth gate: bare id -> project_id, then access check.
     "web/api/log/views.py::_atomic_field_update_impl",
+    # Embedding pipeline workers: one global sweep over embedding_queue by
+    # status/id across every tenant's pending work (genuinely cross-partition;
+    # the queue is small and bounded, unlike the log/embedding tables).
+    "workers/embedding_generator.py::reset_stale_generating_items",
+    "workers/embedding_generator.py::claim_pending_batch",
+    "workers/embedding_generator.py::update_queue_with_vectors",
+    "workers/embedding_inserter.py::reset_stale_inserting_items",
+    "workers/embedding_inserter.py::claim_ready_batch",
+    "workers/embedding_inserter.py::delete_processed_queue_items",
 )
 
 _lock = threading.Lock()

@@ -2192,7 +2192,7 @@ def _queue_embeddings_for_generation(
     model: Optional[str],
     dimensions: Optional[int],
     key: str,
-    project_id: Optional[int] = None,
+    project_id: int,
     force: bool = False,
 ) -> None:
     """
@@ -2209,6 +2209,9 @@ def _queue_embeddings_for_generation(
         model: Embedding model to use (defaults to DEFAULT_EMBEDDING_MODEL if None)
         dimensions: Optional number of dimensions for the embedding
         key: The TARGET key for Embedding.key (e.g., "desc_emb")
+        project_id: Project owning the log events. Required so the
+            existence check and the id->project resolution prune to one
+            partition instead of fanning out across every tenant.
     """
     from orchestra.db.models.core_models import EmbeddingQueue
 
