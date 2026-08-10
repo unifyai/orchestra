@@ -6090,6 +6090,7 @@ async def clone_voice(
     tags=["Assistant Management"],
 )
 def list_default_model_options(
+    request_fastapi: Request,
     usage: Literal["actor", "slow_brain"] = Query(
         "actor",
         description=(
@@ -6098,27 +6099,38 @@ def list_default_model_options(
             "the selectable model pairs are identical."
         ),
     ),
+    session=Depends(get_db_session),
 ) -> InfoResponse[List[DefaultModelOptionRead]]:
     """List the selectable per-assistant LLM options."""
-    return InfoResponse(
-        info=[
-            DefaultModelOptionRead(
-                model=option.model,
-                reasoning_effort=option.reasoning_effort,
-                label=option.label,
-                approx_credits_per_task=option.approx_credits_per_task,
-                approx_credits_per_message=option.approx_credits_per_message,
-                artificial_analysis_url=option.artificial_analysis_url,
-                recommended=True,
-                eligible=True,
-                disabled_reason=None,
-                supports_reasoning=True,
-                input_cost_per_token=option.input_usd_per_m / 1_000_000,
-                output_cost_per_token=option.output_usd_per_m / 1_000_000,
-            )
-            for option in list_model_options(usage)
-        ],
+    from orchestra.lib.payment_gated_models import (
+        account_never_paid,
+        payment_gate_reason,
     )
+
+    never_paid = account_never_paid(
+        session,
+        request_fastapi.state.user_id,
+        getattr(request_fastapi.state, "organization_id", None),
+    )
+
+    def _option(option) -> DefaultModelOptionRead:
+        gated = payment_gate_reason(option.model, never_paid=never_paid)
+        return DefaultModelOptionRead(
+            model=option.model,
+            reasoning_effort=option.reasoning_effort,
+            label=option.label,
+            approx_credits_per_task=option.approx_credits_per_task,
+            approx_credits_per_message=option.approx_credits_per_message,
+            artificial_analysis_url=option.artificial_analysis_url,
+            recommended=True,
+            eligible=gated is None,
+            disabled_reason=gated,
+            supports_reasoning=True,
+            input_cost_per_token=option.input_usd_per_m / 1_000_000,
+            output_cost_per_token=option.output_usd_per_m / 1_000_000,
+        )
+
+    return InfoResponse(info=[_option(o) for o in list_model_options(usage)])
 
 
 @router.get(
@@ -6134,13 +6146,19 @@ def list_default_model_options(
     tags=["Assistant Management"],
 )
 def search_default_model_options(
+    request_fastapi: Request,
     q: str = Query("", description="Case-insensitive substring match on id/name."),
     usage: Literal["actor", "slow_brain"] = Query(
         "actor",
         description="Actor requires tools; slow_brain requires image input only.",
     ),
     limit: int = Query(50, ge=1, le=200),
+    session=Depends(get_db_session),
 ) -> InfoResponse[List[DefaultModelOptionRead]]:
+    from orchestra.lib.payment_gated_models import (
+        account_never_paid,
+        payment_gate_reason,
+    )
     from orchestra.services.openrouter_catalog import search_models
     from orchestra.web.api.assistant.default_models import (
         credits_per_message_from_token_costs,
@@ -6151,29 +6169,38 @@ def search_default_model_options(
         limit=limit,
         require_tools=(usage == "actor"),
     )
-    return InfoResponse(
-        info=[
-            DefaultModelOptionRead(
-                model=row["endpoint"],
-                reasoning_effort=None,
-                label=str(row.get("name") or row["id"]),
-                approx_credits_per_task=None,
-                approx_credits_per_message=credits_per_message_from_token_costs(
-                    row.get("input_cost_per_token"),
-                    row.get("output_cost_per_token"),
-                ),
-                artificial_analysis_url=None,
-                recommended=False,
-                eligible=bool(row.get("eligible")),
-                disabled_reason=row.get("disabled_reason"),
-                supports_reasoning=bool(row.get("supports_reasoning")),
-                input_cost_per_token=row.get("input_cost_per_token"),
-                output_cost_per_token=row.get("output_cost_per_token"),
-                context_length=row.get("context_length"),
-            )
-            for row in rows
-        ],
+    never_paid = account_never_paid(
+        session,
+        request_fastapi.state.user_id,
+        getattr(request_fastapi.state, "organization_id", None),
     )
+
+    def _row(row: dict) -> DefaultModelOptionRead:
+        # Capability policy already answered for this row. Payment gating is
+        # a second, independent reason to refuse, and it wins the label: a
+        # user who cannot reach the provider at all is not helped by being
+        # told the model lacks tool support.
+        gated = payment_gate_reason(row["endpoint"], never_paid=never_paid)
+        return DefaultModelOptionRead(
+            model=row["endpoint"],
+            reasoning_effort=None,
+            label=str(row.get("name") or row["id"]),
+            approx_credits_per_task=None,
+            approx_credits_per_message=credits_per_message_from_token_costs(
+                row.get("input_cost_per_token"),
+                row.get("output_cost_per_token"),
+            ),
+            artificial_analysis_url=None,
+            recommended=False,
+            eligible=bool(row.get("eligible")) and gated is None,
+            disabled_reason=gated or row.get("disabled_reason"),
+            supports_reasoning=bool(row.get("supports_reasoning")),
+            input_cost_per_token=row.get("input_cost_per_token"),
+            output_cost_per_token=row.get("output_cost_per_token"),
+            context_length=row.get("context_length"),
+        )
+
+    return InfoResponse(info=[_row(row) for row in rows])
 
 
 @router.get(
