@@ -3074,13 +3074,16 @@ async def test_recompute_derived_on_create_sync_embedding(
     dbsession,
 ):
     """
-    Verify that ``recompute_derived=True`` on POST /v0/logs handles sync
-    ``embed()`` equations: embeddings are generated immediately and stored in
-    the Embedding table under the correct key.
+    Verify that new rows in an embed()-templated context flow through the
+    embedding queue: POST enqueues (regardless of ``recompute_derived`` —
+    coverage is a write-side responsibility), and the two-stage worker
+    pipeline lands the vector in the Embedding table.
     """
     from sqlalchemy import select
 
-    from orchestra.db.models.orchestra_models import Embedding
+    from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
+    from orchestra.workers.embedding_generator import process_pending_embeddings
+    from orchestra.workers.embedding_inserter import process_ready_embeddings
 
     project_name = "test_recompute_sync_embed"
     await _create_project(client, project_name, user=1)
@@ -3119,7 +3122,22 @@ async def test_recompute_derived_on_create_sync_embedding(
     assert response.status_code == 200, response.json()
     new_id_with = response.json()["log_event_ids"][0]
 
-    # Assert: embedding exists in Embedding table under the correct key
+    # Assert: the row was enqueued (embedding lands via the worker pipeline,
+    # never inline in the request).
+    queue_entry = dbsession.execute(
+        select(EmbeddingQueue).where(
+            EmbeddingQueue.ref_id == new_id_with,
+            EmbeddingQueue.key == key,
+        ),
+    ).scalar_one_or_none()
+    assert queue_entry is not None, "new row must be enqueued for embedding"
+    assert queue_entry.status == "pending"
+    assert queue_entry.text == "a friendly dog"
+
+    # Drive the two-stage pipeline; the vector must land in Embedding.
+    process_pending_embeddings(dbsession)
+    process_ready_embeddings(dbsession)
+
     embedding = dbsession.execute(
         select(Embedding).where(
             Embedding.ref_id == new_id_with,
@@ -3132,7 +3150,8 @@ async def test_recompute_derived_on_create_sync_embedding(
     ), f"Embedding should exist for log {new_id_with} under key '{key}'"
     assert embedding.vector is not None, "Embedding vector should be populated"
 
-    # 4) Create NEW logs WITHOUT recompute_derived (default False)
+    # 4) Create NEW logs WITHOUT recompute_derived: embedding coverage is a
+    # write-side responsibility, so the row is enqueued all the same.
     response = await client.post(
         "/v0/logs",
         json={
@@ -3144,17 +3163,16 @@ async def test_recompute_derived_on_create_sync_embedding(
     assert response.status_code == 200, response.json()
     new_id_without = response.json()["log_event_ids"][0]
 
-    # Assert: NO embedding for this log
-    embedding_none = dbsession.execute(
-        select(Embedding).where(
-            Embedding.ref_id == new_id_without,
-            Embedding.key == key,
-            Embedding.is_deleted == False,  # noqa: E712
+    queue_entry = dbsession.execute(
+        select(EmbeddingQueue).where(
+            EmbeddingQueue.ref_id == new_id_without,
+            EmbeddingQueue.key == key,
         ),
     ).scalar_one_or_none()
-    assert (
-        embedding_none is None
-    ), f"Embedding should NOT exist for log {new_id_without} (recompute_derived=False)"
+    assert queue_entry is not None, (
+        "rows created without recompute_derived must still be enqueued — "
+        "otherwise they are invisible to semantic search until a backfill"
+    )
 
 
 @pytest.mark.anyio
@@ -3234,7 +3252,8 @@ async def test_recompute_derived_on_create_async_embedding(
         queue_entry.status == "pending"
     ), f"Queue entry should be pending, got '{queue_entry.status}'"
 
-    # Assert: JSONB has the null marker for the derived key
+    # Assert: no JSONB null marker — vectors live only in the Embedding
+    # table, and the marker (which carried no value) is no longer written.
     response = await client.get(
         f"/v0/logs?project_name={project_name}&from_ids={new_id}",
         headers=HEADERS,
@@ -3243,14 +3262,13 @@ async def test_recompute_derived_on_create_async_embedding(
     logs = response.json()["logs"]
     assert len(logs) == 1
     derived_entries = logs[0].get("derived_entries", {})
-    assert (
-        key in derived_entries
-    ), f"Derived key '{key}' should exist in JSONB (as null marker)"
-    assert (
-        derived_entries[key] is None
-    ), f"Derived key '{key}' should be null (async embed not yet computed)"
+    assert derived_entries.get(key) is None, (
+        f"Derived key '{key}' must carry no JSONB value (vectors live in the "
+        "Embedding table)"
+    )
 
-    # 4) Create NEW logs WITHOUT recompute_derived (default False)
+    # 4) Create NEW logs WITHOUT recompute_derived: embedding coverage is a
+    # write-side responsibility, so the row is enqueued all the same.
     response = await client.post(
         "/v0/logs",
         json={
@@ -3262,19 +3280,18 @@ async def test_recompute_derived_on_create_async_embedding(
     assert response.status_code == 200, response.json()
     no_recompute_id = response.json()["log_event_ids"][0]
 
-    # Assert: NO EmbeddingQueue entry for this log
-    queue_none = dbsession.execute(
+    queue_entry = dbsession.execute(
         select(EmbeddingQueue).where(
             EmbeddingQueue.ref_id == no_recompute_id,
             EmbeddingQueue.key == key,
         ),
     ).scalar_one_or_none()
-    assert queue_none is None, (
-        f"EmbeddingQueue entry should NOT exist for log {no_recompute_id} "
-        "(recompute_derived=False)"
+    assert queue_entry is not None, (
+        "rows created without recompute_derived must still be enqueued — "
+        "otherwise they are invisible to semantic search until a backfill"
     )
 
-    # Assert: NO Embedding row either
+    # The vector itself only lands once the worker pipeline runs.
     emb_none = dbsession.execute(
         select(Embedding).where(
             Embedding.ref_id == no_recompute_id,
@@ -3282,10 +3299,7 @@ async def test_recompute_derived_on_create_async_embedding(
             Embedding.is_deleted == False,  # noqa: E712
         ),
     ).scalar_one_or_none()
-    assert emb_none is None, (
-        f"Embedding should NOT exist for log {no_recompute_id} "
-        "(recompute_derived=False)"
-    )
+    assert emb_none is None, "vector must not be computed inline in the request"
 
 
 @pytest.mark.anyio
@@ -3442,7 +3456,9 @@ async def test_recompute_derived_on_create_image_embedding(
         key in derived_entries
     ), f"Derived key '{key}' should exist in JSONB as null marker"
 
-    # 6) Create a log WITHOUT recompute_derived — no embedding should be created
+    # 6) Create a log WITHOUT recompute_derived — embedding templates run
+    # anyway (coverage is a write-side responsibility; image embeddings have
+    # no queue stage, so they compute in the create path).
     response = await client.post(
         "/v0/logs",
         json={
@@ -3461,16 +3477,16 @@ async def test_recompute_derived_on_create_image_embedding(
     no_recompute_id = response.json()["log_event_ids"][0]
 
     dbsession.expire_all()
-    no_emb = dbsession.execute(
+    no_flag_emb = dbsession.execute(
         select(Embedding).where(
             Embedding.ref_id == no_recompute_id,
             Embedding.key == key,
             Embedding.is_deleted == False,  # noqa: E712
         ),
     ).scalar_one_or_none()
-    assert no_emb is None, (
-        f"Embedding should NOT exist for log {no_recompute_id} "
-        "(recompute_derived=False)"
+    assert no_flag_emb is not None, (
+        f"Embedding should exist for log {no_recompute_id} even without "
+        "recompute_derived — new rows in a templated context must be covered"
     )
 
 
@@ -3484,13 +3500,15 @@ async def test_recompute_derived_on_update(
     both general derived columns and sync ``embed()`` derived columns.
 
     For general derived columns the recomputed value must reflect the updated
-    base data.  For ``embed()`` columns the stale embedding is soft-deleted
-    before recomputation so ``_ensure_vectors_exist`` regenerates it — the
-    vector must actually change when the source text changes.
+    base data.  For ``embed()`` columns the changed rows are re-enqueued (the
+    stale vector stays live until the worker pipeline upserts the refreshed
+    one) — the vector must actually change when the source text changes.
     """
     from sqlalchemy import select
 
     from orchestra.db.models.orchestra_models import Embedding
+    from orchestra.workers.embedding_generator import process_pending_embeddings
+    from orchestra.workers.embedding_inserter import process_ready_embeddings
 
     project_name = "test_recompute_update"
     await _create_project(client, project_name, user=1)
@@ -3595,7 +3613,24 @@ async def test_recompute_derived_on_update(
         logs_after[id2]["derived_entries"][general_key] == 400
     ), "score_double should be 200 * 2 = 400 after update"
 
-    # 5) Verify embedding was regenerated with the new text
+    # 5) Verify embedding refresh: the changed rows were re-enqueued, the
+    # stale vector stays live until the worker pipeline replaces it in place.
+    dbsession.expire_all()
+    stale_emb = dbsession.execute(
+        select(Embedding).where(
+            Embedding.ref_id == id1,
+            Embedding.key == embed_key,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
+    ).scalar_one_or_none()
+    assert stale_emb is not None, (
+        "the previous vector must stay live during the refresh window — "
+        "no soft-delete gap"
+    )
+
+    process_pending_embeddings(dbsession)
+    process_ready_embeddings(dbsession)
+
     dbsession.expire_all()
     updated_emb = dbsession.execute(
         select(Embedding).where(
@@ -3614,15 +3649,9 @@ async def test_recompute_derived_on_update(
     )
     assert original_vector != updated_vector, (
         "Embedding vector should change after updating the base text — "
-        "recompute_derived_logs should soft-delete stale embeddings "
-        "so _ensure_vectors_exist regenerates them"
+        "changed rows are force-enqueued and the Stage-2 inserter upserts "
+        "the refreshed vector"
     )
-
-    # JSONB null marker should still be present
-    assert embed_key in logs_after[id1].get(
-        "derived_entries",
-        {},
-    ), f"Derived key '{embed_key}' should exist in JSONB after update"
 
 
 @pytest.mark.anyio

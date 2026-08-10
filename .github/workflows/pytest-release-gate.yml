@@ -149,7 +149,7 @@ jobs:
         ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
         ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
         # OpenRouter API key (used for OpenAI-compatible model calls)
-        ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
         TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
         ORCHESTRA_TOGETHER_AI_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
         # Orchestra-specific configuration
@@ -263,7 +263,7 @@ jobs:
         name: logs-shard-${{ matrix.shard }}
         path: logs/
         if-no-files-found: ignore
-        retention-days: 90
+        retention-days: 14
 
   # Single, stable required status check for staging->main releases. The
   # matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),

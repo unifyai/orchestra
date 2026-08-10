@@ -598,6 +598,38 @@ class PipedreamProviderAdapter(BaseIntegrationProviderAdapter):
             },
         )
 
+    def delete_connected_account(self, provider_connection_id: str) -> bool:
+        """Release a Pipedream account by id. See the base method.
+
+        Pipedream does not reserve a name per live account the way Composio
+        reserves an alias, so an orphan here blocks nothing — but it keeps
+        its OAuth grant and counts against the project, which is reason
+        enough not to abandon it.
+        """
+
+        if not self.project_id or not provider_connection_id:
+            return False
+
+        access_token, token_error = self._access_token()
+        if token_error or not access_token:
+            return False
+
+        import requests
+
+        response = requests.delete(
+            f"{self.base_url}/{self.project_id}/accounts/{provider_connection_id}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "X-PD-Environment": self.environment,
+            },
+            timeout=self.timeout_seconds,
+        )
+        # An account that is already gone is released as far as we care.
+        if response.status_code in (200, 202, 204, 404):
+            return True
+        response.raise_for_status()
+        return True
+
     def create_connect_link_url(
         self,
         *,

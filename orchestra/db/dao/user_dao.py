@@ -107,7 +107,9 @@ class UserDAO:
         # automatically.
         from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 
-        billing_account = BillingAccountDAO(self.session).create()
+        billing_account = BillingAccountDAO(self.session).create(
+            apply_signup_grant=True,
+        )
 
         from orchestra.db.dao.auth_dao import canonicalize_email
 

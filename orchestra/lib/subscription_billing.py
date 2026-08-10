@@ -33,6 +33,7 @@ from orchestra.db.dao.billing_plan_assignment_dao import BillingPlanAssignmentDA
 from orchestra.db.models.enums import CollectionMethod
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_MONTHLY_COMMIT,
+    RECHARGE_TYPE_PROMO,
     RECHARGE_TYPE_PRORATION,
     BillingAccount,
     BillingMode,
@@ -48,6 +49,7 @@ from orchestra.lib.billing import (
 )
 from orchestra.lib.credit_grants import (
     GRANT_KIND_PLAN,
+    GRANT_KIND_TRIAL,
     add_one_month,
     add_one_year,
     forfeit_plan_grant_remainder,
@@ -514,6 +516,33 @@ def apply_subscription_invoice_paid(
     # posted, so any mid-cycle upgrade now grants only what is above this
     # fresh baseline.
     billing_account.plan_credits_granted_period = grant
+
+    # One-time signup grant for card-gated trial accounts, applied on the
+    # first *collected* invoice rather than at checkout: a card on file is
+    # a promise, not money, and most trial cards never charge successfully.
+    # ``trial_end_at`` marks the account as having come through the trial
+    # Checkout. ``apply_credit_grant`` records a promo Recharge, so the
+    # promo-absence check both makes this once-per-account and skips
+    # accounts that were granted at signup (card gate off).
+    if billing_account.trial_end_at is not None and settings.signup_credit_grant > 0:
+        from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+
+        existing_promo = (
+            session.query(Recharge.id)
+            .filter(
+                Recharge.billing_account_id == billing_account.id,
+                Recharge.type == RECHARGE_TYPE_PROMO,
+            )
+            .first()
+        )
+        if existing_promo is None:
+            BillingAccountDAO(session).apply_credit_grant(
+                billing_account.id,
+                settings.signup_credit_grant,
+                grant_kind=GRANT_KIND_TRIAL,
+                expires_at=expires_at,
+                description="Signup trial credit grant",
+            )
 
     # Record the collection as a PAID monthly_commit Recharge, attributed
     # to the active assignment so the invoice list + reconciliation see it.

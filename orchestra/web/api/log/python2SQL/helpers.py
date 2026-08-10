@@ -2192,7 +2192,8 @@ def _queue_embeddings_for_generation(
     model: Optional[str],
     dimensions: Optional[int],
     key: str,
-    project_id: Optional[int] = None,
+    project_id: int,
+    force: bool = False,
 ) -> None:
     """
     Queue embeddings for background generation instead of creating them synchronously.
@@ -2208,6 +2209,9 @@ def _queue_embeddings_for_generation(
         model: Embedding model to use (defaults to DEFAULT_EMBEDDING_MODEL if None)
         dimensions: Optional number of dimensions for the embedding
         key: The TARGET key for Embedding.key (e.g., "desc_emb")
+        project_id: Project owning the log events. Required so the
+            existence check and the id->project resolution prune to one
+            partition instead of fanning out across every tenant.
     """
     from orchestra.db.models.core_models import EmbeddingQueue
 
@@ -2216,25 +2220,30 @@ def _queue_embeddings_for_generation(
 
     model_name = model or DEFAULT_EMBEDDING_MODEL
 
-    # 1. Find which embeddings already exist (excluding soft-deleted)
+    # 1. Find which embeddings already exist (excluding soft-deleted).
+    # ``force=True`` bypasses this: the caller knows the source text changed,
+    # so an existing vector is stale and must be regenerated (the Stage-2
+    # inserter upserts, replacing it in place).
     all_ids = list(id_to_text.keys())
-    existing_refs = (
-        session.execute(
-            select(Embedding.ref_id).where(
-                and_(
-                    Embedding.key == key,
-                    Embedding.model == model_name,
-                    Embedding.ref_id.in_(all_ids),
-                    embedding_scope(Embedding, project_id),
-                    Embedding.is_deleted
-                    == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
+    existing_set: set = set()
+    if not force:
+        existing_refs = (
+            session.execute(
+                select(Embedding.ref_id).where(
+                    and_(
+                        Embedding.key == key,
+                        Embedding.model == model_name,
+                        Embedding.ref_id.in_(all_ids),
+                        embedding_scope(Embedding, project_id),
+                        Embedding.is_deleted
+                        == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
+                    ),
                 ),
-            ),
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    existing_set = set(existing_refs)
+        existing_set = set(existing_refs)
 
     # 2. Queue only missing embeddings
     ids_to_queue = [
@@ -2274,7 +2283,31 @@ def _queue_embeddings_for_generation(
     ]
 
     stmt = insert(EmbeddingQueue).values(queue_entries)
-    stmt = stmt.on_conflict_do_nothing(constraint="uq_embedding_queue")
+    # A queue row may already exist for (project, ref, key, model). DO NOTHING
+    # here used to make a re-queue a silent no-op: a `failed` row could never
+    # be revived, and a stale row kept generating a vector for outdated text.
+    # Refresh the row instead — but never touch rows a worker holds mid-flight
+    # ('generating'/'inserting'), and leave identical still-viable rows alone.
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_embedding_queue",
+        set_={
+            "text": stmt.excluded.text,
+            "dimensions": stmt.excluded.dimensions,
+            "status": "pending",
+            "retry_count": 0,
+            "error_message": None,
+            "processing_started_at": None,
+            "generated_vector": None,
+            "vector_generated_at": None,
+        },
+        where=or_(
+            EmbeddingQueue.status.in_(("failed", "cancelled")),
+            and_(
+                EmbeddingQueue.text != stmt.excluded.text,
+                EmbeddingQueue.status.notin_(("generating", "inserting")),
+            ),
+        ),
+    )
     session.execute(stmt)
     session.commit()
 

@@ -72,6 +72,7 @@ from orchestra.web.api.webhooks import provider_triggers as provider_trigger_web
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 from orchestra.web.api.whatsapp import admin_router as whatsapp_admin_router
 from orchestra.web.api.whatsapp import router as whatsapp_router
+from orchestra.web.api.workflows.views import admin_router as workflows_admin_router
 
 API_KEY_AUTH = [
     Depends(auth_api_key),
@@ -201,6 +202,13 @@ api_router.include_router(
     canvas_admin_router,
     prefix="/admin",
     tags=["Canvas"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    workflows_admin_router,
+    prefix="/admin",
+    tags=["Workflows"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )

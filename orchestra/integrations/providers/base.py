@@ -218,6 +218,27 @@ class BaseIntegrationProviderAdapter(ABC):
 
         return None
 
+    def delete_connected_account(self, provider_connection_id: str) -> bool:
+        """Release the account this connection holds at the provider.
+
+        Disconnecting an app has to end at the provider, not in our own
+        table. An account we walk away from keeps its OAuth grant, keeps
+        counting against the workspace, and — on backends that reserve a
+        name per live account — keeps holding the identifier its own
+        replacement will ask for, so the orphan refuses the reconnect meant
+        to replace it.
+
+        Returns True when the account is gone (including "was already
+        gone"), False when this backend cannot release it. The caller keeps
+        the stored id on False, because that id is the only thing that makes
+        an unreleased account findable afterwards.
+
+        The default is False: a backend that has not implemented this cannot
+        claim the account was released.
+        """
+
+        return False
+
     def stage_file(
         self,
         *,

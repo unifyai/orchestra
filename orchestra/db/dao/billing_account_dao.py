@@ -68,7 +68,7 @@ class BillingAccountDAO:
     def create(
         self,
         *,
-        apply_signup_grant: bool = True,
+        apply_signup_grant: bool = False,
         **kwargs,
     ) -> BillingAccount:
         """
@@ -85,7 +85,17 @@ class BillingAccountDAO:
         factory — the daily reconciliation routine flags any such row
         as ``plan_assignment_null_pointer`` (critical).
 
-        :param apply_signup_grant: Whether to apply the configured signup promo.
+        The signup grant is opt-in because billing accounts are created per
+        *wallet*, not per person: a user gets one, and so does every
+        organization they create. Granting by default made the promo
+        re-mintable without limit — create an organization, spend its $100,
+        delete it, repeat — so the grant is now requested explicitly by the
+        one caller that represents a new person joining the platform.
+
+        :param apply_signup_grant: Whether to apply the configured signup
+            promo. Only the user-signup path may pass ``True``; an
+            organization's wallet inherits its owner's entitlement rather
+            than earning a fresh one.
         :param kwargs: Optional initial field values (credits, etc.)
         :return: The created BillingAccount instance.
         """

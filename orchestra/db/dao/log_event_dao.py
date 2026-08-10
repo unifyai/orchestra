@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -1421,7 +1422,8 @@ class LogEventDAO:
             if le_id:
                 updates_by_log_id.setdefault(le_id, []).append(update_item)
 
-        update_result = {"successful_update_ids": [], "failed": []}
+        update_result = {"successful_update_ids": [], "failed": [], "changed_keys": []}
+        changed_keys: set = set()
 
         if not updates_by_log_id:
             return update_result
@@ -1611,8 +1613,16 @@ class LogEventDAO:
                     if not key:
                         continue
 
+                    # `field_types` arrives in two shapes: metadata dicts from
+                    # get_field_types(return_mutable=True) on the user-facing
+                    # update path (mutability enforced), or plain name→type
+                    # strings from derived writers (system recomputation may
+                    # always write). The old unconditional `.get` raised
+                    # AttributeError on the string shape, which the per-row
+                    # handler swallowed — silently no-opping every repeat
+                    # derived write.
                     ft_info = field_types.get(key)
-                    if ft_info and not ft_info.get("mutable", True):
+                    if isinstance(ft_info, dict) and not ft_info.get("mutable", True):
                         raise ImmutableFieldError(f"Field '{key}' is immutable")
 
                     key_explicit_type = explicit_types.get(key, {})
@@ -1643,6 +1653,13 @@ class LogEventDAO:
                             raise OverwriteError(
                                 f"Field '{key}' already exists and overwrite is False",
                             )
+
+                    # Clients routinely PUT whole rows; a key rewritten with an
+                    # identical value must not count as changed, or downstream
+                    # derived recomputation (including re-embedding) fires on
+                    # every touch of the row.
+                    if key not in current_data or current_data[key] != value:
+                        changed_keys.add(key)
 
                     update_data[key] = value
 
@@ -1707,6 +1724,7 @@ class LogEventDAO:
             self.session.execute(update_sql, params)
 
         self.session.commit()
+        update_result["changed_keys"] = sorted(changed_keys)
         return update_result
 
     def apply_jsonb_patch(
@@ -1964,6 +1982,59 @@ class LogEventDAO:
             is_embedding_equation = (
                 "embed(" in template.equation or "embed_image(" in template.equation
             )
+
+            # Pure text-embed templates skip the sync pipeline entirely: no
+            # soft-delete, no inline provider call, no HNSW write from this
+            # request. The rows are force-enqueued (caller only recomputes
+            # genuinely changed keys) and the Stage-2 inserter upserts the
+            # refreshed vector in place. The old soft-delete + synchronous
+            # re-embed was the primary vector-churn engine.
+            pure_embed_source = None
+            equation_stripped = template.equation.strip()
+            if equation_stripped.startswith(
+                "embed(",
+            ) and not equation_stripped.startswith(
+                "embed_image(",
+            ):
+                source_match = re.match(
+                    r"embed\(\s*\{\s*(?:[A-Za-z_]\w*\s*:\s*)?([A-Za-z_]\w*)\s*\}",
+                    equation_stripped,
+                )
+                if source_match:
+                    pure_embed_source = source_match.group(1)
+
+            if pure_embed_source is not None:
+                from orchestra.web.api.log.python2SQL.helpers import (
+                    _queue_embeddings_for_generation,
+                )
+
+                id_to_text = {
+                    row_id: text_value
+                    for row_id, text_value in self.session.execute(
+                        select(
+                            LogEvent.id,
+                            LogEvent.data.op("->>")(pure_embed_source),
+                        ).where(
+                            LogEvent.project_id == template.project_id,
+                            LogEvent.id.in_(log_ids),
+                        ),
+                    ).all()
+                    if text_value
+                }
+                if id_to_text:
+                    # model=None → default; equations cannot express another
+                    # model today (the parser drops the ``model=`` kwarg).
+                    _queue_embeddings_for_generation(
+                        self.session,
+                        id_to_text,
+                        None,
+                        None,
+                        template.key,
+                        project_id=template.project_id,
+                        force=True,
+                    )
+                return len(id_to_text)
+
             if is_embedding_equation:
                 self.session.execute(
                     update(Embedding)
@@ -2020,7 +2091,6 @@ class LogEventDAO:
             for log_event_id, value in computed_values:
                 try:
                     if isinstance(value, np.ndarray):
-                        val = None
                         non_null_val = value.tolist()
                         if is_image_embedding:
                             embedding_objects.append(
@@ -2033,10 +2103,17 @@ class LogEventDAO:
                                     owner_key=template_owner_key,
                                 ),
                             )
-                    else:
-                        val = json.loads(json.dumps(value, cls=json_encoder))
-                        if val is not None:
-                            non_null_val = val
+                        # Vectors live only in the Embedding table: no JSONB
+                        # null marker. Writing one rewrote every log row per
+                        # recompute (no HOT updates) for a value that carries
+                        # no information; presence checks resolve against the
+                        # embedding table.
+                        updates_count += 1
+                        continue
+
+                    val = json.loads(json.dumps(value, cls=json_encoder))
+                    if val is not None:
+                        non_null_val = val
 
                     merge_entries.append(
                         {

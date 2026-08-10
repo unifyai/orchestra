@@ -663,6 +663,29 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
         if response.status_code not in (200, 202, 204, 404):
             response.raise_for_status()
 
+    def delete_connected_account(self, provider_connection_id: str) -> bool:
+        """Release a Composio connected account by id. See the base method.
+
+        Composio reserves an alias per ACTIVE account, so an orphan left by
+        a disconnect is enough to refuse the reconnect meant to replace it.
+        """
+
+        if not self.api_key or not provider_connection_id:
+            return False
+
+        import requests
+
+        response = requests.delete(
+            f"{self.base_url}/connected_accounts/{provider_connection_id}",
+            headers=self._api_key_headers(),
+            timeout=self.timeout_seconds,
+        )
+        # An account that is already gone is released as far as we care.
+        if response.status_code in (200, 202, 204, 404):
+            return True
+        response.raise_for_status()
+        return True
+
     def create_auth_link(
         self,
         *,
@@ -703,12 +726,25 @@ class ComposioProviderAdapter(BaseIntegrationProviderAdapter):
             response.raise_for_status()
             data = response.json()
         except Exception as exc:
+            # `requests` stringifies an HTTPError to the status and URL only,
+            # so the provider's own reason reached neither the log nor the
+            # caller: a 400 here read as an unexplained "Bad Request" with
+            # nothing to act on. The body is where Composio says what it
+            # objected to, so carry it.
+            provider_response = getattr(exc, "response", None)
+            body = (
+                (provider_response.text or "").strip()[:600]
+                if provider_response
+                else ""
+            )
             return (
                 None,
                 None,
                 {
                     "code": "provider_auth_link_failed",
-                    "message": f"Failed to create Composio auth link: {exc}",
+                    "message": f"Failed to create Composio auth link: {exc}"
+                    + (f" — {body}" if body else ""),
+                    "provider_response": body,
                 },
             )
         redirect_url = data.get("redirect_url") or data.get("redirectUrl")

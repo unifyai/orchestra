@@ -858,12 +858,17 @@ class TestSignupCreditGrant:
         assert float(promos[0].amount_usd) == 0
 
     @pytest.mark.anyio
-    async def test_org_creation_grants_signup_credits_to_org(
+    async def test_org_creation_does_not_grant_signup_credits(
         self,
         client: AsyncClient,
         dbsession: Session,
     ):
-        """A created organization can spend credits before onboarding is completed."""
+        """The signup promo is per person, so a new organization starts empty.
+
+        Granting per billing account made the promo re-mintable without
+        limit: create an organization, spend its balance, delete it, repeat.
+        The owner keeps the one grant on their own account.
+        """
         from orchestra.settings import settings
 
         user = await create_test_user(client, "signup-credit-org-owner@unify.ai")
@@ -871,15 +876,51 @@ class TestSignupCreditGrant:
 
         db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
 
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        promos = self._promo_recharges(dbsession, db_org.billing_account_id)
-        assert len(promos) == 1
-        assert float(promos[0].quantity) == settings.signup_credit_grant
-        assert float(promos[0].amount_usd) == 0
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, db_org.billing_account_id) == []
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
         assert float(db_user.billing_account.credits) == settings.signup_credit_grant
+
+    @pytest.mark.anyio
+    async def test_a_second_organization_is_refused(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """One organization per user, and the refusal mints nothing."""
+        from orchestra.settings import settings
+
+        user = await create_test_user(client, "org-loop-owner@example.com")
+
+        org = await create_test_org(client, user, "LoopOrg0")
+        db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
+        assert float(db_org.billing_account.credits) == 0
+
+        response = await client.post(
+            "/v0/organizations",
+            json={"name": "LoopOrg1"},
+            headers=user["headers"],
+        )
+        assert response.status_code == 403
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        assert float(db_user.billing_account.credits) == settings.signup_credit_grant
+
+    @pytest.mark.anyio
+    async def test_unify_staff_are_exempt_from_the_org_cap(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """Staff provision customer orgs, so unify.ai users may own several."""
+        staff = await create_test_user(client, "staff-org-cap@unify.ai")
+
+        await create_test_org(client, staff, "First Staff Org")
+        second = await create_test_org(client, staff, "White Glove Client Org")
+        assert second["id"]
 
     @pytest.mark.anyio
     async def test_personal_onboarding_does_not_change_signup_grant(
@@ -929,8 +970,10 @@ class TestSignupCreditGrant:
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
         org_ba_id = db_org.billing_account_id
 
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        assert len(self._promo_recharges(dbsession, org_ba_id)) == 1
+        # The signup promo is per person: the org wallet starts empty and
+        # the owner keeps the one grant on their own account.
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, org_ba_id) == []
 
         resp = await client.put(
             "/v0/user/onboarding",
@@ -948,8 +991,8 @@ class TestSignupCreditGrant:
 
         dbsession.expire_all()
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        assert len(self._promo_recharges(dbsession, org_ba_id)) == 1
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, org_ba_id) == []
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
@@ -990,8 +1033,6 @@ class TestSignupCreditGrant:
         dbsession: Session,
     ):
         """Members completing onboarding do not add org promo credits."""
-        from orchestra.settings import settings
-
         owner = await create_test_user(client, "org-owner-credit@unify.ai")
         org = await create_test_org(client, owner, "MultiMemberCreditOrg")
         org_id = org["id"]
@@ -1008,9 +1049,11 @@ class TestSignupCreditGrant:
             },
         )
 
+        # The org wallet holds no promo funds: the signup grant lives on the
+        # owner's own account, so onboarding leaves the org at zero.
         dbsession.expire_all()
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
+        assert float(db_org.billing_account.credits) == 0
 
         member = await create_test_user(client, "org-member-credit@unify.ai")
         await client.put(
@@ -1027,8 +1070,8 @@ class TestSignupCreditGrant:
 
         dbsession.expire_all()
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        assert len(self._promo_recharges(dbsession, db_org.billing_account_id)) == 1
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, db_org.billing_account_id) == []
 
     @pytest.mark.anyio
     async def test_completed_onboarding_without_step_data_keeps_signup_grant(

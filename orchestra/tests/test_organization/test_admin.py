@@ -101,11 +101,10 @@ async def test_admin_list_organizations_with_members(client: AsyncClient, dbsess
 @pytest.mark.anyio
 async def test_admin_list_organizations_pagination(client: AsyncClient):
     """Test pagination with limit and offset."""
-    # Create a user and multiple organizations
-    user = await create_test_user(client, "org_pagination@example.com")
-
+    # A user may own at most one organization, so each org gets its own owner.
     created_org_ids = []
     for i in range(5):
+        user = await create_test_user(client, f"org_pagination_{i}@example.com")
         org_resp = await client.post(
             "/v0/organizations",
             json={"name": f"Pagination Org {i}"},
@@ -146,27 +145,28 @@ async def test_admin_list_organizations_pagination(client: AsyncClient):
 @pytest.mark.anyio
 async def test_admin_list_organizations_filter_by_name(client: AsyncClient):
     """Test filtering organizations by partial name match."""
-    user = await create_test_user(client, "org_filter@example.com")
-
-    # Create organizations with different names
+    # A user may own at most one organization, so each org gets its own owner.
+    user1 = await create_test_user(client, "org_filter_1@example.com")
     org1_resp = await client.post(
         "/v0/organizations",
         json={"name": "Alpha Corp"},
-        headers=user["headers"],
+        headers=user1["headers"],
     )
     assert org1_resp.status_code == status.HTTP_201_CREATED
 
+    user2 = await create_test_user(client, "org_filter_2@example.com")
     org2_resp = await client.post(
         "/v0/organizations",
         json={"name": "Beta Industries"},
-        headers=user["headers"],
+        headers=user2["headers"],
     )
     assert org2_resp.status_code == status.HTTP_201_CREATED
 
+    user3 = await create_test_user(client, "org_filter_3@example.com")
     org3_resp = await client.post(
         "/v0/organizations",
         json={"name": "Alpha Technologies"},
-        headers=user["headers"],
+        headers=user3["headers"],
     )
     assert org3_resp.status_code == status.HTTP_201_CREATED
 

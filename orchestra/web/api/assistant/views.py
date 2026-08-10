@@ -4897,6 +4897,16 @@ async def delete_assistant(
             )
         ]
 
+        # Release provider accounts before the assistant row goes. Connection
+        # rows have no cascade, so once the assistant is gone nothing can
+        # reach them — no surface lists them, no disconnect can be issued —
+        # and the accounts stay live at the provider forever.
+        from orchestra.web.api.integrations.operations import (
+            release_assistant_connections,
+        )
+
+        release_assistant_connections(session, assistant_id=assistant_id)
+
         dao.delete_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,

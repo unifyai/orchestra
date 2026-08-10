@@ -1488,6 +1488,53 @@ def admin_cleanup_expired_invites(
         )
 
 
+@router.post(
+    "/cleanup/abandoned-provider-accounts",
+    summary="Admin: Release provider accounts from unfinished connect attempts",
+    description="Delete connected accounts left behind by connect attempts the "
+    "user never completed. Called by scheduled cleanup job.",
+)
+def admin_cleanup_abandoned_provider_accounts(
+    older_than_seconds: int = 3600,
+    limit: int = 500,
+    session=Depends(get_db_session),
+) -> dict:
+    """Release provider accounts nobody finished connecting.
+
+    A provider creates the connected account when the auth link is issued,
+    not when the user authorises, so an abandoned attempt leaves a real
+    account behind that no disconnect will ever reach — the user never
+    believes they connected anything. Nothing else reclaims them.
+
+    :param older_than_seconds: Only touch attempts idle at least this long.
+    :param limit: Most accounts to release in one pass.
+    :param session: Database session.
+    :return: Counts of candidates, released and held.
+    """
+    from orchestra.web.api.integrations.operations import (
+        release_abandoned_provider_accounts,
+    )
+
+    try:
+        result = release_abandoned_provider_accounts(
+            session,
+            older_than_seconds=older_than_seconds,
+            limit=limit,
+        )
+        session.commit()
+        return {
+            **result,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Released {result['released']} abandoned account(s)",
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to release abandoned provider accounts: {str(e)}",
+        )
+
+
 @router.get(
     "/cleanup/assistant-runtime",
     summary="Admin: Inspect durable assistant cleanup tasks",

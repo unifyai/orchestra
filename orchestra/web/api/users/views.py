@@ -1157,15 +1157,10 @@ async def create_organization(
             detail=f"Invalid organization name: {exc}",
         )
 
-    organization_dao = OrganizationDAO(session)
     user_dao = UserDAO(session)
 
-    existing_org = organization_dao.filter(owner_id=owner_id)
-    if existing_org:
-        raise HTTPException(
-            status_code=400,
-            detail="This user already has an organization.",
-        )
+    # The one-org-per-user cap (Unify members exempt) is enforced by the
+    # canonical creation helper below.
 
     # Get owner's timezone to initialize org timezone and reuse canonical org creation.
     owner_row = user_dao.get_by_id(owner_id) if owner_id else None

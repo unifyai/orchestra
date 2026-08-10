@@ -1500,6 +1500,429 @@ def test_composio_connect_logs_auth_config_creation_failure(
     assert "invalid toolkit auth config" in caplog.text
 
 
+def test_disconnect_releases_the_upstream_account_rather_than_orphaning_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disconnecting must not leave a live account at the provider.
+
+    Disconnect and cancel only ever wrote our own row. The upstream account
+    stayed: OAuth grant intact, counted against the workspace, and while
+    ACTIVE still reserving its alias — enough to refuse the reconnect meant
+    to replace it. Best effort, because the user asked to disconnect: a
+    provider that is down must not keep the local row connected.
+    """
+
+    deleted: list[str] = []
+
+    class FakeAdapter:
+        def delete_connected_account(self, provider_connection_id: str) -> bool:
+            deleted.append(provider_connection_id)
+            return True
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_row"
+        provider_connection_id = "ca_upstream"
+        canonical_app_slug = "gmail"
+        credential_storage = "provider_vault"
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+
+    assert operations._release_provider_account(
+        None,
+        Conn(),
+        reason="user_disconnected",
+    )
+    assert deleted == ["ca_upstream"]
+
+    # A row that never linked upstream has nothing to release.
+    class Unlinked(Conn):
+        provider_connection_id = None
+
+    deleted.clear()
+    assert operations._release_provider_account(
+        None,
+        Unlinked(),
+        reason="setup_cancelled",
+    )
+    assert deleted == []
+
+
+def test_release_provider_account_never_blocks_the_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class ExplodingAdapter:
+        def delete_connected_account(self, _provider_connection_id: str) -> None:
+            raise RuntimeError("provider unreachable")
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    class Conn:
+        backend_id = "composio"
+        connection_id = "ic_row"
+        provider_connection_id = "ca_upstream"
+        canonical_app_slug = "gmail"
+        credential_storage = "provider_vault"
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: ExplodingAdapter(),
+    )
+    caplog.set_level(logging.ERROR, logger=operations.__name__)
+
+    # Raising here would strand the user connected to something they asked to
+    # drop; the ids needed to sweep the orphan go to the log instead.
+    # False keeps the pointer: it is the only thing that makes the leaked
+    # account findable, and the sweep query keys on exactly that.
+    assert not operations._release_provider_account(
+        None,
+        Conn(),
+        reason="user_disconnected",
+    )
+    assert "provider_connection_id=ca_upstream" in caplog.text
+    assert "connection_id=ic_row" in caplog.text
+
+
+def test_starting_a_connection_never_erases_the_upstream_pointer() -> None:
+    """A retry must not destroy the record of what it is retrying.
+
+    provider_connection_id used to be part of the value dict every start
+    writes, set to None for OAuth. Reuse applies that dict wholesale, so
+    beginning a connection erased the pointer to the account the previous
+    attempt had created — before the new link was even requested. The
+    provider still held that account, ACTIVE and reserving its alias, while
+    the only record of which account it was had just been overwritten by
+    the retry that needed it most. It is why a leaked account could be
+    neither adopted nor swept, and why the sweep query under-reports.
+    """
+    import inspect
+
+    from orchestra.web.api.integrations import operations
+
+    source = inspect.getsource(operations.start_connection)
+    values = source[
+        source.index("connection_values = {") : source.index("existing_connection =")
+    ]
+    assert "provider_connection_id" not in values
+
+    # It still gets one on the paths where it means something: a fresh row,
+    # and an API-key connect that mints a local handle.
+    assert source.count("local_{uuid.uuid4().hex}") == 2
+
+
+def test_release_is_a_backend_capability_not_a_composio_special_case() -> None:
+    """Every backend answers the same question, or admits it cannot.
+
+    The release path used to duck-type its way to a Composio method, which
+    made "release the upstream account" a Composio feature rather than a
+    contract. Pipedream leaked exactly as hard, silently, with nothing in
+    the type system saying so.
+    """
+    from orchestra.integrations.providers.base import BaseIntegrationProviderAdapter
+    from orchestra.integrations.providers.composio import ComposioProviderAdapter
+    from orchestra.integrations.providers.pipedream import PipedreamProviderAdapter
+
+    # Declared once, on the contract every backend implements.
+    assert hasattr(BaseIntegrationProviderAdapter, "delete_connected_account")
+
+    # The default is a refusal, never a false claim of success: a backend
+    # that has not implemented this cannot say the account is gone.
+    class Unimplemented(BaseIntegrationProviderAdapter):
+        def iter_apps(self, **_kwargs):
+            return iter(())
+
+        def iter_tools(self, **_kwargs):
+            return iter(())
+
+        def list_app_entries(self, **_kwargs):
+            return []
+
+        def list_tool_entries(self, **_kwargs):
+            return []
+
+        def create_connect_url(self, **_kwargs):
+            return None
+
+        def execute(self, request):
+            raise NotImplementedError
+
+        def health_check(self, request):
+            raise NotImplementedError
+
+    assert Unimplemented().delete_connected_account("ca_anything") is False
+
+    # And the two real backends both implement it.
+    for adapter in (ComposioProviderAdapter, PipedreamProviderAdapter):
+        assert (
+            adapter.delete_connected_account
+            is not BaseIntegrationProviderAdapter.delete_connected_account
+        ), f"{adapter.__name__} must implement its own release"
+
+
+def test_only_a_provider_held_credential_has_an_account_to_release() -> None:
+    """Two of the three storages put a synthetic id in that column.
+
+    An API-key connect stores `local_<uuid>`; the workspace facade stores
+    `google:<email>`, which is a prefix and an address, not an account.
+    Handing either to a provider asks it about something that never existed
+    there. `credential_storage` already records who holds the credential, so
+    keying on it stays right for backends that do not exist yet.
+    """
+
+    class ApiKeyRow:
+        backend_id = "composio"
+        connection_id = "ic_apikey"
+        provider_connection_id = "local_deadbeef"
+        canonical_app_slug = "notion"
+        credential_storage = "secret_manager"
+
+    class WorkspaceFacadeRow:
+        backend_id = "native_google"
+        connection_id = "ic_ws_native_google_google_drive_2103"
+        provider_connection_id = "google:someone@example.com"
+        canonical_app_slug = "google_drive"
+        credential_storage = "assistant_workspace_secrets"
+
+    # True — nothing to release — and neither reaches an adapter at all,
+    # which the absence of any monkeypatched adapter here proves: a session
+    # of None would blow up the moment one was resolved.
+    assert operations._release_provider_account(
+        None,
+        ApiKeyRow(),
+        reason="user_disconnected",
+    )
+    assert operations._release_provider_account(
+        None,
+        WorkspaceFacadeRow(),
+        reason="assistant_deleted",
+    )
+
+
+def test_abandoned_attempts_are_the_leak_nothing_else_reclaims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An attempt nobody finished still created an account at the provider.
+
+    The account exists from the moment the auth link is issued, not from
+    consent, so walking away from the popup leaves a real one behind. No
+    disconnect will ever reach it — the user never believes they connected
+    anything — and expire_stale_pending_connection only rewrites our own
+    row. In production this outnumbered disconnected connections about ten
+    to one.
+
+    A row that reached a usable state is a connection, not an abandonment,
+    and must be left for the user to disconnect.
+    """
+    released: list[str] = []
+
+    class FakeAdapter:
+        def delete_connected_account(self, provider_connection_id: str) -> bool:
+            released.append(provider_connection_id)
+            return True
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class Row:
+        def __init__(self, status, provider_connection_id):
+            self.backend_id = "composio"
+            self.connection_id = f"ic_{status}"
+            self.provider_connection_id = provider_connection_id
+            self.canonical_app_slug = "github"
+            self.credential_storage = "provider_vault"
+            self.status = status
+
+    abandoned = Row("pending", "ca_never_finished")
+    connected = Row("connected", "ca_in_use")
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *_a, **_k):
+            # The filter is what excludes the connected row; model it by
+            # honouring the same status rule the production query uses.
+            return FakeQuery(
+                [r for r in self._rows if r.status in ("pending", "error", "expired")],
+            )
+
+        def order_by(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def query(self, *_a, **_k):
+            return FakeQuery([abandoned, connected])
+
+    class FakeDAO:
+        def __init__(self, _session):
+            pass
+
+        def get_backend(self, _backend_id):
+            return FakeBackend()
+
+    monkeypatch.setattr(operations, "IntegrationProviderDAO", FakeDAO)
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+
+    result = operations.release_abandoned_provider_accounts(FakeSession())
+
+    assert released == ["ca_never_finished"]
+    assert result["released"] == 1
+    # Released rows forget the id; a live connection is untouched.
+    assert abandoned.provider_connection_id is None
+    assert connected.provider_connection_id == "ca_in_use"
+
+
+def test_provider_link_alias_is_spent_once_an_upstream_account_exists() -> None:
+    """The alias and connection_id have opposite lifecycles.
+
+    connection_id is Orchestra's stable identity — tasks and bindings store
+    it, which is why start_connection reuses the row instead of minting a
+    new one (e33180ca). A Composio alias is consumed permanently by the
+    first account created under it, and a later link asking for the same
+    one is refused with a bodyless 400.
+
+    Sending one as the other made that failure terminal: cancel keeps
+    connection_id by design, so every retry reproduced the collision and no
+    recovery affordance could clear it. A row that has never linked keeps
+    the stable alias (so a double-submit cannot mint two accounts); once it
+    has, the next link asks for a fresh one.
+    """
+
+    class Row:
+        connection_id = "ic_stable"
+        provider_connection_id = None
+
+    fresh = Row()
+    assert operations._provider_link_alias(fresh) == "ic_stable"
+    # Stable across a double-submit while no account exists upstream.
+    assert operations._provider_link_alias(fresh) == "ic_stable"
+
+    linked = Row()
+    linked.provider_connection_id = "ca_already_active"
+    first = operations._provider_link_alias(linked)
+    second = operations._provider_link_alias(linked)
+    assert first != "ic_stable"
+    assert second != first
+    # Still traceable back to the row it belongs to, and the identity that
+    # bindings hold is untouched.
+    assert first.startswith("ic_stable-")
+    assert linked.connection_id == "ic_stable"
+
+
+def test_composio_auth_link_rejection_is_a_provider_error_not_a_missing_resource(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A provider that refuses the authorization request is 502, not 404.
+
+    This branch raised a bare ValueError, which the view's catch-all maps to
+    404. The browser was told "Not Found" for a Composio 400 — no code to
+    branch on, and a message naming neither the app nor anything to do about
+    it. Every sibling failure on this path already raised ProviderConnectError.
+    """
+
+    class FakeBackend:
+        config_json = {}
+        status = "enabled"
+
+    class FakeApp:
+        canonical_app_slug = "gmail"
+        display_name = "Gmail"
+        raw_provider_metadata_json = {"auth_config_id": "ac_gmail"}
+
+    class FakeConnection:
+        backend_id = "composio"
+        provider_app_id = "GMAIL"
+        canonical_app_slug = "gmail"
+        connection_id = "ic_wedged"
+        provider_connection_id = None
+
+    class FakeAdapter:
+        def get_or_create_auth_config(self, toolkit_slug: str) -> str:
+            return "ac_gmail"
+
+        def create_auth_link(self, **_kwargs):
+            return (
+                None,
+                None,
+                {
+                    "code": "provider_auth_link_failed",
+                    "message": (
+                        "Failed to create Composio auth link: 400 Client Error: "
+                        'Bad Request — {"message":"alias already in use"}'
+                    ),
+                    "provider_response": '{"message":"alias already in use"}',
+                },
+            )
+
+    monkeypatch.setattr(
+        operations,
+        "get_provider_adapter",
+        lambda *_args, **_kwargs: FakeAdapter(),
+    )
+    caplog.set_level(logging.WARNING, logger=operations.__name__)
+
+    with pytest.raises(operations.ProviderConnectError) as excinfo:
+        operations._provider_connect_url(
+            backend=FakeBackend(),
+            app=FakeApp(),
+            owner=operations.OwnerContext(owner_scope="assistant", user_id="user-1"),
+            connection=FakeConnection(),
+            redirect_url="https://console.example/callback",
+        )
+
+    assert excinfo.value.status_code == 502
+    assert excinfo.value.code == "provider_auth_link_failed"
+    # Names the app, and the one thing that actually clears a wedged attempt.
+    assert "Gmail" in str(excinfo.value)
+    assert "cancel it" in str(excinfo.value)
+
+    # The provider's own reason must reach the log; `requests` stringifies an
+    # HTTPError to the status and URL alone, so without the body a 400 here
+    # was unexplainable after the fact.
+    assert "alias already in use" in caplog.text
+    assert "connection_id=ic_wedged" in caplog.text
+
+
 def test_composio_adapter_fetches_catalog_and_manages_auth_configs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

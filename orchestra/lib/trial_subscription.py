@@ -11,9 +11,11 @@ is usable. Signup flows into a Stripe Checkout Session that:
   lands automatically at trial end unless the customer cancels first.
 
 On ``checkout.session.completed`` the account is linked to the
-subscription and receives the one-time signup credit grant
-(``settings.signup_credit_grant``), stamped ``grant_kind="trial"`` so the
-unconsumed remainder forfeits at trial end via the existing expiry sweep.
+subscription. The one-time signup credit grant is *not* applied here — a
+card on file is a promise, not money — but on the first successfully
+collected invoice (see
+:func:`orchestra.lib.subscription_billing.apply_subscription_invoice_paid`),
+stamped ``grant_kind="trial"`` and expiring with that first paid period.
 
 Platform access is gated on :func:`has_platform_access`: an account with
 neither a live subscription nor any real payment history is frozen out
@@ -288,14 +290,12 @@ def apply_trial_checkout_completed(
 ) -> None:
     """Sync local state after the signup Checkout Session completes.
 
-    Links the subscription, stamps the trial end, and applies the
-    one-time signup grant (idempotent — skipped if the account already
-    has a promo recharge). The first invoice at trial end flows through
-    the normal ``invoice.paid`` handler, which activates the tier
-    assignment and grants the monthly credits.
+    Links the subscription and stamps the trial end. No credits are
+    granted here: the first invoice at trial end flows through the normal
+    ``invoice.paid`` handler, which activates the tier assignment, grants
+    the monthly credits, and applies the one-time signup grant — so an
+    account whose card never charges successfully never holds credits.
     """
-    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-
     subscription_id = checkout_data.get("subscription")
     if not subscription_id:
         logger.warning(
@@ -314,26 +314,6 @@ def apply_trial_checkout_completed(
     trial_end = subscription.get("trial_end")
     if trial_end:
         ba.trial_end_at = datetime.fromtimestamp(int(trial_end), tz=timezone.utc)
-
-    # One-time signup grant, now gated behind the card: stamped as an
-    # expiring trial grant so the remainder forfeits at trial end.
-    dao = BillingAccountDAO(session)
-    existing_promo = session.execute(
-        select(Recharge.id).where(
-            Recharge.billing_account_id == ba.id,
-            Recharge.type == "promo",
-        ),
-    ).first()
-    if existing_promo is None and settings.signup_credit_grant > 0:
-        from orchestra.lib.credit_grants import GRANT_KIND_TRIAL
-
-        dao.apply_credit_grant(
-            ba.id,
-            settings.signup_credit_grant,
-            grant_kind=GRANT_KIND_TRIAL,
-            expires_at=ba.trial_end_at,
-            description="Signup trial credit grant",
-        )
 
     # A frozen never-paid account that completes checkout is reinstated.
     if ba.account_status == "SUSPENDED" and ba.suspension_reason == "card_required":

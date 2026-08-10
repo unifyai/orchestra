@@ -33,7 +33,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from sqlalchemy import text, update
+from sqlalchemy import func, text, update
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -114,14 +114,19 @@ class GenerationResult:
 CLAIM_PENDING_QUERY = """
 WITH claimable AS (
     SELECT id FROM embedding_queue
-    WHERE status = 'pending'
-      AND retry_count < :max_retries
+    WHERE (status = 'pending' AND retry_count < :max_retries)
+       -- Failed items rejoin the normal rotation after a cool-off instead of
+       -- waiting for a separate retry job that only runs every 30 minutes.
+       OR (status = 'failed'
+           AND processing_started_at IS NOT NULL
+           AND processing_started_at < NOW() - INTERVAL '30 minutes')
     ORDER BY created_at
     LIMIT :limit
     FOR UPDATE SKIP LOCKED
 )
 UPDATE embedding_queue q
 SET status = 'generating',
+    retry_count = CASE WHEN q.status = 'failed' THEN 0 ELSE q.retry_count END,
     processing_started_at = NOW()
 FROM claimable c
 WHERE q.id = c.id
@@ -332,24 +337,39 @@ def generate_vectors_for_items(
                 logger.info(f"Generated {len(batch)} vectors for model {model}")
 
             except Exception as e:
-                error_msg = str(e)[:500]
-                logger.error(
-                    f"Failed to generate vectors for batch: {e}",
-                    exc_info=True,
+                # One poison text used to fail the whole batch, burning every
+                # sibling item's retry budget until all 2048 landed in
+                # 'failed'. Isolate the failure: retry items one at a time so
+                # only the genuinely bad ones are marked.
+                logger.warning(
+                    f"Batch of {len(batch)} failed ({e}); retrying items "
+                    "individually to isolate the failure",
                 )
-                # Mark entire batch as failed
                 for item in batch:
-                    failed_results.append(
-                        GenerationResult(
-                            queue_item_id=item.id,
-                            ref_id=item.ref_id,
-                            key=item.key,
-                            model=item.model,
-                            vector=[],
-                            success=False,
-                            error_message=error_msg,
-                        ),
-                    )
+                    try:
+                        single = _get_embeddings_batch([item.text], model, dimensions)
+                        successful_results.append(
+                            GenerationResult(
+                                queue_item_id=item.id,
+                                ref_id=item.ref_id,
+                                key=item.key,
+                                model=item.model,
+                                vector=single[0],
+                                success=True,
+                            ),
+                        )
+                    except Exception as item_error:
+                        failed_results.append(
+                            GenerationResult(
+                                queue_item_id=item.id,
+                                ref_id=item.ref_id,
+                                key=item.key,
+                                model=item.model,
+                                vector=[],
+                                success=False,
+                                error_message=str(item_error)[:500],
+                            ),
+                        )
 
     return successful_results, failed_results
 
@@ -461,7 +481,9 @@ def mark_generation_failures(
                 status=new_status,
                 retry_count=new_retry_count,
                 error_message=result.error_message,
-                processing_started_at=None,
+                # 'failed' keeps its timestamp: the normal claim query uses it
+                # as the cool-off clock to bring the item back into rotation.
+                processing_started_at=(func.now() if new_status == "failed" else None),
             ),
         )
     session.commit()
