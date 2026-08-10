@@ -374,4 +374,4 @@ jobs:
         name: logs-shard-${{ matrix.shard }}
         path: logs/
         if-no-files-found: ignore
-        retention-days: 90
+        retention-days: 14

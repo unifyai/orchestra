@@ -263,7 +263,7 @@ jobs:
         name: logs-shard-${{ matrix.shard }}
         path: logs/
         if-no-files-found: ignore
-        retention-days: 90
+        retention-days: 14
 
   # Single, stable required status check for staging->main releases. The
   # matrix above publishes per-shard checks ("pytest (0)".."pytest (7)"),
