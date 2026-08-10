@@ -13,6 +13,7 @@ from orchestra.lib.payment_gated_models import (
     payment_gate_reason,
     provider_label,
     provider_of,
+    vendor_of,
 )
 
 
@@ -53,19 +54,32 @@ class TestProviderResolution:
         assert provider_of("openai/gpt-5.6-terra@openrouter") == "openrouter"
         assert provider_of("claude-fable-5@anthropic") == "anthropic"
 
-    def test_an_openrouter_routed_anthropic_model_resolves_to_openrouter(self):
-        """Mirrors enforcement, which reads the route rather than the vendor.
+    def test_an_openrouter_routed_anthropic_model_is_still_gated(self):
+        """The route is OpenRouter; the vendor is Anthropic, and that decides.
 
-        ``anthropic/...@openrouter`` bills OpenRouter, so the spend boundary
-        treats it as OpenRouter and does not gate it. The catalogue says the
-        same thing, deliberately: labelling it unavailable here would grey out
-        a model the runtime will happily run. Whether the *rule* should look at
-        the vendor instead is an enforcement question, and changing it means
-        changing both sides together.
+        The curated catalogue offers Anthropic natively while model search
+        offers the same vendor through the aggregator, so matching only the
+        route would leave the search path advertising exactly the models the
+        gate exists to hold back. Mirrors ``_gated_provider_of`` in
+        ``unify.spending_limits``.
         """
         assert provider_of("anthropic/claude-opus-4.8@openrouter") == "openrouter"
+        assert vendor_of("anthropic/claude-opus-4.8@openrouter") == "anthropic"
+
+        reason = payment_gate_reason(
+            "anthropic/claude-opus-4.8@openrouter",
+            never_paid=True,
+        )
+        assert reason is not None
+        # Names the vendor being refused, not the aggregator it was routed by.
+        assert "Anthropic" in reason
+        assert "OpenRouter" not in reason
+
+    def test_the_platform_default_survives_vendor_matching(self):
+        """It shares the aggregator with the gated vendor and must not be caught."""
+        assert vendor_of("openai/gpt-5.6-sol@openrouter") == "openai"
         assert (
-            payment_gate_reason("anthropic/claude-opus-4.8@openrouter", never_paid=True)
+            payment_gate_reason("openai/gpt-5.6-sol@openrouter", never_paid=True)
             is None
         )
 

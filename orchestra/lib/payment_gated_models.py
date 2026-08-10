@@ -64,6 +64,22 @@ def provider_of(endpoint: Optional[str]) -> Optional[str]:
     return provider.strip().lower() or None
 
 
+def vendor_of(endpoint: Optional[str]) -> Optional[str]:
+    """Extract the vendor that owns the model, independent of the route.
+
+    OpenRouter ids are vendor-prefixed (``anthropic/claude-opus-4.8``), so
+    the vendor survives being routed through an aggregator. Returns ``None``
+    when the model half carries no prefix.
+    """
+    if not endpoint:
+        return None
+    model, _, _ = endpoint.rpartition("@")
+    vendor, sep, _ = (model or endpoint).partition("/")
+    if not sep:
+        return None
+    return vendor.strip().lower() or None
+
+
 def provider_label(provider: str) -> str:
     """How a provider is spelled when the user reads it."""
     return _PROVIDER_DISPLAY_NAMES.get(provider, provider)
@@ -88,6 +104,25 @@ def account_never_paid(
     return bool(trial_gate_fields(session, ba)["never_paid"])
 
 
+def gated_provider_of(endpoint: Optional[str], *, never_paid: bool) -> Optional[str]:
+    """The gated provider this model would reach, or ``None`` if allowed.
+
+    Checked against both the route and the vendor, because either reaches
+    the same models: the curated catalogue offers Anthropic natively
+    (``claude-opus-5@anthropic``) while model search offers the identical
+    vendor through an aggregator (``anthropic/claude-opus-4.8@openrouter``).
+    The vendor is reported in preference to the route, since it names what
+    the user is actually being refused.
+    """
+    if not never_paid:
+        return None
+    gated = payment_gated_providers()
+    for candidate in (vendor_of(endpoint), provider_of(endpoint)):
+        if candidate is not None and candidate in gated:
+            return candidate
+    return None
+
+
 def payment_gate_reason(endpoint: Optional[str], *, never_paid: bool) -> Optional[str]:
     """Why this model is unselectable, or ``None`` if it is selectable.
 
@@ -95,10 +130,8 @@ def payment_gate_reason(endpoint: Optional[str], *, never_paid: bool) -> Optiona
     condition and stops; the full remedy belongs in the refusal the user
     gets at spend time, which has room for it.
     """
-    if not never_paid:
-        return None
-    provider = provider_of(endpoint)
-    if provider is None or provider not in payment_gated_providers():
+    provider = gated_provider_of(endpoint, never_paid=never_paid)
+    if provider is None:
         return None
     return (
         f"{provider_label(provider)} models unlock after this account's "
