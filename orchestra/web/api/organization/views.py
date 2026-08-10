@@ -62,6 +62,7 @@ from orchestra.services.org_wide_sharing_service import (
 from orchestra.services.personal_workspace_service import (
     disable_personal_workspace_for_org_member,
     reenable_personal_workspace_if_no_org,
+    user_is_unify_member,
 )
 from orchestra.services.staff_access_service import (
     apply_staff_access_on_join,
@@ -175,6 +176,20 @@ async def _create_organization_with_owner_coordinator(
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
+
+    # One organization per user. Each organization is a separate wallet, so
+    # unlimited creation let one person fragment activity across accounts
+    # faster than any per-account control could see. Unify's own members are
+    # the exception: staff provision customer organizations during
+    # white-glove onboarding and hand ownership over afterwards.
+    if org_dao.filter(owner_id=owner_user_id) and not user_is_unify_member(
+        session,
+        owner_user_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A user may own at most one organization.",
+        )
 
     created_coordinator_ids: list[int] = []
     try:

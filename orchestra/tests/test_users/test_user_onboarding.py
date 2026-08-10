@@ -884,24 +884,47 @@ class TestSignupCreditGrant:
         assert float(db_user.billing_account.credits) == settings.signup_credit_grant
 
     @pytest.mark.anyio
-    async def test_repeated_org_creation_cannot_remint_the_grant(
+    async def test_a_second_organization_is_refused(
         self,
         client: AsyncClient,
         dbsession: Session,
     ):
-        """Looping organization creation mints no additional credit."""
+        """One organization per user, and the refusal mints nothing."""
         from orchestra.settings import settings
 
         user = await create_test_user(client, "org-loop-owner@unify.ai")
 
-        for index in range(3):
-            org = await create_test_org(client, user, f"LoopOrg{index}")
-            db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
-            assert float(db_org.billing_account.credits) == 0
+        org = await create_test_org(client, user, "LoopOrg0")
+        db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
+        assert float(db_org.billing_account.credits) == 0
+
+        response = await client.post(
+            "/v0/organizations",
+            json={"name": "LoopOrg1"},
+            headers=user["headers"],
+        )
+        assert response.status_code == 403
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
         assert float(db_user.billing_account.credits) == settings.signup_credit_grant
+
+    @pytest.mark.anyio
+    async def test_unify_members_are_exempt_from_the_org_cap(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """Staff provision customer orgs, so Unify members may own several."""
+        from orchestra.services.personal_workspace_service import (
+            UNIFY_ORGANIZATION_NAME,
+        )
+
+        staff = await create_test_user(client, "staff-org-cap@unify.ai")
+        await create_test_org(client, staff, UNIFY_ORGANIZATION_NAME)
+
+        second = await create_test_org(client, staff, "White Glove Client Org")
+        assert second["id"]
 
     @pytest.mark.anyio
     async def test_personal_onboarding_does_not_change_signup_grant(
