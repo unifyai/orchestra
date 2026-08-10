@@ -37,6 +37,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
     Team,
     TeamAssistantMembership,
+    User,
 )
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
@@ -62,7 +63,6 @@ from orchestra.services.org_wide_sharing_service import (
 from orchestra.services.personal_workspace_service import (
     disable_personal_workspace_for_org_member,
     reenable_personal_workspace_if_no_org,
-    user_is_unify_member,
 )
 from orchestra.services.staff_access_service import (
     apply_staff_access_on_join,
@@ -163,6 +163,24 @@ async def _run_pool_resolution_followups(
                 )
 
 
+UNIFY_STAFF_EMAIL_DOMAIN = "@unify.ai"
+
+
+def _user_is_unify_staff(session: Session, user_id: str) -> bool:
+    """Whether the user holds a verified unify.ai mailbox.
+
+    The email is trustworthy as an identity signal: self-serve signup
+    creates no ``User`` row until the address is verified, and
+    admin-created users are deliberate. Keying on the domain rather than
+    membership in the org named "Unify" also works on deployments where
+    that org does not exist (fresh stacks, self-host).
+    """
+    email = session.execute(
+        select(User.email).where(User.id == user_id),
+    ).scalar_one_or_none()
+    return bool(email) and email.lower().endswith(UNIFY_STAFF_EMAIL_DOMAIN)
+
+
 async def _create_organization_with_owner_coordinator(
     session: Session,
     *,
@@ -179,10 +197,10 @@ async def _create_organization_with_owner_coordinator(
 
     # One organization per user. Each organization is a separate wallet, so
     # unlimited creation let one person fragment activity across accounts
-    # faster than any per-account control could see. Unify's own members are
-    # the exception: staff provision customer organizations during
+    # faster than any per-account control could see. Unify's own staff are
+    # the exception: they provision customer organizations during
     # white-glove onboarding and hand ownership over afterwards.
-    if org_dao.filter(owner_id=owner_user_id) and not user_is_unify_member(
+    if org_dao.filter(owner_id=owner_user_id) and not _user_is_unify_staff(
         session,
         owner_user_id,
     ):

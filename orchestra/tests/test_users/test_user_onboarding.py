@@ -892,7 +892,7 @@ class TestSignupCreditGrant:
         """One organization per user, and the refusal mints nothing."""
         from orchestra.settings import settings
 
-        user = await create_test_user(client, "org-loop-owner@unify.ai")
+        user = await create_test_user(client, "org-loop-owner@example.com")
 
         org = await create_test_org(client, user, "LoopOrg0")
         db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
@@ -910,19 +910,15 @@ class TestSignupCreditGrant:
         assert float(db_user.billing_account.credits) == settings.signup_credit_grant
 
     @pytest.mark.anyio
-    async def test_unify_members_are_exempt_from_the_org_cap(
+    async def test_unify_staff_are_exempt_from_the_org_cap(
         self,
         client: AsyncClient,
         dbsession: Session,
     ):
-        """Staff provision customer orgs, so Unify members may own several."""
-        from orchestra.services.personal_workspace_service import (
-            UNIFY_ORGANIZATION_NAME,
-        )
-
+        """Staff provision customer orgs, so unify.ai users may own several."""
         staff = await create_test_user(client, "staff-org-cap@unify.ai")
-        await create_test_org(client, staff, UNIFY_ORGANIZATION_NAME)
 
+        await create_test_org(client, staff, "First Staff Org")
         second = await create_test_org(client, staff, "White Glove Client Org")
         assert second["id"]
 
