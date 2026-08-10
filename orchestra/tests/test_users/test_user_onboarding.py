@@ -858,12 +858,17 @@ class TestSignupCreditGrant:
         assert float(promos[0].amount_usd) == 0
 
     @pytest.mark.anyio
-    async def test_org_creation_grants_signup_credits_to_org(
+    async def test_org_creation_does_not_grant_signup_credits(
         self,
         client: AsyncClient,
         dbsession: Session,
     ):
-        """A created organization can spend credits before onboarding is completed."""
+        """The signup promo is per person, so a new organization starts empty.
+
+        Granting per billing account made the promo re-mintable without
+        limit: create an organization, spend its balance, delete it, repeat.
+        The owner keeps the one grant on their own account.
+        """
         from orchestra.settings import settings
 
         user = await create_test_user(client, "signup-credit-org-owner@unify.ai")
@@ -871,11 +876,28 @@ class TestSignupCreditGrant:
 
         db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
 
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        promos = self._promo_recharges(dbsession, db_org.billing_account_id)
-        assert len(promos) == 1
-        assert float(promos[0].quantity) == settings.signup_credit_grant
-        assert float(promos[0].amount_usd) == 0
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, db_org.billing_account_id) == []
+
+        user_dao = UserDAO(dbsession)
+        db_user = user_dao.get_user_with_id(user["id"])
+        assert float(db_user.billing_account.credits) == settings.signup_credit_grant
+
+    @pytest.mark.anyio
+    async def test_repeated_org_creation_cannot_remint_the_grant(
+        self,
+        client: AsyncClient,
+        dbsession: Session,
+    ):
+        """Looping organization creation mints no additional credit."""
+        from orchestra.settings import settings
+
+        user = await create_test_user(client, "org-loop-owner@unify.ai")
+
+        for index in range(3):
+            org = await create_test_org(client, user, f"LoopOrg{index}")
+            db_org = dbsession.query(Organization).filter_by(id=org["id"]).first()
+            assert float(db_org.billing_account.credits) == 0
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
