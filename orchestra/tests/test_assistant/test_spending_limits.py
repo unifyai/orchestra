@@ -77,6 +77,26 @@ async def _create_organization(client: AsyncClient, name: str, headers: dict):
     )
 
 
+def _fund_org(dbsession, org_id: str, amount: float) -> None:
+    """Top up an org wallet so deductions stay above the overdraft floor.
+
+    Organizations no longer receive the signup grant, so their wallets
+    start empty and any meaningful deduction would suspend the account.
+    """
+    from orchestra.db.dao.billing_account_dao import BillingAccountDAO
+    from orchestra.db.models.orchestra_models import Organization
+
+    org = dbsession.query(Organization).filter_by(id=org_id).first()
+    assert org is not None and org.billing_account_id is not None
+    BillingAccountDAO(dbsession).add_credits(
+        org.billing_account_id,
+        amount,
+        category="test_fund",
+        description="Test funding for spend aggregation",
+    )
+    dbsession.commit()
+
+
 # ===========================================================================
 # Assistant Spending Limit Tests
 # ===========================================================================
@@ -1445,7 +1465,10 @@ async def test_user_spend_aggregates_across_multiple_assistants(client: AsyncCli
 
 
 @pytest.mark.anyio
-async def test_org_spend_aggregates_across_multiple_assistants(client: AsyncClient):
+async def test_org_spend_aggregates_across_multiple_assistants(
+    client: AsyncClient,
+    dbsession,
+):
     """Test that org spend endpoint aggregates spend from multiple org assistants.
 
     Seeds credit_transaction rows for two org assistants and verifies the
@@ -1461,6 +1484,9 @@ async def test_org_spend_aggregates_across_multiple_assistants(client: AsyncClie
     org_data = response.json()
     org_id = org_data["id"]
     org_api_key = org_data["api_key"]
+
+    # Org wallets start empty; fund enough to cover both deductions.
+    _fund_org(dbsession, org_id, 100.0)
 
     org_headers = {
         "accept": "application/json",
@@ -1519,7 +1545,10 @@ async def test_org_spend_aggregates_across_multiple_assistants(client: AsyncClie
 
 
 @pytest.mark.anyio
-async def test_member_spend_aggregates_across_org_assistants(client: AsyncClient):
+async def test_member_spend_aggregates_across_org_assistants(
+    client: AsyncClient,
+    dbsession,
+):
     """Test that member spend endpoint aggregates spend from all assistants created by member.
 
     Seeds credit_transaction rows with user_id attribution and verifies the
@@ -1535,6 +1564,9 @@ async def test_member_spend_aggregates_across_org_assistants(client: AsyncClient
     org_data = response.json()
     org_id = org_data["id"]
     org_api_key = org_data["api_key"]
+
+    # Org wallets start empty; fund enough to cover both deductions.
+    _fund_org(dbsession, org_id, 100.0)
 
     org_headers = {
         "accept": "application/json",

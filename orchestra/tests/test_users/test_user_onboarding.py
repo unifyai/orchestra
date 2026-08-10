@@ -970,8 +970,10 @@ class TestSignupCreditGrant:
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
         org_ba_id = db_org.billing_account_id
 
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        assert len(self._promo_recharges(dbsession, org_ba_id)) == 1
+        # The signup promo is per person: the org wallet starts empty and
+        # the owner keeps the one grant on their own account.
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, org_ba_id) == []
 
         resp = await client.put(
             "/v0/user/onboarding",
@@ -989,8 +991,8 @@ class TestSignupCreditGrant:
 
         dbsession.expire_all()
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        assert len(self._promo_recharges(dbsession, org_ba_id)) == 1
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, org_ba_id) == []
 
         user_dao = UserDAO(dbsession)
         db_user = user_dao.get_user_with_id(user["id"])
@@ -1031,8 +1033,6 @@ class TestSignupCreditGrant:
         dbsession: Session,
     ):
         """Members completing onboarding do not add org promo credits."""
-        from orchestra.settings import settings
-
         owner = await create_test_user(client, "org-owner-credit@unify.ai")
         org = await create_test_org(client, owner, "MultiMemberCreditOrg")
         org_id = org["id"]
@@ -1049,9 +1049,11 @@ class TestSignupCreditGrant:
             },
         )
 
+        # The org wallet holds no promo funds: the signup grant lives on the
+        # owner's own account, so onboarding leaves the org at zero.
         dbsession.expire_all()
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
+        assert float(db_org.billing_account.credits) == 0
 
         member = await create_test_user(client, "org-member-credit@unify.ai")
         await client.put(
@@ -1068,8 +1070,8 @@ class TestSignupCreditGrant:
 
         dbsession.expire_all()
         db_org = dbsession.query(Organization).filter_by(id=org_id).first()
-        assert float(db_org.billing_account.credits) == settings.signup_credit_grant
-        assert len(self._promo_recharges(dbsession, db_org.billing_account_id)) == 1
+        assert float(db_org.billing_account.credits) == 0
+        assert self._promo_recharges(dbsession, db_org.billing_account_id) == []
 
     @pytest.mark.anyio
     async def test_completed_onboarding_without_step_data_keeps_signup_grant(
