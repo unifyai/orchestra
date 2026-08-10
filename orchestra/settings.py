@@ -533,6 +533,17 @@ class Settings(BaseSettings):
         "REQUIRE_API_PAYMENT_HISTORY",
         "false",
     ).lower() in ("1", "true", "yes")
+    #: Providers a never-paid account may not spend on, comma-separated.
+    #: Enforcement lives in the runtime (``unify.spending_limits``), which
+    #: reads this same variable name and default; Orchestra reads it only to
+    #: label the model catalogue, so the picker shows what the spend boundary
+    #: will actually allow. The two must be given the same value wherever
+    #: they are deployed together, or the catalogue advertises models that
+    #: are refused on use (or hides ones that are not).
+    payment_gated_providers: str = os.environ.get(
+        "PAYMENT_GATED_PROVIDERS",
+        "anthropic",
+    )
 
     # ── Burner-cluster detection ────────────────────────────────────────
     #: How many never-paid accounts must share a signup origin before the

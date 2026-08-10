@@ -118,10 +118,13 @@ def is_internal_account(session: Session, billing_account_id: int) -> bool:
     gating them only breaks internal environments (shared staging
     tenants, benchmarks, smoke tests).
 
-    Membership is deliberately *not* inferred from an ``@unify.ai`` email
-    domain. Staff provision and own customer organizations during
-    white-glove onboarding, so an owner-domain test silently marked real
-    customer accounts internal and exempted them from the card gate and
+    Internal status requires *both* signals. The Unify-org scoping alone
+    is spoofable — the name is claimable wherever the platform's own org
+    does not exist — so the owner/member must also hold a verified
+    unify.ai mailbox. The domain alone is not sufficient either: staff
+    provision and own customer organizations during white-glove
+    onboarding, and an owner-domain test on its own marked those real
+    customer accounts internal, exempting them from the card gate and
     the daily burn ceiling. A customer that should skip the card gate
     gets an explicit, revocable grant instead — see
     :func:`has_free_trial_grant`.
@@ -131,7 +134,10 @@ def is_internal_account(session: Session, billing_account_id: int) -> bool:
         OrganizationMember,
         User,
     )
-    from orchestra.services.personal_workspace_service import UNIFY_ORGANIZATION_NAME
+    from orchestra.services.personal_workspace_service import (
+        UNIFY_ORGANIZATION_NAME,
+        UNIFY_STAFF_EMAIL_DOMAIN,
+    )
 
     unify_org_id = session.execute(
         select(Organization.id).where(
@@ -141,25 +147,33 @@ def is_internal_account(session: Session, billing_account_id: int) -> bool:
     if unify_org_id is None:
         return False
 
-    owns_the_account = session.execute(
-        select(Organization.id).where(
+    # The org name is claimable by anyone wherever the platform's own org
+    # does not exist, so the name alone proves nothing: the org's wallet is
+    # internal only when its owner holds a verified unify.ai mailbox, and a
+    # member's personal wallet only when that member does.
+    owner_email = session.execute(
+        select(User.email)
+        .join(Organization, Organization.owner_id == User.id)
+        .where(
             Organization.id == unify_org_id,
             Organization.billing_account_id == billing_account_id,
         ),
-    ).first()
-    if owns_the_account is not None:
+    ).scalar_one_or_none()
+    if owner_email is not None and owner_email.lower().endswith(
+        UNIFY_STAFF_EMAIL_DOMAIN,
+    ):
         return True
 
-    return (
-        session.execute(
-            select(User.id)
-            .join(OrganizationMember, OrganizationMember.user_id == User.id)
-            .where(
-                User.billing_account_id == billing_account_id,
-                OrganizationMember.organization_id == unify_org_id,
-            ),
-        ).first()
-        is not None
+    member_email = session.execute(
+        select(User.email)
+        .join(OrganizationMember, OrganizationMember.user_id == User.id)
+        .where(
+            User.billing_account_id == billing_account_id,
+            OrganizationMember.organization_id == unify_org_id,
+        ),
+    ).scalar_one_or_none()
+    return bool(member_email) and member_email.lower().endswith(
+        UNIFY_STAFF_EMAIL_DOMAIN,
     )
 
 

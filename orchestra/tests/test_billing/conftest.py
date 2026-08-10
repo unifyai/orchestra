@@ -124,11 +124,17 @@ def make_org_with_billing(
     name: str,
     stripe_customer_id: str | None,
     credits: float | Decimal = 100,
+    owner_email: str | None = None,
 ) -> tuple[Organization, BillingAccount]:
-    """Create an :class:`Organization` with owner, owner-BA, and org-BA."""
+    """Create an :class:`Organization` with owner, owner-BA, and org-BA.
+
+    Pass ``owner_email`` when the owner's mailbox is load-bearing — e.g. an
+    org named "Unify" only counts as internal when its owner holds a
+    verified unify.ai address.
+    """
     owner_ba = make_billing_account(dbsession, credits=Decimal("100"))
     owner_id = f"owner_{name.replace(' ', '_').lower()}"
-    owner = make_user(dbsession, owner_id, owner_ba)
+    owner = make_user(dbsession, owner_id, owner_ba, email=owner_email)
 
     org_ba = make_billing_account(
         dbsession,
