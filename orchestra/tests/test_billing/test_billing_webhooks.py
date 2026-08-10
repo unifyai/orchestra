@@ -30,6 +30,7 @@ from orchestra.db.models.enums import CommitPeriod
 from orchestra.db.models.orchestra_models import (
     DEFAULT_TEMPLATE_ID,
     RECHARGE_TYPE_MONTHLY_COMMIT,
+    RECHARGE_TYPE_PROMO,
     BillingPlanTemplate,
     Recharge,
     RechargeStatus,
@@ -40,7 +41,6 @@ from orchestra.settings import settings
 from orchestra.tests.test_billing.conftest import (
     TIER_50_ID,
     TIER_75_ID,
-    make_org_with_billing,
     make_user_with_billing,
     put_on_tier,
     subscription_invoice_event,
@@ -1498,6 +1498,63 @@ class TestSelfServeSubscriptionWebhooks:
         dbsession.refresh(ba)
         assert ba.current_period_end is not None
 
+    def test_trial_signup_grant_lands_on_first_collected_invoice_only(
+        self,
+        dbsession: Session,
+    ) -> None:
+        """The one-time signup grant waits for money, then never re-mints.
+
+        A trial-checkout account (``trial_end_at`` stamped) holds no
+        credits until its first invoice actually collects; that invoice
+        grants the tier credits plus the one-time signup grant, and the
+        renewal cycle grants tier credits only.
+        """
+        from orchestra.web.api.webhooks.stripe import process_invoice_event
+
+        _user, ba = make_user_with_billing(
+            dbsession,
+            "trial_conv",
+            stripe_customer_id="cus_trial_conv",
+        )
+        ba.trial_end_at = datetime.now(timezone.utc)
+        put_on_tier(dbsession, ba, TIER_50_ID, "sub_trial_conv")
+
+        event = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_trial_conv",
+            subscription_id="sub_trial_conv",
+            billing_reason="subscription_cycle",
+        )
+        resp = process_invoice_event(event, dbsession)
+        assert resp.status_code == 200
+
+        dao = BillingAccountDAO(dbsession)
+        signup_grant = Decimal(str(settings.signup_credit_grant))
+        assert dao.get_credits(ba.id) == Decimal("50") + signup_grant
+
+        def promo_recharges() -> list[Recharge]:
+            return (
+                dbsession.query(Recharge)
+                .filter(
+                    Recharge.billing_account_id == ba.id,
+                    Recharge.type == RECHARGE_TYPE_PROMO,
+                )
+                .all()
+            )
+
+        assert len(promo_recharges()) == 1
+
+        renewal = subscription_invoice_event(
+            "invoice.paid",
+            customer_id="cus_trial_conv",
+            subscription_id="sub_trial_conv_renewal",
+            billing_reason="subscription_cycle",
+        )
+        resp = process_invoice_event(renewal, dbsession)
+        assert resp.status_code == 200
+
+        assert len(promo_recharges()) == 1
+
     def test_invoice_paid_proration_records_recharge_without_granting(
         self,
         dbsession: Session,
@@ -2155,9 +2212,7 @@ class TestCustomerTaxIdWebhook:
         self,
         dbsession: Session,
     ) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_tax_id_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_tax_id_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2187,9 +2242,7 @@ class TestCustomerTaxIdWebhook:
         # Only an explicit ``unverified`` status suppresses the flag; a
         # present ID awaiting verification (``pending``) is treated as a
         # business so the business recurring price applies from the start.
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_tax_id_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_tax_id_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2214,9 +2267,7 @@ class TestCustomerTaxIdWebhook:
         self,
         dbsession: Session,
     ) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_tax_id_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_tax_id_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2238,9 +2289,7 @@ class TestCustomerTaxIdWebhook:
         assert ba.is_business is False
 
     def test_deleted_clears_is_business(self, dbsession: Session) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_tax_id_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_tax_id_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2267,9 +2316,7 @@ class TestCustomerTaxIdWebhook:
         self,
         dbsession: Session,
     ) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_tax_id_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_tax_id_event
 
         resp = process_customer_tax_id_event(
             _tax_id_event(
@@ -2285,9 +2332,7 @@ class TestCustomerTaxIdWebhook:
         assert resp.status_code == 200
 
     def test_redelivery_is_idempotent(self, dbsession: Session) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_tax_id_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_tax_id_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2323,9 +2368,7 @@ class TestCustomerUpdatedWebhook:
         self,
         dbsession: Session,
     ) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_updated_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_updated_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2354,9 +2397,7 @@ class TestCustomerUpdatedWebhook:
         # their address in the Stripe dashboard. The webhook must flip the
         # gate back off so the subscribe flow re-collects a tax-resolvable
         # address instead of trusting a now-stale ``true``.
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_updated_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_updated_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2384,9 +2425,7 @@ class TestCustomerUpdatedWebhook:
     ) -> None:
         # A partial address (missing postal_code) is not tax-resolvable, so it
         # counts as incomplete just like a missing one.
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_updated_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_updated_event
 
         _user, ba = make_user_with_billing(
             dbsession,
@@ -2414,9 +2453,7 @@ class TestCustomerUpdatedWebhook:
         self,
         dbsession: Session,
     ) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_updated_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_updated_event
 
         resp = process_customer_updated_event(
             _customer_updated_event(
@@ -2429,9 +2466,7 @@ class TestCustomerUpdatedWebhook:
         assert resp.status_code == 200
 
     def test_redelivery_is_idempotent(self, dbsession: Session) -> None:
-        from orchestra.web.api.webhooks.stripe import (
-            process_customer_updated_event,
-        )
+        from orchestra.web.api.webhooks.stripe import process_customer_updated_event
 
         _user, ba = make_user_with_billing(
             dbsession,
