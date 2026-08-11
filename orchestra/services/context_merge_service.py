@@ -70,6 +70,13 @@ FUNCTIONS_PRIMITIVES_TABLE = "Functions/Primitives"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
 FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 
+# Tables whose rows are running totals built by atomic increments, mapped to
+# the field carrying the total. Merging these adds rather than picks a winner
+# (see :func:`_apply_additive_accumulator_policy`).
+ACCUMULATOR_TABLE_FIELDS = {
+    "Spending/Monthly": "cumulative_spend",
+}
+
 # Every manager ships a sync-state singleton at <Table>/Meta with this exact
 # key shape: one fixed meta_id=1 row holding a re-derivable content hash.
 META_SINGLETON_SUFFIX = "/Meta"
@@ -443,6 +450,68 @@ def _apply_primitives_policy(
     _drop_source_logs(session, project_id, pair.source.id, dropped)
 
 
+def _accumulator_key(data: Dict[str, Any], key_columns: List[str]) -> Tuple[str, ...]:
+    return tuple(str(data.get(column)) for column in key_columns)
+
+
+def _apply_additive_accumulator_policy(
+    session: Session,
+    project_id: int,
+    pair: _PairMerge,
+    *,
+    field: str,
+) -> None:
+    """Fold accumulator rows by adding, not by picking a winner.
+
+    ``field`` is built by atomic ``+=`` increments — one per event — so a row
+    holds the total of the events recorded *in its own context*. Two rows
+    sharing a unique key therefore cover disjoint events, and the merged total
+    is their sum; keeping either one alone silently discards real events.
+    Summing cannot double-count, since any one event only ever incremented the
+    row in the context it was written to.
+    """
+    key_columns = list(pair.target.unique_key_names or [])
+    if not key_columns:
+        return
+
+    target_rows = {
+        _accumulator_key(data, key_columns): (log_id, data)
+        for log_id, data in _context_log_rows(session, project_id, pair.target.id)
+    }
+
+    merged: List[Tuple[int, str]] = []
+    dropped: List[int] = []
+    for source_log_id, source_data in _context_log_rows(
+        session,
+        project_id,
+        pair.source.id,
+    ):
+        match = target_rows.get(_accumulator_key(source_data, key_columns))
+        if match is None:
+            # No counterpart: the row moves across untouched.
+            continue
+        target_log_id, target_data = match
+        combined = dict(target_data)
+        combined[field] = _as_number(target_data.get(field)) + _as_number(
+            source_data.get(field),
+        )
+        merged.append((target_log_id, json.dumps(combined)))
+        dropped.append(source_log_id)
+
+    _flush_remap_updates(session, project_id, merged)
+    _drop_source_logs(session, project_id, pair.source.id, dropped)
+
+
+def _as_number(value: Any) -> float:
+    """Accumulator fields arrive as float, int, or numeric string."""
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _apply_secrets_policy(
     session: Session,
     project_id: int,
@@ -769,7 +838,14 @@ def _prepare_pair_merge(
     if table_path == FUNCTIONS_PRIMITIVES_TABLE:
         _apply_primitives_policy(session, project_id, pair)
         return pair
-    if table_path in (FUNCTIONS_COMPOSITIONAL_TABLE, FUNCTIONS_VENVS_TABLE):
+    if table_path in ACCUMULATOR_TABLE_FIELDS:
+        _apply_additive_accumulator_policy(
+            session,
+            project_id,
+            pair,
+            field=ACCUMULATOR_TABLE_FIELDS[table_path],
+        )
+    elif table_path in (FUNCTIONS_COMPOSITIONAL_TABLE, FUNCTIONS_VENVS_TABLE):
         _apply_named_function_policy(session, project_id, pair)
     elif table_path == SECRETS_TABLE:
         _apply_secrets_policy(session, project_id, pair)
