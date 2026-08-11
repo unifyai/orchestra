@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Ensure the Cloud Scheduler jobs that sweep for burner-account clusters.
 #
-# Ships pointing at ``dry_run=true`` on purpose. The sweep suspends real
-# customer accounts, and its evidence — several never-paid accounts
-# sharing a signup origin, each having drained its grant — only becomes
-# meaningful once signup provenance has been recorded for a while. Run it
-# reporting-only first, read the flagged ids out of the run logs, and
-# flip BURNER_CLUSTER_DRY_RUN=false when the matches look right.
+# Points at ``dry_run=false``: the sweep enforces, matching the deployed
+# jobs. The default has to match what is live, because this script is the
+# thing that rewrites them — a reporting-only default would silently
+# disarm the control the next time anyone re-applied it, and nothing
+# would look wrong afterwards.
+#
+# What guards against a false positive is the signature itself: several
+# never-paid accounts sharing a signup origin inside a short window, each
+# having drained its grant. Set BURNER_CLUSTER_DRY_RUN=true to return the
+# jobs to reporting-only while investigating a match.
 #
 # Auth matches other Orchestra admin schedulers: static Bearer
 # ``ORCHESTRA_ADMIN_KEY`` from Secret Manager (project ``gcp-project-saas``).
@@ -14,7 +18,7 @@
 # Usage:
 #   bash deploy/ensure_burner_cluster_scheduler.sh
 #   bash deploy/ensure_burner_cluster_scheduler.sh --dry-run
-#   BURNER_CLUSTER_DRY_RUN=false bash deploy/ensure_burner_cluster_scheduler.sh
+#   BURNER_CLUSTER_DRY_RUN=true bash deploy/ensure_burner_cluster_scheduler.sh
 #
 # Idempotent: create or update staging + production jobs in us-central1.
 # Note ``--dry-run`` (do not touch Cloud Scheduler) is a different thing
@@ -26,7 +30,7 @@ PROJECT="${GCP_PROJECT:-gcp-project-saas}"
 LOCATION="${GCP_LOCATION:-us-central1}"
 # Daily, after the other billing routines have settled.
 SCHEDULE="${BURNER_CLUSTER_SWEEP_SCHEDULE:-30 5 * * *}"
-SWEEP_DRY_RUN="${BURNER_CLUSTER_DRY_RUN:-true}"
+SWEEP_DRY_RUN="${BURNER_CLUSTER_DRY_RUN:-false}"
 ATTEMPT_DEADLINE="${BURNER_CLUSTER_SWEEP_DEADLINE:-120s}"
 DRY_RUN=0
 
@@ -34,7 +38,7 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,22p' "$0"
+      sed -n '2,25p' "$0"
       exit 0
       ;;
     *)

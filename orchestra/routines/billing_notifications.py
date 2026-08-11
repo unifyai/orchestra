@@ -25,6 +25,7 @@ import requests
 
 if TYPE_CHECKING:
     from orchestra.routines.billing_reconciliation import ReconciliationResult
+    from orchestra.routines.card_gate_sweep import ClusterSweepResult
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,97 @@ def notify_billing_event_failure(
         _cooldown_cache[cache_key] = now
 
     return sent
+
+
+# ---------------------------------------------------------------------------
+# Burner-cluster sweep
+# ---------------------------------------------------------------------------
+
+
+def notify_burner_cluster_sweep(
+    result: ClusterSweepResult,
+    *,
+    environment: str = "",
+) -> bool:
+    """Announce a burner-cluster sweep that acted, or that could not see.
+
+    Deliberately not routed through the failure notifiers: a freeze is
+    the control working, and labelling it an error would train everyone
+    to dismiss it. It still warrants a mention, because the sweep locks
+    real people out of their accounts on circumstantial evidence and a
+    false positive needs a human long before the customer writes in.
+
+    Silent on the ordinary case — a live run that froze nobody, having
+    looked at accounts it could actually read.
+    """
+    webhook_url = os.environ.get(WEBHOOK_URL_ENV)
+    if not webhook_url:
+        return True
+
+    blind = bool(result.considered) and result.without_provenance == result.considered
+    if result.dry_run or not (result.frozen or blind):
+        return True
+
+    env_tag = environment.upper() or _detect_environment()
+    ids = ", ".join(str(i) for i in result.billing_account_ids[:25]) or "—"
+    if len(result.billing_account_ids) > 25:
+        ids += f" (+{len(result.billing_account_ids) - 25} more)"
+
+    if result.frozen:
+        embed = {
+            "title": f"🧊 Burner-cluster sweep froze {result.frozen} — {env_tag}",
+            "color": COLOR_RED,
+            "fields": [
+                {
+                    "name": "Billing accounts",
+                    "value": ids,
+                    "inline": False,
+                },
+                {
+                    "name": "Largest cluster",
+                    "value": f"{result.largest_cluster} (threshold {result.threshold})",
+                    "inline": True,
+                },
+                {
+                    "name": "Candidates considered",
+                    "value": str(result.considered),
+                    "inline": True,
+                },
+            ],
+            "footer": {"text": datetime.now(timezone.utc).isoformat()},
+        }
+        content = _build_mention_string(
+            f"🧊 **{result.frozen} account(s) suspended** as a burner cluster "
+            f"in {env_tag} — confirm before the customer does",
+        )
+    else:
+        embed = {
+            "title": f"🕶️ Burner-cluster sweep ran blind — {env_tag}",
+            "color": COLOR_YELLOW,
+            "fields": [
+                {
+                    "name": "Candidates",
+                    "value": (f"{result.considered}, none carrying a signup origin"),
+                    "inline": False,
+                },
+                {
+                    "name": "What this means",
+                    "value": (
+                        "The sweep froze nothing because it could not see, "
+                        "not because nothing was there. Check that signup "
+                        "provenance is still being recorded."
+                    ),
+                    "inline": False,
+                },
+            ],
+            "footer": {"text": datetime.now(timezone.utc).isoformat()},
+        }
+        content = _build_mention_string(
+            f"🕶️ **Burner-cluster sweep is blind** in {env_tag} — "
+            "its nightly all-clear is not evidence of anything",
+        )
+
+    return _send_webhook(webhook_url, content=content, embeds=[embed])
 
 
 # ---------------------------------------------------------------------------

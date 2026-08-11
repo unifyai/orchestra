@@ -1078,11 +1078,15 @@ def trigger_burner_cluster_freeze_sweep(
     dry_run: bool = True,
     session=Depends(get_db_session),
 ) -> dict:
+    from orchestra.routines.billing_notifications import notify_burner_cluster_sweep
     from orchestra.routines.card_gate_sweep import freeze_burner_clusters
 
     result = freeze_burner_clusters(session, dry_run=dry_run)
     if not dry_run:
         session.commit()
+    # After the commit: an alert about a suspension that then failed to
+    # persist would send someone looking for an account that is fine.
+    notify_burner_cluster_sweep(result)
     return {"status": "success", **result.to_dict()}
 
 
