@@ -312,10 +312,18 @@ class Settings(BaseSettings):
     )
     #: Anthropic credential for the LLM gateway's native-Anthropic leg. Held
     #: here so assistant pods never carry one: they reach Anthropic only
-    #: through the broker, authenticated as themselves. Deliberately a
-    #: separate name from any pod-side ANTHROPIC_API_KEY so the two cannot be
-    #: conflated when one is rotated.
-    routing_anthropic_api_key: Optional[str] = get_env("ROUTING_ANTHROPIC_API_KEY")
+    #: through the broker, authenticated as themselves.
+    #:
+    #: Two names because the live services disagree and neither is in source:
+    #: production mounts ``ORCHESTRA_ANTHROPIC_API_KEY`` while staging mounts
+    #: bare ``ANTHROPIC_API_KEY``, both from the ``ROUTING_ANTHROPIC_API_KEY*``
+    #: secrets. Reading both is what makes this work in either environment
+    #: without hand-editing a running service; standardising on one name means
+    #: changing a live deployment, which is a separate and more disruptive
+    #: change than adding a route. Prefer the explicit name when both are set.
+    routing_anthropic_api_key: Optional[str] = get_env(
+        "ORCHESTRA_ANTHROPIC_API_KEY",
+    ) or get_env("ANTHROPIC_API_KEY")
     anthropic_api_base: str = get_env(
         "ORCHESTRA_ANTHROPIC_API_BASE",
         "https://api.anthropic.com",
