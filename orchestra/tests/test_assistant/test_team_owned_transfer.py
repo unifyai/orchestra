@@ -1062,7 +1062,13 @@ async def test_merge_dedupes_equivalent_recurring_tasks(
         project_id,
         f"Teams/{team_id}/Tasks/Executions",
     )
-    by_marker = {row["marker"]: row["task_id"] for row in activation_rows}
+    # Only the seeded rows carry a marker: these definitions repeat, so
+    # projection writes open heads of its own alongside them. What this
+    # test pins is the remapping of machine-state references, not how many
+    # execution rows exist.
+    by_marker = {
+        row["marker"]: row["task_id"] for row in activation_rows if "marker" in row
+    }
     assert by_marker == {"weekly-activation": 1, "daily-activation": 0}
 
 

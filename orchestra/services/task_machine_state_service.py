@@ -2042,6 +2042,26 @@ def _project_execution_payload(
             if minted is None:
                 return KEEP_CURRENT_HEAD
             scheduled_for, dispatch_offset_seconds = minted
+        elif anchor is None and wake == "scheduled":
+            # A repeat-only series has no anchor and, before its first run,
+            # no ledger either: its head is simply the rule's next future
+            # slot. Without this branch the projection stored a head with no
+            # scheduled_for, which arms nothing.
+            #
+            # Scoped to the scheduled wake because this function also
+            # projects triggered and provider-event heads, where an absent
+            # schedule is normal and a null scheduled_for is the correct
+            # answer — the head waits for an event, not a clock. Minting
+            # for those instead dropped the head entirely whenever the row
+            # had no repeat rule to mint from.
+            minted = _next_repeat_occurrence_after(
+                data=row.data,
+                task_id=task_id,
+                previous_start=datetime.now(timezone.utc),
+            )
+            if minted is None:
+                return KEEP_CURRENT_HEAD
+            scheduled_for, dispatch_offset_seconds = minted
         else:
             scheduled_for = anchor
     payload = {
@@ -2506,19 +2526,25 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 
 def _is_scheduled_execution_candidate(data: Mapping[str, Any]) -> bool:
-    """Return True when a task row is the current armed scheduled execution."""
+    """Return True when a task row is the current armed scheduled execution.
+
+    A definition is scheduled when either a start time or a repeat rule
+    says so; the two are independent fields and a recurring series often
+    carries only the rule. Requiring ``schedule.start_at`` here left every
+    repeat-only definition — the shape workflow installs plant — with no
+    projected execution at all: nothing armed a timer and the series never
+    fired, while its console row honestly reported no next run.
+    """
 
     if not _is_task_enabled(data):
         return False
-    schedule = data.get("schedule")
     trigger = data.get("trigger")
     if trigger not in (None, {}):
         return False
-    if not isinstance(schedule, dict):
-        return False
-    if schedule.get("start_at") is None:
-        return False
-    return True
+    schedule = data.get("schedule")
+    if isinstance(schedule, dict) and schedule.get("start_at") is not None:
+        return True
+    return bool(parse_repeat_patterns(data.get("repeat")))
 
 
 def _is_provider_event_execution_candidate(data: Mapping[str, Any]) -> bool:

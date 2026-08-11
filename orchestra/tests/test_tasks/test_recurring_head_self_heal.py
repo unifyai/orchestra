@@ -280,3 +280,98 @@ async def test_releasing_a_crashed_run_leaves_a_future_scheduled_head(
     dbsession.refresh(definition)
     assert definition.data["task_revision"] == 1
     assert "state" not in definition.data
+
+
+def test_a_repeat_only_definition_is_a_scheduled_candidate() -> None:
+    """A repeat rule alone schedules a series; no start time is required.
+
+    ``schedule`` holds a single start time and ``repeat`` holds the cadence —
+    independent fields, and a recurring definition (the shape workflow
+    installs plant) often carries only the rule. Requiring ``start_at``
+    projected nothing for these: no head, no timer, a series that never
+    fired while its definition sat armed.
+    """
+
+    repeat_only = {
+        "task_id": 12,
+        "name": "Weekday briefing",
+        "enabled": True,
+        "schedule": None,
+        "trigger": None,
+        "repeat": _TEN_MINUTES,
+    }
+    assert service._is_scheduled_execution_candidate(repeat_only)
+
+    unscheduled = {**repeat_only, "repeat": None}
+    assert not service._is_scheduled_execution_candidate(unscheduled)
+
+
+def test_a_repeat_only_series_mints_its_first_head() -> None:
+    """Before its first run, a repeat-only series heads at the rule's next slot."""
+
+    definition = service._TaskRow(
+        log_event_id=556,
+        data={
+            "task_id": 13,
+            "name": "Weekday briefing",
+            "description": "Repeat-only recurring definition.",
+            "enabled": True,
+            "schedule": None,
+            "repeat": _TEN_MINUTES,
+            "assistant_id": "42",
+        },
+        updated_at=None,
+        created_at=None,
+    )
+
+    payload = _project(definition, latest=None)
+
+    assert payload is not KEEP_CURRENT_HEAD
+    assert payload["state"] == "scheduled"
+    assert payload["recurring"] is True
+    minted = datetime.fromisoformat(payload["scheduled_for"])
+    now = datetime.now(timezone.utc)
+    assert minted > now
+    assert minted - now <= timedelta(minutes=10)
+
+
+def test_a_triggered_head_survives_having_no_schedule() -> None:
+    """A triggered head has no clock, and that is not a missing head.
+
+    Projection is shared across wakes. An absent schedule is normal for a
+    triggered row: its scheduled_for is legitimately null because the head
+    waits for an event rather than a time. Minting a slot there instead
+    dropped the head entirely whenever the row had no repeat rule to mint
+    from — which is every communication trigger.
+    """
+
+    triggered = service._TaskRow(
+        log_event_id=557,
+        data={
+            "task_id": 14,
+            "name": "Reply when the customer writes",
+            "enabled": True,
+            "assistant_id": "42",
+            "trigger": {"medium": "email", "recurring": True},
+        },
+        updated_at=None,
+        created_at=None,
+    )
+
+    with (
+        patch.object(service, "_open_execution_scheduled_for", return_value=None),
+        patch.object(service, "_latest_ledger_occurrence", return_value=None),
+    ):
+        payload = service._project_execution_payload(
+            row=triggered,
+            wake="triggered",
+            tasks_context_name="1/42/Tasks",
+            destination=None,
+            session=MagicMock(),
+            project_id=1,
+        )
+
+    assert payload is not KEEP_CURRENT_HEAD
+    assert payload["wake"] == "triggered"
+    assert payload["scheduled_for"] is None
+    assert payload["trigger_medium"] == "email"
