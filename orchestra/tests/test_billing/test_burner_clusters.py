@@ -284,6 +284,74 @@ def test_user_agent_hash_clusters_across_changing_ips(
 
 
 # ---------------------------------------------------------------------------
+# Run diagnostics
+# ---------------------------------------------------------------------------
+#
+# A nightly zero is what this sweep reports almost every night, and the
+# only thing anyone reads. These pin that the zero carries enough with it
+# to tell "looked, found nothing" apart from "could not look" -- the
+# ambiguity that let the previous abuse signature sit dead and unnoticed.
+
+
+def test_a_quiet_run_reports_how_close_it_came(dbsession, small_cluster):
+    """Threshold minus one is a very different zero from nothing at all."""
+    for i in range(2):
+        _make_farmed_account(dbsession, f"diag_near_{i}", ip="203.0.113.110")
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert result.frozen == 0
+    assert result.considered == 2
+    assert result.largest_cluster == 2
+    assert result.threshold == 3
+    assert result.without_provenance == 0
+
+
+def test_a_blind_run_says_so_rather_than_reporting_all_clear(
+    dbsession,
+    small_cluster,
+):
+    """Unreadable candidates must not read as an absence of farming.
+
+    If provenance capture regresses, every account arrives without an
+    origin and the sweep freezes nothing -- indistinguishable from a
+    healthy quiet night unless the run says which one it was.
+    """
+    for i in range(4):
+        _make_farmed_account(dbsession, f"diag_blind_{i}", ip=None)
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert result.frozen == 0
+    assert result.considered == 4
+    assert result.without_provenance == 4
+    assert "blind" in result.note
+
+
+def test_a_healthy_quiet_run_is_not_labelled_blind(dbsession, small_cluster):
+    """The warning has to stay rare or it stops being read."""
+    _make_farmed_account(dbsession, "diag_seen", ip="203.0.113.120")
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert result.frozen == 0
+    assert result.note == ""
+
+
+def test_partial_provenance_still_clusters_what_it_can(dbsession, small_cluster):
+    """One unreadable signup must not disarm the run for the others."""
+    for i in range(3):
+        _make_farmed_account(dbsession, f"diag_partial_{i}", ip="203.0.113.130")
+    _make_farmed_account(dbsession, "diag_partial_blank", ip=None)
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert result.frozen == 3
+    assert result.without_provenance == 1
+    assert result.note == ""
+
+
+# ---------------------------------------------------------------------------
 # Provenance capture
 # ---------------------------------------------------------------------------
 

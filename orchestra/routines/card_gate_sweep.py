@@ -70,6 +70,31 @@ class SweepResult:
         return asdict(self)
 
 
+@dataclass
+class ClusterSweepResult(SweepResult):
+    """A cluster-sweep run, including why it froze nothing.
+
+    ``frozen == 0`` has two very different causes — nothing matched, or
+    the sweep could not see — and the run log is the only place anyone
+    reads this from. The earlier abuse signature was deleted for exactly
+    that ambiguity: it had become unable to fire, and reported the same
+    reassuring zero every night for weeks. These counters make the two
+    cases tell themselves apart without a database query.
+    """
+
+    #: Drained never-paid accounts the sweep looked at.
+    considered: int = 0
+    #: How many of those carried no signup origin at all. Approaching
+    #: ``considered`` means provenance capture has broken and the sweep
+    #: is blind, not clear.
+    without_provenance: int = 0
+    #: Distinct accounts in the biggest origin group. Read against
+    #: ``threshold`` this says how close the quiet run actually was.
+    largest_cluster: int = 0
+    #: ``burner_cluster_min_accounts`` as it was for this run.
+    threshold: int = 0
+
+
 def _paid_ba_ids(session: Session) -> set[int]:
     """Billing accounts with any real (non-promo) payment history."""
     rows = session.execute(
@@ -181,7 +206,7 @@ def freeze_burner_clusters(
     session: Session,
     *,
     dry_run: bool = True,
-) -> SweepResult:
+) -> ClusterSweepResult:
     """Suspend never-paid accounts that farmed a grant in an origin cluster.
 
     An account is frozen only when *all* of the following hold, because
@@ -201,7 +226,10 @@ def freeze_burner_clusters(
     cluster out of missing data, which is precisely the failure mode this
     sweep must not have.
     """
-    result = SweepResult(dry_run=dry_run)
+    result = ClusterSweepResult(
+        dry_run=dry_run,
+        threshold=settings.burner_cluster_min_accounts,
+    )
     # ``User.created_at`` is TIMESTAMP *without* time zone (unlike
     # ``CreditTransaction.at``), so compare it against a naive UTC value
     # rather than letting the driver coerce an aware one against the
@@ -226,20 +254,29 @@ def freeze_burner_clusters(
         .all()
     )
 
+    result.considered = len(users)
+
     clusters: dict[tuple[str, str], list[User]] = {}
     for user in users:
-        for kind, value in (
-            ("ip", user.signup_ip),
-            ("ua", user.signup_user_agent_hash),
-        ):
-            if not value:
-                continue
-            clusters.setdefault((kind, value), []).append(user)
+        origins = [
+            (kind, value)
+            for kind, value in (
+                ("ip", user.signup_ip),
+                ("ua", user.signup_user_agent_hash),
+            )
+            if value
+        ]
+        if not origins:
+            result.without_provenance += 1
+            continue
+        for origin in origins:
+            clusters.setdefault(origin, []).append(user)
 
     flagged_ba_ids: set[int] = set()
     for (kind, value), members in clusters.items():
         result.scanned += 1
         member_ba_ids = {u.billing_account_id for u in members if u.billing_account_id}
+        result.largest_cluster = max(result.largest_cluster, len(member_ba_ids))
         if len(member_ba_ids) < settings.burner_cluster_min_accounts:
             continue
         logger.warning(
@@ -261,6 +298,13 @@ def freeze_burner_clusters(
             ba.suspension_reason = "abuse_fingerprint"
 
     result.frozen = len(result.billing_account_ids)
+    if result.considered and result.without_provenance == result.considered:
+        # Says the quiet part out loud: every candidate was unreadable,
+        # so this run proves nothing about whether farming is happening.
+        result.note = (
+            "No candidate carried a signup origin — this run was blind, "
+            "not clear. Check that signup provenance is still recorded."
+        )
     if not dry_run:
         session.flush()
     logger.warning(
