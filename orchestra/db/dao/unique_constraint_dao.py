@@ -36,25 +36,33 @@ COMPOSITE_KEY_FIELD = "__composite__"
 # log is no longer associated with the context. Such an orphan would block its
 # key forever while reads of the context show nothing holding it. A constraint
 # row is therefore only authoritative while its holder is still attached to
-# the context; this predicate identifies rows whose claim has lapsed, and the
-# check paths below reclaim them for the incoming log instead of reporting a
-# duplicate. Used inside ON CONFLICT DO UPDATE, where the conflicting row is
-# addressed by its table name.
-HOLDER_ABSENT = text(
-    "NOT EXISTS ("
-    "SELECT 1 FROM log_event_context lec "
-    "WHERE lec.project_id = log_unique_constraint.project_id "
-    "AND lec.context_id = log_unique_constraint.context_id "
-    "AND lec.log_event_id = log_unique_constraint.log_event_id"
-    ")",
-)
+# the context; the predicates below identify rows whose claim has lapsed, and
+# the check paths reclaim them for the incoming log instead of reporting a
+# duplicate. The project id is bound as a literal (never correlated from the
+# constraint row) so the planner prunes the LIST(project_id) partitions of
+# log_event_context.
+
+
+def holder_absent_clause(project_id: int):
+    """WHERE clause for ON CONFLICT DO UPDATE: the conflicting row's holder
+    log is no longer attached to the context, so its claim has lapsed. The
+    conflicting row is addressed by its table name."""
+    return text(
+        "NOT EXISTS ("
+        "SELECT 1 FROM log_event_context lec "
+        "WHERE lec.project_id = :prune_project_id "
+        "AND lec.context_id = log_unique_constraint.context_id "
+        "AND lec.log_event_id = log_unique_constraint.log_event_id"
+        ")",
+    ).bindparams(prune_project_id=int(project_id))
+
 
 # Same liveness test for plain SELECTs against the lookup table, where the row
-# is addressed through the ``luc`` alias.
+# is addressed through the ``luc`` alias. Callers bind ``:project_id``.
 HOLDER_PRESENT_SQL = (
     "EXISTS ("
     "SELECT 1 FROM log_event_context lec "
-    "WHERE lec.project_id = luc.project_id "
+    "WHERE lec.project_id = :project_id "
     "AND lec.context_id = luc.context_id "
     "AND lec.log_event_id = luc.log_event_id"
     ")"
@@ -225,8 +233,8 @@ class UniqueConstraintDAO:
         Uses INSERT ... ON CONFLICT with RETURNING to atomically check and
         insert in a single query. A conflicting row whose holder log is no
         longer attached to the context is reclaimed for the incoming log
-        (DO UPDATE guarded by HOLDER_ABSENT) rather than reported as a
-        duplicate: the row lock serializes concurrent claimants, and the
+        (DO UPDATE guarded by the holder-absent clause) rather than reported
+        as a duplicate: the row lock serializes concurrent claimants, and the
         loser re-evaluates the guard against the winner's claim, so exactly
         one create wins a lapsed key.
 
@@ -254,7 +262,7 @@ class UniqueConstraintDAO:
         stmt = stmt.on_conflict_do_update(
             index_elements=["context_id", "field_name", "value_hash"],
             set_={"log_event_id": stmt.excluded.log_event_id},
-            where=HOLDER_ABSENT,
+            where=holder_absent_clause(entries[0]["project_id"]),
         )
         stmt = stmt.returning(
             LogUniqueConstraint.context_id,
@@ -499,7 +507,7 @@ class UniqueConstraintDAO:
         stmt = stmt.on_conflict_do_update(
             index_elements=["context_id", "field_name", "value_hash"],
             set_={"log_event_id": stmt.excluded.log_event_id},
-            where=HOLDER_ABSENT,
+            where=holder_absent_clause(entries[0]["project_id"]),
         )
         stmt = stmt.returning(
             LogUniqueConstraint.context_id,
@@ -738,7 +746,7 @@ class UniqueConstraintDAO:
         stmt = stmt.on_conflict_do_update(
             index_elements=["context_id", "field_name", "value_hash"],
             set_={"log_event_id": stmt.excluded.log_event_id},
-            where=HOLDER_ABSENT,
+            where=holder_absent_clause(resolved_project_id),
         )
         stmt = stmt.returning(LogUniqueConstraint.log_event_id)
 

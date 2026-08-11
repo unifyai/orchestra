@@ -11,7 +11,7 @@ from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.unique_constraint_dao import HOLDER_ABSENT
+from orchestra.db.dao.unique_constraint_dao import holder_absent_clause
 from orchestra.db.log_queries import project_scope
 from orchestra.db.models.core_models import (
     ActiveDerivedLog,
@@ -4618,13 +4618,13 @@ class ContextDAO:
             if values:
                 # The target may already hold a row for this key: reclaim it
                 # for the copied log when its holder has left the context
-                # (see unique_constraint_dao.HOLDER_ABSENT), keep it when a
-                # live holder owns the key.
+                # (see unique_constraint_dao.holder_absent_clause), keep it
+                # when a live holder owns the key.
                 stmt = pg_insert(LogUniqueConstraint).values(values)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["context_id", "field_name", "value_hash"],
                     set_={"log_event_id": stmt.excluded.log_event_id},
-                    where=HOLDER_ABSENT,
+                    where=holder_absent_clause(int(target_project_id)),
                 )
                 total += self.session.execute(stmt).rowcount
 
