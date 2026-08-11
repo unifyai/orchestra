@@ -13,6 +13,7 @@ extended; see the LLM-gateway design spec.
 
 import json
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Optional
@@ -25,7 +26,13 @@ from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dependencies import transient_request_db_session
 from orchestra.lib.billing import get_billing_entity
 from orchestra.settings import settings
-from orchestra.web.api.llm.schema import ChatCompletionRequest
+from orchestra.web.api.llm.schema import (
+    AuthorizeRequest,
+    AuthorizeResponse,
+    ChatCompletionRequest,
+    SettleRequest,
+    SettleResponse,
+)
 from orchestra.web.api.utils.http_client import get_async_client
 
 router = APIRouter()
@@ -421,6 +428,141 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             )
 
     return StreamingResponse(_proxy_stream(), media_type="text/event-stream")
+
+
+def _price_usage_for(model: str, usage: Any) -> Optional[float]:
+    """Cost a provider's own usage object, however that provider reports it.
+
+    OpenRouter states an authoritative charged amount; Anthropic states
+    tokens and never money. Keeping both here means the caller reports what
+    the provider said and never computes a price -- the side holding the
+    ledger stays the side that decides what things cost.
+    """
+    direct = _usage_cost(usage)
+    if direct is not None:
+        return direct
+    rates = _anthropic_token_rates(model)
+    if rates is None:
+        return None
+    return _anthropic_usage_cost(usage, rates)
+
+
+def _is_meterable(model: str) -> bool:
+    """Whether a completed call on this model could be priced at all.
+
+    OpenRouter models report their own cost, so any of them can be settled.
+    A native Anthropic model can only be settled if the catalogue prices it.
+    """
+    normalized = model.strip().lower()
+    if normalized.endswith(_OPENROUTER_SUFFIX) or normalized.startswith("openrouter/"):
+        return True
+    return _anthropic_token_rates(model) is not None
+
+
+@router.post(
+    "/llm/authorize",
+    response_model=AuthorizeResponse,
+    tags=["LLM Gateway"],
+)
+def authorize(request: Request, body: AuthorizeRequest) -> AuthorizeResponse:
+    """Decide whether a caller holding its own provider key may proceed.
+
+    This is the gateway without the bytes. A pod-local broker streams
+    directly to the provider -- so the account checks that the proxy routes
+    run inline have to be answerable on their own, in milliseconds, rather
+    than by routing a generation through this service.
+
+    That split matters for more than latency: a proxied call occupies a
+    request slot here for as long as the model is generating, so LLM volume
+    would contend with billing, logs and search on the same pool. A metadata
+    call occupies one for milliseconds.
+
+    Refusals are returned as ``allowed: false`` rather than raised, so a
+    caller can relay the reason to the user; genuine faults still raise.
+    """
+    if not _is_meterable(body.model):
+        return AuthorizeResponse(
+            allowed=False,
+            reason=(
+                f"Model '{body.model}' cannot be metered, so it is not "
+                "available. Only OpenRouter models and curated Anthropic "
+                "models can be priced."
+            ),
+        )
+
+    try:
+        _precheck(request, body.assistant_id)
+    except HTTPException as exc:
+        # 400/402 here are verdicts about the account, not failures of this
+        # endpoint: the caller asked a question and this is the answer.
+        if exc.status_code in (
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_402_PAYMENT_REQUIRED,
+            status.HTTP_403_FORBIDDEN,
+        ):
+            return AuthorizeResponse(allowed=False, reason=str(exc.detail))
+        raise
+
+    return AuthorizeResponse(allowed=True, lease=secrets.token_urlsafe(16))
+
+
+@router.post(
+    "/llm/settle",
+    response_model=SettleResponse,
+    tags=["LLM Gateway"],
+)
+def settle(request: Request, body: SettleRequest) -> SettleResponse:
+    """Charge a completed call the caller made with its own provider key.
+
+    Deliberately not fire-and-forget on the caller's side: this is the only
+    record that the call happened, so a caller that cannot reach it has to
+    treat that as a failure to retry rather than a call that was free. The
+    ledger write itself is idempotent only by lease, which is echoed from
+    the authorising call so a settle can be traced to it.
+    """
+    ctx = _precheck_settle_context(request)
+    cost = _price_usage_for(body.model, body.usage)
+    if cost is None:
+        logger.warning(
+            "LLM gateway: settle carried no priceable usage (model=%s)",
+            body.model,
+        )
+        return SettleResponse(charged=0.0, metered=False)
+
+    _charge_usage(
+        request.app.state.db_session_factory,
+        ctx=ctx,
+        user_id=getattr(request.state, "user_id", None),
+        organization_id=getattr(request.state, "organization_id", None),
+        assistant_id=body.assistant_id,
+        model=body.model,
+        raw_cost=cost,
+    )
+    charged = cost * float(settings.chat_completions_markup_rate)
+    return SettleResponse(charged=charged, metered=bool(ctx.charges))
+
+
+def _precheck_settle_context(request: Request) -> _BillingCtx:
+    """Resolve the billing account for a settle, without re-gating the call.
+
+    The balance and cap gates belong on the way in. Applying them here would
+    refuse to record a call the provider has already served and already
+    billed us for, which loses the charge precisely when the account is
+    furthest overdrawn.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    organization_id = getattr(request.state, "organization_id", None)
+    charges = settings.charges_billing
+
+    with transient_request_db_session(request) as session:
+        try:
+            entity = get_billing_entity(session, user_id, organization_id)
+        except ValueError:
+            return _BillingCtx(billing_account_id=None, charges=False)
+        return _BillingCtx(
+            billing_account_id=int(entity.billing_account_id),
+            charges=charges,
+        )
 
 
 @router.post("/llm/anthropic/v1/messages", tags=["LLM Gateway"])

@@ -420,3 +420,53 @@ class TestAnthropicStreamUsage:
     def test_a_stream_carrying_no_usage_prices_nothing(self):
         tail = 'data: {"type":"content_block_delta"}\n\n'
         assert views._anthropic_cost_from_stream_tail(tail, (5.0, 25.0)) is None
+
+
+# --------------------------------------------------------------------------- #
+# Metering API (used by the pod-local broker, which holds the provider key)
+# --------------------------------------------------------------------------- #
+
+
+class TestMeterability:
+    """What can be charged decides what may be run.
+
+    A caller streaming bytes itself can only be allowed to do so for a call
+    this side could later price. Authorising something unpriceable would
+    hand out inference nobody can bill.
+    """
+
+    def test_openrouter_models_are_always_meterable(self):
+        """They report their own cost, so any of them can be settled."""
+        assert views._is_meterable("openai/gpt-5.6-sol@openrouter") is True
+        assert views._is_meterable("openrouter/openai/gpt-5.6-sol") is True
+
+    def test_a_catalogued_anthropic_model_is_meterable(self):
+        assert views._is_meterable("claude-opus-5@anthropic") is True
+
+    def test_an_uncatalogued_native_model_is_not(self):
+        assert views._is_meterable("mystery-model@vertex-ai") is False
+
+
+class TestPriceUsageForEitherProvider:
+    """One entry point, because the caller reports and never computes.
+
+    Leaving the pricing decision here is what keeps refusing an unpriceable
+    model meaningful: a caller that priced its own calls could simply
+    declare a number.
+    """
+
+    def test_an_openrouter_cost_is_taken_as_authoritative(self):
+        assert views._price_usage_for("openai/x@openrouter", {"cost": 0.000225}) == (
+            pytest.approx(0.000225)
+        )
+
+    def test_anthropic_tokens_are_priced_from_the_catalogue(self):
+        cost = views._price_usage_for(
+            "claude-opus-5",
+            {"input_tokens": 1000, "output_tokens": 500},
+        )
+        assert cost == pytest.approx(0.0175)
+
+    def test_usage_for_an_unpriceable_model_yields_nothing(self):
+        """Better no charge than an invented one; authorize refuses these."""
+        assert views._price_usage_for("mystery@vertex-ai", {"input_tokens": 10}) is None
