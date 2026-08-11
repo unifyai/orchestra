@@ -1525,7 +1525,10 @@ async def test_repair_dry_run_leaves_stray_rows_in_place(
         team_id=team_id,
     )
     stray = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
     _seed_table(dbsession, project_id, stray, versioned=True)
+    _seed_table(dbsession, project_id, team_data, versioned=True)
+    await _post_rows(client, org_headers, team_data, [{"repo": "team-one"}])
     await _post_rows(client, org_headers, stray, [{"repo": "stray-one"}])
 
     response = await client.post(
@@ -1538,10 +1541,16 @@ async def test_repair_dry_run_leaves_stray_rows_in_place(
     assert body["dry_run"] is True
     assert body["personal_contexts_found"] >= 1
 
-    # A dry run reports what it would do and keeps the rows where they were.
+    # A dry run reports what it would do and changes nothing: the stray rows
+    # stay put, the team table is untouched, and — because the rollback is
+    # scoped to a savepoint rather than the session — the caller's own
+    # uncommitted setup survives it.
     dbsession.expire_all()
     assert [row["repo"] for row in _table_rows(dbsession, project_id, stray)] == [
         "stray-one",
+    ]
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, team_data)] == [
+        "team-one",
     ]
 
 

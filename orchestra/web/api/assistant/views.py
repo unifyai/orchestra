@@ -5677,8 +5677,9 @@ def repair_team_owned_memory_endpoint(
             merge_versioned=body.merge_versioned,
             dry_run=body.dry_run,
         )
+    # The service unwinds its own savepoint on failure; rolling the whole
+    # session back here would discard more than this repair touched.
     except TeamOwnershipTransferError as exc:
-        session.rollback()
         detail = str(exc)
         if detail == "assistant_not_team_owned":
             status_code = status.HTTP_400_BAD_REQUEST
@@ -5690,7 +5691,6 @@ def repair_team_owned_memory_endpoint(
             status_code = status.HTTP_409_CONFLICT
         raise HTTPException(status_code=status_code, detail=detail) from exc
     except Exception as exc:
-        session.rollback()
         logging.error(
             f"Failed to repair team memory for assistant {assistant_id}: {exc}",
             exc_info=True,

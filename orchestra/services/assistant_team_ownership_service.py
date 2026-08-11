@@ -228,6 +228,11 @@ def repair_team_owned_memory(
 
     stranded = context_dao.list_context_subtree(project_id, personal_prefix)
 
+    # Everything the repair touches goes inside a SAVEPOINT so undoing it
+    # undoes only this repair. session.rollback() would discard the whole
+    # transaction, taking any uncommitted work the caller had already done on
+    # the same session with it — a dry run must never destroy its caller.
+    savepoint = session.begin_nested()
     try:
         merge_result = merge_context_trees(
             session,
@@ -238,31 +243,35 @@ def repair_team_owned_memory(
             merge_populated=merge_memory,
             merge_versioned=merge_versioned,
         )
+
+        # Rows arriving from the personal root still carry the assistant's
+        # denormalized owner key; rebrand them so the team's owner
+        # sub-partition stays the unit of bulk deletion.
+        update_tree_ownership(
+            session,
+            project_id=project_id,
+            prefix=team_prefix,
+            owner_scope=OwnerScope.TEAM,
+            owner_id=owner_team_id,
+            previous_owner_key=owner_key(OwnerScope.ASSISTANT, assistant_id),
+        )
+
+        session.query(ContactMembership).filter(
+            ContactMembership.assistant_id == assistant_id,
+            ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
+        ).delete(synchronize_session=False)
+        ensure_team_contact_memberships(session, [(assistant_id, owner_team_id)])
     except ContextMergeError as exc:
-        session.rollback()
+        savepoint.rollback()
         raise TeamOwnershipTransferError(_transfer_detail(exc)) from exc
-
-    # Rows arriving from the personal root still carry the assistant's
-    # denormalized owner key; rebrand them so the team's owner sub-partition
-    # stays the unit of bulk deletion.
-    update_tree_ownership(
-        session,
-        project_id=project_id,
-        prefix=team_prefix,
-        owner_scope=OwnerScope.TEAM,
-        owner_id=owner_team_id,
-        previous_owner_key=owner_key(OwnerScope.ASSISTANT, assistant_id),
-    )
-
-    session.query(ContactMembership).filter(
-        ContactMembership.assistant_id == assistant_id,
-        ContactMembership.target_scope == CONTACT_MEMBERSHIP_SCOPE_PERSONAL,
-    ).delete(synchronize_session=False)
-    ensure_team_contact_memberships(session, [(assistant_id, owner_team_id)])
+    except Exception:
+        savepoint.rollback()
+        raise
 
     if dry_run:
-        session.rollback()
+        savepoint.rollback()
     else:
+        savepoint.commit()
         session.commit()
 
     return {
