@@ -3329,6 +3329,16 @@ def _delete_logs(
                 )
                 .delete(synchronize_session=False)
             )
+            # A detached log must release this context's uniqueness claims,
+            # or the lookup rows would block those keys against a context
+            # that no longer shows the log.
+            from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
+            UniqueConstraintDAO(session).remove_constraints_for_logs(
+                logs_in_other_contexts,
+                context_id=context_id,
+                project_id=project_id,
+            )
             if removed_count > 0:
                 context_description.append(
                     f"Removed {removed_count} log events from context '{context_name}'",
@@ -3385,11 +3395,12 @@ def _delete_logs(
             # log_unique_constraint no longer cascades with log_event (FK dropped
             # for partitioning); clear its rows so deleting+recreating a unique
             # machine row (e.g. activation reprojection) does not hit a stale
-            # uniqueness conflict. Scope by context/project to avoid lock fights
-            # on the global log_event_id index under concurrent creates.
+            # uniqueness conflict. Project-scoped, not context-scoped: a fully
+            # deleted log must release its claims in every context it was ever
+            # constrained in (the (project_id, log_event_id) index keeps this
+            # off the global log_event_id index under concurrent creates).
             UniqueConstraintDAO(session).remove_constraints_for_logs(
                 logs_to_delete,
-                context_id=context_id,
                 project_id=project_id,
             )
 
@@ -3567,6 +3578,14 @@ def _delete_logs(
                     )
                     .delete(synchronize_session=False)
                 )
+                # Detached logs release this context's uniqueness claims.
+                from orchestra.db.dao.unique_constraint_dao import UniqueConstraintDAO
+
+                UniqueConstraintDAO(session).remove_constraints_for_logs(
+                    logs_in_other_contexts,
+                    context_id=context_id,
+                    project_id=project_id,
+                )
                 if removed_count > 0:
                     context_description.append(
                         f"Removed {removed_count} empty log events from context '{context_name}'",
@@ -3595,9 +3614,10 @@ def _delete_logs(
                 )
                 # log_unique_constraint no longer cascades with log_event (FK
                 # dropped for partitioning); clear its rows explicitly.
+                # Project-scoped: a fully deleted log releases its claims in
+                # every context it was ever constrained in.
                 UniqueConstraintDAO(session).remove_constraints_for_logs(
                     logs_to_delete,
-                    context_id=context_id,
                     project_id=project_id,
                 )
 

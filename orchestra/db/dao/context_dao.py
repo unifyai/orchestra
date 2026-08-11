@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.unique_constraint_dao import HOLDER_ABSENT
 from orchestra.db.log_queries import project_scope
 from orchestra.db.models.core_models import (
     ActiveDerivedLog,
@@ -3394,6 +3395,18 @@ class ContextDAO:
             self.session.delete(context)
             self.session.flush()  # Ensure the context deletion cascades
 
+            # log_unique_constraint has no FK to context (partitioning);
+            # drop the dead context's uniqueness rows wholesale so surviving
+            # logs' claims don't linger against a context that no longer
+            # exists.
+            self.session.execute(
+                text(
+                    "DELETE FROM log_unique_constraint "
+                    "WHERE context_id = :ctx_id AND project_id = :project_id",
+                ),
+                {"ctx_id": id, "project_id": project_id},
+            )
+
             # ── Phase 4: Scoped orphan cleanup ──
             # Uses scoped query on this context's log_event_ids instead of
             # scanning all logs in the project (23ms vs 632ms on prod).
@@ -4603,8 +4616,17 @@ class ContextDAO:
                 if r.log_event_id in id_map
             ]
             if values:
-                self.session.execute(pg_insert(LogUniqueConstraint).values(values))
-                total += len(values)
+                # The target may already hold a row for this key: reclaim it
+                # for the copied log when its holder has left the context
+                # (see unique_constraint_dao.HOLDER_ABSENT), keep it when a
+                # live holder owns the key.
+                stmt = pg_insert(LogUniqueConstraint).values(values)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["context_id", "field_name", "value_hash"],
+                    set_={"log_event_id": stmt.excluded.log_event_id},
+                    where=HOLDER_ABSENT,
+                )
+                total += self.session.execute(stmt).rowcount
 
         if total:
             self.session.commit()
