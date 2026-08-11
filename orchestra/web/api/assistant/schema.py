@@ -2428,6 +2428,16 @@ class AssistantTransferToTeamOwnedRequest(BaseModel):
             "such collisions abort the transfer with 409."
         ),
     )
+    merge_versioned: bool = Field(
+        False,
+        description=(
+            "Allow those merges when either table keeps a commit history. Two "
+            "independent histories cannot be spliced, so the assistant's is "
+            "dropped and the team table gets one merge commit recording the "
+            "combined state. Without this flag such collisions abort with 409. "
+            "Tables that merely move keep their history regardless."
+        ),
+    )
 
 
 class AssistantTransferToTeamOwnedResponse(BaseModel):
@@ -2445,6 +2455,13 @@ class AssistantTransferToTeamOwnedResponse(BaseModel):
         description=(
             "Number of populated context pairs merged into existing team "
             "tables (merge_memory only)."
+        ),
+    )
+    versions_sealed: int = Field(
+        0,
+        description=(
+            "Number of versioned team tables given a merge commit recording "
+            "their post-merge state (merge_versioned only)."
         ),
     )
     duplicate_contacts: list = Field(

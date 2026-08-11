@@ -126,6 +126,7 @@ def _seed_table(
     unique_keys: dict | None = None,
     auto_counting: dict | None = None,
     foreign_keys: list | None = None,
+    versioned: bool = False,
 ) -> None:
     """Create a schema-bearing context, or align an existing one's schema."""
     context_dao = ContextDAO(dbsession)
@@ -136,6 +137,7 @@ def _seed_table(
         context.unique_key_types = list(unique_keys.values()) if unique_keys else []
         context.auto_counting = auto_counting or {}
         context.foreign_keys = foreign_keys or []
+        context.is_versioned = versioned
         dbsession.add(context)
     else:
         context_dao.create(
@@ -144,6 +146,7 @@ def _seed_table(
             unique_keys=unique_keys,
             auto_counting=auto_counting,
             foreign_keys=foreign_keys,
+            is_versioned=versioned,
         )
     dbsession.commit()
 
@@ -1270,3 +1273,153 @@ async def test_merge_rejects_semantic_unique_key_conflict(
     assert response.status_code == status.HTTP_409_CONFLICT, response.json()
     assert response.json()["detail"].startswith("team_memory_merge_unique_key_conflict")
     assert "octocat" in response.json()["detail"]
+
+
+def _head_snapshot_row_count(dbsession, project_id: int, context_name: str) -> int:
+    """Rows captured by the context's HEAD commit snapshot."""
+    context = (
+        dbsession.query(Context)
+        .filter_by(project_id=project_id, name=context_name)
+        .one()
+    )
+    return dbsession.execute(
+        text(
+            """
+            SELECT count(*)
+            FROM log_event_version lev
+            JOIN context_version cv ON cv.id = lev.context_version_id
+            WHERE cv.context_id = :context_id
+              AND cv.commit_hash = :commit_hash
+            """,
+        ),
+        {"context_id": context.id, "commit_hash": context.current_commit_hash},
+    ).scalar()
+
+
+@pytest.mark.anyio
+async def test_merge_rejects_versioned_collision_without_flag(
+    client: AsyncClient,
+    dbsession,
+):
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_versioned_refused@test.com",
+        org_name="Team Owned Versioned Refused Org",
+    )
+    personal_data = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
+    for name in (personal_data, team_data):
+        _seed_table(dbsession, project_id, name, versioned=True)
+    await _post_rows(client, org_headers, personal_data, [{"repo": "mine"}])
+    await _post_rows(client, org_headers, team_data, [{"repo": "theirs"}])
+
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={"owner_team_id": team_id, "merge_memory": True},
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT, response.json()
+    assert response.json()["detail"].startswith("team_memory_merge_versioned_context")
+
+
+@pytest.mark.anyio
+async def test_merge_versioned_seals_head_with_merged_rows(
+    client: AsyncClient,
+    dbsession,
+):
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_versioned_merge@test.com",
+        org_name="Team Owned Versioned Merge Org",
+    )
+    personal_data = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
+    for name in (personal_data, team_data):
+        _seed_table(dbsession, project_id, name, versioned=True)
+    await _post_rows(
+        client,
+        org_headers,
+        personal_data,
+        [{"repo": "mine-a"}, {"repo": "mine-b"}],
+    )
+    await _post_rows(client, org_headers, team_data, [{"repo": "theirs"}])
+
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={
+            "owner_team_id": team_id,
+            "merge_memory": True,
+            "merge_versioned": True,
+        },
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    body = response.json()["info"]
+    assert body["versions_sealed"] >= 1
+
+    dbsession.expire_all()
+    rows = _table_rows(dbsession, project_id, team_data)
+    assert {row["repo"] for row in rows} == {"mine-a", "mine-b", "theirs"}
+
+    # The seal exists so HEAD explains the table's contents: without it a
+    # rollback to HEAD would silently drop every merged row.
+    assert _head_snapshot_row_count(dbsession, project_id, team_data) == len(rows)
+
+
+@pytest.mark.anyio
+async def test_versioned_rename_keeps_history_without_flag(
+    client: AsyncClient,
+    dbsession,
+):
+    """A versioned table with no counterpart moves by rename, history intact."""
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_versioned_rename@test.com",
+        org_name="Team Owned Versioned Rename Org",
+    )
+    personal_data = f"{personal_prefix}/Data/Repos"
+    _seed_table(dbsession, project_id, personal_data, versioned=True)
+    await _post_rows(client, org_headers, personal_data, [{"repo": "solo"}])
+    context_dao = ContextDAO(dbsession)
+    source = context_dao.filter(project_id=project_id, name=personal_data)[0][0]
+    original_hash = context_dao.commit(source.id, commit_message="before transfer")
+
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={"owner_team_id": team_id, "merge_memory": True},
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+
+    dbsession.expire_all()
+    moved = (
+        dbsession.query(Context)
+        .filter_by(project_id=project_id, name=f"Teams/{team_id}/Data/Repos")
+        .one()
+    )
+    assert moved.is_versioned is True
+    assert moved.current_commit_hash == original_hash

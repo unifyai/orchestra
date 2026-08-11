@@ -69,6 +69,7 @@ async def transfer_assistant_to_team_owned(
     owner_team_id: int,
     actor_user_id: str,
     merge_memory: bool = False,
+    merge_versioned: bool = False,
 ) -> dict[str, object]:
     """Convert an org assistant from personal memory to team-owned scope.
 
@@ -120,6 +121,7 @@ async def transfer_assistant_to_team_owned(
             source_prefix=personal_prefix,
             target_prefix=team_prefix,
             merge_populated=merge_memory,
+            merge_versioned=merge_versioned,
         )
     except ContextMergeError as exc:
         raise TeamOwnershipTransferError(_transfer_detail(exc)) from exc
@@ -167,6 +169,7 @@ async def transfer_assistant_to_team_owned(
         "owner_team_id": owner_team_id,
         "contexts_renamed": merge_result.contexts_renamed,
         "contexts_merged": merge_result.contexts_merged,
+        "versions_sealed": merge_result.versions_sealed,
         "duplicate_contacts": merge_result.duplicate_contacts,
         "memory_root": team_prefix,
     }

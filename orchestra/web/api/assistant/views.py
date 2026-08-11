@@ -5580,6 +5580,7 @@ async def transfer_assistant_to_team_owned_endpoint(
             owner_team_id=transfer_request.owner_team_id,
             actor_user_id=user_id,
             merge_memory=transfer_request.merge_memory,
+            merge_versioned=transfer_request.merge_versioned,
         )
     except TeamOwnershipTransferError as exc:
         session.rollback()
@@ -5628,6 +5629,7 @@ async def transfer_assistant_to_team_owned_endpoint(
             owner_team_id=int(result["owner_team_id"]),
             contexts_renamed=int(result["contexts_renamed"]),
             contexts_merged=int(result["contexts_merged"]),
+            versions_sealed=int(result["versions_sealed"]),
             duplicate_contacts=list(result["duplicate_contacts"]),
             memory_root=str(result["memory_root"]),
         ),

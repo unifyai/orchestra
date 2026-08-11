@@ -13,7 +13,6 @@ from orchestra.web.api import (  # noqa: WPS235
     credits,
     integrations,
     interface,
-    llm,
     log,
     organization,
     project,
@@ -382,11 +381,6 @@ api_router.include_router(
 api_router.include_router(
     credits.router,
     tags=["Credits"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    llm.router,
-    tags=["LLM Gateway"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
