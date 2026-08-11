@@ -1,9 +1,9 @@
 """Signup provenance capture for abuse correlation.
 
 Free credits are Console-only, so credit farming no longer surfaces on
-the raw-API channel that :func:`freeze_abuse_fingerprints` watches. What
-remains is only separable by correlating accounts with each other, and
-that needs to know where each signup came from.
+the raw-API channel an earlier sweep watched. What remains is only
+separable by correlating accounts with each other, and that needs to
+know where each signup came from.
 
 Two values are recorded, both deliberately coarse:
 
