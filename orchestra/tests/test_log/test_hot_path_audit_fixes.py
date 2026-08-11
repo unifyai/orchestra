@@ -399,6 +399,17 @@ async def test_unique_field_conflict_lookup_is_batched(dbsession):
             "lid": existing_id,
         },
     )
+    # A claim only blocks while its holder is still attached to the context;
+    # an unattached holder makes it lapsed, and lapsed claims are not
+    # conflicts. Attach the holder so this exercises a live claim.
+    dbsession.execute(
+        text(
+            "INSERT INTO log_event_context "
+            "(project_id, context_id, log_event_id, owner_key) "
+            "VALUES (:pid, :cid, :lid, 'sys')",
+        ),
+        {"pid": project_id, "cid": context_id, "lid": existing_id},
+    )
     candidate_id = dbsession.execute(
         text(
             "INSERT INTO log_event (project_id, owner_key, data) "
