@@ -1540,11 +1540,10 @@ async def test_repair_dry_run_leaves_stray_rows_in_place(
     body = response.json()["info"]
     assert body["dry_run"] is True
     assert body["personal_contexts_found"] >= 1
+    assert stray in body["personal_contexts_with_rows"]
 
-    # A dry run reports what it would do and changes nothing: the stray rows
-    # stay put, the team table is untouched, and — because the rollback is
-    # scoped to a savepoint rather than the session — the caller's own
-    # uncommitted setup survives it.
+    # The dry run returns before writing: stray rows stay put, the team table
+    # is untouched, and nothing had to be undone to keep it that way.
     dbsession.expire_all()
     assert [row["repo"] for row in _table_rows(dbsession, project_id, stray)] == [
         "stray-one",

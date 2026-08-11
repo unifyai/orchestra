@@ -2462,8 +2462,9 @@ class AssistantTeamMemoryRepairRequest(BaseModel):
     dry_run: bool = Field(
         False,
         description=(
-            "Perform the whole repair and roll it back, so the returned counts "
-            "describe what a real run would do without changing anything."
+            "Report what is stranded under the personal root and return "
+            "without writing anything. Being read-only, it lists what a real "
+            "run would act on but cannot confirm the merge would succeed."
         ),
     )
 
@@ -2478,6 +2479,13 @@ class AssistantTeamMemoryRepairResponse(BaseModel):
     personal_contexts_found: int = Field(
         0,
         description="Stray contexts found under the personal root before the fold.",
+    )
+    personal_contexts_with_rows: list = Field(
+        default_factory=list,
+        description=(
+            "Stray contexts actually holding rows. Populated on a dry run; "
+            "empty on a real run, where the counts below describe the outcome."
+        ),
     )
     contexts_renamed: int = Field(
         0,

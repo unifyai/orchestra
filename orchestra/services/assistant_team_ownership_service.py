@@ -194,9 +194,9 @@ def repair_team_owned_memory(
     exists to perform the conversion rather than repair one.
 
     Ownership, team membership and the assistant record are already correct
-    here; only the stranded contexts move. ``dry_run`` performs the whole
-    merge and rolls it back, so the reported counts describe what a real run
-    would do without leaving anything behind.
+    here; only the stranded contexts move. ``dry_run`` reports what is
+    stranded and returns before writing anything — it never merges, so it
+    cannot say whether the merge would succeed, only what it would act on.
     """
     assistant_dao = AssistantDAO(session)
     assistant = assistant_dao.get_assistant_by_agent_id(assistant_id)
@@ -228,11 +228,31 @@ def repair_team_owned_memory(
 
     stranded = context_dao.list_context_subtree(project_id, personal_prefix)
 
-    # Everything the repair touches goes inside a SAVEPOINT so undoing it
-    # undoes only this repair. session.rollback() would discard the whole
-    # transaction, taking any uncommitted work the caller had already done on
-    # the same session with it — a dry run must never destroy its caller.
-    savepoint = session.begin_nested()
+    if dry_run:
+        # Read-only by construction rather than merge-then-undo. Undoing
+        # needs either session.rollback(), which discards the caller's whole
+        # transaction, or a SAVEPOINT, which the DBAPI rejects outright on an
+        # AUTOCOMMIT connection — so a simulate-and-revert preview would be
+        # safe or destructive depending on how the session happened to be
+        # configured. Reporting without writing cannot be.
+        populated = [
+            context.name
+            for context in stranded
+            if context_dao.context_has_logs(project_id, int(context.id))
+        ]
+        return {
+            "agent_id": assistant_id,
+            "owner_team_id": owner_team_id,
+            "dry_run": True,
+            "personal_contexts_found": len(stranded),
+            "personal_contexts_with_rows": sorted(populated),
+            "contexts_renamed": 0,
+            "contexts_merged": 0,
+            "versions_sealed": 0,
+            "duplicate_contacts": [],
+            "memory_root": team_prefix,
+        }
+
     try:
         merge_result = merge_context_trees(
             session,
@@ -262,23 +282,17 @@ def repair_team_owned_memory(
         ).delete(synchronize_session=False)
         ensure_team_contact_memberships(session, [(assistant_id, owner_team_id)])
     except ContextMergeError as exc:
-        savepoint.rollback()
+        session.rollback()
         raise TeamOwnershipTransferError(_transfer_detail(exc)) from exc
-    except Exception:
-        savepoint.rollback()
-        raise
 
-    if dry_run:
-        savepoint.rollback()
-    else:
-        savepoint.commit()
-        session.commit()
+    session.commit()
 
     return {
         "agent_id": assistant_id,
         "owner_team_id": owner_team_id,
-        "dry_run": dry_run,
+        "dry_run": False,
         "personal_contexts_found": len(stranded),
+        "personal_contexts_with_rows": [],
         "contexts_renamed": merge_result.contexts_renamed,
         "contexts_merged": merge_result.contexts_merged,
         "versions_sealed": merge_result.versions_sealed,

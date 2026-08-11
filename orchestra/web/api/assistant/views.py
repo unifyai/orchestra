@@ -5650,8 +5650,8 @@ async def transfer_assistant_to_team_owned_endpoint(
         "Sessions that ran with owner_team_id unbound wrote to the personal "
         "root anyway, stranding rows outside the root the assistant reads. "
         "This folds those contexts into the team root using the same merge as "
-        "conversion, which refuses an already-team-owned assistant. Use "
-        "dry_run first: it performs the whole repair and rolls it back."
+        "conversion, which refuses an already-team-owned assistant. dry_run "
+        "reports what is stranded without writing anything."
     ),
     tags=["Assistants", "Admin"],
     responses={
@@ -5704,7 +5704,7 @@ def repair_team_owned_memory_endpoint(
     return InfoResponse(
         info=AssistantTeamMemoryRepairResponse(
             message=(
-                "Dry run complete; nothing was changed."
+                "Dry run complete; nothing was read back or changed."
                 if dry_run
                 else "Stray personal contexts folded into the team root."
             ),
@@ -5712,6 +5712,7 @@ def repair_team_owned_memory_endpoint(
             owner_team_id=int(result["owner_team_id"]),
             dry_run=dry_run,
             personal_contexts_found=int(result["personal_contexts_found"]),
+            personal_contexts_with_rows=list(result["personal_contexts_with_rows"]),
             contexts_renamed=int(result["contexts_renamed"]),
             contexts_merged=int(result["contexts_merged"]),
             versions_sealed=int(result["versions_sealed"]),
