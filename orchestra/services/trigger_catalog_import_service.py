@@ -96,21 +96,14 @@ class TriggerCatalogImportService:
                 diagnostics=bootstrap.last_import_diagnostics_json,
             )
 
-        existing_snapshot = self.dao.get_snapshot_by_hash(
+        snapshot, created = self.dao.get_or_create_snapshot(
             environment=environment,
             backend_id=backend_id,
+            catalog_version=catalog_version,
             content_hash=content_hash,
+            raw_entry_count=len(entries),
         )
-        if existing_snapshot is not None:
-            snapshot = existing_snapshot
-        else:
-            snapshot = self.dao.create_snapshot(
-                environment=environment,
-                backend_id=backend_id,
-                catalog_version=catalog_version,
-                content_hash=content_hash,
-                raw_entry_count=len(entries),
-            )
+        if created:
             self.dao.insert_candidates(snapshot_id=snapshot.id, entries=entries)
 
         now = datetime.now(timezone.utc)

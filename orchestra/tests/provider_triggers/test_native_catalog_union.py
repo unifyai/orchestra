@@ -410,7 +410,7 @@ def _seed_composio_google_calendar_alias_catalog(
 
     dao = TriggerCatalogDAO(dbsession)
     content_hash = f"gcal-alias-{uuid.uuid4().hex}"
-    snapshot = dao.create_snapshot(
+    snapshot, _ = dao.get_or_create_snapshot(
         environment="selfhost",
         backend_id=COMPOSIO_BACKEND_ID,
         catalog_version="alias-test",
@@ -532,7 +532,7 @@ def _seed_composio_two_app_catalog(dbsession: Session) -> Assistant:
 
     dao = TriggerCatalogDAO(dbsession)
     content_hash = f"two-app-{uuid.uuid4().hex}"
-    snapshot = dao.create_snapshot(
+    snapshot, _ = dao.get_or_create_snapshot(
         environment="selfhost",
         backend_id=COMPOSIO_BACKEND_ID,
         catalog_version="two-app-test",
@@ -714,7 +714,7 @@ def _seed_composio_interspersed_two_app_catalog(dbsession: Session) -> Assistant
         )
         for slug in _INTERSPERSED_CALENDAR_SLUGS
     ]
-    snapshot = dao.create_snapshot(
+    snapshot, _ = dao.get_or_create_snapshot(
         environment="selfhost",
         backend_id=COMPOSIO_BACKEND_ID,
         catalog_version="interspersed-test",

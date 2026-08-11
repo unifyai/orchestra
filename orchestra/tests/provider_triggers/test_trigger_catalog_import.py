@@ -220,7 +220,7 @@ def test_list_candidates_for_snapshot_pages_without_duplicates_or_gaps(
     dbsession: Session,
 ) -> None:
     dao = TriggerCatalogDAO(dbsession)
-    snapshot = dao.create_snapshot(
+    snapshot, _ = dao.get_or_create_snapshot(
         environment="selfhost",
         backend_id=COMPOSIO_BACKEND_ID,
         catalog_version="pagination-test",
@@ -258,3 +258,85 @@ def test_list_candidates_for_snapshot_pages_without_duplicates_or_gaps(
         offset += page_size
 
     assert paged_slugs == [row.provider_trigger_slug for row in unpaginated]
+
+
+def test_import_survives_bootstrap_state_insert_race(
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A losing concurrent first import recovers instead of failing.
+
+    Simulates the loser's stale lookup: the bootstrap row already exists, but
+    ``get_bootstrap_state`` misses it once, so the insert hits the unique
+    constraint exactly as it does when two importers race on first boot. The
+    conflict must be a no-op followed by a re-read, not an error.
+    """
+
+    monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
+    service = TriggerCatalogImportService(dbsession)
+    first = service.import_catalog(
+        backend_id=COMPOSIO_BACKEND_ID,
+        environment="selfhost",
+    )
+
+    real_get = TriggerCatalogDAO.get_bootstrap_state
+    lookups = {"count": 0}
+
+    def stale_once(self: TriggerCatalogDAO, *, environment: str, backend_id: str):
+        lookups["count"] += 1
+        if lookups["count"] == 1:
+            return None
+        return real_get(self, environment=environment, backend_id=backend_id)
+
+    monkeypatch.setattr(TriggerCatalogDAO, "get_bootstrap_state", stale_once)
+
+    second = service.import_catalog(
+        backend_id=COMPOSIO_BACKEND_ID,
+        environment="selfhost",
+    )
+
+    assert second.skipped is True
+    assert second.content_hash == first.content_hash
+    assert lookups["count"] >= 2
+
+
+def test_import_survives_snapshot_insert_race(
+    dbsession: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A losing concurrent import reuses the winner's staged snapshot.
+
+    A snapshot for this content hash already exists (the winner's), but this
+    importer's bootstrap state does not yet desire it — the loser's exact
+    position in the race. The snapshot insert must conflict into a reuse
+    without duplicating candidates.
+    """
+
+    monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
+    service = TriggerCatalogImportService(dbsession)
+    dao = TriggerCatalogDAO(dbsession)
+    first = service.import_catalog(
+        backend_id=COMPOSIO_BACKEND_ID,
+        environment="selfhost",
+    )
+    assert first.snapshot_id is not None
+    candidates_before = len(dao.list_candidates_for_snapshot(first.snapshot_id))
+    assert candidates_before > 0
+
+    bootstrap = dao.get_bootstrap_state(
+        environment="selfhost",
+        backend_id=COMPOSIO_BACKEND_ID,
+    )
+    assert bootstrap is not None
+    bootstrap.desired_hash = ""
+    dbsession.flush()
+
+    second = service.import_catalog(
+        backend_id=COMPOSIO_BACKEND_ID,
+        environment="selfhost",
+    )
+
+    assert second.skipped is False
+    assert second.snapshot_id == first.snapshot_id
+    candidates_after = len(dao.list_candidates_for_snapshot(first.snapshot_id))
+    assert candidates_after == candidates_before

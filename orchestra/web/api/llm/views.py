@@ -1,26 +1,30 @@
-"""LLM gateway routes.
+"""LLM gateway: the metering, without the bytes.
 
-Assistant containers call this instead of talking to OpenRouter directly, so
-the provider key never leaves Orchestra. Every call is authenticated with the
-caller's Unify API key, gated on the billing balance *before* the provider is
-touched, metered from OpenRouter's authoritative ``usage.cost``, and settled
-against the credit ledger with the platform markup.
+Callers hold the provider credentials themselves -- the broker sidecar
+running beside each assistant runtime -- and stream to the provider
+directly. What they cannot do on their own is decide whether an account may
+spend and what a call cost, so they ask here: ``authorize`` before, and
+``settle`` after.
 
-v1 proxies OpenRouter models only (``openai/…@openrouter`` or bare
-``openai/…``). Other providers still route through unillm until the gateway is
-extended; see the LLM-gateway design spec.
+This service used to proxy the calls as well. It stopped because of what
+that cost in capacity rather than latency: Orchestra serves 400 concurrent
+requests in total, and a proxied generation held one of them for its whole
+duration, so LLM volume contended with billing, logs and search on the same
+pool and every voice turn paid a network hop. These two endpoints occupy a
+slot for milliseconds.
+
+Pricing stays on this side deliberately. A caller that priced its own calls
+could declare any number, and refusing to serve a model we cannot price
+would stop meaning anything.
 """
 
-import json
 import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
 
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.dependencies import transient_request_db_session
@@ -29,23 +33,15 @@ from orchestra.settings import settings
 from orchestra.web.api.llm.schema import (
     AuthorizeRequest,
     AuthorizeResponse,
-    ChatCompletionRequest,
     SettleRequest,
     SettleResponse,
 )
-from orchestra.web.api.utils.http_client import get_async_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _OPENROUTER_SUFFIX = "@openrouter"
 _LLM_CATEGORY = "llm"
-# Read timeout must comfortably exceed slow-brain completions; connect stays
-# short so a provider outage fails fast rather than hanging the caller.
-_UPSTREAM_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
-# Bounded tail retained while streaming so the terminal usage chunk can be
-# parsed without buffering the whole response in memory.
-_USAGE_TAIL_LIMIT = 16_384
 
 
 @dataclass(frozen=True)
@@ -54,28 +50,6 @@ class _BillingCtx:
 
     billing_account_id: Optional[int]
     charges: bool
-
-
-def _normalize_model(model: str) -> str:
-    """Map a UniLLM endpoint string to an OpenRouter model id.
-
-    ``openai/gpt-5.6-sol@openrouter`` -> ``openai/gpt-5.6-sol``; a bare id is
-    returned unchanged. A non-OpenRouter provider suffix (e.g. ``@vertex-ai``)
-    is rejected — the gateway does not hold those keys yet.
-    """
-    model = model.strip()
-    if model.endswith(_OPENROUTER_SUFFIX):
-        return model[: -len(_OPENROUTER_SUFFIX)]
-    if "@" in model:
-        provider = model.rsplit("@", 1)[1]
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Provider '{provider}' is not available through the LLM "
-                "gateway yet. Only OpenRouter models are supported."
-            ),
-        )
-    return model
 
 
 def _usage_cost(usage: Any) -> Optional[float]:
@@ -143,26 +117,6 @@ def _anthropic_usage_cost(usage: Any, rates: tuple[float, float]) -> Optional[fl
     if prompt <= 0 and completion <= 0:
         return None
     return (prompt * input_per_m + completion * output_per_m) / 1_000_000
-
-
-def _require_anthropic_key() -> str:
-    key = settings.routing_anthropic_api_key
-    if not key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="LLM gateway is not configured for Anthropic (no provider key).",
-        )
-    return key
-
-
-def _require_openrouter_key() -> str:
-    key = settings.openrouter_api_key
-    if not key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="LLM gateway is not configured (no provider key).",
-        )
-    return key
 
 
 def _enforce_spending_caps(
@@ -317,119 +271,6 @@ def _charge_usage(
         session.close()
 
 
-def _build_payload(body: ChatCompletionRequest) -> dict[str, Any]:
-    """Forward the request verbatim, normalising the model and forcing usage
-    accounting so the provider returns ``usage.cost`` for metering."""
-    payload = body.model_dump(exclude_none=True)
-    payload.pop("assistant_id", None)
-    payload["model"] = _normalize_model(body.model)
-    # Ask OpenRouter to include cost in the response (and, for streams, in a
-    # terminal usage chunk) so we can meter from the authoritative number.
-    payload["usage"] = {"include": True}
-    if body.stream:
-        payload["stream"] = True
-        stream_options = dict(payload.get("stream_options") or {})
-        stream_options["include_usage"] = True
-        payload["stream_options"] = stream_options
-    return payload
-
-
-@router.post("/llm/chat/completions", tags=["LLM Gateway"])
-async def chat_completions(request: Request, body: ChatCompletionRequest):
-    """OpenAI-compatible chat completions, brokered through Orchestra.
-
-    Point any OpenAI-compatible client (unillm, the OpenAI SDK, litellm) at
-    ``<orchestra>/v0/llm`` with a Unify API key as the bearer token.
-    """
-    key = _require_openrouter_key()
-    ctx = _precheck(request, body.assistant_id)
-
-    user_id = getattr(request.state, "user_id", None)
-    organization_id = getattr(request.state, "organization_id", None)
-    assistant_id = body.assistant_id
-    payload = _build_payload(body)
-    model = payload["model"]
-
-    url = f"{settings.openrouter_api_base.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    client = get_async_client()
-
-    if not body.stream:
-        try:
-            resp = await client.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=_UPSTREAM_TIMEOUT,
-            )
-        except httpx.RequestError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Upstream LLM provider error: {exc}",
-            ) from exc
-
-        data = resp.json() if resp.content else {}
-        if resp.status_code >= 400:
-            # Never surface the provider response with our key context; forward
-            # the status and the provider's own error body.
-            return JSONResponse(status_code=resp.status_code, content=data)
-
-        cost = _usage_cost(data.get("usage"))
-        if cost is not None:
-            _charge_usage(
-                request.app.state.db_session_factory,
-                ctx=ctx,
-                user_id=user_id,
-                organization_id=organization_id,
-                assistant_id=assistant_id,
-                model=model,
-                raw_cost=cost,
-            )
-        return JSONResponse(status_code=resp.status_code, content=data)
-
-    # Streaming: pass provider bytes straight through, sniff the terminal usage
-    # chunk from a bounded tail, and settle once the stream completes.
-    session_factory = request.app.state.db_session_factory
-
-    async def _proxy_stream() -> AsyncIterator[bytes]:
-        tail = ""
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=payload,
-                timeout=_UPSTREAM_TIMEOUT,
-            ) as upstream:
-                if upstream.status_code >= 400:
-                    err = await upstream.aread()
-                    yield err
-                    return
-                async for chunk in upstream.aiter_bytes():
-                    yield chunk
-                    tail = (tail + chunk.decode("utf-8", "ignore"))[-_USAGE_TAIL_LIMIT:]
-        except httpx.RequestError as exc:
-            logger.warning("LLM gateway stream error: %s", exc)
-            return
-
-        cost = _cost_from_stream_tail(tail)
-        if cost is not None:
-            _charge_usage(
-                session_factory,
-                ctx=ctx,
-                user_id=user_id,
-                organization_id=organization_id,
-                assistant_id=assistant_id,
-                model=model,
-                raw_cost=cost,
-            )
-
-    return StreamingResponse(_proxy_stream(), media_type="text/event-stream")
-
-
 def _price_usage_for(model: str, usage: Any) -> Optional[float]:
     """Cost a provider's own usage object, however that provider reports it.
 
@@ -563,214 +404,3 @@ def _precheck_settle_context(request: Request) -> _BillingCtx:
             billing_account_id=int(entity.billing_account_id),
             charges=charges,
         )
-
-
-@router.post("/llm/anthropic/v1/messages", tags=["LLM Gateway"])
-async def anthropic_messages(request: Request):
-    """Anthropic's Messages API, brokered through Orchestra.
-
-    Deliberately a verbatim proxy of Anthropic's own protocol rather than an
-    OpenAI-shaped endpoint that translates. Anthropic publishes no
-    OpenAI-compatible surface, so translating would mean owning a mapping of
-    messages, system blocks, tools, and two different SSE grammars on the
-    inference path for every Claude call -- a large surface whose failures
-    would be ours and would look like model misbehaviour. Forwarding the
-    bytes keeps this leg the same shape as the OpenRouter one: hold the key,
-    gate the spend, meter the result.
-
-    Callers reach it by pointing an Anthropic client's ``api_base`` here; the
-    client's own credential is ignored and replaced, since the point is that
-    it does not have one.
-    """
-    key = _require_anthropic_key()
-
-    body = await request.json()
-    model = str(body.get("model") or "").strip()
-    if not model:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="`model` is required.",
-        )
-
-    # Priced before the provider is touched. A model we cannot price is
-    # refused rather than served: serving it would be unmetered inference,
-    # which is the exact failure this gateway exists to prevent.
-    rates = _anthropic_token_rates(model)
-    if rates is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Model '{model}' is not available through the LLM gateway. "
-                "Only curated Anthropic models can be metered."
-            ),
-        )
-
-    assistant_id = body.pop("assistant_id", None)
-    if assistant_id is not None:
-        assistant_id = int(assistant_id)
-    ctx = _precheck(request, assistant_id)
-
-    user_id = getattr(request.state, "user_id", None)
-    organization_id = getattr(request.state, "organization_id", None)
-    stream = bool(body.get("stream"))
-
-    url = f"{settings.anthropic_api_base.rstrip('/')}/v1/messages"
-    # The caller's inbound credential is never forwarded: it authenticated to
-    # us, and Anthropic must see ours instead.
-    headers = {
-        "x-api-key": key,
-        "anthropic-version": request.headers.get("anthropic-version", "2023-06-01"),
-        "content-type": "application/json",
-        "accept": "text/event-stream" if stream else "application/json",
-    }
-    beta = request.headers.get("anthropic-beta")
-    if beta:
-        headers["anthropic-beta"] = beta
-    client = get_async_client()
-
-    if not stream:
-        try:
-            resp = await client.post(
-                url,
-                headers=headers,
-                json=body,
-                timeout=_UPSTREAM_TIMEOUT,
-            )
-        except httpx.RequestError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Upstream LLM provider error: {exc}",
-            ) from exc
-
-        data = resp.json() if resp.content else {}
-        if resp.status_code >= 400:
-            return JSONResponse(status_code=resp.status_code, content=data)
-
-        cost = _anthropic_usage_cost(data.get("usage"), rates)
-        if cost is not None:
-            _charge_usage(
-                request.app.state.db_session_factory,
-                ctx=ctx,
-                user_id=user_id,
-                organization_id=organization_id,
-                assistant_id=assistant_id,
-                model=model,
-                raw_cost=cost,
-            )
-        return JSONResponse(status_code=resp.status_code, content=data)
-
-    session_factory = request.app.state.db_session_factory
-
-    async def _proxy_stream() -> AsyncIterator[bytes]:
-        tail = ""
-        try:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=body,
-                timeout=_UPSTREAM_TIMEOUT,
-            ) as upstream:
-                if upstream.status_code >= 400:
-                    yield await upstream.aread()
-                    return
-                async for chunk in upstream.aiter_bytes():
-                    yield chunk
-                    tail = (tail + chunk.decode("utf-8", "ignore"))[-_USAGE_TAIL_LIMIT:]
-        except httpx.RequestError as exc:
-            logger.warning("LLM gateway stream error (anthropic): %s", exc)
-            return
-
-        cost = _anthropic_cost_from_stream_tail(tail, rates)
-        if cost is not None:
-            _charge_usage(
-                session_factory,
-                ctx=ctx,
-                user_id=user_id,
-                organization_id=organization_id,
-                assistant_id=assistant_id,
-                model=model,
-                raw_cost=cost,
-            )
-
-    return StreamingResponse(_proxy_stream(), media_type="text/event-stream")
-
-
-def _anthropic_cost_from_stream_tail(
-    tail: str,
-    rates: tuple[float, float],
-) -> Optional[float]:
-    """Price the terminal usage of an Anthropic SSE stream.
-
-    Anthropic splits usage across the stream: ``message_start`` carries the
-    input tokens and the final ``message_delta`` carries the output count.
-    Only the tail is retained, so the two are merged as they are found
-    rather than assumed to arrive together.
-    """
-    merged: dict[str, Any] = {}
-    for line in tail.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[len("data:") :].strip()
-        if not data or data == "[DONE]":
-            continue
-        try:
-            obj = json.loads(data)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        for source in (obj.get("usage"), (obj.get("message") or {}).get("usage")):
-            if isinstance(source, dict):
-                for name, value in source.items():
-                    if isinstance(value, (int, float)):
-                        merged[name] = value
-    return _anthropic_usage_cost(merged, rates) if merged else None
-
-
-def _cost_from_stream_tail(tail: str) -> Optional[float]:
-    """Scan buffered SSE ``data:`` lines for the terminal usage cost."""
-    cost: Optional[float] = None
-    for line in tail.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[len("data:") :].strip()
-        if not data or data == "[DONE]":
-            continue
-        try:
-            obj = json.loads(data)
-        except json.JSONDecodeError:
-            continue
-        found = _usage_cost(obj.get("usage"))
-        if found is not None:
-            cost = found
-    return cost
-
-
-@router.get("/llm/models", tags=["LLM Gateway"])
-async def list_models(request: Request):
-    """List available models — proxied from OpenRouter with no key exposed.
-
-    Lets container code discover routable models without holding a provider
-    key (the old ``list_llms()`` path read keys straight from the env).
-    """
-    key = _require_openrouter_key()
-    url = f"{settings.openrouter_api_base.rstrip('/')}/models"
-    client = get_async_client()
-    try:
-        resp = await client.get(
-            url,
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=httpx.Timeout(30.0),
-        )
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Upstream LLM provider error: {exc}",
-        ) from exc
-    return JSONResponse(
-        status_code=resp.status_code,
-        content=resp.json() if resp.content else {},
-    )
