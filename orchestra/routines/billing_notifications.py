@@ -25,6 +25,7 @@ import requests
 
 if TYPE_CHECKING:
     from orchestra.routines.billing_reconciliation import ReconciliationResult
+    from orchestra.routines.card_gate_sweep import ClusterSweepResult
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +303,11 @@ def notify_billing_event_failure(
 # ---------------------------------------------------------------------------
 
 
-def notify_burner_cluster_sweep(result, *, environment: str = "") -> bool:
+def notify_burner_cluster_sweep(
+    result: ClusterSweepResult,
+    *,
+    environment: str = "",
+) -> bool:
     """Announce a burner-cluster sweep that acted, or that could not see.
 
     Deliberately not routed through the failure notifiers: a freeze is
