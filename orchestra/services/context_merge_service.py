@@ -114,6 +114,8 @@ class ContextTreeMergeResult:
 
     contexts_renamed: int = 0
     contexts_merged: int = 0
+    # Versioned targets given a merge commit recording their post-merge state.
+    versions_sealed: int = 0
     # Rows in the merged target contact book that likely describe the same
     # person (exact email/phone match); reported for operator review, never
     # auto-merged. Entries: matched_on, existing_contact_id,
@@ -320,8 +322,10 @@ def _check_schema_compatible(
     session: Session,
     source: Context,
     target: Context,
+    *,
+    merge_versioned: bool = False,
 ) -> None:
-    if source.is_versioned or target.is_versioned:
+    if (source.is_versioned or target.is_versioned) and not merge_versioned:
         raise ContextMergeError("versioned_context", target.name)
     if (
         (source.unique_key_names or []) != (target.unique_key_names or [])
@@ -743,6 +747,7 @@ def _prepare_pair_merge(
     target: Context,
     table_path: str,
     policy_inputs: _PolicyInputs,
+    merge_versioned: bool = False,
 ) -> _PairMerge:
     """Validate a pair, apply identity policies, and offset-remap source keys.
 
@@ -750,7 +755,12 @@ def _prepare_pair_merge(
     association move happens in :func:`_finalize_pair_merge` after key
     remaps have been propagated across the whole source subtree.
     """
-    _check_schema_compatible(session, source, target)
+    _check_schema_compatible(
+        session,
+        source,
+        target,
+        merge_versioned=merge_versioned,
+    )
     pair = _PairMerge(source=source, target=target, table_path=table_path)
 
     if _is_meta_singleton(table_path, target):
@@ -1064,6 +1074,26 @@ def _finalize_pair_merge(
     session.flush()
 
 
+def _seal_merged_version(context_dao: ContextDAO, *, pair: _PairMerge) -> bool:
+    """Record a versioned target's post-merge state as one new commit.
+
+    The source context is dropped once its logs move, taking its own commit
+    chain with it, so the incoming rows arrive carrying no history the target
+    can see. Without a commit here the target's chain would no longer explain
+    its own contents — its HEAD snapshot would omit every merged row, and a
+    rollback to that HEAD would silently discard them. Sealing closes the gap
+    at the merge boundary; the source's superseded history is not replayed.
+    """
+    if not pair.target.is_versioned:
+        return False
+    context_dao.commit(
+        pair.target.id,
+        commit_message=f"Merged {pair.source.name} into {pair.target.name}",
+        commit=False,
+    )
+    return True
+
+
 def _function_name_snapshot(
     session: Session,
     context_dao: ContextDAO,
@@ -1112,6 +1142,7 @@ def _reconcile_tree_collisions(
     target_prefix: str,
     merge_populated: bool,
     result: ContextTreeMergeResult,
+    merge_versioned: bool = False,
 ) -> None:
     """Resolve name collisions between the source and target trees.
 
@@ -1172,6 +1203,7 @@ def _reconcile_tree_collisions(
                 target=target_context,
                 table_path=table_path,
                 policy_inputs=policy_inputs,
+                merge_versioned=merge_versioned,
             )
             pairs.append(pair)
             for column, remap in pair.remaps.items():
@@ -1202,6 +1234,10 @@ def _reconcile_tree_collisions(
                 project_id=project_id,
                 pair=pair,
             )
+            # Seal before the source row goes: the message names it, and the
+            # snapshot must see the moved logs already in the target.
+            if _seal_merged_version(context_dao, pair=pair):
+                result.versions_sealed += 1
             session.delete(pair.source)
             result.duplicate_contacts.extend(_duplicate_contact_entries(pair))
         session.flush()
@@ -1272,6 +1308,7 @@ def merge_context_trees(
     source_prefix: str,
     target_prefix: str,
     merge_populated: bool = False,
+    merge_versioned: bool = False,
 ) -> ContextTreeMergeResult:
     """Fold the ``source_prefix`` context tree into the ``target_prefix`` tree.
 
@@ -1279,6 +1316,13 @@ def merge_context_trees(
     (only with ``merge_populated``; refused otherwise), and everything else is
     renamed into place. FK reference paths are re-rooted afterwards, and the
     source tree is verified empty. Runs entirely in the caller's transaction.
+
+    ``merge_versioned`` allows populated collisions where either side keeps a
+    commit history. Two independent chains cannot be spliced, so the source's
+    history is dropped with its context and the target gets one merge commit
+    recording the combined state (:func:`_seal_merged_version`). Renames are
+    unaffected either way — a context that merely moves carries its history
+    with it, so only genuine collisions ever consult this flag.
 
     Ownership columns are not touched; callers that change the owning entity
     (e.g. personal assistant → team) follow up with
@@ -1293,6 +1337,7 @@ def merge_context_trees(
         target_prefix=target_prefix,
         merge_populated=merge_populated,
         result=result,
+        merge_versioned=merge_versioned,
     )
 
     try:

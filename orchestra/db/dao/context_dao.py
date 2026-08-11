@@ -4000,9 +4000,19 @@ class ContextDAO:
             self.session.rollback()
             raise e
 
-    def commit(self, context_id: int, commit_message: Optional[str] = None) -> str:
+    def commit(
+        self,
+        context_id: int,
+        commit_message: Optional[str] = None,
+        *,
+        commit: bool = True,
+    ) -> str:
         """
         Create a new version of a single context.
+
+        Pass ``commit=False`` when the caller owns the transaction (e.g. a
+        context tree merge sealing its result), so the new version lands with
+        the rest of that unit of work instead of committing it early.
         """
         context = self.session.query(Context).filter_by(id=context_id).one_or_none()
         if not context or not context.is_versioned:
@@ -4086,7 +4096,10 @@ class ContextDAO:
         # Update the context's HEAD pointer
         context.current_commit_hash = commit_hash
 
-        self.session.commit()
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
         return commit_hash
 
     def rollback(self, context_id: int, commit_hash: str) -> None:
