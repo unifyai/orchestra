@@ -353,3 +353,70 @@ async def test_models_endpoint_proxies(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["data"][0]["id"] == "openai/gpt-5.6-sol"
     assert provider.calls[0][0] == "get"
+
+
+# --------------------------------------------------------------------------- #
+# Native-Anthropic leg
+# --------------------------------------------------------------------------- #
+
+
+class TestAnthropicPricing:
+    """Anthropic bills in tokens and never in money, so we price it ourselves.
+
+    That makes the rate table load-bearing in a way the OpenRouter leg's is
+    not: there, a wrong number is a reporting error; here it is the charge.
+    """
+
+    def test_rates_come_from_the_curated_catalogue(self):
+        assert views._anthropic_token_rates("claude-opus-5") == (5.0, 25.0)
+
+    def test_the_endpoint_suffixed_form_resolves_too(self):
+        """unillm speaks ``model@provider``; Anthropic is sent the bare id."""
+        assert views._anthropic_token_rates("claude-opus-5@anthropic") == (5.0, 25.0)
+
+    def test_an_unpriceable_model_resolves_to_nothing(self):
+        assert views._anthropic_token_rates("gpt-4o") is None
+
+    def test_cost_is_tokens_at_the_catalogue_rate(self):
+        rates = (5.0, 25.0)
+        cost = views._anthropic_usage_cost(
+            {"input_tokens": 1000, "output_tokens": 500},
+            rates,
+        )
+        assert cost == pytest.approx(1000 * 5.0 / 1e6 + 500 * 25.0 / 1e6)
+
+    def test_cache_tokens_are_charged_rather_than_dropped(self):
+        """Ignoring them would bill a cached call as though it were free."""
+        rates = (5.0, 25.0)
+        plain = views._anthropic_usage_cost({"input_tokens": 1000}, rates)
+        cached = views._anthropic_usage_cost(
+            {
+                "input_tokens": 1000,
+                "cache_read_input_tokens": 4000,
+                "cache_creation_input_tokens": 1000,
+            },
+            rates,
+        )
+        assert cached > plain
+
+    def test_usage_without_token_counts_prices_nothing(self):
+        """Better no row than a zero-cost row implying the call was free."""
+        assert views._anthropic_usage_cost({}, (5.0, 25.0)) is None
+
+
+class TestAnthropicStreamUsage:
+    """Anthropic splits usage across two events; the tail must merge them."""
+
+    def test_input_and_output_counts_are_merged_across_events(self):
+        tail = (
+            'data: {"type":"message_start","message":{"usage":'
+            '{"input_tokens":1000}}}\n\n'
+            'data: {"type":"message_delta","usage":{"output_tokens":500}}\n\n'
+        )
+        assert views._anthropic_cost_from_stream_tail(tail, (5.0, 25.0)) == (
+            pytest.approx(0.0175)
+        )
+
+    def test_a_stream_carrying_no_usage_prices_nothing(self):
+        tail = 'data: {"type":"content_block_delta"}\n\n'
+        assert views._anthropic_cost_from_stream_tail(tail, (5.0, 25.0)) is None

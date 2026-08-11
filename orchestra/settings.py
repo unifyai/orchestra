@@ -310,6 +310,16 @@ class Settings(BaseSettings):
         "ORCHESTRA_OPENROUTER_API_BASE",
         "https://openrouter.ai/api/v1",
     )
+    #: Anthropic credential for the LLM gateway's native-Anthropic leg. Held
+    #: here so assistant pods never carry one: they reach Anthropic only
+    #: through the broker, authenticated as themselves. Deliberately a
+    #: separate name from any pod-side ANTHROPIC_API_KEY so the two cannot be
+    #: conflated when one is rotated.
+    routing_anthropic_api_key: Optional[str] = get_env("ROUTING_ANTHROPIC_API_KEY")
+    anthropic_api_base: str = get_env(
+        "ORCHESTRA_ANTHROPIC_API_BASE",
+        "https://api.anthropic.com",
+    )
 
     # Cloudflare Turnstile CAPTCHA
     turnstile_secret_key: Optional[str] = os.environ.get("TURNSTILE_SECRET_KEY")
