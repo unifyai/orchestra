@@ -333,3 +333,45 @@ def test_a_repeat_only_series_mints_its_first_head() -> None:
     now = datetime.now(timezone.utc)
     assert minted > now
     assert minted - now <= timedelta(minutes=10)
+
+
+def test_a_triggered_head_survives_having_no_schedule() -> None:
+    """A triggered head has no clock, and that is not a missing head.
+
+    Projection is shared across wakes. An absent schedule is normal for a
+    triggered row: its scheduled_for is legitimately null because the head
+    waits for an event rather than a time. Minting a slot there instead
+    dropped the head entirely whenever the row had no repeat rule to mint
+    from — which is every communication trigger.
+    """
+
+    triggered = service._TaskRow(
+        log_event_id=557,
+        data={
+            "task_id": 14,
+            "name": "Reply when the customer writes",
+            "enabled": True,
+            "assistant_id": "42",
+            "trigger": {"medium": "email", "recurring": True},
+        },
+        updated_at=None,
+        created_at=None,
+    )
+
+    with (
+        patch.object(service, "_open_execution_scheduled_for", return_value=None),
+        patch.object(service, "_latest_ledger_occurrence", return_value=None),
+    ):
+        payload = service._project_execution_payload(
+            row=triggered,
+            wake="triggered",
+            tasks_context_name="1/42/Tasks",
+            destination=None,
+            session=MagicMock(),
+            project_id=1,
+        )
+
+    assert payload is not KEEP_CURRENT_HEAD
+    assert payload["wake"] == "triggered"
+    assert payload["scheduled_for"] is None
+    assert payload["trigger_medium"] == "email"

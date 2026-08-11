@@ -2042,11 +2042,18 @@ def _project_execution_payload(
             if minted is None:
                 return KEEP_CURRENT_HEAD
             scheduled_for, dispatch_offset_seconds = minted
-        elif anchor is None:
+        elif anchor is None and wake == "scheduled":
             # A repeat-only series has no anchor and, before its first run,
             # no ledger either: its head is simply the rule's next future
             # slot. Without this branch the projection stored a head with no
             # scheduled_for, which arms nothing.
+            #
+            # Scoped to the scheduled wake because this function also
+            # projects triggered and provider-event heads, where an absent
+            # schedule is normal and a null scheduled_for is the correct
+            # answer — the head waits for an event, not a clock. Minting
+            # for those instead dropped the head entirely whenever the row
+            # had no repeat rule to mint from.
             minted = _next_repeat_occurrence_after(
                 data=row.data,
                 task_id=task_id,
