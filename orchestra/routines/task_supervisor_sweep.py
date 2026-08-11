@@ -183,9 +183,13 @@ def _armed_definition_ids_by_surface(
             continue
         if not isinstance(data, dict):
             continue
-        armed = isinstance(data.get("schedule"), dict) or isinstance(
-            data.get("trigger"),
-            dict,
+        # A repeat rule alone arms a series: recurring definitions often
+        # carry no `schedule` at all, and skipping them here left exactly
+        # the tasks most dependent on the sweep outside it.
+        armed = (
+            isinstance(data.get("schedule"), dict)
+            or isinstance(data.get("trigger"), dict)
+            or bool(data.get("repeat"))
         )
         if not armed:
             continue
