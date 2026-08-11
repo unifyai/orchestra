@@ -373,6 +373,17 @@ async def test_unique_field_conflict_lookup_is_batched(dbsession):
         ),
         {"pid": project_id},
     ).scalar_one()
+    # A constraint row only counts while its holder is attached to the
+    # context; without this association the row reads as a lapsed claim
+    # and the lookup would rightly report no conflict.
+    dbsession.execute(
+        text(
+            "INSERT INTO log_event_context "
+            "(project_id, log_event_id, context_id, owner_key) "
+            "VALUES (:pid, :lid, :cid, 'sys')",
+        ),
+        {"pid": project_id, "lid": existing_id, "cid": context_id},
+    )
     dao = UniqueConstraintDAO(dbsession)
     value_hash = dao.hash_value("a@example.com")
     dbsession.execute(

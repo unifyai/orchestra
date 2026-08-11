@@ -15,7 +15,11 @@ from orchestra.db.models.orchestra_models import (
     Assistant,
     ContactMembership,
 )
-from orchestra.tests.utils import create_test_user, ensure_assistants_project
+from orchestra.tests.utils import (
+    ADMIN_HEADERS,
+    create_test_user,
+    ensure_assistants_project,
+)
 
 _SHARED_TEAM_SHELLS = (
     "Contacts",
@@ -1062,7 +1066,13 @@ async def test_merge_dedupes_equivalent_recurring_tasks(
         project_id,
         f"Teams/{team_id}/Tasks/Executions",
     )
-    by_marker = {row["marker"]: row["task_id"] for row in activation_rows}
+    # Only the seeded rows carry a marker: these definitions repeat, so
+    # projection writes open heads of its own alongside them. What this
+    # test pins is the remapping of machine-state references, not how many
+    # execution rows exist.
+    by_marker = {
+        row["marker"]: row["task_id"] for row in activation_rows if "marker" in row
+    }
     assert by_marker == {"weekly-activation": 1, "daily-activation": 0}
 
 
@@ -1423,3 +1433,210 @@ async def test_versioned_rename_keeps_history_without_flag(
     )
     assert moved.is_versioned is True
     assert moved.current_commit_hash == original_hash
+
+
+async def _convert_to_team_owned(
+    client: AsyncClient,
+    org_headers: dict,
+    *,
+    agent_id: int,
+    team_id: int,
+) -> None:
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={"owner_team_id": team_id, "merge_memory": True},
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+
+
+@pytest.mark.anyio
+async def test_repair_folds_stray_personal_rows_into_team_root(
+    client: AsyncClient,
+    dbsession,
+):
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_repair@test.com",
+        org_name="Team Owned Repair Org",
+    )
+    await _convert_to_team_owned(
+        client,
+        org_headers,
+        agent_id=agent_id,
+        team_id=team_id,
+    )
+
+    # A session that booted with owner_team_id unbound writes past the team
+    # routing, stranding rows the assistant can no longer see.
+    stray = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
+    _seed_table(dbsession, project_id, stray, versioned=True)
+    _seed_table(dbsession, project_id, team_data, versioned=True)
+    await _post_rows(client, org_headers, team_data, [{"repo": "team-one"}])
+    await _post_rows(client, org_headers, stray, [{"repo": "stray-one"}])
+
+    response = await client.post(
+        f"/v0/admin/assistant/{agent_id}/repair/team-memory",
+        json={},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    body = response.json()["info"]
+    assert body["dry_run"] is False
+    assert body["memory_root"] == f"Teams/{team_id}"
+
+    dbsession.expire_all()
+    merged = {row["repo"] for row in _table_rows(dbsession, project_id, team_data)}
+    assert merged == {"team-one", "stray-one"}
+    assert _table_rows(dbsession, project_id, stray) == []
+
+
+@pytest.mark.anyio
+async def test_repair_dry_run_leaves_stray_rows_in_place(
+    client: AsyncClient,
+    dbsession,
+):
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_repair_dry@test.com",
+        org_name="Team Owned Repair Dry Org",
+    )
+    await _convert_to_team_owned(
+        client,
+        org_headers,
+        agent_id=agent_id,
+        team_id=team_id,
+    )
+    stray = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
+    _seed_table(dbsession, project_id, stray, versioned=True)
+    _seed_table(dbsession, project_id, team_data, versioned=True)
+    await _post_rows(client, org_headers, team_data, [{"repo": "team-one"}])
+    await _post_rows(client, org_headers, stray, [{"repo": "stray-one"}])
+
+    response = await client.post(
+        f"/v0/admin/assistant/{agent_id}/repair/team-memory",
+        json={"dry_run": True},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    body = response.json()["info"]
+    assert body["dry_run"] is True
+    assert body["personal_contexts_found"] >= 1
+    assert stray in body["personal_contexts_with_rows"]
+
+    # The dry run returns before writing: stray rows stay put, the team table
+    # is untouched, and nothing had to be undone to keep it that way.
+    dbsession.expire_all()
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, stray)] == [
+        "stray-one",
+    ]
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, team_data)] == [
+        "team-one",
+    ]
+
+
+@pytest.mark.anyio
+async def test_repair_rejects_assistant_that_is_not_team_owned(
+    client: AsyncClient,
+    dbsession,
+):
+    (
+        _org_id,
+        _org_headers,
+        _team_id,
+        agent_id,
+        _project_id,
+        _personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_repair_reject@test.com",
+        org_name="Team Owned Repair Reject Org",
+    )
+
+    response = await client.post(
+        f"/v0/admin/assistant/{agent_id}/repair/team-memory",
+        json={},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
+    assert response.json()["detail"] == "assistant_not_team_owned"
+
+
+@pytest.mark.anyio
+async def test_repair_leaves_stray_rows_intact_when_merge_refuses(
+    client: AsyncClient,
+    dbsession,
+):
+    """A refused repair must not half-apply.
+
+    The real fleet hits this: several stray Data/GTM tables carry an
+    ``auto_counting`` shape their team counterpart lacks, so the repair
+    aborts on schema_mismatch. The rows have to survive that intact.
+    """
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_repair_refused@test.com",
+        org_name="Team Owned Repair Refused Org",
+    )
+    await _convert_to_team_owned(
+        client,
+        org_headers,
+        agent_id=agent_id,
+        team_id=team_id,
+    )
+
+    stray = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
+    _seed_table(
+        dbsession,
+        project_id,
+        stray,
+        unique_keys={"row_id": "int"},
+        auto_counting={"row_id": None},
+    )
+    _seed_table(dbsession, project_id, team_data)
+    await _post_rows(client, org_headers, team_data, [{"repo": "team-one"}])
+    await _post_rows(client, org_headers, stray, [{"row_id": 0, "repo": "stray-one"}])
+
+    response = await client.post(
+        f"/v0/admin/assistant/{agent_id}/repair/team-memory",
+        json={},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT, response.json()
+    assert response.json()["detail"].startswith("team_memory_merge_schema_mismatch")
+
+    dbsession.expire_all()
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, stray)] == [
+        "stray-one",
+    ]
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, team_data)] == [
+        "team-one",
+    ]

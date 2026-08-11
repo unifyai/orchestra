@@ -2440,6 +2440,78 @@ class AssistantTransferToTeamOwnedRequest(BaseModel):
     )
 
 
+class AssistantTeamMemoryRepairRequest(BaseModel):
+    """Schema for folding a team-owned assistant's stray personal root away."""
+
+    merge_memory: bool = Field(
+        True,
+        description=(
+            "Merge stray rows into a team table that already holds data for "
+            "the same table (key values are re-numbered above the team's). "
+            "Without this, such collisions abort the repair with 409."
+        ),
+    )
+    merge_versioned: bool = Field(
+        True,
+        description=(
+            "Allow those merges when either table keeps a commit history. The "
+            "stray table's history is dropped and the team table gets one "
+            "merge commit recording the combined state."
+        ),
+    )
+    dry_run: bool = Field(
+        False,
+        description=(
+            "Report what is stranded under the personal root and return "
+            "without writing anything. Being read-only, it lists what a real "
+            "run would act on but cannot confirm the merge would succeed."
+        ),
+    )
+
+
+class AssistantTeamMemoryRepairResponse(BaseModel):
+    """Response schema for the team-memory repair."""
+
+    message: str = Field(..., description="Outcome message.")
+    agent_id: int = Field(..., description="Repaired assistant id.")
+    owner_team_id: int = Field(..., description="Owning team id.")
+    dry_run: bool = Field(..., description="Whether the work was rolled back.")
+    personal_contexts_found: int = Field(
+        0,
+        description="Stray contexts found under the personal root before the fold.",
+    )
+    personal_contexts_with_rows: list = Field(
+        default_factory=list,
+        description=(
+            "Stray contexts actually holding rows. Populated on a dry run; "
+            "empty on a real run, where the counts below describe the outcome."
+        ),
+    )
+    contexts_renamed: int = Field(
+        0,
+        description="Number of stray contexts moved under the team root.",
+    )
+    contexts_merged: int = Field(
+        0,
+        description="Number of populated context pairs merged into team tables.",
+    )
+    versions_sealed: int = Field(
+        0,
+        description=(
+            "Number of versioned team tables given a merge commit recording "
+            "their post-merge state."
+        ),
+    )
+    duplicate_contacts: list = Field(
+        default_factory=list,
+        description=(
+            "Suspected same-person rows in the merged team contact book. "
+            "Reported for operator review — never auto-merged."
+        ),
+    )
+    memory_root: str = Field(..., description="The assistant's only memory root.")
+
+
 class AssistantTransferToTeamOwnedResponse(BaseModel):
     """Response schema for team-owned conversion."""
 

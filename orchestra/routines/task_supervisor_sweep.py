@@ -39,8 +39,10 @@ Runs **every 15 minutes** via Cloud Scheduler:
     Cloud Scheduler API hands those back in plaintext to anyone who can
     read the job, so do not put it back.
 
-Staging has no scheduled trigger — invoke on demand via the same admin
-endpoint.
+Staging mirrors it as ``orchestra-staging-task-supervisor-sweep`` against
+the staging host; both jobs are ensured idempotently by
+``deploy/ensure_task_supervisor_sweep_scheduler.sh``. The same admin
+endpoint also serves on-demand invocation.
 
 The schedule only records a status code, which is why a pass that failed
 across the fleet answers 5xx (see :attr:`TaskSupervisorSweepResult.status`).
@@ -183,9 +185,13 @@ def _armed_definition_ids_by_surface(
             continue
         if not isinstance(data, dict):
             continue
-        armed = isinstance(data.get("schedule"), dict) or isinstance(
-            data.get("trigger"),
-            dict,
+        # A repeat rule alone arms a series: recurring definitions often
+        # carry no `schedule` at all, and skipping them here left exactly
+        # the tasks most dependent on the sweep outside it.
+        armed = (
+            isinstance(data.get("schedule"), dict)
+            or isinstance(data.get("trigger"), dict)
+            or bool(data.get("repeat"))
         )
         if not armed:
             continue

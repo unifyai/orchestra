@@ -91,6 +91,7 @@ from orchestra.services.assistant_external_ip_service import (
 )
 from orchestra.services.assistant_team_ownership_service import (
     TeamOwnershipTransferError,
+    repair_team_owned_memory,
     transfer_assistant_to_team_owned,
 )
 from orchestra.services.bucket_service import create_bucket_service
@@ -177,6 +178,8 @@ from orchestra.web.api.assistant.schema import (
     AssistantSpendingLimitResponse,
     AssistantSpendResponse,
     AssistantStatus,
+    AssistantTeamMemoryRepairRequest,
+    AssistantTeamMemoryRepairResponse,
     AssistantTransferResponse,
     AssistantTransferToOrgRequest,
     AssistantTransferToPersonalRequest,
@@ -5627,6 +5630,89 @@ async def transfer_assistant_to_team_owned_endpoint(
             message="Assistant converted to team-owned scope successfully.",
             agent_id=int(result["agent_id"]),
             owner_team_id=int(result["owner_team_id"]),
+            contexts_renamed=int(result["contexts_renamed"]),
+            contexts_merged=int(result["contexts_merged"]),
+            versions_sealed=int(result["versions_sealed"]),
+            duplicate_contacts=list(result["duplicate_contacts"]),
+            memory_root=str(result["memory_root"]),
+        ),
+    )
+
+
+@admin_router.post(
+    "/assistant/{assistant_id}/repair/team-memory",
+    response_model=InfoResponse[AssistantTeamMemoryRepairResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: fold a team-owned assistant's stray personal root away",
+    description=(
+        "A team-owned assistant's only memory is its team root; conversion "
+        "moves the personal tree wholesale and leaves nothing behind. "
+        "Sessions that ran with owner_team_id unbound wrote to the personal "
+        "root anyway, stranding rows outside the root the assistant reads. "
+        "This folds those contexts into the team root using the same merge as "
+        "conversion, which refuses an already-team-owned assistant. dry_run "
+        "reports what is stranded without writing anything."
+    ),
+    tags=["Assistants", "Admin"],
+    responses={
+        200: {"description": "Repair completed (or simulated with dry_run)."},
+        404: {"description": "Assistant or team not found."},
+        400: {"description": "Assistant is not team-owned."},
+        409: {"description": "Stray and team tables collide irreconcilably."},
+    },
+)
+def repair_team_owned_memory_endpoint(
+    assistant_id: int,
+    session: Session = Depends(get_db_session),
+    body: AssistantTeamMemoryRepairRequest = Body(
+        default_factory=AssistantTeamMemoryRepairRequest,
+    ),
+) -> InfoResponse[AssistantTeamMemoryRepairResponse]:
+    """Fold a team-owned assistant's leftover personal contexts into its team."""
+    try:
+        result = repair_team_owned_memory(
+            session,
+            assistant_id=assistant_id,
+            merge_memory=body.merge_memory,
+            merge_versioned=body.merge_versioned,
+            dry_run=body.dry_run,
+        )
+    # The service unwinds its own savepoint on failure; rolling the whole
+    # session back here would discard more than this repair touched.
+    except TeamOwnershipTransferError as exc:
+        detail = str(exc)
+        if detail == "assistant_not_team_owned":
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif detail in {"assistant_not_found", "team_not_found"}:
+            status_code = status.HTTP_404_NOT_FOUND
+        elif detail == "team_memory_transfer_incomplete":
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        else:
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        logging.error(
+            f"Failed to repair team memory for assistant {assistant_id}: {exc}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to repair team-owned memory",
+        ) from exc
+
+    dry_run = bool(result["dry_run"])
+    return InfoResponse(
+        info=AssistantTeamMemoryRepairResponse(
+            message=(
+                "Dry run complete; nothing was read back or changed."
+                if dry_run
+                else "Stray personal contexts folded into the team root."
+            ),
+            agent_id=int(result["agent_id"]),
+            owner_team_id=int(result["owner_team_id"]),
+            dry_run=dry_run,
+            personal_contexts_found=int(result["personal_contexts_found"]),
+            personal_contexts_with_rows=list(result["personal_contexts_with_rows"]),
             contexts_renamed=int(result["contexts_renamed"]),
             contexts_merged=int(result["contexts_merged"]),
             versions_sealed=int(result["versions_sealed"]),

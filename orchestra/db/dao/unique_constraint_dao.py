@@ -31,6 +31,43 @@ logger = logging.getLogger(__name__)
 # Field name used for composite key constraints
 COMPOSITE_KEY_FIELD = "__composite__"
 
+# The log_unique_constraint -> log_event FK was dropped for partitioning, so a
+# delete path that misses the app-level cleanup can leave a row whose holder
+# log is no longer associated with the context. Such an orphan would block its
+# key forever while reads of the context show nothing holding it. A constraint
+# row is therefore only authoritative while its holder is still attached to
+# the context; the predicates below identify rows whose claim has lapsed, and
+# the check paths reclaim them for the incoming log instead of reporting a
+# duplicate. The project id is bound as a literal (never correlated from the
+# constraint row) so the planner prunes the LIST(project_id) partitions of
+# log_event_context.
+
+
+def holder_absent_clause(project_id: int):
+    """WHERE clause for ON CONFLICT DO UPDATE: the conflicting row's holder
+    log is no longer attached to the context, so its claim has lapsed. The
+    conflicting row is addressed by its table name."""
+    return text(
+        "NOT EXISTS ("
+        "SELECT 1 FROM log_event_context lec "
+        "WHERE lec.project_id = :prune_project_id "
+        "AND lec.context_id = log_unique_constraint.context_id "
+        "AND lec.log_event_id = log_unique_constraint.log_event_id"
+        ")",
+    ).bindparams(prune_project_id=int(project_id))
+
+
+# Same liveness test for plain SELECTs against the lookup table, where the row
+# is addressed through the ``luc`` alias. Callers bind ``:project_id``.
+HOLDER_PRESENT_SQL = (
+    "EXISTS ("
+    "SELECT 1 FROM log_event_context lec "
+    "WHERE lec.project_id = :project_id "
+    "AND lec.context_id = luc.context_id "
+    "AND lec.log_event_id = luc.log_event_id"
+    ")"
+)
+
 
 class UniqueConstraintDAO:
     """DAO for managing unique field constraints using a lookup table."""
@@ -193,8 +230,13 @@ class UniqueConstraintDAO:
         """
         Check for duplicates using the lookup table (fast path).
 
-        Uses INSERT ... ON CONFLICT DO NOTHING with RETURNING to atomically
-        check and insert in a single query.
+        Uses INSERT ... ON CONFLICT with RETURNING to atomically check and
+        insert in a single query. A conflicting row whose holder log is no
+        longer attached to the context is reclaimed for the incoming log
+        (DO UPDATE guarded by the holder-absent clause) rather than reported
+        as a duplicate: the row lock serializes concurrent claimants, and the
+        loser re-evaluates the guard against the winner's claim, so exactly
+        one create wins a lapsed key.
 
         :param entries: List of constraint entries to check.
         :param exclude_ids: Log event IDs to exclude.
@@ -215,11 +257,12 @@ class UniqueConstraintDAO:
             for e in entries
         ]
 
-        # Use INSERT ... ON CONFLICT DO NOTHING with RETURNING
-        # Rows that conflict (duplicates) won't be returned
+        # Rows that neither insert nor reclaim (live duplicates) aren't returned
         stmt = insert(LogUniqueConstraint).values(values)
-        stmt = stmt.on_conflict_do_nothing(
+        stmt = stmt.on_conflict_do_update(
             index_elements=["context_id", "field_name", "value_hash"],
+            set_={"log_event_id": stmt.excluded.log_event_id},
+            where=holder_absent_clause(entries[0]["project_id"]),
         )
         stmt = stmt.returning(
             LogUniqueConstraint.context_id,
@@ -439,6 +482,10 @@ class UniqueConstraintDAO:
         """
         Check composite key duplicates using lookup table.
 
+        A conflicting row whose holder log has left the context is reclaimed
+        for the incoming log instead of reported as a duplicate — see
+        ``_check_via_lookup_table`` for the race analysis.
+
         :param entries: List of composite key entries to check.
         :return: First duplicate found, or None.
         """
@@ -457,8 +504,10 @@ class UniqueConstraintDAO:
         ]
 
         stmt = insert(LogUniqueConstraint).values(values)
-        stmt = stmt.on_conflict_do_nothing(
+        stmt = stmt.on_conflict_do_update(
             index_elements=["context_id", "field_name", "value_hash"],
+            set_={"log_event_id": stmt.excluded.log_event_id},
+            where=holder_absent_clause(entries[0]["project_id"]),
         )
         stmt = stmt.returning(
             LogUniqueConstraint.context_id,
@@ -685,7 +734,8 @@ class UniqueConstraintDAO:
             },
         )
 
-        # Try to insert new constraint
+        # Try to insert the new constraint, reclaiming a lapsed row whose
+        # holder has left the context (see _check_via_lookup_table).
         stmt = insert(LogUniqueConstraint).values(
             context_id=context_id,
             project_id=resolved_project_id,
@@ -693,8 +743,10 @@ class UniqueConstraintDAO:
             value_hash=new_hash,
             log_event_id=log_event_id,
         )
-        stmt = stmt.on_conflict_do_nothing(
+        stmt = stmt.on_conflict_do_update(
             index_elements=["context_id", "field_name", "value_hash"],
+            set_={"log_event_id": stmt.excluded.log_event_id},
+            where=holder_absent_clause(resolved_project_id),
         )
         stmt = stmt.returning(LogUniqueConstraint.log_event_id)
 
@@ -768,14 +820,18 @@ class UniqueConstraintDAO:
         """Return subset of ``candidate_hashes`` already present in the context."""
         if self._use_lookup_table():
             resolved_project_id = self._project_id_for_context(context_id, project_id)
+            # A lookup row only counts while its holder log is still attached
+            # to the context; a lapsed row must not skip the incoming row —
+            # the create that follows reclaims it atomically.
             result = self.session.execute(
                 text(
-                    """
-                    SELECT value_hash FROM log_unique_constraint
-                    WHERE context_id = :context_id
-                      AND project_id = :project_id
-                      AND field_name = :field_name
-                      AND value_hash = ANY(:hashes)
+                    f"""
+                    SELECT value_hash FROM log_unique_constraint luc
+                    WHERE luc.context_id = :context_id
+                      AND luc.project_id = :project_id
+                      AND luc.field_name = :field_name
+                      AND luc.value_hash = ANY(:hashes)
+                      AND {HOLDER_PRESENT_SQL}
                     """,
                 ),
                 {
@@ -878,10 +934,11 @@ class UniqueConstraintDAO:
             return conflicts
 
         if self._use_lookup_table():
-            # One batch lookup via unnest join (no N+1).
+            # One batch lookup via unnest join (no N+1). A lapsed lookup row
+            # (holder no longer attached to the context) is not a conflict.
             rows = self.session.execute(
                 text(
-                    """
+                    f"""
                     SELECT v.candidate_id, v.field_name, v.value_hash
                     FROM unnest(
                         CAST(:field_names AS text[]),
@@ -895,6 +952,7 @@ class UniqueConstraintDAO:
                      AND luc.value_hash = v.value_hash
                     WHERE NOT (luc.log_event_id = ANY(:exclude_ids))
                       AND luc.log_event_id <> v.candidate_id
+                      AND {HOLDER_PRESENT_SQL}
                     """,
                 ),
                 {
