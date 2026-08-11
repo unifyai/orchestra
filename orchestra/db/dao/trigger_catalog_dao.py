@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.provider_trigger_catalog_models import (
@@ -44,15 +45,25 @@ class TriggerCatalogDAO:
         )
         if row is not None:
             return row
-        row = ProviderTriggerCatalogBootstrapState(
+        # ON CONFLICT DO NOTHING keeps concurrent first imports from failing:
+        # the loser's insert is a no-op and the follow-up read returns the
+        # winner's row.
+        self.session.execute(
+            pg_insert(ProviderTriggerCatalogBootstrapState)
+            .values(
+                environment=environment,
+                backend_id=backend_id,
+                desired_hash="",
+                last_status="pending",
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_provider_trigger_catalog_bootstrap_env_backend",
+            ),
+        )
+        return self.get_bootstrap_state(
             environment=environment,
             backend_id=backend_id,
-            desired_hash="",
-            last_status="pending",
         )
-        self.session.add(row)
-        self.session.flush()
-        return row
 
     def get_snapshot_by_hash(
         self,
@@ -69,7 +80,7 @@ class TriggerCatalogDAO:
             ),
         )
 
-    def create_snapshot(
+    def get_or_create_snapshot(
         self,
         *,
         environment: str,
@@ -77,17 +88,35 @@ class TriggerCatalogDAO:
         catalog_version: str,
         content_hash: str,
         raw_entry_count: int,
-    ) -> ProviderTriggerCatalogSnapshot:
-        snapshot = ProviderTriggerCatalogSnapshot(
+    ) -> tuple[ProviderTriggerCatalogSnapshot, bool]:
+        """Stage a snapshot for this content hash, reusing an existing one.
+
+        Returns the snapshot and whether this call created it, so the caller
+        knows if the snapshot still needs its candidates inserted. ON CONFLICT
+        DO NOTHING keeps concurrent importers of the same catalog from
+        failing: the loser reuses the winner's snapshot.
+        """
+
+        inserted_id = self.session.execute(
+            pg_insert(ProviderTriggerCatalogSnapshot)
+            .values(
+                environment=environment,
+                backend_id=backend_id,
+                catalog_version=catalog_version,
+                content_hash=content_hash,
+                raw_entry_count=raw_entry_count,
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_provider_trigger_catalog_snapshots_env_backend_hash",
+            )
+            .returning(ProviderTriggerCatalogSnapshot.id),
+        ).scalar()
+        snapshot = self.get_snapshot_by_hash(
             environment=environment,
             backend_id=backend_id,
-            catalog_version=catalog_version,
             content_hash=content_hash,
-            raw_entry_count=raw_entry_count,
         )
-        self.session.add(snapshot)
-        self.session.flush()
-        return snapshot
+        return snapshot, inserted_id is not None
 
     def insert_candidates(
         self,
