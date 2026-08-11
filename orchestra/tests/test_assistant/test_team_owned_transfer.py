@@ -1579,3 +1579,64 @@ async def test_repair_rejects_assistant_that_is_not_team_owned(
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
     assert response.json()["detail"] == "assistant_not_team_owned"
+
+
+@pytest.mark.anyio
+async def test_repair_leaves_stray_rows_intact_when_merge_refuses(
+    client: AsyncClient,
+    dbsession,
+):
+    """A refused repair must not half-apply.
+
+    The real fleet hits this: several stray Data/GTM tables carry an
+    ``auto_counting`` shape their team counterpart lacks, so the repair
+    aborts on schema_mismatch. The rows have to survive that intact.
+    """
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_repair_refused@test.com",
+        org_name="Team Owned Repair Refused Org",
+    )
+    await _convert_to_team_owned(
+        client,
+        org_headers,
+        agent_id=agent_id,
+        team_id=team_id,
+    )
+
+    stray = f"{personal_prefix}/Data/Repos"
+    team_data = f"Teams/{team_id}/Data/Repos"
+    _seed_table(
+        dbsession,
+        project_id,
+        stray,
+        unique_keys={"row_id": "int"},
+        auto_counting={"row_id": None},
+    )
+    _seed_table(dbsession, project_id, team_data)
+    await _post_rows(client, org_headers, team_data, [{"repo": "team-one"}])
+    await _post_rows(client, org_headers, stray, [{"row_id": 0, "repo": "stray-one"}])
+
+    response = await client.post(
+        f"/v0/admin/assistant/{agent_id}/repair/team-memory",
+        json={},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_409_CONFLICT, response.json()
+    assert response.json()["detail"].startswith("team_memory_merge_schema_mismatch")
+
+    dbsession.expire_all()
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, stray)] == [
+        "stray-one",
+    ]
+    assert [row["repo"] for row in _table_rows(dbsession, project_id, team_data)] == [
+        "team-one",
+    ]
