@@ -10,33 +10,26 @@ Two admin-triggered sweeps, both idempotent and dry-run-first:
   Completing the trial Checkout auto-reinstates the account
   (``trial_subscription.apply_trial_checkout_completed``).
 
-* :func:`freeze_abuse_fingerprints` — recurring guard against free-credit
-  extraction. The observed farming signature is crisp: a young,
-  never-paid account whose LLM spend flows almost entirely through the
-  raw API channel (ledger rows with ``assistant_id`` NULL — the OSS CLI
-  path, not the product) and whose wallet is near or below zero.
-  Matching accounts are suspended with reason ``abuse_fingerprint``.
-  Comped orgs are exempt: the grant opens the raw API to them and never
-  tops their wallet back up, so a white-glove evaluation driving the CLI
-  arrives at precisely the state this signature keys on.
+* :func:`freeze_burner_clusters` — recurring guard against free-credit
+  extraction, now that free credits are Console-only. An earlier sweep
+  keyed on raw-API usage (ledger rows with ``assistant_id`` NULL), but
+  closing the API to never-paid accounts did not just reduce farming, it
+  *moved* it: that channel became unreachable, so the signal went quiet
+  while farming continued through the Console, where ``assistant_id`` is
+  populated and looks like ordinary use. A signature that cannot fire is
+  worse than none, because the nightly run keeps reporting zero and reads
+  as an all-clear, so it was removed rather than left in place.
 
-* :func:`freeze_burner_clusters` — successor signal for when free credits
-  are Console-only. Closing the API to never-paid accounts does not just
-  reduce farming, it *moves* it: the raw-API channel the fingerprint
-  above keys on becomes unreachable, so that sweep quietly stops finding
-  anything, and whatever farming continues does so through the Console
-  where ``assistant_id`` is populated and looks like ordinary use.
+  No single-account signal separates farming from evaluation there. Burn
+  velocity is the tempting one and it is wrong — an enthusiastic
+  evaluator's first session drains a grant just as fast as a script, and
+  freezing them is the worst outcome available. What does separate them
+  is repetition across accounts, so this sweep only ever acts on a
+  *cluster*: several never-paid accounts sharing a signup origin inside a
+  short window, each having drained its grant.
 
-  No single-account signal separates the two there. Burn velocity is the
-  tempting one and it is wrong — an enthusiastic evaluator's first
-  session drains a grant just as fast as a script, and freezing them is
-  the worst outcome available. What does separate them is repetition
-  across accounts, so this sweep only ever acts on a *cluster*: several
-  never-paid accounts sharing a signup origin inside a short window,
-  each having drained its grant.
-
-All three return a summary dict suitable for the admin-endpoint response
-and Cloud Scheduler run logs.
+Both return a summary dict suitable for the admin-endpoint response and
+Cloud Scheduler run logs.
 """
 
 from __future__ import annotations
@@ -46,7 +39,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List
 
-from sqlalchemy import Integer, cast, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.enums import RECHARGE_TYPE_PAYMENT
@@ -61,15 +54,6 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
-
-# Abuse-fingerprint thresholds. Deliberately conservative: the sweep
-# freezes only accounts whose usage is overwhelmingly raw-API and whose
-# trial value is already extracted — a genuine product evaluator (Twin
-# chats populate ``assistant_id``) never matches.
-ABUSE_LOOKBACK_DAYS = 14
-ABUSE_MIN_LLM_SPEND = 20.0
-ABUSE_NULL_ASSISTANT_FRACTION = 0.9
-ABUSE_MAX_REMAINING_CREDITS = 5.0
 
 
 @dataclass
@@ -154,64 +138,6 @@ def freeze_never_paid_accounts(
             **result.to_dict(),
             # Don't spam the log payload with every id.
             "billing_account_ids": result.billing_account_ids[:50],
-        },
-    )
-    return result
-
-
-def freeze_abuse_fingerprints(
-    session: Session,
-    *,
-    dry_run: bool = True,
-) -> SweepResult:
-    """Suspend never-paid accounts matching the credit-farming signature."""
-    result = SweepResult(dry_run=dry_run)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=ABUSE_LOOKBACK_DAYS)
-
-    spend_rows = session.execute(
-        select(
-            CreditTransaction.billing_account_id,
-            func.sum(-CreditTransaction.amount).label("spend"),
-            func.sum(
-                cast(CreditTransaction.assistant_id.is_(None), Integer),
-            ).label("null_rows"),
-            func.count().label("rows"),
-        )
-        .where(
-            CreditTransaction.category == "llm",
-            CreditTransaction.at >= cutoff,
-        )
-        .group_by(CreditTransaction.billing_account_id),
-    ).fetchall()
-
-    paid = _paid_ba_ids(session)
-    comped = _free_trial_ba_ids(session)
-
-    for ba_id, spend, null_rows, total_rows in spend_rows:
-        result.scanned += 1
-        if ba_id in paid or ba_id in comped:
-            continue
-        if float(spend or 0) < ABUSE_MIN_LLM_SPEND:
-            continue
-        if total_rows == 0 or (null_rows / total_rows) < ABUSE_NULL_ASSISTANT_FRACTION:
-            continue
-        ba = session.get(BillingAccount, ba_id)
-        if ba is None or ba.account_status != "ACTIVE":
-            continue
-        if float(ba.credits) > ABUSE_MAX_REMAINING_CREDITS:
-            continue
-        result.billing_account_ids.append(ba_id)
-        if not dry_run:
-            ba.account_status = "SUSPENDED"
-            ba.suspension_reason = "abuse_fingerprint"
-
-    result.frozen = len(result.billing_account_ids)
-    if not dry_run:
-        session.flush()
-    logger.warning(
-        {
-            "message": "Abuse-fingerprint freeze sweep finished",
-            **result.to_dict(),
         },
     )
     return result

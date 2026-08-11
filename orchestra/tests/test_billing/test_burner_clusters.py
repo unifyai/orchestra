@@ -1,9 +1,9 @@
 """Burner-cluster detection for Console-only free credits.
 
 Closing the API to never-paid accounts moves farming rather than ending
-it: the raw-API channel :func:`freeze_abuse_fingerprints` keys on becomes
-unreachable, and what continues does so through the Console, where it
-looks like ordinary use.
+it: the raw-API channel an earlier sweep keyed on becomes unreachable,
+and what continues does so through the Console, where it looks like
+ordinary use.
 
 The whole design rests on refusing to act on single-account signals, so
 most of these tests are about what the sweep must *not* freeze.

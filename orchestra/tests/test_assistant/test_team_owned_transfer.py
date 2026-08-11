@@ -1640,3 +1640,85 @@ async def test_repair_leaves_stray_rows_intact_when_merge_refuses(
     assert [row["repo"] for row in _table_rows(dbsession, project_id, team_data)] == [
         "team-one",
     ]
+
+
+@pytest.mark.anyio
+async def test_merge_sums_spending_accumulator_rows(
+    client: AsyncClient,
+    dbsession,
+):
+    """Spend rows are atomic-increment totals, so a merge adds them.
+
+    Picking either side would discard the events the other side recorded.
+    """
+    (
+        _org_id,
+        org_headers,
+        team_id,
+        agent_id,
+        project_id,
+        personal_prefix,
+    ) = await _setup_merge_org(
+        client,
+        dbsession,
+        email="team_owned_spend_merge@test.com",
+        org_name="Team Owned Spend Merge Org",
+    )
+    keys = {"_user_id": "str", "_assistant_id": "str", "month": "str"}
+    personal_spend = f"{personal_prefix}/Spending/Monthly"
+    team_spend = f"Teams/{team_id}/Spending/Monthly"
+    _seed_table(dbsession, project_id, personal_spend, unique_keys=keys)
+    _seed_table(dbsession, project_id, team_spend, unique_keys=keys)
+
+    # Same (user, month) on both sides: disjoint events, so they add.
+    await _post_rows(
+        client,
+        org_headers,
+        team_spend,
+        [
+            {
+                "_user_id": "user-a",
+                "_assistant_id": str(agent_id),
+                "month": "2026-07",
+                "cumulative_spend": 0.159525864,
+            },
+        ],
+    )
+    await _post_rows(
+        client,
+        org_headers,
+        personal_spend,
+        [
+            {
+                "_user_id": "user-a",
+                "_assistant_id": str(agent_id),
+                "month": "2026-07",
+                "cumulative_spend": 51.4055135,
+            },
+            # A second payer for the same month has no counterpart and rides
+            # across untouched — multiple rows per month is the designed shape.
+            {
+                "_user_id": "user-b",
+                "_assistant_id": str(agent_id),
+                "month": "2026-07",
+                "cumulative_spend": 0.0918680625,
+            },
+        ],
+    )
+
+    response = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-team-owned",
+        json={"owner_team_id": team_id, "merge_memory": True},
+        headers=org_headers,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+
+    dbsession.expire_all()
+    merged = {
+        (row["_user_id"], row["month"]): row["cumulative_spend"]
+        for row in _table_rows(dbsession, project_id, team_spend)
+    }
+    assert set(merged) == {("user-a", "2026-07"), ("user-b", "2026-07")}
+    assert merged[("user-a", "2026-07")] == pytest.approx(51.565039364)
+    assert merged[("user-b", "2026-07")] == pytest.approx(0.0918680625)
+    assert _table_rows(dbsession, project_id, personal_spend) == []

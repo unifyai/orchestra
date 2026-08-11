@@ -1058,35 +1058,12 @@ def trigger_card_gate_freeze_sweep(
 
 
 @router.post(
-    "/billing/abuse-freeze-sweep",
-    summary="Admin: Freeze accounts matching the credit-farming signature",
-    description=(
-        "Suspend (reason ``abuse_fingerprint``) never-paid accounts whose "
-        "recent LLM spend is overwhelmingly raw-API (``assistant_id`` "
-        "NULL ledger rows) and whose wallet is near/below zero. Intended "
-        "to run daily via Cloud Scheduler alongside the other billing "
-        "routines. Defaults to ``dry_run=true``."
-    ),
-)
-def trigger_abuse_freeze_sweep(
-    dry_run: bool = True,
-    session=Depends(get_db_session),
-) -> dict:
-    from orchestra.routines.card_gate_sweep import freeze_abuse_fingerprints
-
-    result = freeze_abuse_fingerprints(session, dry_run=dry_run)
-    if not dry_run:
-        session.commit()
-    return {"status": "success", **result.to_dict()}
-
-
-@router.post(
     "/billing/burner-cluster-freeze-sweep",
     summary="Admin: Freeze never-paid accounts farming in an origin cluster",
     description=(
-        "Successor to ``/billing/abuse-freeze-sweep`` for when free "
-        "credits are Console-only: that signature keys on raw-API spend, "
-        "which never-paid accounts can no longer produce. Suspends "
+        "The credit-farming guard for when free credits are Console-only. "
+        "An earlier sweep keyed on raw-API spend, which never-paid "
+        "accounts can no longer produce, so it could not fire. Suspends "
         "(reason ``abuse_fingerprint``) only accounts in a *cluster* — "
         "several never-paid accounts sharing a signup origin inside a "
         "short window, each having drained its grant. Single accounts are "
