@@ -352,6 +352,80 @@ def test_partial_provenance_still_clusters_what_it_can(dbsession, small_cluster)
 
 
 # ---------------------------------------------------------------------------
+# Alerting
+# ---------------------------------------------------------------------------
+#
+# The sweep locks people out on circumstantial evidence, unattended, at
+# half past five in the morning. Whether anyone hears about it is part of
+# the control, not a nicety.
+
+
+@pytest.fixture
+def discord(monkeypatch):
+    """Capture what would be posted to the billing webhook."""
+    from orchestra.routines import billing_notifications
+
+    monkeypatch.setenv(billing_notifications.WEBHOOK_URL_ENV, "https://discord.test")
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        billing_notifications,
+        "_send_webhook",
+        lambda url, content="", embeds=None: sent.append(
+            {"content": content, "embeds": embeds or []},
+        )
+        or True,
+    )
+    return sent
+
+
+def _notify(result):
+    from orchestra.routines.billing_notifications import notify_burner_cluster_sweep
+
+    return notify_burner_cluster_sweep(result)
+
+
+def test_a_freeze_is_announced(dbsession, small_cluster, discord):
+    for i in range(3):
+        _make_farmed_account(dbsession, f"alert_ring_{i}", ip="203.0.113.140")
+
+    result = freeze_burner_clusters(dbsession, dry_run=False)
+    _notify(result)
+
+    assert len(discord) == 1
+    assert "3 account(s) suspended" in discord[0]["content"]
+
+
+def test_an_ordinary_quiet_run_stays_silent(dbsession, small_cluster, discord):
+    """Nightly noise is how an alert stops being read."""
+    _make_farmed_account(dbsession, "alert_quiet", ip="203.0.113.150")
+
+    _notify(freeze_burner_clusters(dbsession, dry_run=False))
+
+    assert discord == []
+
+
+def test_a_dry_run_never_pages(dbsession, small_cluster, discord):
+    """Reporting-only means reporting-only; nobody is locked out yet."""
+    for i in range(3):
+        _make_farmed_account(dbsession, f"alert_dry_{i}", ip="203.0.113.160")
+
+    _notify(freeze_burner_clusters(dbsession, dry_run=True))
+
+    assert discord == []
+
+
+def test_a_blind_run_is_announced_as_blind(dbsession, small_cluster, discord):
+    """A control that has quietly gone deaf must not pass for a calm one."""
+    for i in range(3):
+        _make_farmed_account(dbsession, f"alert_blind_{i}", ip=None)
+
+    _notify(freeze_burner_clusters(dbsession, dry_run=False))
+
+    assert len(discord) == 1
+    assert "blind" in discord[0]["content"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Provenance capture
 # ---------------------------------------------------------------------------
 
