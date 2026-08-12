@@ -21,6 +21,11 @@ class UserRequest(BaseModel):
     phone_number: Optional[str] = None
     whatsapp_number: Optional[str] = None
     discord_id: Optional[str] = None
+    #: Signup origin as Console observed it on the browser's request.
+    #: This endpoint backs next-auth's adapter, so it is the OAuth signup
+    #: path; without these the whole OAuth cohort records no origin.
+    signup_ip: Optional[str] = None
+    signup_user_agent: Optional[str] = None
 
     @field_validator("timezone")
     @classmethod

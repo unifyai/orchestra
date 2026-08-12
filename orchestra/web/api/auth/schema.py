@@ -62,6 +62,11 @@ class EmailRegisterRequest(BaseModel):
         max_length=_PASSWORD_MAX_LENGTH,
     )
     captcha_token: Optional[str] = None  # Cloudflare Turnstile token
+    #: Signup origin as Console observed it on the browser's request.
+    #: Only self-host creates the user here; the hosted flow records it
+    #: on ``/auth/create-user`` once the address is verified.
+    signup_ip: Optional[str] = None
+    signup_user_agent: Optional[str] = None
 
     @field_validator("password")
     @classmethod
@@ -88,9 +93,16 @@ class VerifyCodeResponse(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
-    """Request to create a user after email verification (token-based)."""
+    """Request to create a user after email verification (token-based).
+
+    The signup origin travels in the body because this endpoint is called
+    by Console's server, whose own address and HTTP client would
+    otherwise be recorded as the signer's.
+    """
 
     token: str
+    signup_ip: Optional[str] = None
+    signup_user_agent: Optional[str] = None
 
 
 class ResetPasswordWithTokenRequest(BaseModel):

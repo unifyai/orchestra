@@ -38,9 +38,9 @@ docker run --name orchestra-db -p 5432:5432 \
   -e POSTGRES_PASSWORD=orchestra -e POSTGRES_USER=orchestra -e POSTGRES_DB=orchestra \
   pgvector/pgvector:pg15
 
-poetry install --with dev
+uv sync
 alembic upgrade head
-poetry run python -m orchestra
+uv run python -m orchestra
 ```
 
 The API will be available at `http://127.0.0.1:8000/v0`.
@@ -139,20 +139,17 @@ orchestra
     └── lifetime.py  # Contains actions to perform on startup and shutdown.
 ```
 
-## Poetry
+## uv
 
-This project uses poetry to manage dependencies.
-To install dependencies:
-
-```bash
-poetry install
-```
-
-For development, you can activate the poetry virtual environment by:
+This project uses uv to manage dependencies.
+To install dependencies (including the dev group):
 
 ```bash
-poetry shell
+uv sync
 ```
+
+Commands run inside the environment with `uv run <command>`, and the
+interpreter is always the repo-local `.venv/bin/python`.
 
 ## Pre-commit
 
@@ -170,7 +167,7 @@ configure your IDE or shell to do the same.
 
 ## Running the tests
 
-To run the orchestra test suite, you will need the poetry environment and a PostgreSQL server running with the `pgvector` extension installed. The tests and vector functions require `pgvector`.
+To run the orchestra test suite, you will need the uv environment and a PostgreSQL server running with the `pgvector` extension installed. The tests and vector functions require `pgvector`.
 
 Recommended (pgvector-enabled Postgres container):
 
@@ -180,18 +177,18 @@ docker run --name orchestra-db -p 5432:5432 \
   pgvector/pgvector:pg15
 ```
 
-Once the database server is running, install dependencies (including dev) and run the tests using the poetry environment. Take into account that some tests will require **secrets and environment variables**.
+Once the database server is running, install dependencies (including dev) and run the tests using the uv environment. Take into account that some tests will require **secrets and environment variables**.
 
 ```bash
-poetry install --with dev
-poetry run pytest -vv .
+uv sync
+uv run pytest -vv .
 ```
 
 If you see an error like `extension "vector" is not available`, your Postgres instance lacks pgvector. Use the image above or install pgvector in your local Postgres and run `CREATE EXTENSION IF NOT EXISTS vector;` in the target database.
 
 ## Running orchestra
 
-To run the orchestra service locally, you will need a database with valid data, the corresponding secrets/environment variables, and the poetry environment.
+To run the orchestra service locally, you will need a database with valid data, the corresponding secrets/environment variables, and the uv environment.
 
 If you already have a docker container running Postgres with pgvector you won't need to create a new image. Otherwise:
 
@@ -215,7 +212,7 @@ psql -h localhost -U orchestra -d orchestra
 
 Your DB should now be fully functional! Now, you should be able to see all the tables (e.g. `\dt`).
 
-To run the service, you can do `poetry run python -m orchestra` but you won't be able to debug the service.
+To run the service, you can do `uv run python -m orchestra` but you won't be able to debug the service.
 
 To run orchestra in debug mode (in VSCode / Codespaces), your `launch.json` file should look something like this:
 

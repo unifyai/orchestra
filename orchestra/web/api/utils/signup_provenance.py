@@ -5,18 +5,33 @@ the raw-API channel an earlier sweep watched. What remains is only
 separable by correlating accounts with each other, and that needs to
 know where each signup came from.
 
+**The values arrive explicitly, never from the request.** Every signup
+reaches Orchestra through Console's Next.js server on an admin-key
+endpoint, so the transport request describes Console: one constant HTTP
+client user agent on every signup, and Console's egress IP. Reading it
+does not merely lose the signal, it inverts it — every hosted account
+collects into a single shared-origin group that the cluster sweep would
+read as a ring of strangers. Console holds the browser's request and
+passes what it saw; this module only normalises and hashes.
+
 Two values are recorded, both deliberately coarse:
 
-* the caller IP, as the referral flow already records it; and
-* a salted hash of the user agent, because the cluster sweep compares it
-  for equality and never reads it, so keeping the raw string would be
-  more identifying than the job requires.
+* the client IP as Console observed it; and
+* a salted hash of the user agent, because nothing reads it back and
+  keeping the raw string would be more identifying than the job needs.
 
-Neither is a strong identifier on its own — an IP is shared by offices,
-VPNs and carriers, and a user agent is shared by everyone on the same
-browser build. That is why they feed a *cluster* signal, where the
-evidence is a burst of never-paid accounts sharing an origin, and never
-an individual freeze decision.
+Neither is a strong identifier. An IP is shared by offices, VPNs and
+carriers; a user agent is shared by everyone on the same browser build.
+The sweep clusters on the IP alone for exactly that reason — a browser
+build is far too coarse to be evidence of anything, however many
+accounts share one — and the stored hash is corroboration for a human
+reading a match, not a key.
+
+The IP is also only as good as what Console could see: the left-most
+forwarded hop is supplied by the caller, so a determined signer can
+choose the address recorded against them. That bounds this to
+unsophisticated farming, and is a reason to read a match before acting
+on it rather than a reason to record nothing.
 """
 
 from __future__ import annotations
@@ -25,41 +40,31 @@ import hashlib
 import hmac
 from typing import Optional
 
-from fastapi import Request
-
 from orchestra.settings import settings
 
-#: Header set by the ingress/load balancer. ``request.client.host`` is the
-#: proxy behind Cloud Run, so the left-most forwarded hop is the real one.
-_FORWARDED_FOR = "x-forwarded-for"
-
-#: Bound on what we will store, so a hostile header cannot bloat the row.
+#: Bound on what we will store, so a hostile value cannot bloat the row.
 _MAX_IP_LENGTH = 45  # an IPv6 address with a zone index
 
 
-def client_ip(request: Request) -> Optional[str]:
-    """The caller's IP, preferring the left-most forwarded hop.
+def normalised_ip(ip: Optional[str]) -> Optional[str]:
+    """The client IP as recorded, or ``None`` when nothing usable came.
 
-    Returns ``None`` rather than a placeholder when nothing usable is
-    present: a column full of ``"unknown"`` would cluster every such
-    signup together and manufacture false evidence.
+    ``None`` rather than a placeholder: a column full of ``"unknown"``
+    would cluster every such signup together and manufacture evidence.
     """
-    forwarded = request.headers.get(_FORWARDED_FOR, "")
-    candidate = forwarded.split(",")[0].strip()
-    if not candidate and request.client:
-        candidate = (request.client.host or "").strip()
+    candidate = (ip or "").strip()
     if not candidate:
         return None
     return candidate[:_MAX_IP_LENGTH]
 
 
-def user_agent_hash(request: Request) -> Optional[str]:
-    """Salted hash of the request's user agent, or ``None`` if absent.
+def user_agent_hash(user_agent: Optional[str]) -> Optional[str]:
+    """Salted hash of a user agent, or ``None`` if absent.
 
     Salted with an existing server secret so the digest is not reversible
     by rainbow table against the small space of common user agents.
     """
-    raw = (request.headers.get("user-agent") or "").strip()
+    raw = (user_agent or "").strip()
     if not raw:
         return None
 
@@ -71,15 +76,16 @@ def user_agent_hash(request: Request) -> Optional[str]:
     ).hexdigest()
 
 
-def signup_provenance(request: Optional[Request]) -> dict:
+def signup_provenance(
+    ip: Optional[str],
+    user_agent: Optional[str],
+) -> dict:
     """Kwargs for :meth:`UserDAO.create` describing where a signup came from.
 
     Always returns both keys so callers can splat it unconditionally;
-    values are ``None`` when the request cannot supply them.
+    values are ``None`` when Console could not supply them.
     """
-    if request is None:
-        return {"signup_ip": None, "signup_user_agent_hash": None}
     return {
-        "signup_ip": client_ip(request),
-        "signup_user_agent_hash": user_agent_hash(request),
+        "signup_ip": normalised_ip(ip),
+        "signup_user_agent_hash": user_agent_hash(user_agent),
     }

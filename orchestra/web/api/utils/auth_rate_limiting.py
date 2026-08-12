@@ -48,17 +48,32 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def get_client_subnet(request: Request) -> str:
-    """Collapse the client IP to its /24 (IPv4) or /48 (IPv6) prefix.
+def subnet_of(ip: str) -> str:
+    """Collapse an IP to its /24 (IPv4) or /48 (IPv6) prefix.
 
     Farmers rotating addresses within one allocation share a prefix even
     when individual IPs differ.
     """
-    ip = get_client_ip(request)
     if ":" in ip:
         return ":".join(ip.split(":")[:3]) + "::/48"
     parts = ip.rsplit(".", 1)
     return f"{parts[0]}.0/24" if len(parts) == 2 else ip
+
+
+def rate_limit_origin(
+    request: Request,
+    *,
+    client_ip: Optional[str] = None,
+    use_subnet: bool = False,
+) -> str:
+    """What an attempt is counted against.
+
+    The caller's own address wins when it knows one, because on the auth
+    endpoints the connection belongs to Console's server rather than to
+    whoever is signing up.
+    """
+    origin = client_ip or get_client_ip(request)
+    return subnet_of(origin) if use_subnet else origin
 
 
 def enforce_auth_rate_limit(
@@ -69,6 +84,7 @@ def enforce_auth_rate_limit(
     window_minutes: int = 5,
     identifier: Optional[str] = None,
     use_subnet: bool = False,
+    client_ip: Optional[str] = None,
 ) -> None:
     """
     Record an auth attempt and raise 429 if the limit is exceeded.
@@ -84,11 +100,18 @@ def enforce_auth_rate_limit(
         identifier: Optional secondary key (email, user_id) combined with IP.
         use_subnet: Key on the client's /24 (or IPv6 /48) prefix instead
             of the exact IP, so limits hold across a rotating allocation.
+        client_ip: The signer's address, where the caller knows it better
+            than the connection does. These endpoints are called by
+            Console's server, so the requesting peer is Console on every
+            attempt: a limit keyed on it throttles the platform rather
+            than a person, and one keyed on IP alone lets strangers
+            exhaust each other's allowance. Falls back to the peer when
+            absent, which is no worse than keying on it throughout.
     """
     if settings.is_staging or settings.environment == "dev":
         return
 
-    ip = get_client_subnet(request) if use_subnet else get_client_ip(request)
+    ip = rate_limit_origin(request, client_ip=client_ip, use_subnet=use_subnet)
     key = f"{ip}:{identifier}" if identifier else ip
     bucket = _get_time_bucket()
 

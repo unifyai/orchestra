@@ -8,7 +8,7 @@ on:
     - 'deploy/**'
     - 'orchestra/**'
     - 'pyproject.toml'
-    - 'poetry.lock'
+    - 'uv.lock'
     - '.github/workflows/ghcr-selfhost.yml'
   workflow_dispatch:
 

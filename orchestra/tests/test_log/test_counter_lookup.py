@@ -404,3 +404,64 @@ def test_resync_context_counters_bumps_past_copied_values(
         provided_values=[{"ingest_key": "b"}],
     )
     assert nxt == [{"ingest_key": "b", "row_id": 501}]
+
+
+def test_resync_context_counters_allow_decrease_restores_snapshot_state(
+    dbsession: Session,
+):
+    # Version rollback deletes every row above the snapshot and re-inserts the
+    # snapshot verbatim. With allow_decrease the counter drops back to
+    # MAX(restored)+1, so post-snapshot allocation history cannot leak into
+    # values assigned after the rollback (which would make them depend on how
+    # many allocations happened before the rollback, not on the snapshot).
+    project, context = _create_context(
+        dbsession,
+        unique_key_names=["ingest_key"],
+        auto_counting={"row_id": None},
+        rows=[{"ingest_key": "seed", "row_id": 0}],
+    )
+    dao = LogEventDAO(dbsession)
+
+    # Advance the counter past the seeded data (next_value -> 3).
+    dao.get_next_composite_ids(
+        project_id=project.id,
+        context_id=context.id,
+        unique_keys={"ingest_key": "str"},
+        provided_values=[{"ingest_key": "a"}, {"ingest_key": "b"}],
+    )
+    assert _counter(dbsession, context.id, "row_id", {}).next_value == 3
+
+    # Simulate the rollback's deletion of post-snapshot rows: only the seeded
+    # row (row_id 0) remains associated with the context.
+    dbsession.query(LogEventContext).filter(
+        LogEventContext.context_id == context.id,
+    ).delete(synchronize_session=False)
+    seed = LogEvent(owner_key="sys", project_id=project.id, data={"row_id": 0})
+    dbsession.add(seed)
+    dbsession.flush()
+    dbsession.add(
+        LogEventContext(
+            owner_key="sys",
+            project_id=project.id,
+            log_event_id=seed.id,
+            context_id=context.id,
+        ),
+    )
+    dbsession.flush()
+
+    dao.resync_context_counters(
+        context_id=context.id,
+        project_id=project.id,
+        allow_decrease=True,
+    )
+    assert _counter(dbsession, context.id, "row_id", {}).next_value == 1
+
+    # The next reservation continues from the restored data, exactly as a
+    # fresh session over the snapshot would.
+    nxt = dao.get_next_composite_ids(
+        project_id=project.id,
+        context_id=context.id,
+        unique_keys={"ingest_key": "str"},
+        provided_values=[{"ingest_key": "c"}],
+    )
+    assert nxt == [{"ingest_key": "c", "row_id": 1}]

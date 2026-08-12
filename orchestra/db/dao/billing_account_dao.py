@@ -116,15 +116,27 @@ class BillingAccountDAO:
         # `assign_default_at_signup` syncs plan_assignment_id via
         # `_insert_active_assignment`, so grant ledger rows can point at it.
         if apply_signup_grant:
+            from orchestra.lib.credit_grants import (
+                GRANT_KIND_TRIAL,
+                signup_trial_expiry,
+            )
             from orchestra.settings import settings
 
             # Under the card gate the signup grant moves to trial-checkout
             # completion (``trial_subscription.apply_trial_checkout_completed``)
             # so a card is always on file before any credits exist.
+            #
+            # Tagged with the same kind and expiry as the card-gated grant:
+            # an untagged grant never expires, so whichever path mints the
+            # signup credit, an account that never spends it keeps a
+            # permanent claim on inference the expiry sweep cannot reclaim.
             if settings.signup_credit_grant > 0 and not settings.require_card_on_file:
                 self.apply_credit_grant(
                     billing_account.id,
                     settings.signup_credit_grant,
+                    grant_kind=GRANT_KIND_TRIAL,
+                    expires_at=signup_trial_expiry(),
+                    description="Signup trial credit grant",
                 )
         return billing_account
 

@@ -432,7 +432,7 @@ def require_server():
     if not _check_server_running():
         pytest.skip(
             f"Server not running at {SERVER_URL}. "
-            "Start with: poetry run python -m orchestra",
+            "Start with: uv run python -m orchestra",
         )
 
 

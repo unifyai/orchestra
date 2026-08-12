@@ -195,7 +195,11 @@ _BOT_UA_PATTERNS: list[re.Pattern] = [
         r"\bpostman\b",
         r"\bscrapy\b",
         r"\bphantomjs\b",
-        r"\bheadless\b",
+        # No trailing boundary: the string these agents actually send is
+        # "HeadlessChrome/120", where the word runs straight into the
+        # browser name and \b never matches. Requiring one made the
+        # pattern unable to catch the agent it names.
+        r"\bheadless",
         r"\bbot\b",
         r"\bcrawler\b",
         r"\bspider\b",

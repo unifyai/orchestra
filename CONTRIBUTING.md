@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.12+
-- [Poetry](https://python-poetry.org/)
+- [uv](https://docs.astral.sh/uv/)
 - Docker or another PostgreSQL instance with the `pgvector` extension
 
 ## Setup
@@ -13,7 +13,7 @@
 ```bash
 git clone https://github.com/unifyai/orchestra.git
 cd orchestra
-poetry install --with dev
+uv sync
 ```
 
 2. Copy the local-development env template:
@@ -36,8 +36,8 @@ docker run --name orchestra-db -p 5432:5432 \
 4. Run migrations and start the API:
 
 ```bash
-poetry run alembic upgrade head
-poetry run python -m orchestra
+uv run alembic upgrade head
+uv run python -m orchestra
 ```
 
 ## Running tests
@@ -46,7 +46,7 @@ Most tests require PostgreSQL with `pgvector` available. Once the database is
 running and your environment is configured:
 
 ```bash
-poetry run pytest -vv .
+uv run pytest -vv .
 ```
 
 Some integration paths also require additional secrets and managed
@@ -58,13 +58,13 @@ maintainer-controlled for those cases.
 Install pre-commit hooks:
 
 ```bash
-poetry run pre-commit install
+uv run pre-commit install
 ```
 
 Run the default local checks manually:
 
 ```bash
-poetry run pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 ## Pull requests

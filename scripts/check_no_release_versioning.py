@@ -29,9 +29,8 @@ def _check_pyproject(root: Path, failures: list[str]) -> None:
 
     data = tomllib.loads(path.read_text())
     project = data.get("project") or {}
-    poetry = data.get("tool", {}).get("poetry") or {}
-    name = project.get("name") or poetry.get("name")
-    version = project.get("version") or poetry.get("version")
+    name = project.get("name")
+    version = project.get("version")
     if _is_first_party(name) and version != INERT_VERSION:
         failures.append(
             f"{path}: first-party package version must be {INERT_VERSION!r}",

@@ -9,8 +9,8 @@ cd "$ORCHESTRA_REPO_PATH"
 
 if [[ -x "$ORCHESTRA_REPO_PATH/.venv/bin/python" ]]; then
   PYTHON="$ORCHESTRA_REPO_PATH/.venv/bin/python"
-elif command -v poetry &>/dev/null; then
-  PYTHON="poetry run python"
+elif command -v uv &>/dev/null; then
+  PYTHON="uv run --project $ORCHESTRA_REPO_PATH python"
 else
   echo "[ERROR] Orchestra Python environment not found" >&2
   exit 1

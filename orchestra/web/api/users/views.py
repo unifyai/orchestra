@@ -97,6 +97,7 @@ from orchestra.web.api.users.schema import (
 )
 from orchestra.web.api.utils.assistant_infra import delete_pubsub_topic
 from orchestra.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.signup_provenance import signup_provenance
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -130,6 +131,7 @@ async def create_user(
             phone_number=user.phone_number,
             whatsapp_number=user.whatsapp_number,
             discord_id=user.discord_id,
+            **signup_provenance(user.signup_ip, user.signup_user_agent),
         )
         user_row = user_dao.filter(email=user.email)
         new_user = user_row[0][0]
@@ -2061,13 +2063,11 @@ def attribute_referral_code(
         raise not_found("User")
     user_instance = user_row[0]
 
-    signup_ip = request.client.host if request.client else None
     try:
         result = attribute_referral(
             session,
             referee_user=user_instance,
             code=payload.code,
-            signup_ip=signup_ip,
         )
         session.commit()
     except ReferralError as e:

@@ -8,6 +8,13 @@ repos:
   - id: trailing-whitespace
   - id: check-toml
   - id: end-of-file-fixer
+  - id: detect-private-key
+
+# Secret scanning — catches API keys/tokens/private keys by content.
+- repo: https://github.com/gitleaks/gitleaks
+  rev: v8.30.1
+  hooks:
+  - id: gitleaks
 
 - repo: https://github.com/asottile/add-trailing-comma
   rev: v3.2.0
@@ -27,20 +34,20 @@ repos:
   hooks:
   - id: autoflake
     name: autoflake
-    entry: poetry run autoflake
+    entry: uv run autoflake
     language: system
     types: [python]
     args: [--in-place, --remove-all-unused-imports, --remove-duplicate-keys]
 
   - id: black
     name: Format with Black
-    entry: poetry run black
+    entry: uv run black
     language: system
     types: [python]
 
   - id: isort
     name: isort
-    entry: poetry run isort
+    entry: uv run isort
     language: system
     types: [python]
 
@@ -57,7 +64,7 @@ repos:
 
   # - id: flake8
   #   name: Check with Flake8
-  #   entry: poetry run flake8
+  #   entry: uv run flake8
   #   language: system
   #   pass_filenames: false
   #   types: [python]
@@ -65,7 +72,7 @@ repos:
 
   # - id: mypy
   #   name: Validate types with MyPy
-  #   entry: poetry run mypy
+  #   entry: uv run mypy
   #   language: system
   #   types: [python]
   #   pass_filenames: false

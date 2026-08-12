@@ -200,6 +200,10 @@ def get_org_roster(
                 RosterAssistant(
                     assistant_id=assistant.agent_id,
                     name=assistant_display_name(assistant),
+                    user_id=assistant.user_id,
+                    organization_id=assistant.organization_id,
+                    desktop_mode=assistant.desktop_mode,
+                    managed_desktop_status=assistant.managed_desktop_status,
                 ),
             )
 

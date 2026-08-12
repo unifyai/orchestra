@@ -100,7 +100,10 @@ from orchestra.web.api.utils.signup_provenance import signup_provenance
 admin_router = APIRouter()
 router = APIRouter()
 logger = logging.getLogger(__name__)
-ph = PasswordHasher()
+# Argon2id cost parameters per the Cryptography Policy: >= 256 MiB memory,
+# >= 3 iterations, parallelism 4. Stored hashes below these parameters are
+# re-derived on the next successful authentication via check_needs_rehash().
+ph = PasswordHasher(memory_cost=262144, time_cost=3, parallelism=4)
 
 
 async def _send_signup_welcome_emails_safe(user) -> None:
@@ -200,12 +203,17 @@ async def register(
     """
     email = body.email.lower().strip()
 
+    # Every limit here keys on the address Console saw the browser at.
+    # The connection itself comes from Console on every registration, so
+    # keying on it throttles the platform as a whole rather than anyone
+    # in particular.
     enforce_auth_rate_limit(
         session,
         request,
         "auth_register",
         max_attempts=5,
         identifier=email,
+        client_ip=body.signup_ip,
     )
     # The (IP, email) limit above never trips for a farmer rotating
     # email addresses; these two throttle raw signup velocity per IP and
@@ -216,6 +224,7 @@ async def register(
         "auth_register_ip",
         max_attempts=10,
         window_minutes=60,
+        client_ip=body.signup_ip,
     )
     enforce_auth_rate_limit(
         session,
@@ -224,11 +233,16 @@ async def register(
         max_attempts=30,
         window_minutes=1440,
         use_subnet=True,
+        client_ip=body.signup_ip,
     )
 
-    # 0a. User-Agent heuristic check
-    user_agent = request.headers.get("user-agent")
-    if not check_user_agent(user_agent):
+    # 0a. User-Agent heuristic check, against the browser's agent as
+    # Console saw it. The request's own is Console's HTTP client and
+    # matches nothing, so judging it passed every registration alike.
+    # An absent agent is not judged: the check reads a missing one as a
+    # bot, which would refuse every signup for as long as the two
+    # deployments disagreed about sending it.
+    if body.signup_user_agent and not check_user_agent(body.signup_user_agent):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -269,7 +283,7 @@ async def register(
             name=body.name,
             last_name=body.last_name,
             password_hash=password_hash,
-            provenance=signup_provenance(request),
+            provenance=signup_provenance(body.signup_ip, body.signup_user_agent),
         )
         session.commit()
         coordinator = get_personal_coordinator(session, str(user.id))
@@ -282,9 +296,13 @@ async def register(
             name=user.name,
         )
 
-    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new registrations
-    remote_ip = request.client.host if request.client else None
-    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
+    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new
+    # registrations. Turnstile checks the address against the one the
+    # challenge was solved at, so it wants the browser's; the connection
+    # here is Console's server, which never solved anything. The
+    # parameter is optional, so sending nothing beats sending the wrong
+    # address.
+    captcha_ok = await verify_turnstile_token(body.captcha_token, body.signup_ip)
     if not captcha_ok:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -428,7 +446,6 @@ def verify_code(
 )
 async def create_user_after_verification(
     body: CreateUserRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -487,7 +504,7 @@ async def create_user_after_verification(
             name=verification.name,
             last_name=verification.last_name,
             password_hash=verification.password_hash,
-            provenance=signup_provenance(request),
+            provenance=signup_provenance(body.signup_ip, body.signup_user_agent),
         )
         auth_dao.delete_verification(verification.id)
         session.commit()

@@ -4855,6 +4855,12 @@ async def delete_assistant(
                 detail="cannot_delete_coordinator",
             )
 
+        if assistant.is_deployment_target:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cannot_delete_deployment_target",
+            )
+
         if organization_id is not None:
             resource_access_dao = ResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
@@ -8090,7 +8096,12 @@ def admin_update_assistant(
             detail=f"Assistant with id {assistant_id} not found.",
         )
 
-    return _apply_assistant_runtime_update(session, assistant, request_body)
+    return _apply_assistant_runtime_update(
+        session,
+        assistant,
+        request_body,
+        allow_deployment_target=True,
+    )
 
 
 @router.patch(
@@ -8118,12 +8129,28 @@ def _apply_assistant_runtime_update(
     session: Session,
     assistant: Assistant,
     request_body: AdminUpdateAssistant,
+    *,
+    allow_deployment_target: bool = False,
 ) -> AdminUpdateAssistantResponse:
-    """Apply the runtime-profile field updates shared by admin and user routes."""
+    """Apply the runtime-profile field updates shared by admin and user routes.
+
+    ``is_deployment_target`` is admin-only: it decides whether the assistant
+    can be deleted, so an owner must not be able to raise it on their own
+    assistant and make it permanent.
+    """
     assistant_id = assistant.agent_id
 
     # Build update dict and track updated fields
     updated_fields = []
+
+    if "is_deployment_target" in request_body.model_fields_set:
+        if not allow_deployment_target:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="is_deployment_target is set by deploy-time reconciliation.",
+            )
+        assistant.is_deployment_target = bool(request_body.is_deployment_target)
+        updated_fields.append("is_deployment_target")
 
     if request_body.timezone is not None:
         assistant.timezone = request_body.timezone

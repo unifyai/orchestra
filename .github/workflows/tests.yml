@@ -75,51 +75,23 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Install Poetry
-      run: pip install 'poetry==2.2.1'
-    - name: Cache poetry dependencies
+    - name: Install uv
+      run: pip install uv
+    - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pypoetry
-        key: poetry-black-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+        path: ~/.cache/uv
+        key: uv-black-${{ runner.os }}-${{ hashFiles('uv.lock') }}
         restore-keys: |
-          poetry-black-${{ runner.os }}-
-    # Use the black version pinned in poetry.lock so CI, pre-commit, and local
+          uv-black-${{ runner.os }}-
+    # Use the black version pinned in uv.lock so CI, pre-commit, and local
     # dev all format with one source of truth (no duplicated version string to
     # drift, and the lock stays at or above the CVE-patched floor in pyproject).
     - name: Install black (locked version)
-      run: poetry install --only lint --no-root
+      run: uv sync --only-group lint --no-install-project --frozen
     - name: Check formatting
-      run: poetry run black --check .
+      run: uv run --no-sync black --check .
 
-  # flake8:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v2
-  #       with:
-  #         python-version: "3.9"
-  #     - name: Install deps
-  #       uses: knowsuchagency/poetry-install@v1
-  #       env:
-  #         POETRY_VIRTUALENVS_CREATE: false
-  #     - name: Run flake8 check
-  #       run: poetry run flake8 --count .
-  # mypy:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v2
-  #       with:
-  #         python-version: "3.9"
-  #     - name: Install deps
-  #       uses: knowsuchagency/poetry-install@v1
-  #       env:
-  #         POETRY_VIRTUALENVS_CREATE: false
-  #     - name: Run mypy check
-  #       run: poetry run mypy --install-types --non-interactive .
   pytest-dev:
     name: pytest-dev
     runs-on: ubuntu-latest-8-cores
@@ -144,7 +116,6 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     env:
       LOGS_DIR: ${{ github.workspace }}/logs
-      POETRY_VIRTUALENVS_CREATE: "false"
     services:
       orchestra-db:
         image: pgvector/pgvector:pg15
@@ -174,30 +145,19 @@ jobs:
       with:
         python-version: "3.12"
 
-    - name: Install Poetry
-      run: |
-        # Pin pip + virtualenv so poetry's parallel installer doesn't race on
-        # site-packages/virtualenv/create/via_global_ref/_virtualenv.py when
-        # building git deps (e.g. orchestra). See unifyai/orchestra#1254.
-        pip install --upgrade pip
-        pip install 'virtualenv>=20.25,<21'
-        pip install 'poetry==2.2.1'
+    - name: Install uv
+      run: pip install uv
 
-    - name: Cache poetry dependencies
+    - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
-        path: ~/.cache/pypoetry
-        key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+        path: ~/.cache/uv
+        key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
         restore-keys: |
-          poetry-${{ runner.os }}-
+          uv-${{ runner.os }}-
 
     - name: Install deps
-      run: poetry install
-      env:
-        POETRY_VIRTUALENVS_CREATE: "false"
-        # Serialize installer so parallel git-dep builds don't race on the
-        # site-packages virtualenv files.
-        POETRY_INSTALLER_PARALLEL: "false"
+      run: uv sync --frozen
 
     - name: Setup logging directory
       run: |
@@ -209,7 +169,7 @@ jobs:
       run: |
         set +e
         # --color=no ensures no ANSI codes in output (required for summary line parsing)
-        poetry run pytest -p no:warnings -vv --color=no --cov="orchestra" -n 8 --shard-id=${{ matrix.shard }} --num-shards=8 . -m "not performance" 2>&1 | tee pytest_output.txt
+        uv run --no-sync pytest -p no:warnings -vv --color=no --cov="orchestra" -n 8 --shard-id=${{ matrix.shard }} --num-shards=8 . -m "not performance" 2>&1 | tee pytest_output.txt
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
 

@@ -10,17 +10,19 @@ RUN apt-get update && apt-get install -y curl
 RUN curl https://sdk.cloud.google.com > install.sh
 RUN bash install.sh --disable-prompts
 
-RUN pip install poetry>=2.1.0
+# Standalone uv binary: not a site-package, so syncing into /usr/local
+# cannot uninstall the installer itself.
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
 
-# Configuring poetry
-RUN poetry config virtualenvs.create false
+# Install into the image's interpreter instead of a per-project .venv.
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
 # Copying requirements of a project
-COPY pyproject.toml poetry.lock /app/src/
+COPY pyproject.toml uv.lock /app/src/
 WORKDIR /app/src
 
 # Installing requirements
-RUN poetry install --only main
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Removing gcc
 RUN apt-get purge -y \
@@ -29,7 +31,7 @@ RUN apt-get purge -y \
 
 # Copying actual application
 COPY . /app/src/
-RUN poetry install --only main
+RUN uv sync --frozen --no-dev
 
 CMD if [ "$ON_PREM" = "true" ]; then \
   echo "Running on prem"; \
@@ -41,4 +43,4 @@ CMD if [ "$ON_PREM" = "true" ]; then \
 
 FROM prod as dev
 
-RUN poetry install
+RUN uv sync --frozen

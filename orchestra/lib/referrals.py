@@ -189,13 +189,18 @@ def attribute_referral(
     *,
     referee_user: User,
     code: str,
-    signup_ip: Optional[str] = None,
 ) -> AttributionResult:
     """Attribute ``referee_user`` to the owner of ``code``.
 
     Idempotent and safe to call repeatedly (e.g. the console retries the
     claim on every login until it succeeds, mirroring credit-grant links).
     Raises :class:`ReferralError` only for hard, surfaced failures.
+
+    The origin stamped on the attribution is the referee's own, taken
+    from their account rather than from whoever is calling. Attribution
+    is reached through Console's server like everything else here, so a
+    caller-derived address describes Console on every referral and would
+    put the whole programme at one origin.
     """
     if not settings.referral_enabled:
         return AttributionResult(False, "Referrals are not currently enabled.")
@@ -267,7 +272,7 @@ def attribute_referral(
         referrer_organization_id=referral_code.referrer_organization_id,
         referee_user_id=referee_user.id,
         referee_billing_account_id=referee_user.billing_account_id,
-        signup_ip=signup_ip,
+        signup_ip=referee_user.signup_ip,
     )
     logger.info(
         {

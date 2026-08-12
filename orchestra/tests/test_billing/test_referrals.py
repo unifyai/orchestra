@@ -114,6 +114,39 @@ def test_attribute_creates_pending(dbsession: Session) -> None:
     assert attribution.referrer_user_id == referrer.id
 
 
+def test_attribution_records_the_referee_s_own_origin(dbsession: Session) -> None:
+    """Not the caller's, which is Console's server on every referral.
+
+    Reading it from the request put the whole programme at one address,
+    which is worth pinning because nothing consumes the column yet — the
+    wrongness would only surface once someone scored against it.
+    """
+    referrer, _ = make_user_with_billing(dbsession, "ref_origin_referrer")
+    referee, _ = make_user_with_billing(dbsession, "ref_origin_referee")
+    referee.signup_ip = "198.51.100.7"
+    dbsession.flush()
+    code = ReferralDAO(dbsession).create_code(referrer.id)
+
+    attribute_referral(dbsession, referee_user=referee, code=code.code)
+
+    attribution = ReferralDAO(dbsession).get_attribution_for_referee(referee.id)
+    assert attribution.signup_ip == "198.51.100.7"
+
+
+def test_attribution_without_a_known_origin_records_none(
+    dbsession: Session,
+) -> None:
+    """A referee whose signup predates provenance has no origin to copy."""
+    referrer, _ = make_user_with_billing(dbsession, "ref_noorigin_referrer")
+    referee, _ = make_user_with_billing(dbsession, "ref_noorigin_referee")
+    code = ReferralDAO(dbsession).create_code(referrer.id)
+
+    attribute_referral(dbsession, referee_user=referee, code=code.code)
+
+    attribution = ReferralDAO(dbsession).get_attribution_for_referee(referee.id)
+    assert attribution.signup_ip is None
+
+
 def test_self_referral_blocked(dbsession: Session) -> None:
     user, _ = make_user_with_billing(dbsession, "ref_self")
     code = ReferralDAO(dbsession).create_code(user.id)

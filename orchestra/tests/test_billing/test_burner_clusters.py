@@ -5,8 +5,9 @@ it: the raw-API channel an earlier sweep keyed on becomes unreachable,
 and what continues does so through the Console, where it looks like
 ordinary use.
 
-The whole design rests on refusing to act on single-account signals, so
-most of these tests are about what the sweep must *not* freeze.
+The report never acts — it names accounts for a person to judge. The
+whole design rests on refusing to draw conclusions from single-account
+signals, so most of these tests are about what it must *not* name.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from orchestra.db.models.orchestra_models import (
     Recharge,
     RechargeStatus,
 )
-from orchestra.routines.card_gate_sweep import freeze_burner_clusters
+from orchestra.routines.card_gate_sweep import report_burner_clusters
 from orchestra.settings import settings
 from orchestra.tests.test_billing.conftest import (
     make_org_with_billing,
@@ -79,26 +80,27 @@ def _make_comped_account(dbsession, uid: str, *, ip: str, org_name: str):
     return user, ba
 
 
-def test_lone_drained_account_is_not_frozen(dbsession, small_cluster):
+def test_a_lone_drained_account_is_not_named(dbsession, small_cluster):
     """One account draining its grant fast is an evaluator, not a farm.
 
-    This is the false positive that matters most: freezing an
-    enthusiastic first session is worse than missing a farmer.
+    This is the false positive that matters most: putting an
+    enthusiastic first session in front of someone as a suspected farm
+    is worse than missing a farmer.
     """
     _make_farmed_account(dbsession, "burner_lone", ip="203.0.113.10")
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
-def test_cluster_below_threshold_is_not_frozen(dbsession, small_cluster):
+def test_a_cluster_below_threshold_is_not_named(dbsession, small_cluster):
     for i in range(2):
         _make_farmed_account(dbsession, f"burner_small_{i}", ip="203.0.113.20")
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
 def test_cluster_at_threshold_is_flagged(dbsession, small_cluster):
@@ -107,34 +109,54 @@ def test_cluster_at_threshold_is_flagged(dbsession, small_cluster):
         for i in range(3)
     ]
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 3
+    assert result.flagged == 3
     assert {ba.id for _u, ba in made} == set(result.billing_account_ids)
 
 
-def test_dry_run_does_not_suspend(dbsession, small_cluster):
+def test_a_match_changes_nothing_about_the_accounts(dbsession, small_cluster):
+    """The central invariant: naming an account is the whole action.
+
+    This was once wired to an automatic suspension and came within a
+    single signup of freezing five strangers. The evidence is
+    circumstantial however many conditions are stacked, so acting on it
+    belongs to whoever reads the report.
+    """
     made = [
-        _make_farmed_account(dbsession, f"burner_dry_{i}", ip="203.0.113.40")
+        _make_farmed_account(dbsession, f"burner_untouched_{i}", ip="203.0.113.40")
         for i in range(3)
     ]
 
-    freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert all(ba.account_status == "ACTIVE" for _u, ba in made)
-
-
-def test_live_run_suspends_with_the_shared_reason(dbsession, small_cluster):
-    made = [
-        _make_farmed_account(dbsession, f"burner_live_{i}", ip="203.0.113.50")
-        for i in range(3)
-    ]
-
-    freeze_burner_clusters(dbsession, dry_run=False)
-
+    assert result.flagged == 3
     for _u, ba in made:
-        assert ba.account_status == "SUSPENDED"
-        assert ba.suspension_reason == "abuse_fingerprint"
+        assert ba.account_status == "ACTIVE"
+        assert ba.suspension_reason is None
+
+
+def test_an_already_suspended_account_is_left_out(dbsession, small_cluster):
+    """Someone has dealt with it; repeating it is noise on tomorrow's report.
+
+    It also stops counting as evidence, exactly as a comped account
+    does — an account already acted on must not be what tips its
+    neighbours over the threshold.
+    """
+    made = [
+        _make_farmed_account(dbsession, f"burner_dealt_{i}", ip="203.0.113.50")
+        for i in range(4)
+    ]
+    _user, handled = made[0]
+    handled.account_status = "SUSPENDED"
+    handled.suspension_reason = "abuse_fingerprint"
+    dbsession.flush()
+
+    result = report_burner_clusters(dbsession)
+
+    assert handled.id not in result.billing_account_ids
+    assert result.flagged == 3
+    assert result.considered == 3
 
 
 def test_shared_origin_without_drained_grants_is_ignored(
@@ -152,9 +174,9 @@ def test_shared_origin_without_drained_grants_is_ignored(
         user.created_at = datetime.utcnow()
         dbsession.flush()
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
 def test_accounts_without_provenance_are_not_clustered(
@@ -164,14 +186,14 @@ def test_accounts_without_provenance_are_not_clustered(
     """Missing data must not become a cluster of its own.
 
     Every pre-existing account has a NULL signup_ip; grouping on that
-    would freeze the entire back catalogue on the first run.
+    would name the entire back catalogue on the first run.
     """
     for i in range(4):
         _make_farmed_account(dbsession, f"noprov_{i}", ip=None)
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
 def test_paid_accounts_are_exempt(dbsession, small_cluster):
@@ -197,12 +219,12 @@ def test_paid_accounts_are_exempt(dbsession, small_cluster):
         )
     dbsession.flush()
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
-def test_comped_account_in_a_cluster_is_not_frozen(dbsession, small_cluster):
+def test_a_comped_account_in_a_cluster_is_not_named(dbsession, small_cluster):
     """An admin-granted free trial clears an account, like payment does.
 
     Comping an org is a deliberate commercial decision, and it outranks
@@ -219,7 +241,7 @@ def test_comped_account_in_a_cluster_is_not_frozen(dbsession, small_cluster):
         org_name="bc comped member",
     )
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
     assert comped_ba.id not in result.billing_account_ids
     assert {ba.id for _u, ba in farmed} == set(result.billing_account_ids)
@@ -241,9 +263,9 @@ def test_comped_account_is_not_cluster_evidence(dbsession, small_cluster):
         org_name="bc comped threshold",
     )
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
 def test_signups_outside_the_window_are_not_clustered(
@@ -257,30 +279,59 @@ def test_signups_outside_the_window_are_not_clustered(
         user.created_at = datetime.utcnow() - timedelta(days=30)
     dbsession.flush()
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
 
 
-def test_user_agent_hash_clusters_across_changing_ips(
-    dbsession,
-    small_cluster,
-):
-    """Rotating IPs is cheap; rotating the whole browser fingerprint is less so."""
-    made = []
-    for i in range(3):
-        user, ba = _make_farmed_account(
+def test_a_shared_user_agent_is_not_a_cluster(dbsession, small_cluster):
+    """A user agent names a browser build, so a popular one is a crowd.
+
+    Treating it as a key was how the sweep came to hold every hosted
+    account in one group: the recorded agent was Console's HTTP client
+    and identical on every signup. Real agents only make that slower —
+    whichever Chrome build is commonest collects enough drained accounts
+    to cross the threshold, and none of them know each other.
+    """
+    for i in range(4):
+        user, _ba = _make_farmed_account(
             dbsession,
             f"ua_ring_{i}",
             ip=f"198.51.100.{i}",
         )
         user.signup_user_agent_hash = "shared-ua-digest"
-        made.append(ba)
     dbsession.flush()
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 3
+    assert result.flagged == 0
+
+
+def test_a_shared_user_agent_does_not_swell_an_ip_cluster(
+    dbsession,
+    small_cluster,
+):
+    """Only the IP decides membership, so the agent cannot tip a group over."""
+    for i in range(2):
+        user, _ba = _make_farmed_account(
+            dbsession,
+            f"ua_swell_same_{i}",
+            ip="198.51.100.200",
+        )
+        user.signup_user_agent_hash = "shared-ua-digest"
+    for i in range(2):
+        user, _ba = _make_farmed_account(
+            dbsession,
+            f"ua_swell_other_{i}",
+            ip=f"198.51.100.{210 + i}",
+        )
+        user.signup_user_agent_hash = "shared-ua-digest"
+    dbsession.flush()
+
+    result = report_burner_clusters(dbsession)
+
+    assert result.flagged == 0
+    assert result.largest_cluster == 2
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +349,9 @@ def test_a_quiet_run_reports_how_close_it_came(dbsession, small_cluster):
     for i in range(2):
         _make_farmed_account(dbsession, f"diag_near_{i}", ip="203.0.113.110")
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
     assert result.considered == 2
     assert result.largest_cluster == 2
     assert result.threshold == 3
@@ -314,15 +365,15 @@ def test_a_blind_run_says_so_rather_than_reporting_all_clear(
     """Unreadable candidates must not read as an absence of farming.
 
     If provenance capture regresses, every account arrives without an
-    origin and the sweep freezes nothing -- indistinguishable from a
+    origin and the report names nobody -- indistinguishable from a
     healthy quiet night unless the run says which one it was.
     """
     for i in range(4):
         _make_farmed_account(dbsession, f"diag_blind_{i}", ip=None)
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
     assert result.considered == 4
     assert result.without_provenance == 4
     assert "blind" in result.note
@@ -332,9 +383,9 @@ def test_a_healthy_quiet_run_is_not_labelled_blind(dbsession, small_cluster):
     """The warning has to stay rare or it stops being read."""
     _make_farmed_account(dbsession, "diag_seen", ip="203.0.113.120")
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 0
+    assert result.flagged == 0
     assert result.note == ""
 
 
@@ -344,9 +395,9 @@ def test_partial_provenance_still_clusters_what_it_can(dbsession, small_cluster)
         _make_farmed_account(dbsession, f"diag_partial_{i}", ip="203.0.113.130")
     _make_farmed_account(dbsession, "diag_partial_blank", ip=None)
 
-    result = freeze_burner_clusters(dbsession, dry_run=True)
+    result = report_burner_clusters(dbsession)
 
-    assert result.frozen == 3
+    assert result.flagged == 3
     assert result.without_provenance == 1
     assert result.note == ""
 
@@ -379,37 +430,28 @@ def discord(monkeypatch):
 
 
 def _notify(result):
-    from orchestra.routines.billing_notifications import notify_burner_cluster_sweep
+    from orchestra.routines.billing_notifications import notify_burner_cluster_report
 
-    return notify_burner_cluster_sweep(result)
+    return notify_burner_cluster_report(result)
 
 
-def test_a_freeze_is_announced(dbsession, small_cluster, discord):
+def test_a_match_is_put_in_front_of_someone(dbsession, small_cluster, discord):
     for i in range(3):
         _make_farmed_account(dbsession, f"alert_ring_{i}", ip="203.0.113.140")
 
-    result = freeze_burner_clusters(dbsession, dry_run=False)
+    result = report_burner_clusters(dbsession)
     _notify(result)
 
     assert len(discord) == 1
-    assert "3 account(s) suspended" in discord[0]["content"]
+    assert "3 account(s) worth a look" in discord[0]["content"]
+    assert "suspend" not in discord[0]["content"].lower()
 
 
 def test_an_ordinary_quiet_run_stays_silent(dbsession, small_cluster, discord):
     """Nightly noise is how an alert stops being read."""
     _make_farmed_account(dbsession, "alert_quiet", ip="203.0.113.150")
 
-    _notify(freeze_burner_clusters(dbsession, dry_run=False))
-
-    assert discord == []
-
-
-def test_a_dry_run_never_pages(dbsession, small_cluster, discord):
-    """Reporting-only means reporting-only; nobody is locked out yet."""
-    for i in range(3):
-        _make_farmed_account(dbsession, f"alert_dry_{i}", ip="203.0.113.160")
-
-    _notify(freeze_burner_clusters(dbsession, dry_run=True))
+    _notify(report_burner_clusters(dbsession))
 
     assert discord == []
 
@@ -419,7 +461,7 @@ def test_a_blind_run_is_announced_as_blind(dbsession, small_cluster, discord):
     for i in range(3):
         _make_farmed_account(dbsession, f"alert_blind_{i}", ip=None)
 
-    _notify(freeze_burner_clusters(dbsession, dry_run=False))
+    _notify(report_burner_clusters(dbsession))
 
     assert len(discord) == 1
     assert "blind" in discord[0]["content"].lower()
@@ -428,41 +470,40 @@ def test_a_blind_run_is_announced_as_blind(dbsession, small_cluster, discord):
 # ---------------------------------------------------------------------------
 # Provenance capture
 # ---------------------------------------------------------------------------
+#
+# The values arrive from Console, which held the browser's request.
+# Orchestra only normalises and hashes them -- it must never fall back to
+# reading its own request, whose caller is Console's server.
 
 
-def _fake_request(headers: dict, client_host: str | None = None):
-    from types import SimpleNamespace
+def test_the_recorded_origin_is_whatever_console_observed():
+    from orchestra.web.api.utils.signup_provenance import signup_provenance
 
-    return SimpleNamespace(
-        headers=headers,
-        client=SimpleNamespace(host=client_host) if client_host else None,
-    )
+    recorded = signup_provenance("198.51.100.7", "Mozilla/5.0 Chrome/120")
 
-
-def test_forwarded_for_wins_over_the_proxy_hop():
-    """Behind Cloud Run, request.client.host is the load balancer."""
-    from orchestra.web.api.utils.signup_provenance import client_ip
-
-    request = _fake_request(
-        {"x-forwarded-for": "198.51.100.7, 10.0.0.1"},
-        client_host="10.0.0.1",
-    )
-
-    assert client_ip(request) == "198.51.100.7"
+    assert recorded["signup_ip"] == "198.51.100.7"
+    assert recorded["signup_user_agent_hash"] is not None
 
 
 def test_missing_origin_is_none_not_a_placeholder():
     """A placeholder would cluster every such signup into fake evidence."""
-    from orchestra.web.api.utils.signup_provenance import client_ip
+    from orchestra.web.api.utils.signup_provenance import signup_provenance
 
-    assert client_ip(_fake_request({})) is None
+    assert signup_provenance(None, None) == {
+        "signup_ip": None,
+        "signup_user_agent_hash": None,
+    }
+    assert signup_provenance("  ", "  ") == {
+        "signup_ip": None,
+        "signup_user_agent_hash": None,
+    }
 
 
 def test_user_agent_is_hashed_not_stored():
     from orchestra.web.api.utils.signup_provenance import user_agent_hash
 
     raw = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120"
-    digest = user_agent_hash(_fake_request({"user-agent": raw}))
+    digest = user_agent_hash(raw)
 
     assert digest is not None
     assert raw not in digest
@@ -470,33 +511,15 @@ def test_user_agent_is_hashed_not_stored():
 
 
 def test_identical_user_agents_hash_alike():
-    """Equality is the only comparison the sweep makes, so it must hold."""
+    """Equality is the only comparison made of it, so it must hold."""
     from orchestra.web.api.utils.signup_provenance import user_agent_hash
 
     raw = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120"
-    assert user_agent_hash(_fake_request({"user-agent": raw})) == user_agent_hash(
-        _fake_request({"user-agent": raw}),
-    )
+    assert user_agent_hash(raw) == user_agent_hash(raw)
 
 
-def test_provenance_always_returns_both_keys():
-    """Callers splat this into UserDAO.create unconditionally."""
-    from orchestra.web.api.utils.signup_provenance import signup_provenance
+def test_overlong_ip_is_bounded():
+    """A hostile value must not bloat the stored row."""
+    from orchestra.web.api.utils.signup_provenance import normalised_ip
 
-    assert signup_provenance(None) == {
-        "signup_ip": None,
-        "signup_user_agent_hash": None,
-    }
-    assert set(signup_provenance(_fake_request({})).keys()) == {
-        "signup_ip",
-        "signup_user_agent_hash",
-    }
-
-
-def test_overlong_forwarded_header_is_bounded():
-    """A hostile header must not bloat the stored row."""
-    from orchestra.web.api.utils.signup_provenance import client_ip
-
-    request = _fake_request({"x-forwarded-for": "9" * 500})
-
-    assert len(client_ip(request)) <= 45
+    assert len(normalised_ip("9" * 500)) <= 45

@@ -405,6 +405,13 @@ class AssistantRead(AssistantCreate):
             "system-authored bios, such as the canonical Coordinator persona."
         ),
     )
+    is_deployment_target: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether a client deployment names this assistant as a target it "
+            "cannot run without. Deleting it is refused while this is true."
+        ),
+    )
 
     user_desktop_url: Optional[str] = Field(
         None,
@@ -2753,6 +2760,15 @@ class AdminUpdateAssistant(BaseModel):
         None,
         description="Per-assistant UI/UX configuration (layout, tabs, theme). "
         "Pass the full nested object to upsert; pass null to clear; omit to leave unchanged.",
+    )
+    is_deployment_target: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether a client deployment names this assistant as a target it "
+            "cannot run without. While true, deleting the assistant is "
+            "refused. Set by deploy-time reconciliation; omit to leave "
+            "unchanged."
+        ),
     )
 
     @field_validator("timezone")
