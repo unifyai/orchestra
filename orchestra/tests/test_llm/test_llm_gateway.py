@@ -87,6 +87,15 @@ class TestMeterability:
     def test_a_catalogued_anthropic_model_is_meterable(self):
         assert views._is_meterable("claude-opus-5@anthropic") is True
 
+    def test_a_provider_shaped_bare_id_is_not(self):
+        """A bare id names no leg, so nothing says how it would be priced.
+
+        Callers must authorize in accounting form (``<id>@<provider>``): the
+        provider-shaped spelling out of a request body matches the OpenRouter
+        marker never, and the curated catalogue only by coincidence.
+        """
+        assert views._is_meterable("openai/gpt-5.4-mini") is False
+
     def test_an_uncatalogued_native_model_is_not(self):
         assert views._is_meterable("mystery-model@vertex-ai") is False
 
