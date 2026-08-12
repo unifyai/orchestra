@@ -48,11 +48,21 @@ class RosterGroup(BaseModel):
 
 
 class RosterAssistant(BaseModel):
-    """Assistant directory entry (name + face) for call tiles and mentions."""
+    """Assistant directory entry for call tiles, mentions, and desktop surfaces.
+
+    Carries the owner/org ids and managed-desktop entitlement alongside the
+    display fields so a call surface can resolve an assistant's liveview from
+    the roster it already holds, rather than fetching each assistant again.
+    Field names match ``AssistantRead``.
+    """
 
     assistant_id: int
     name: str
     image: Optional[str] = None
+    user_id: Optional[str] = None
+    organization_id: Optional[int] = None
+    desktop_mode: Optional[Literal["ubuntu", "windows", "macos"]] = None
+    managed_desktop_status: Optional[str] = None
 
 
 class OrgRosterResponse(BaseModel):
