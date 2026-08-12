@@ -8,6 +8,13 @@ repos:
   - id: trailing-whitespace
   - id: check-toml
   - id: end-of-file-fixer
+  - id: detect-private-key
+
+# Secret scanning — catches API keys/tokens/private keys by content.
+- repo: https://github.com/gitleaks/gitleaks
+  rev: v8.30.1
+  hooks:
+  - id: gitleaks
 
 - repo: https://github.com/asottile/add-trailing-comma
   rev: v3.2.0

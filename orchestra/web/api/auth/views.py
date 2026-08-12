@@ -100,7 +100,10 @@ from orchestra.web.api.utils.signup_provenance import signup_provenance
 admin_router = APIRouter()
 router = APIRouter()
 logger = logging.getLogger(__name__)
-ph = PasswordHasher()
+# Argon2id cost parameters per the Cryptography Policy: >= 256 MiB memory,
+# >= 3 iterations, parallelism 4. Stored hashes below these parameters are
+# re-derived on the next successful authentication via check_needs_rehash().
+ph = PasswordHasher(memory_cost=262144, time_cost=3, parallelism=4)
 
 
 async def _send_signup_welcome_emails_safe(user) -> None:
