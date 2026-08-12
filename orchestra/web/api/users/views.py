@@ -2063,13 +2063,11 @@ def attribute_referral_code(
         raise not_found("User")
     user_instance = user_row[0]
 
-    signup_ip = request.client.host if request.client else None
     try:
         result = attribute_referral(
             session,
             referee_user=user_instance,
             code=payload.code,
-            signup_ip=signup_ip,
         )
         session.commit()
     except ReferralError as e:

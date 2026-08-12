@@ -3379,7 +3379,7 @@ class ReferralAttribution(Base):
     signup_ip = Column(
         String,
         nullable=True,
-        comment="Referee IP at attribution time (velocity/abuse scoring)",
+        comment="Referee's own signup origin, copied here for abuse scoring",
     )
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     rewarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
