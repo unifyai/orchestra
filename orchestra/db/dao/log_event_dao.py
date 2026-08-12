@@ -1172,6 +1172,7 @@ class LogEventDAO:
         self,
         context_id: int,
         project_id: int,
+        allow_decrease: bool = False,
     ) -> None:
         """Re-sync a context's materialized ``context_counter`` rows after a
         verbatim bulk copy of ``log_event`` data into the context.
@@ -1193,6 +1194,14 @@ class LogEventDAO:
         not yet exist need no action: the next reservation seeds them from
         ``MAX(existing)`` (which now includes the copied data), so no drift is
         possible. No-op when the context has no materialized counters.
+
+        With ``allow_decrease=True`` the counter is set to the recomputed
+        value outright rather than bumped. Copy paths must not use this (the
+        destination keeps its own live counter), but a version rollback must:
+        the rows above the snapshot were just deleted, so ``MAX(restored)+1``
+        cannot collide, and holding the counter above it would leak
+        post-snapshot allocation history through an operation whose contract
+        is to restore the snapshot state exactly.
         """
         # ORDER BY gives a deterministic advisory-lock acquisition order so a
         # re-sync running concurrently with ingest (or another re-sync) on the
@@ -1252,11 +1261,16 @@ class LogEventDAO:
             max_val = query.scalar()
             recomputed_next = (max_val if max_val is not None else -1) + 1
 
+            next_value_expr = (
+                ":recomputed_next"
+                if allow_decrease
+                else "GREATEST(next_value, :recomputed_next)"
+            )
             self.session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE context_counter
-                    SET next_value = GREATEST(next_value, :recomputed_next),
+                    SET next_value = {next_value_expr},
                         updated_at = now()
                     WHERE context_id = :context_id
                       AND column_name = :column_name

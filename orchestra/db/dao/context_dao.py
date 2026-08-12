@@ -4329,7 +4329,6 @@ class ContextDAO:
         ok = owner_key_for_context(self.session, context_id)
         _ROLLBACK_PAGE = 2000
         last_lev_id = 0
-        restored_any = False
         while True:
             page = (
                 self.session.query(LogEventVersion)
@@ -4343,7 +4342,6 @@ class ContextDAO:
             )
             if not page:
                 break
-            restored_any = True
             last_lev_id = page[-1].id
             stmt = (
                 pg_insert(LogEvent)
@@ -4378,17 +4376,20 @@ class ContextDAO:
                     ),
                 )
 
-        if not restored_any:
-            return
-
         # The restored rows carry their counter columns (e.g. row_id) verbatim
-        # and bypass get_next_composite_ids, so re-sync the materialized counter
-        # to MAX(existing)+1 to keep future server-assigned values collision-free.
+        # and bypass get_next_composite_ids, so re-sync the materialized
+        # counter to MAX(restored)+1. allow_decrease: rows above the snapshot
+        # were just deleted, so lowering the counter cannot collide, and a
+        # counter left above MAX(restored)+1 leaks post-snapshot allocation
+        # history — repeated rollback/allocate cycles would then hand out
+        # session-order-dependent ids instead of restoring the exact snapshot
+        # state. Runs even when the snapshot is empty (counters reset to 0).
         from orchestra.db.dao.log_event_dao import LogEventDAO
 
         LogEventDAO(self.session).resync_context_counters(
             context_id=context_id,
             project_id=context.project_id,
+            allow_decrease=True,
         )
 
     # -------------------------------------------------------------------------
