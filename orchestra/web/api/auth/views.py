@@ -203,12 +203,17 @@ async def register(
     """
     email = body.email.lower().strip()
 
+    # Every limit here keys on the address Console saw the browser at.
+    # The connection itself comes from Console on every registration, so
+    # keying on it throttles the platform as a whole rather than anyone
+    # in particular.
     enforce_auth_rate_limit(
         session,
         request,
         "auth_register",
         max_attempts=5,
         identifier=email,
+        client_ip=body.signup_ip,
     )
     # The (IP, email) limit above never trips for a farmer rotating
     # email addresses; these two throttle raw signup velocity per IP and
@@ -219,6 +224,7 @@ async def register(
         "auth_register_ip",
         max_attempts=10,
         window_minutes=60,
+        client_ip=body.signup_ip,
     )
     enforce_auth_rate_limit(
         session,
@@ -227,11 +233,16 @@ async def register(
         max_attempts=30,
         window_minutes=1440,
         use_subnet=True,
+        client_ip=body.signup_ip,
     )
 
-    # 0a. User-Agent heuristic check
-    user_agent = request.headers.get("user-agent")
-    if not check_user_agent(user_agent):
+    # 0a. User-Agent heuristic check, against the browser's agent as
+    # Console saw it. The request's own is Console's HTTP client and
+    # matches nothing, so judging it passed every registration alike.
+    # An absent agent is not judged: the check reads a missing one as a
+    # bot, which would refuse every signup for as long as the two
+    # deployments disagreed about sending it.
+    if body.signup_user_agent and not check_user_agent(body.signup_user_agent):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -285,9 +296,13 @@ async def register(
             name=user.name,
         )
 
-    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new registrations
-    remote_ip = request.client.host if request.client else None
-    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
+    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new
+    # registrations. Turnstile checks the address against the one the
+    # challenge was solved at, so it wants the browser's; the connection
+    # here is Console's server, which never solved anything. The
+    # parameter is optional, so sending nothing beats sending the wrong
+    # address.
+    captcha_ok = await verify_turnstile_token(body.captcha_token, body.signup_ip)
     if not captcha_ok:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
