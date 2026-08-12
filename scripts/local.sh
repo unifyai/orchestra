@@ -267,22 +267,23 @@ check_orchestra_repo() {
   return 0
 }
 
-check_poetry() {
-  if ! command -v poetry &>/dev/null; then
-    log_error "Poetry is not installed (required for orchestra)"
+check_uv() {
+  if ! command -v uv &>/dev/null; then
+    log_error "uv is not installed (required for orchestra)"
     return 1
   fi
-  log_success "Poetry is available"
+  log_success "uv is available"
   return 0
 }
 
-# Get an executable from the in-project .venv, with fallback to poetry run.
-# This avoids issues where poetry picks up the wrong virtualenv when called
-# from a different repo's context (e.g., unity calling orchestra's local.sh).
+# Get an executable from the in-project .venv, with fallback to uv run.
+# The --project flag pins uv to orchestra's environment regardless of the
+# caller's cwd (e.g., unity calling orchestra's local.sh), and uv run
+# creates the .venv on first use.
 #
 # Usage: get_venv_executable <repo_path> <executable_name>
 # Example: get_venv_executable "/path/to/orchestra" "python"
-# Returns: Full path to executable, or "poetry run <executable>" as fallback
+# Returns: Full path to executable, or "uv run --project <repo> <executable>" as fallback
 get_venv_executable() {
   local repo_path="$1"
   local executable="$2"
@@ -291,8 +292,7 @@ get_venv_executable() {
   if [[ -x "$venv_bin/$executable" ]]; then
     echo "$venv_bin/$executable"
   else
-    # Fallback to poetry - may work if environment is clean
-    echo "poetry run $executable"
+    echo "uv run --project $repo_path $executable"
   fi
 }
 
@@ -1136,8 +1136,8 @@ start_orchestra_server() {
   local workers="${ORCHESTRA_WORKERS:-1}"
   log_info "Starting Orchestra with $workers workers"
 
-  # Get virtualenv python path - use in-project .venv to avoid poetry picking
-  # up wrong environment when called from another repo's context
+  # Get virtualenv python path - prefer the in-project .venv so the right
+  # environment is used even when called from another repo's context
   local venv_python
   venv_python=$(get_venv_executable "$ORCHESTRA_REPO_PATH" "python")
   log_info "Using python: $venv_python"
@@ -1155,10 +1155,10 @@ start_orchestra_server() {
 
   # Start server (use setsid if available for proper process isolation).
   # NB: $venv_python is left unquoted on purpose — when no in-project .venv
-  # exists, get_venv_executable falls back to the multi-word "poetry run
-  # python", which must word-split into separate argv entries (same pattern
-  # as $alembic_cmd above). Quoting it would exec the whole string as a
-  # single, non-existent binary ("poetry run python: not found").
+  # exists, get_venv_executable falls back to the multi-word "uv run
+  # --project <repo> python", which must word-split into separate argv
+  # entries (same pattern as $alembic_cmd above). Quoting it would exec the
+  # whole string as a single, non-existent binary.
   if command -v setsid &>/dev/null; then
     setsid bash -c "ulimit -n $fd_limit; exec $venv_python -m orchestra" > "$ORCHESTRA_SERVER_LOGFILE" 2>&1 &
   else
@@ -1331,8 +1331,8 @@ cmd_start() {
     return 1
   fi
 
-  if ! check_poetry; then
-    log_warn "Poetry not available, falling back to staging URL"
+  if ! check_uv; then
+    log_warn "uv not available, falling back to staging URL"
     echo "export UNIFY_BASE_URL='$STAGING_URL'"
     return 1
   fi

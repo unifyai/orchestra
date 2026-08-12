@@ -5,18 +5,20 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
   git \
   && rm -rf /var/lib/apt/lists/*
 
-RUN pip install poetry>=2.1.0 'wheel>=0.46.2'
+# Standalone uv binary: not a site-package, so syncing into /usr/local
+# cannot uninstall the installer itself.
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
 
-# Configuring poetry
-RUN poetry config virtualenvs.create false
-RUN poetry config cache-dir /tmp/poetry-cache
+# Install into the image's interpreter instead of a per-project .venv.
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
+ENV UV_CACHE_DIR=/tmp/uv-cache
 
 # Copying requirements of a project
-COPY pyproject.toml poetry.lock /app/src/
+COPY pyproject.toml uv.lock /app/src/
 WORKDIR /app/src
 
 # Installing requirements
-RUN poetry install --only main --no-root
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Removing gcc
 RUN apt-get purge -y \
@@ -25,7 +27,7 @@ RUN apt-get purge -y \
 
 # Copying actual application
 COPY . /app/src/
-RUN poetry install --only main
+RUN uv sync --frozen --no-dev
 
 RUN groupadd -r orchestra && useradd -r -g orchestra -d /app/src -s /sbin/nologin orchestra \
     && chown -R orchestra:orchestra /app/src
@@ -41,4 +43,6 @@ CMD if [ "$ON_PREM" = "true" ]; then \
 
 FROM prod AS dev
 
-RUN poetry install
+USER root
+RUN uv sync --frozen
+USER orchestra

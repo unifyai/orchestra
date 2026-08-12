@@ -203,10 +203,3 @@ logs/*
 # Cursor local scratch files
 /.cursor/projects/
 /.cursor/plans/
-
-# This project is Poetry-managed. Any uv invocation that resolves the workspace
-# (uv run / uv sync / uv lock) writes a stub uv.lock here, because uv reads PEP
-# 621 [project].requires-python and this pyproject.toml declares the constraint
-# under [tool.poetry.dependencies]. The stub carries no package data and has
-# been committed by accident twice; ignore it so it cannot recur.
-/uv.lock

@@ -11,7 +11,7 @@ Only DB access is used for test setup (setting known verification codes,
 reading TOTP secrets) — never for assertions on the system's behaviour.
 
 Prerequisites:
-  - Orchestra running locally    (poetry run python -m orchestra)
+  - Orchestra running locally    (uv run python -m orchestra)
   - PostgreSQL accessible        (localhost:5432 or ORCHESTRA_DB_URL)
 
 Skip: All tests skip when Orchestra is not reachable.
