@@ -52,9 +52,9 @@ class CanvasTokenResponse(BaseModel):
 class CanvasQueryRequest(BaseModel):
     """Request body for POST /admin/canvas/{token}/query.
 
-    An alias and nothing else. This is the whole point of the endpoint: the
-    dashboard tile bridge it replaces accepts ``context`` and ``filter`` from the
-    client, so any token holder can query anything in the creator's project. Here
+    An alias and nothing else. This is the whole point of the endpoint: a
+    bridge that accepts ``context`` and ``filter`` from the client lets any
+    token holder query anything in the creator's project. Here
     the server loads the canvas record and executes the binding that was
     validated and stored at author time, so a compromised or prompt-injected
     canvas cannot widen its own reach — the worst it can do is ask for one of its

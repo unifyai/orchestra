@@ -2938,7 +2938,7 @@ class AssistantConsoleConfig(Base):
 
     One-to-one with ``Assistant``.  Stores typed layout, tab-visibility,
     and theme override fields so the Console can render client-specific
-    dashboard-centric (or other) layouts without a JSONB grab-bag.
+    layouts without a JSONB grab-bag.
 
     Created / updated by unity-deploy's startup hook via
     ``PATCH /admin/assistant/{id}``.
@@ -4510,47 +4510,6 @@ class AssistantCleanupTask(Base):
     )
 
 
-class DashboardToken(Base):
-    """Token-to-context mapping for dashboard tiles and layouts.
-
-    Content lives in Unify contexts (Dashboards/Tiles, Dashboards/Layouts);
-    this table provides the routing information the console needs to resolve
-    a token-based URL to the correct Unify context path and creator identity.
-    """
-
-    __tablename__ = "dashboard_token"
-
-    token = Column(String(12), primary_key=True)
-    entity_type = Column(String(20), nullable=False)
-    context_name = Column(String(500), nullable=False)
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    user_id = Column(
-        String,
-        ForeignKey("user.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    organization_id = Column(
-        Integer,
-        ForeignKey("organization.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    created_at = Column(TIMESTAMP, server_default=func.now())
-
-    project = relationship(
-        "Project",
-        backref=backref("dashboard_tokens", passive_deletes=True),
-    )
-
-    __table_args__ = (
-        Index("idx_dashboard_token_project_id", "project_id"),
-        Index("idx_dashboard_token_user_id", "user_id"),
-    )
-
-
 # Who may read a canvas. Enforced server-side on every read path; a canvas can
 # name its own visibility but cannot widen it, and the frame never sees this at
 # all.
@@ -4569,10 +4528,6 @@ class CanvasToken(Base):
     declared actions — lives in Unify contexts under ``Canvas/*``. This table is
     only the routing and authorization record console needs in order to turn a
     token in a URL into a context path plus the identity to read it as.
-
-    Unlike ``DashboardToken`` there is no ``entity_type``: a canvas is the whole
-    view rather than a tile composed into a layout, so the column could only ever
-    hold one value.
 
     ``visibility`` and ``status`` live here rather than only on the Unify row
     because every console proxy has to check them before it uses the admin key,

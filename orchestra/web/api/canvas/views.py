@@ -15,11 +15,12 @@ Two roles, deliberately split:
   on the same call because it has to check both before using the admin key. It
   also executes a canvas's declared bindings on the viewer's behalf.
 
-The read plane accepts an **alias and nothing else**. The dashboard tile bridge it
-replaces takes ``context`` and ``filter`` from the client, which lets any token
-holder query anything in the creator's project; here the server loads the canvas
-record and runs the binding that was validated and dry-run at author time. A
-compromised or prompt-injected canvas therefore cannot widen its own reach.
+The read plane accepts an **alias and nothing else**. A bridge that takes
+``context`` and ``filter`` from the client lets any token holder query anything
+in the creator's project — the retired dashboard tile bridge did exactly that;
+here the server loads the canvas record and runs the binding that was validated
+and dry-run at author time. A compromised or prompt-injected canvas therefore
+cannot widen its own reach.
 
 There is no bundle endpoint. The compiled module is stored on the canvas row
 itself with its sha256, so console reads it through the ordinary logs API as the
@@ -618,8 +619,8 @@ def admin_canvas_query(
     The client names an alias; the server loads the canvas record, finds the
     binding that was validated and dry-run at author time, and executes it as the
     owner. No context path, filter expression or row limit is accepted from the
-    caller, which is the difference between this and the dashboard tile bridge it
-    replaces.
+    caller — accepting those is what made the retired dashboard tile bridge a
+    query-anything hole.
 
     An unknown alias is a 404 rather than an empty result: silently returning no
     rows would leave a canvas rendering an empty state for a typo, which looks
