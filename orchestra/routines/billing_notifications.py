@@ -25,7 +25,7 @@ import requests
 
 if TYPE_CHECKING:
     from orchestra.routines.billing_reconciliation import ReconciliationResult
-    from orchestra.routines.card_gate_sweep import ClusterSweepResult
+    from orchestra.routines.card_gate_sweep import ClusterReport
 
 logger = logging.getLogger(__name__)
 
@@ -303,28 +303,28 @@ def notify_billing_event_failure(
 # ---------------------------------------------------------------------------
 
 
-def notify_burner_cluster_sweep(
-    result: ClusterSweepResult,
+def notify_burner_cluster_report(
+    result: ClusterReport,
     *,
     environment: str = "",
 ) -> bool:
-    """Announce a burner-cluster sweep that acted, or that could not see.
+    """Put a burner-cluster match in front of someone, or say it ran blind.
 
-    Deliberately not routed through the failure notifiers: a freeze is
-    the control working, and labelling it an error would train everyone
-    to dismiss it. It still warrants a mention, because the sweep locks
-    real people out of their accounts on circumstantial evidence and a
-    false positive needs a human long before the customer writes in.
+    The report never acts, so this message *is* the control: nothing
+    happens to a flagged account until a person reads this and decides.
+    Deliberately not routed through the failure notifiers — a match is
+    the signal working, and dressing it as an error would train everyone
+    to scroll past the one thing that needs judgement.
 
-    Silent on the ordinary case — a live run that froze nobody, having
-    looked at accounts it could actually read.
+    Silent on the ordinary case: a run that named nobody, having looked
+    at accounts it could actually read.
     """
     webhook_url = os.environ.get(WEBHOOK_URL_ENV)
     if not webhook_url:
         return True
 
     blind = bool(result.considered) and result.without_provenance == result.considered
-    if result.dry_run or not (result.frozen or blind):
+    if not (result.flagged or blind):
         return True
 
     env_tag = environment.upper() or _detect_environment()
@@ -332,10 +332,10 @@ def notify_burner_cluster_sweep(
     if len(result.billing_account_ids) > 25:
         ids += f" (+{len(result.billing_account_ids) - 25} more)"
 
-    if result.frozen:
+    if result.flagged:
         embed = {
-            "title": f"🧊 Burner-cluster sweep froze {result.frozen} — {env_tag}",
-            "color": COLOR_RED,
+            "title": f"🔎 {result.flagged} account(s) share an origin — {env_tag}",
+            "color": COLOR_YELLOW,
             "fields": [
                 {
                     "name": "Billing accounts",
@@ -352,16 +352,27 @@ def notify_burner_cluster_sweep(
                     "value": str(result.considered),
                     "inline": True,
                 },
+                {
+                    "name": "Nothing has happened to them",
+                    "value": (
+                        "Never-paid accounts that each drained a grant from "
+                        "one address inside the window. An office or a VPN "
+                        "exit looks the same, so read them before acting. To "
+                        "suspend: `POST /admin/billing/freeze` with reason "
+                        "`abuse_fingerprint`."
+                    ),
+                    "inline": False,
+                },
             ],
             "footer": {"text": datetime.now(timezone.utc).isoformat()},
         }
         content = _build_mention_string(
-            f"🧊 **{result.frozen} account(s) suspended** as a burner cluster "
-            f"in {env_tag} — confirm before the customer does",
+            f"🔎 **{result.flagged} account(s) worth a look** in {env_tag} — "
+            "a burner-cluster match, awaiting a human",
         )
     else:
         embed = {
-            "title": f"🕶️ Burner-cluster sweep ran blind — {env_tag}",
+            "title": f"🕶️ Burner-cluster report ran blind — {env_tag}",
             "color": COLOR_YELLOW,
             "fields": [
                 {
@@ -372,8 +383,8 @@ def notify_burner_cluster_sweep(
                 {
                     "name": "What this means",
                     "value": (
-                        "The sweep froze nothing because it could not see, "
-                        "not because nothing was there. Check that signup "
+                        "It named nobody because it could not see, not "
+                        "because nothing was there. Check that signup "
                         "provenance is still being recorded."
                     ),
                     "inline": False,
@@ -382,8 +393,8 @@ def notify_burner_cluster_sweep(
             "footer": {"text": datetime.now(timezone.utc).isoformat()},
         }
         content = _build_mention_string(
-            f"🕶️ **Burner-cluster sweep is blind** in {env_tag} — "
-            "its nightly all-clear is not evidence of anything",
+            f"🕶️ **Burner-cluster report is blind** in {env_tag} — "
+            "its nightly quiet is not evidence of anything",
         )
 
     return _send_webhook(webhook_url, content=content, embeds=[embed])

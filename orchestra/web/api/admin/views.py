@@ -1058,35 +1058,32 @@ def trigger_card_gate_freeze_sweep(
 
 
 @router.post(
-    "/billing/burner-cluster-freeze-sweep",
-    summary="Admin: Freeze never-paid accounts farming in an origin cluster",
+    "/billing/burner-cluster-report",
+    summary="Admin: Report never-paid accounts farming in an origin cluster",
     description=(
-        "The credit-farming guard for when free credits are Console-only. "
-        "An earlier sweep keyed on raw-API spend, which never-paid "
-        "accounts can no longer produce, so it could not fire. Suspends "
-        "(reason ``abuse_fingerprint``) only accounts in a *cluster* — "
-        "several never-paid accounts sharing a signup origin inside a "
-        "short window, each having drained its grant. Single accounts are "
-        "never frozen, however fast they burn. "
-        "Returns nothing until signup provenance has been recorded for a "
-        "while: pre-existing users have no ``signup_ip`` and are skipped "
-        "rather than grouped under a shared NULL. "
-        "Defaults to ``dry_run=true``."
+        "The credit-farming signal for when free credits are Console-only. "
+        "Names accounts in a *cluster* — several never-paid accounts "
+        "sharing a signup origin inside a short window, each having "
+        "drained its grant — and does nothing else. Single accounts are "
+        "never named, however fast they burn. "
+        "Read-only by design: the evidence is circumstantial however many "
+        "conditions are stacked, so acting on it is a person's decision, "
+        "taken through ``POST /admin/billing/freeze`` with reason "
+        "``abuse_fingerprint``. "
+        "Accounts with no ``signup_ip`` are skipped rather than grouped "
+        "under a shared NULL, and when every candidate is unreadable the "
+        "response says so — a blind run and a clear one otherwise look "
+        "identical."
     ),
 )
-def trigger_burner_cluster_freeze_sweep(
-    dry_run: bool = True,
+def trigger_burner_cluster_report(
     session=Depends(get_db_session),
 ) -> dict:
-    from orchestra.routines.billing_notifications import notify_burner_cluster_sweep
-    from orchestra.routines.card_gate_sweep import freeze_burner_clusters
+    from orchestra.routines.billing_notifications import notify_burner_cluster_report
+    from orchestra.routines.card_gate_sweep import report_burner_clusters
 
-    result = freeze_burner_clusters(session, dry_run=dry_run)
-    if not dry_run:
-        session.commit()
-    # After the commit: an alert about a suspension that then failed to
-    # persist would send someone looking for an account that is fine.
-    notify_burner_cluster_sweep(result)
+    result = report_burner_clusters(session)
+    notify_burner_cluster_report(result)
     return {"status": "success", **result.to_dict()}
 
 

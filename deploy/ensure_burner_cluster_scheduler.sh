@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
-# Ensure the Cloud Scheduler jobs that sweep for burner-account clusters.
+# Ensure the Cloud Scheduler jobs that report burner-account clusters.
 #
-# Points at ``dry_run=true``, matching the deployed jobs, and must stay
-# there until signup provenance is captured from the *browser*.
+# The job reports and nothing else. It names never-paid accounts that
+# each drained a grant from one signup origin inside a short window, and
+# posts them to the billing Discord for a person to judge. Suspending one
+# is done by hand afterwards, through POST /admin/billing/freeze with
+# reason ``abuse_fingerprint``.
 #
-# The sweep's evidence is a group of never-paid accounts sharing a signup
-# origin. Today every hosted signup reaches Orchestra through Console's
-# Next.js server on an admin-key endpoint, so the request the origin is
-# read from describes Console, not the person signing up: the user agent
-# is that of Console's HTTP client and is byte-identical on every signup,
-# and the IP is Console's Cloud Run egress. Every hosted email/password
-# account therefore lands in one enormous shared-origin group, and at
-# ``burner_cluster_min_accounts`` the sweep would suspend a set of
-# unrelated customers as an abuse ring. OAuth signups record no origin at
-# all, so they are merely invisible rather than incriminated.
-#
-# Enforcement becomes safe once Console forwards the real client IP and
-# user agent explicitly and Orchestra records those instead. Until then
-# BURNER_CLUSTER_DRY_RUN=false is not a tuning decision, it is an
-# outage: read the run's ``without_provenance`` and ``largest_cluster``
-# against ``considered`` and confirm the groups are made of people
-# before arming it.
+# There is deliberately no switch here for acting automatically. The
+# evidence is circumstantial however many conditions are stacked — an
+# office, a VPN exit and a university NAT all look like this — and the
+# cost of being wrong is a customer locked out of an account they were
+# about to pay for. It was briefly wired to an automatic suspension and
+# came within one signup of freezing five strangers who shared nothing
+# but Console's HTTP client.
 #
 # Auth matches other Orchestra admin schedulers: static Bearer
 # ``ORCHESTRA_ADMIN_KEY`` from Secret Manager (project ``gcp-project-saas``).
@@ -28,11 +21,10 @@
 # Usage:
 #   bash deploy/ensure_burner_cluster_scheduler.sh
 #   bash deploy/ensure_burner_cluster_scheduler.sh --dry-run
-#   BURNER_CLUSTER_DRY_RUN=false bash deploy/ensure_burner_cluster_scheduler.sh
 #
 # Idempotent: create or update staging + production jobs in us-central1.
-# Note ``--dry-run`` (do not touch Cloud Scheduler) is a different thing
-# from BURNER_CLUSTER_DRY_RUN (the sweep reports without freezing).
+# ``--dry-run`` here means "do not touch Cloud Scheduler"; the job it
+# manages has no such mode, because it never changes anything.
 
 set -euo pipefail
 
@@ -40,7 +32,6 @@ PROJECT="${GCP_PROJECT:-gcp-project-saas}"
 LOCATION="${GCP_LOCATION:-us-central1}"
 # Daily, after the other billing routines have settled.
 SCHEDULE="${BURNER_CLUSTER_SWEEP_SCHEDULE:-30 5 * * *}"
-SWEEP_DRY_RUN="${BURNER_CLUSTER_DRY_RUN:-true}"
 ATTEMPT_DEADLINE="${BURNER_CLUSTER_SWEEP_DEADLINE:-120s}"
 DRY_RUN=0
 
@@ -48,7 +39,7 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,35p' "$0"
+      sed -n '2,28p' "$0"
       exit 0
       ;;
     *)
@@ -58,11 +49,11 @@ for arg in "$@"; do
   esac
 done
 
-STAGING_URI="https://internal.example.com/v0/admin/billing/burner-cluster-freeze-sweep?dry_run=${SWEEP_DRY_RUN}"
-PROD_URI="https://api.unify.ai/v0/admin/billing/burner-cluster-freeze-sweep?dry_run=${SWEEP_DRY_RUN}"
+STAGING_URI="https://internal.example.com/v0/admin/billing/burner-cluster-report"
+PROD_URI="https://api.unify.ai/v0/admin/billing/burner-cluster-report"
 
-STAGING_JOB="orchestra-staging-burner-cluster-sweep"
-PROD_JOB="orchestra-burner-cluster-sweep"
+STAGING_JOB="orchestra-staging-burner-cluster-report"
+PROD_JOB="orchestra-burner-cluster-report"
 
 BODY="{}"
 
@@ -143,9 +134,9 @@ ensure_job() {
 ensure_job \
   "$STAGING_JOB" \
   "$STAGING_URI" \
-  "Freeze never-paid accounts farming credits in a signup-origin cluster (staging)."
+  "Report never-paid accounts farming credits in a signup-origin cluster (staging)."
 
 ensure_job \
   "$PROD_JOB" \
   "$PROD_URI" \
-  "Freeze never-paid accounts farming credits in a signup-origin cluster (production)."
+  "Report never-paid accounts farming credits in a signup-origin cluster (production)."

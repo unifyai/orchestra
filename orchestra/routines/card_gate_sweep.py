@@ -1,6 +1,4 @@
-"""Freeze sweeps backing the card-gated trial rollout.
-
-Two admin-triggered sweeps, both idempotent and dry-run-first:
+"""Billing sweeps: one that suspends, one that only ever reports.
 
 * :func:`freeze_never_paid_accounts` — one-shot migration sweep for the
   card gate: every ACTIVE account with neither a linked subscription nor
@@ -8,43 +6,33 @@ Two admin-triggered sweeps, both idempotent and dry-run-first:
   Orgs holding an admin-granted free trial are exempt, so a comped
   white-glove account is not frozen out from under the customer.
   Completing the trial Checkout auto-reinstates the account
-  (``trial_subscription.apply_trial_checkout_completed``).
+  (``trial_subscription.apply_trial_checkout_completed``). Dry-run first;
+  it acts on a rule the customer was told about.
 
-* :func:`freeze_burner_clusters` — recurring guard against free-credit
-  extraction, now that free credits are Console-only. An earlier sweep
-  keyed on raw-API usage (ledger rows with ``assistant_id`` NULL), but
-  closing the API to never-paid accounts did not just reduce farming, it
-  *moved* it: that channel became unreachable, so the signal went quiet
-  while farming continued through the Console, where ``assistant_id`` is
-  populated and looks like ordinary use. A signature that cannot fire is
-  worse than none, because the nightly run keeps reporting zero and reads
-  as an all-clear, so it was removed rather than left in place.
+* :func:`report_burner_clusters` — nightly reading of the credit-farming
+  signal, now that free credits are Console-only. It names accounts and
+  stops there. An earlier sweep keyed on raw-API usage, but closing the
+  API to never-paid accounts did not reduce farming so much as *move* it
+  to the Console, where it looks like ordinary use; a signature that
+  cannot fire is worse than none, because the nightly zero reads as an
+  all-clear, so that one was deleted rather than left in place.
 
-  No single-account signal separates farming from evaluation there. Burn
+  No single-account signal separates farming from evaluation. Burn
   velocity is the tempting one and it is wrong — an enthusiastic
-  evaluator's first session drains a grant just as fast as a script, and
-  freezing them is the worst outcome available. What does separate them
-  is repetition across accounts, so this sweep only ever acts on a
-  *cluster*: several never-paid accounts sharing a signup origin inside a
-  short window, each having drained its grant.
+  evaluator drains a grant as fast as a script does. What distinguishes
+  them is repetition across accounts, so the signal is a *cluster*:
+  several never-paid accounts sharing a signup origin inside a short
+  window, each having drained its grant.
 
-  That cluster signal is only as good as the origin behind it, and the
-  origin is currently not the signer's. Hosted signups reach Orchestra
-  through Console's Next.js server on an admin-key endpoint, so the
-  request provenance is read from belongs to Console: one constant HTTP
-  client user agent across every signup, and Console's Cloud Run egress
-  IP. That makes a single shared-origin group containing every hosted
-  email/password account, which the sweep would read as an abuse ring of
-  strangers. OAuth signups (``POST /admin/user``) record no origin at
-  all and are invisible instead.
-
-  So the sweep runs reporting-only, and enforcing it is a data-source
-  decision rather than a threshold one: Console has to forward the real
-  client IP and user agent, and Orchestra has to record those, before a
-  match here means anything about a person.
-
-Both return a summary dict suitable for the admin-endpoint response and
-Cloud Scheduler run logs.
+  This reports rather than suspends because every part of that has an
+  innocent reading, and the evidence is circumstantial however many
+  conditions are stacked. It was briefly wired to an automatic
+  suspension and came within one signup of freezing five strangers who
+  shared nothing but Console's HTTP client, back when the recorded
+  origin described Console rather than the signer. Even with provenance
+  captured correctly, a shared address is grounds for a person to look,
+  not for software to act. Whoever reads a match can suspend through the
+  admin freeze endpoint, with ``abuse_fingerprint`` as the reason.
 """
 
 from __future__ import annotations
@@ -86,21 +74,27 @@ class SweepResult:
 
 
 @dataclass
-class ClusterSweepResult(SweepResult):
-    """A cluster-sweep run, including why it froze nothing.
+class ClusterReport:
+    """One night's reading of the burner-cluster signal.
 
-    ``frozen == 0`` has two very different causes — nothing matched, or
-    the sweep could not see — and the run log is the only place anyone
-    reads this from. The earlier abuse signature was deleted for exactly
-    that ambiguity: it had become unable to fire, and reported the same
-    reassuring zero every night for weeks. These counters make the two
-    cases tell themselves apart without a database query.
+    Carries no verdict because the report reaches a person, who decides.
+    ``flagged`` names accounts worth a look, and the counters beside it
+    say whether a quiet night was quiet or blind — the run log is the
+    only place anyone reads this from, and an earlier abuse signature
+    was deleted for exactly that ambiguity, having become unable to fire
+    while reporting the same reassuring zero every night for weeks.
     """
 
-    #: Drained never-paid accounts the sweep looked at.
+    #: Origin groups examined.
+    scanned: int = 0
+    #: Accounts in groups at or above the threshold.
+    flagged: int = 0
+    billing_account_ids: List[int] = field(default_factory=list)
+    note: str = ""
+    #: Drained never-paid accounts the report looked at.
     considered: int = 0
     #: How many of those carried no signup origin at all. Approaching
-    #: ``considered`` means provenance capture has broken and the sweep
+    #: ``considered`` means provenance capture has broken and the report
     #: is blind, not clear.
     without_provenance: int = 0
     #: Distinct accounts in the biggest origin group. Read against
@@ -108,6 +102,9 @@ class ClusterSweepResult(SweepResult):
     largest_cluster: int = 0
     #: ``burner_cluster_min_accounts`` as it was for this run.
     threshold: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 def _paid_ba_ids(session: Session) -> set[int]:
@@ -217,34 +214,31 @@ def _drained_never_paid_ba_ids(session: Session) -> set[int]:
     return drained
 
 
-def freeze_burner_clusters(
-    session: Session,
-    *,
-    dry_run: bool = True,
-) -> ClusterSweepResult:
-    """Suspend never-paid accounts that farmed a grant in an origin cluster.
+def report_burner_clusters(session: Session) -> ClusterReport:
+    """Name never-paid accounts that drained a grant from a shared origin.
 
-    An account is frozen only when *all* of the following hold, because
-    each condition alone has an innocent explanation:
+    Reports; never acts. Suspending an account is available to whoever
+    reads this, through the admin freeze endpoint, and stays a decision a
+    person makes — every part of this signature has an innocent reading,
+    and the cost of being wrong is a real customer locked out of an
+    account they were about to pay for:
 
-    * it shares a signup IP with enough other accounts
-      (``burner_cluster_min_accounts``) — but an office, a VPN exit or a
-      university NAT does that legitimately;
-    * those signups landed inside ``burner_cluster_window_days`` — but a
-      team onboarding together does that legitimately;
-    * every account in the cluster has never paid and has drained its
-      grant — which, together with the above, is not something a real
-      team does.
+    * sharing a signup IP with enough other accounts
+      (``burner_cluster_min_accounts``) is what an office, a VPN exit or
+      a university NAT looks like;
+    * those signups landing inside ``burner_cluster_window_days`` is what
+      a team onboarding together looks like;
+    * every account never having paid and having drained its grant is
+      what a room full of people evaluating the product looks like.
 
-    Accounts with no recorded provenance are skipped entirely rather than
-    grouped under a shared ``NULL``: lumping them together would invent a
-    cluster out of missing data, which is precisely the failure mode this
-    sweep must not have.
+    Together they are worth a look, which is what this produces. They are
+    not worth an automatic suspension, and were briefly wired to one.
+
+    Accounts with no recorded provenance are skipped rather than grouped
+    under a shared ``NULL``: lumping them together would invent a cluster
+    out of missing data.
     """
-    result = ClusterSweepResult(
-        dry_run=dry_run,
-        threshold=settings.burner_cluster_min_accounts,
-    )
+    result = ClusterReport(threshold=settings.burner_cluster_min_accounts)
     # ``User.created_at`` is TIMESTAMP *without* time zone (unlike
     # ``CreditTransaction.at``), so compare it against a naive UTC value
     # rather than letting the driver coerce an aware one against the
@@ -301,16 +295,16 @@ def freeze_burner_clusters(
         )
         flagged_ba_ids |= member_ba_ids
 
+    # Accounts already suspended are left out: whoever reads this is
+    # deciding what to do about an account still in use, and one that has
+    # already been dealt with is noise on the next four nights' reports.
     for ba_id in sorted(flagged_ba_ids):
         ba = session.get(BillingAccount, ba_id)
         if ba is None or ba.account_status != "ACTIVE":
             continue
         result.billing_account_ids.append(ba_id)
-        if not dry_run:
-            ba.account_status = "SUSPENDED"
-            ba.suspension_reason = "abuse_fingerprint"
 
-    result.frozen = len(result.billing_account_ids)
+    result.flagged = len(result.billing_account_ids)
     if result.considered and result.without_provenance == result.considered:
         # Says the quiet part out loud: every candidate was unreadable,
         # so this run proves nothing about whether farming is happening.
@@ -318,11 +312,9 @@ def freeze_burner_clusters(
             "No candidate carried a signup origin — this run was blind, "
             "not clear. Check that signup provenance is still recorded."
         )
-    if not dry_run:
-        session.flush()
     logger.warning(
         {
-            "message": "Burner-cluster freeze sweep finished",
+            "message": "Burner-cluster report finished",
             **result.to_dict(),
             "billing_account_ids": result.billing_account_ids[:50],
         },
