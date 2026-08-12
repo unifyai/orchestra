@@ -165,7 +165,7 @@ async def test_a_client_supplied_context_and_filter_are_ignored(
 ):
     """The hole this endpoint exists to close.
 
-    The dashboard tile bridge takes `context` and `filter` from the body, so any
+    A bridge taking `context` and `filter` from the body lets any
     token holder can read anything in the creator's project. Extra fields here
     must not reach the query — the canvas gets its own binding or nothing.
     """

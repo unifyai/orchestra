@@ -5217,7 +5217,7 @@ def query_flat_rows(
     """Run one row query as the given identity and return flat rows plus total.
 
     The one place the query → field-type resolution → formatting → flattening
-    sequence lives for internal bridges (canvas bindings, dashboard tiles) that
+    sequence lives for internal bridges (canvas bindings) that
     execute a stored query on a caller's behalf. Each bridge hand-rolling the
     sequence is how they drift: a display-oriented ``value_limit`` copied into a
     machine-consumed read once truncated a canvas's bindings declaration into

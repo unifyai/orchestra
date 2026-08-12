@@ -17,7 +17,6 @@ from orchestra.web.api.admin.schema import (
     PlanGroupCreateRequest,
 )
 from orchestra.web.api.assistant.schema import AssistantUpdate, VoiceCreate
-from orchestra.web.api.dashboard.schema import DashboardActionRecord
 from orchestra.web.api.interface.schema import (
     UpdateInterfaceRequest,
     UpdateTabRequest,
@@ -59,23 +58,6 @@ SCHEMA_CASES = [
     ("name", lambda: UpdateInterfaceRequest(name=PAYLOAD)),
     ("title", lambda: UpdatePlotRequest(title=PAYLOAD)),
     ("title", lambda: UpdateTableViewRequest(title=PAYLOAD)),
-    (
-        "action_name",
-        lambda: DashboardActionRecord(
-            tile_token="t",
-            action_name=PAYLOAD,
-            function_id=1,
-        ),
-    ),
-    (
-        "label",
-        lambda: DashboardActionRecord(
-            tile_token="t",
-            action_name="ok",
-            function_id=1,
-            label=PAYLOAD,
-        ),
-    ),
     ("name", lambda: PlanGroupCreateRequest(name=PAYLOAD)),
     (
         "display_name",
