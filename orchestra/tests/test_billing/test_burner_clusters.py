@@ -262,25 +262,54 @@ def test_signups_outside_the_window_are_not_clustered(
     assert result.frozen == 0
 
 
-def test_user_agent_hash_clusters_across_changing_ips(
-    dbsession,
-    small_cluster,
-):
-    """Rotating IPs is cheap; rotating the whole browser fingerprint is less so."""
-    made = []
-    for i in range(3):
-        user, ba = _make_farmed_account(
+def test_a_shared_user_agent_is_not_a_cluster(dbsession, small_cluster):
+    """A user agent names a browser build, so a popular one is a crowd.
+
+    Treating it as a key was how the sweep came to hold every hosted
+    account in one group: the recorded agent was Console's HTTP client
+    and identical on every signup. Real agents only make that slower —
+    whichever Chrome build is commonest collects enough drained accounts
+    to cross the threshold, and none of them know each other.
+    """
+    for i in range(4):
+        user, _ba = _make_farmed_account(
             dbsession,
             f"ua_ring_{i}",
             ip=f"198.51.100.{i}",
         )
         user.signup_user_agent_hash = "shared-ua-digest"
-        made.append(ba)
     dbsession.flush()
 
     result = freeze_burner_clusters(dbsession, dry_run=True)
 
-    assert result.frozen == 3
+    assert result.frozen == 0
+
+
+def test_a_shared_user_agent_does_not_swell_an_ip_cluster(
+    dbsession,
+    small_cluster,
+):
+    """Only the IP decides membership, so the agent cannot tip a group over."""
+    for i in range(2):
+        user, _ba = _make_farmed_account(
+            dbsession,
+            f"ua_swell_same_{i}",
+            ip="198.51.100.200",
+        )
+        user.signup_user_agent_hash = "shared-ua-digest"
+    for i in range(2):
+        user, _ba = _make_farmed_account(
+            dbsession,
+            f"ua_swell_other_{i}",
+            ip=f"198.51.100.{210 + i}",
+        )
+        user.signup_user_agent_hash = "shared-ua-digest"
+    dbsession.flush()
+
+    result = freeze_burner_clusters(dbsession, dry_run=True)
+
+    assert result.frozen == 0
+    assert result.largest_cluster == 2
 
 
 # ---------------------------------------------------------------------------
@@ -428,41 +457,40 @@ def test_a_blind_run_is_announced_as_blind(dbsession, small_cluster, discord):
 # ---------------------------------------------------------------------------
 # Provenance capture
 # ---------------------------------------------------------------------------
+#
+# The values arrive from Console, which held the browser's request.
+# Orchestra only normalises and hashes them -- it must never fall back to
+# reading its own request, whose caller is Console's server.
 
 
-def _fake_request(headers: dict, client_host: str | None = None):
-    from types import SimpleNamespace
+def test_the_recorded_origin_is_whatever_console_observed():
+    from orchestra.web.api.utils.signup_provenance import signup_provenance
 
-    return SimpleNamespace(
-        headers=headers,
-        client=SimpleNamespace(host=client_host) if client_host else None,
-    )
+    recorded = signup_provenance("198.51.100.7", "Mozilla/5.0 Chrome/120")
 
-
-def test_forwarded_for_wins_over_the_proxy_hop():
-    """Behind Cloud Run, request.client.host is the load balancer."""
-    from orchestra.web.api.utils.signup_provenance import client_ip
-
-    request = _fake_request(
-        {"x-forwarded-for": "198.51.100.7, 10.0.0.1"},
-        client_host="10.0.0.1",
-    )
-
-    assert client_ip(request) == "198.51.100.7"
+    assert recorded["signup_ip"] == "198.51.100.7"
+    assert recorded["signup_user_agent_hash"] is not None
 
 
 def test_missing_origin_is_none_not_a_placeholder():
     """A placeholder would cluster every such signup into fake evidence."""
-    from orchestra.web.api.utils.signup_provenance import client_ip
+    from orchestra.web.api.utils.signup_provenance import signup_provenance
 
-    assert client_ip(_fake_request({})) is None
+    assert signup_provenance(None, None) == {
+        "signup_ip": None,
+        "signup_user_agent_hash": None,
+    }
+    assert signup_provenance("  ", "  ") == {
+        "signup_ip": None,
+        "signup_user_agent_hash": None,
+    }
 
 
 def test_user_agent_is_hashed_not_stored():
     from orchestra.web.api.utils.signup_provenance import user_agent_hash
 
     raw = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120"
-    digest = user_agent_hash(_fake_request({"user-agent": raw}))
+    digest = user_agent_hash(raw)
 
     assert digest is not None
     assert raw not in digest
@@ -470,33 +498,15 @@ def test_user_agent_is_hashed_not_stored():
 
 
 def test_identical_user_agents_hash_alike():
-    """Equality is the only comparison the sweep makes, so it must hold."""
+    """Equality is the only comparison made of it, so it must hold."""
     from orchestra.web.api.utils.signup_provenance import user_agent_hash
 
     raw = "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120"
-    assert user_agent_hash(_fake_request({"user-agent": raw})) == user_agent_hash(
-        _fake_request({"user-agent": raw}),
-    )
+    assert user_agent_hash(raw) == user_agent_hash(raw)
 
 
-def test_provenance_always_returns_both_keys():
-    """Callers splat this into UserDAO.create unconditionally."""
-    from orchestra.web.api.utils.signup_provenance import signup_provenance
+def test_overlong_ip_is_bounded():
+    """A hostile value must not bloat the stored row."""
+    from orchestra.web.api.utils.signup_provenance import normalised_ip
 
-    assert signup_provenance(None) == {
-        "signup_ip": None,
-        "signup_user_agent_hash": None,
-    }
-    assert set(signup_provenance(_fake_request({})).keys()) == {
-        "signup_ip",
-        "signup_user_agent_hash",
-    }
-
-
-def test_overlong_forwarded_header_is_bounded():
-    """A hostile header must not bloat the stored row."""
-    from orchestra.web.api.utils.signup_provenance import client_ip
-
-    request = _fake_request({"x-forwarded-for": "9" * 500})
-
-    assert len(client_ip(request)) <= 45
+    assert len(normalised_ip("9" * 500)) <= 45

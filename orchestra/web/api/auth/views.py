@@ -269,7 +269,7 @@ async def register(
             name=body.name,
             last_name=body.last_name,
             password_hash=password_hash,
-            provenance=signup_provenance(request),
+            provenance=signup_provenance(body.signup_ip, body.signup_user_agent),
         )
         session.commit()
         coordinator = get_personal_coordinator(session, str(user.id))
@@ -428,7 +428,6 @@ def verify_code(
 )
 async def create_user_after_verification(
     body: CreateUserRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -487,7 +486,7 @@ async def create_user_after_verification(
             name=verification.name,
             last_name=verification.last_name,
             password_hash=verification.password_hash,
-            provenance=signup_provenance(request),
+            provenance=signup_provenance(body.signup_ip, body.signup_user_agent),
         )
         auth_dao.delete_verification(verification.id)
         session.commit()

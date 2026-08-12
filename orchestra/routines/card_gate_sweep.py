@@ -227,7 +227,7 @@ def freeze_burner_clusters(
     An account is frozen only when *all* of the following hold, because
     each condition alone has an innocent explanation:
 
-    * it shares a signup IP or user-agent hash with enough other accounts
+    * it shares a signup IP with enough other accounts
       (``burner_cluster_min_accounts``) — but an office, a VPN exit or a
       university NAT does that legitimately;
     * those signups landed inside ``burner_cluster_window_days`` — but a
@@ -271,24 +271,20 @@ def freeze_burner_clusters(
 
     result.considered = len(users)
 
-    clusters: dict[tuple[str, str], list[User]] = {}
+    # Grouped by IP alone. The stored user-agent hash is corroboration
+    # for whoever reads a match, never a key: a user agent identifies a
+    # browser build, so any popular one collects a crowd of strangers
+    # that grows past the threshold on its own. Clustering cannot rescue
+    # a coarse identifier, it multiplies it.
+    clusters: dict[str, list[User]] = {}
     for user in users:
-        origins = [
-            (kind, value)
-            for kind, value in (
-                ("ip", user.signup_ip),
-                ("ua", user.signup_user_agent_hash),
-            )
-            if value
-        ]
-        if not origins:
+        if not user.signup_ip:
             result.without_provenance += 1
             continue
-        for origin in origins:
-            clusters.setdefault(origin, []).append(user)
+        clusters.setdefault(user.signup_ip, []).append(user)
 
     flagged_ba_ids: set[int] = set()
-    for (kind, value), members in clusters.items():
+    for members in clusters.values():
         result.scanned += 1
         member_ba_ids = {u.billing_account_id for u in members if u.billing_account_id}
         result.largest_cluster = max(result.largest_cluster, len(member_ba_ids))
@@ -297,8 +293,10 @@ def freeze_burner_clusters(
         logger.warning(
             {
                 "message": "Burner cluster matched",
-                "origin_kind": kind,
                 "accounts": len(member_ba_ids),
+                "user_agents": len(
+                    {u.signup_user_agent_hash for u in members},
+                ),
             },
         )
         flagged_ba_ids |= member_ba_ids
