@@ -405,6 +405,13 @@ class AssistantRead(AssistantCreate):
             "system-authored bios, such as the canonical Coordinator persona."
         ),
     )
+    is_deployment_target: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether a client deployment names this assistant as a target it "
+            "cannot run without. Deleting it is refused while this is true."
+        ),
+    )
 
     user_desktop_url: Optional[str] = Field(
         None,
