@@ -28,6 +28,21 @@ Two admin-triggered sweeps, both idempotent and dry-run-first:
   *cluster*: several never-paid accounts sharing a signup origin inside a
   short window, each having drained its grant.
 
+  That cluster signal is only as good as the origin behind it, and the
+  origin is currently not the signer's. Hosted signups reach Orchestra
+  through Console's Next.js server on an admin-key endpoint, so the
+  request provenance is read from belongs to Console: one constant HTTP
+  client user agent across every signup, and Console's Cloud Run egress
+  IP. That makes a single shared-origin group containing every hosted
+  email/password account, which the sweep would read as an abuse ring of
+  strangers. OAuth signups (``POST /admin/user``) record no origin at
+  all and are invisible instead.
+
+  So the sweep runs reporting-only, and enforcing it is a data-source
+  decision rather than a threshold one: Console has to forward the real
+  client IP and user agent, and Orchestra has to record those, before a
+  match here means anything about a person.
+
 Both return a summary dict suitable for the admin-endpoint response and
 Cloud Scheduler run logs.
 """
