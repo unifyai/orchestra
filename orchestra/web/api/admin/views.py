@@ -1278,6 +1278,36 @@ def is_billing_account_frozen(
     return result
 
 
+@router.get("/billing/runtime-access")
+def get_runtime_access(
+    user_id: Optional[str] = None,
+    organization_id: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """Whether metered runtime work may be started for this account.
+
+    The same question ``require_console_origin_for_free_accounts`` answers,
+    asked on behalf of a dispatcher rather than a caller. That dependency
+    reads the origin off the request, which works while a person is asking
+    for work; scheduled work has no such request. A schedule is armed once
+    and fired thereafter by Cloud Tasks, so every run after the first
+    reaches the runtime with no origin left to inspect, and the gate that
+    refuses a free account never sees it.
+
+    Answering by account rather than by request closes that: a dispatcher
+    knows whose assistant it holds even when it knows nothing about who
+    armed the schedule.
+    """
+    from orchestra.lib.trial_subscription import has_api_access
+
+    ba = BillingAccountDAO(session).resolve(user_id, organization_id)
+    allowed = has_api_access(session, ba)
+    return {
+        "allowed": allowed,
+        "reason": None if allowed else "payment_required",
+    }
+
+
 @router.get("/billing/account-info")
 def get_billing_account_info(
     user_id: Optional[str] = None,
