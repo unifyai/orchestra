@@ -415,6 +415,60 @@ async def test_delete_coordinator_rejected(
 
 
 @pytest.mark.anyio
+async def test_delete_deployment_target_rejected(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """An assistant a deployment depends on cannot be deleted out from under it."""
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    target = Assistant(
+        user_id=user_id,
+        organization_id=None,
+        first_name="Brain",
+        surname="Operator",
+        is_deployment_target=True,
+    )
+    dbsession.add(target)
+    dbsession.commit()
+
+    resp = await client.delete(f"/v0/assistant/{target.agent_id}", headers=HEADERS)
+    assert resp.status_code == status.HTTP_409_CONFLICT
+    assert resp.json().get("detail") == "cannot_delete_deployment_target"
+
+
+@pytest.mark.anyio
+async def test_owner_cannot_flag_own_assistant_as_deployment_target(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """The flag decides deletability, so only admins may raise it."""
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    assistant = Assistant(
+        user_id=user_id,
+        organization_id=None,
+        first_name="Ada",
+        surname="Lovelace",
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    resp = await client.patch(
+        f"/v0/assistant/{assistant.agent_id}/runtime-profile",
+        headers=HEADERS,
+        json={"is_deployment_target": True},
+    )
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    dbsession.refresh(assistant)
+    assert assistant.is_deployment_target is False
+
+    resp = await client.delete(f"/v0/assistant/{assistant.agent_id}", headers=HEADERS)
+    assert resp.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.anyio
 async def test_update_about_only(client: AsyncClient, mock_assistant_infra_calls):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` about only -> updated
     _, mock_reawaken = mock_assistant_infra_calls

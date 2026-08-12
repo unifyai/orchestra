@@ -2638,6 +2638,16 @@ class Assistant(Base):
         default=False,
         server_default="false",
     )
+    # A client deployment names this assistant as a target it cannot run
+    # without, so deleting the row breaks every subsequent deploy of its
+    # environment. Deploy-time reconciliation owns the flag; the delete
+    # endpoint refuses while it is set.
+    is_deployment_target = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     console_config = relationship(
         "AssistantConsoleConfig",

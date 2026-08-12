@@ -2754,6 +2754,15 @@ class AdminUpdateAssistant(BaseModel):
         description="Per-assistant UI/UX configuration (layout, tabs, theme). "
         "Pass the full nested object to upsert; pass null to clear; omit to leave unchanged.",
     )
+    is_deployment_target: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether a client deployment names this assistant as a target it "
+            "cannot run without. While true, deleting the assistant is "
+            "refused. Set by deploy-time reconciliation; omit to leave "
+            "unchanged."
+        ),
+    )
 
     @field_validator("timezone")
     @classmethod
