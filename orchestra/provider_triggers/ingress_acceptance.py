@@ -19,6 +19,7 @@ from orchestra.db.models.provider_trigger_models import (
     EventTriggerSubscriptionGeneration,
     ProviderEventReceipt,
 )
+from orchestra.db.request_principal import system_principal
 from orchestra.observability.provider_trigger_metrics import (
     record_event_to_visible_run_latency,
 )
@@ -238,7 +239,10 @@ def _classify_delivery(
     if binding.active_generation_id != generation.generation_id:
         return ReceiptClassificationReason.stale
 
-    connection = IntegrationProviderDAO(session).get_connection(binding.connection_id)
+    with system_principal():
+        connection = IntegrationProviderDAO(session).get_connection(
+            binding.connection_id,
+        )
     if connection is None or not connection.provider_connection_id:
         return ReceiptClassificationReason.unauthorized
     if binding.owner_scope == "assistant":

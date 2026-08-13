@@ -16,6 +16,7 @@ from orchestra.db.models.provider_trigger_models import (
     EventTriggerBinding,
     EventTriggerSubscriptionGeneration,
 )
+from orchestra.db.request_principal import system_principal
 from orchestra.provider_triggers.provider_identity import provider_account_subject_hmac
 from orchestra.provider_triggers.runtime_types import (
     BindingRuntimeHealth,
@@ -273,7 +274,8 @@ class ProviderTriggerReconciliationService:
         self,
         binding: EventTriggerBinding,
     ) -> IntegrationConnection | None:
-        return self._integration_dao.get_connection(binding.connection_id)
+        with system_principal():
+            return self._integration_dao.get_connection(binding.connection_id)
 
     def _connection_owned_by_binding(
         self,
