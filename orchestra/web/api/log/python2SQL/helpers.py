@@ -298,6 +298,15 @@ def _create_embeddings(
     )
 
 
+def _truncate_to_token_budget(text: str, budget: int) -> str:
+    """Cut a text down to the per-input token budget, keeping its head."""
+    estimate = math.ceil(count_tokens_per_utf_byte(text))
+    while estimate > budget:
+        text = text[: max(1, int(len(text) * budget / estimate * 0.98))]
+        estimate = math.ceil(count_tokens_per_utf_byte(text))
+    return text
+
+
 def _get_embeddings_batch(
     texts: list[str],
     model: str | None = None,
@@ -309,8 +318,8 @@ def _get_embeddings_batch(
     Token-aware batching
     --------------------
     - Estimates tokens per input with `count_tokens_per_utf_byte`.
-    - Enforces `MAX_TOKENS_PER_INPUT` for each text. If any input exceeds the
-      per-input limit, raises a ValueError.
+    - Truncates any text over `MAX_TOKENS_PER_INPUT` to fit the per-input
+      budget, keeping its head.
     - Greedily splits the list of texts into sub-batches whose combined
       estimated tokens are <= `MAX_TOKENS_PER_REQUEST`.
     - Calls the API per sub-batch and concatenates results in original order.
@@ -319,15 +328,15 @@ def _get_embeddings_batch(
 
     Notes
     -----
-    - This function does not modify individual texts.
+    - Texts within the per-input budget are embedded unmodified.
     - The order of outputs matches the order of `texts`.
     - Uses threaded_map for parallel batch execution.
 
     Raises
     ------
-    ValueError: if the API key is missing, any input exceeds
-                `MAX_TOKENS_PER_INPUT`, an API call fails for a non-token-limit
-                reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
+    ValueError: if the API key is missing, an API call fails for a
+                non-token-limit reason, or embedding dimensions exceed
+                `MAX_EMBEDDING_DIMS`.
     """
     import time
 
@@ -345,19 +354,12 @@ def _get_embeddings_batch(
     if not texts:
         return []
 
-    # 1) Estimate tokens per input and validate per-input limit
+    # 1) Estimate tokens per input, truncating any text over the per-input
+    # limit. Oversized content is a property of the text, not of the call:
+    # refusing it would leave the row permanently unembeddable however often
+    # it is retried, while embedding the head keeps it searchable.
+    texts = [_truncate_to_token_budget(t, MAX_TOKENS_PER_INPUT) for t in texts]
     token_estimates = [math.ceil(count_tokens_per_utf_byte(t)) for t in texts]
-    too_large = [
-        (i, est) for i, est in enumerate(token_estimates) if est > MAX_TOKENS_PER_INPUT
-    ]
-    if too_large:
-        examples = ", ".join(
-            [f"idx={i}, tokens={est}" for i, est in too_large[:5]],
-        )
-        raise ValueError(
-            f"One or more inputs exceed MAX_TOKENS_PER_INPUT={MAX_TOKENS_PER_INPUT}. "
-            f"Examples: {examples}",
-        )
 
     # 2) Greedily group texts into batches under MAX_TOKENS_PER_REQUEST
     batches: list[list[str]] = []
