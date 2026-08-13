@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from orchestra.db.models.integration_provider_models import (
@@ -24,6 +24,7 @@ from orchestra.db.models.integration_provider_models import (
     IntegrationOverlay,
     ProviderActionAudit,
 )
+from orchestra.db.request_principal import get_request_principal
 
 HIDDEN_CONNECTION_STATUSES = {"disconnected"}
 LIVE_CONNECTION_STATUSES = {"connected", "configured"}
@@ -38,6 +39,55 @@ class IntegrationProviderDAO:
 
     def __init__(self, session: Session):
         self.session = session
+
+    # Tenant scoping ---------------------------------------------------------
+    #
+    # Every connection/audit lookup reachable from the authenticated API is
+    # scoped to the request principal here, so a caller can never read or
+    # mutate another tenant's rows by supplying a foreign id/owner. Enforcing
+    # it at the DAO (rather than per-handler) covers the bare-``connection_id``
+    # actions (disconnect/cancel/reconnect/complete/...) that never build an
+    # owner at all. Fail closed: no principal in context => deny.
+    def _principal(self):
+        principal = get_request_principal()
+        if principal is None:
+            raise PermissionError(
+                "No request principal in context; refusing untenanted "
+                "integration access. Web callers get one from the integration "
+                "principal dependency; internal callers must use "
+                "orchestra.db.request_principal.system_principal().",
+            )
+        return principal
+
+    def _scope_connections(self, query: Query) -> Query:
+        principal = self._principal()
+        if principal.is_system:
+            return query
+        clauses = []
+        if principal.user_id:
+            clauses.append(IntegrationConnection.user_id == principal.user_id)
+        if principal.organization_id is not None:
+            clauses.append(
+                IntegrationConnection.org_id == principal.organization_id,
+            )
+        if not clauses:
+            raise PermissionError("Request principal carries no tenant identity.")
+        return query.filter(or_(*clauses))
+
+    def _scope_audits(self, query: Query) -> Query:
+        principal = self._principal()
+        if principal.is_system:
+            return query
+        clauses = []
+        if principal.user_id:
+            clauses.append(ProviderActionAudit.user_id == principal.user_id)
+        if principal.organization_id is not None:
+            clauses.append(
+                ProviderActionAudit.org_id == principal.organization_id,
+            )
+        if not clauses:
+            raise PermissionError("Request principal carries no tenant identity.")
+        return query.filter(or_(*clauses))
 
     # Backends and seed catalog
     def seed_default_backends(self, *, default_backends: list[dict[str, Any]]) -> None:
@@ -208,6 +258,7 @@ class IntegrationProviderDAO:
 
     # Connections and policy state
     def owner_filter(self, query: Query, owner: Any) -> Query:
+        query = self._scope_connections(query)
         query = query.filter(IntegrationConnection.owner_scope == owner.owner_scope)
         if owner.org_id is not None:
             query = query.filter(IntegrationConnection.org_id == owner.org_id)
@@ -433,7 +484,7 @@ class IntegrationProviderDAO:
 
     def get_connection(self, connection_id: str) -> IntegrationConnection | None:
         return (
-            self.session.query(IntegrationConnection)
+            self._scope_connections(self.session.query(IntegrationConnection))
             .filter_by(connection_id=connection_id)
             .one_or_none()
         )
@@ -496,7 +547,9 @@ class IntegrationProviderDAO:
 
     def get_action_audit(self, audit_id: int) -> ProviderActionAudit | None:
         return (
-            self.session.query(ProviderActionAudit).filter_by(id=audit_id).one_or_none()
+            self._scope_audits(self.session.query(ProviderActionAudit))
+            .filter_by(id=audit_id)
+            .one_or_none()
         )
 
     def update_action_audit(
