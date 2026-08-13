@@ -5,15 +5,27 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import OperationalError
 
 from orchestra.db.models.integration_provider_models import IntegrationConnection
+from orchestra.db.request_principal import system_principal
 from orchestra.services import coordinator_service as svc
 from orchestra.web.api.integrations.operations import (
     OwnerContext,
     complete_connection,
     start_connection,
 )
+
+
+@pytest.fixture(autouse=True)
+def _trusted_principal():
+    # These are unit tests of operations-level notify behavior with a mocked
+    # DAO; they call start/complete_connection directly rather than through the
+    # HTTP layer that establishes the request principal, so run them as a
+    # trusted (system) principal — the tenant guard is covered elsewhere.
+    with system_principal():
+        yield
 
 
 def test_complete_connection_notifies_onboarding_render_when_progress_changes() -> None:

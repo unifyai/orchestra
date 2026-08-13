@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -38,7 +39,16 @@ def _clear_provider_env_for_local_echo_tests(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("PIPEDREAM_CLIENT_SECRET", raising=False)
 
 
-def _owner_payload(assistant_id: int, user_id: str = "api-user") -> dict[str, object]:
+# The owner user must be the authenticated account itself — Orchestra now
+# scopes every integration connection to the caller, so a decoupled fake id
+# (the old "api-user") is correctly rejected.
+_ACCOUNT_USER_ID = os.environ["AUTH_ACCOUNT_USER_ID"]
+
+
+def _owner_payload(
+    assistant_id: int,
+    user_id: str = _ACCOUNT_USER_ID,
+) -> dict[str, object]:
     return {
         "owner_scope": "assistant",
         "assistant_id": assistant_id,
@@ -46,7 +56,7 @@ def _owner_payload(assistant_id: int, user_id: str = "api-user") -> dict[str, ob
     }
 
 
-def _owner_query(assistant_id: int, user_id: str = "api-user") -> str:
+def _owner_query(assistant_id: int, user_id: str = _ACCOUNT_USER_ID) -> str:
     return f"owner_scope=assistant&assistant_id={assistant_id}&user_id={user_id}"
 
 
@@ -1152,6 +1162,7 @@ async def test_run_tool_uses_owner_external_user_id_when_body_user_missing(
         json={
             "owner_scope": "assistant",
             "assistant_id": assistant_id,
+            "user_id": _ACCOUNT_USER_ID,
             "canonical_app_slug": "gmail",
             "backend_id": "composio",
             "provider_app_id": "gmail",
