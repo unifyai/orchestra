@@ -1995,8 +1995,14 @@ def _atomic_upsert_mode(
     session,
 ) -> AtomicFieldUpdateResponse:
     """Handle atomic upsert mode - find or create log, then apply operation."""
-    # Validate that all unique keys are present in initial_data
+    # Key names are interpolated into the lookup SQL below, so they are held to
+    # the same allowlist as the claim endpoint's field names.
     for key_name in body.unique_keys.keys():
+        if not _CLAIM_FIELD_NAME_RE.match(key_name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid unique key name {key_name!r}.",
+            )
         if key_name not in body.initial_data:
             raise HTTPException(
                 status_code=400,
@@ -2038,10 +2044,10 @@ def _atomic_upsert_mode(
     # Build the unique key filter conditions for SQL
     unique_key_conditions = []
     unique_key_values = []
-    for key_name in body.unique_keys.keys():
+    for i, key_name in enumerate(body.unique_keys.keys()):
         key_value = body.initial_data[key_name]
-        unique_key_conditions.append(f"data->>'{key_name}' = :key_{key_name}")
-        unique_key_values.append((f"key_{key_name}", str(key_value)))
+        unique_key_conditions.append(f"data->>'{key_name}' = :key_{i}")
+        unique_key_values.append((f"key_{i}", str(key_value)))
 
     # Build a hash for the advisory lock from project + context + unique key values
     # Include context_id to ensure we're locking on the same context
