@@ -10,6 +10,10 @@ The values now travel in the body, which introduces a failure mode worth
 pinning as hard as the behaviour itself: while a deployment is mid-roll
 the two sides disagree about sending them, and a guard that reads a
 missing origin as hostile would refuse every signup for the duration.
+
+What the velocity limits are keyed on is covered in
+``test_auth_rate_limiting.py``; this file covers the bot heuristic and
+what a registration does when no origin arrived at all.
 """
 
 from __future__ import annotations
@@ -17,45 +21,6 @@ from __future__ import annotations
 import pytest
 
 from orchestra.db.dao.auth_dao import check_user_agent
-from orchestra.web.api.utils.auth_rate_limiting import rate_limit_origin, subnet_of
-
-
-def _console_request():
-    """A request as it arrives from Console's server."""
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        headers={"x-forwarded-for": "10.4.0.9"},
-        client=SimpleNamespace(host="10.4.0.9"),
-    )
-
-
-class TestVelocityLimitKey:
-    """What an attempt is counted against."""
-
-    def test_the_signer_is_counted_rather_than_console(self):
-        """Keying on the connection puts the whole platform in one bucket."""
-        assert (
-            rate_limit_origin(_console_request(), client_ip="198.51.100.7")
-            == "198.51.100.7"
-        )
-
-    def test_the_connection_is_the_fallback_when_nothing_was_forwarded(self):
-        """No worse than the behaviour it replaces, so a rollout cannot lock signup."""
-        assert rate_limit_origin(_console_request()) == "10.4.0.9"
-
-    def test_a_subnet_key_collapses_the_signer_not_the_caller(self):
-        assert (
-            rate_limit_origin(
-                _console_request(),
-                client_ip="198.51.100.7",
-                use_subnet=True,
-            )
-            == "198.51.100.0/24"
-        )
-
-    def test_ipv6_collapses_to_a_prefix(self):
-        assert subnet_of("2001:db8:abcd:1234::1").endswith("::/48")
 
 
 class TestBotHeuristicInput:

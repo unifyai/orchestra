@@ -67,6 +67,12 @@ class EmailRegisterRequest(BaseModel):
     #: on ``/auth/create-user`` once the address is verified.
     signup_ip: Optional[str] = None
     signup_user_agent: Optional[str] = None
+    #: The caller's address for rate limiting, which Console derives from
+    #: the hop its load balancer appended rather than the forwarded hop a
+    #: caller supplies. Distinct from ``signup_ip`` above: that one is an
+    #: advisory record a signer may choose, this one a limit key they
+    #: must not be able to.
+    client_ip: Optional[str] = None
 
     @field_validator("password")
     @classmethod
@@ -83,6 +89,8 @@ class EmailVerifyRequest(BaseModel):
         default="signup",
         description="Purpose of the verification: 'signup' or 'password_reset'",
     )
+    #: Caller's address for rate limiting, supplied by Console.
+    client_ip: Optional[str] = None
 
 
 class VerifyCodeResponse(BaseModel):
@@ -126,6 +134,8 @@ class EmailAuthenticateRequest(BaseModel):
 
     email: EmailStr
     password: str
+    #: Caller's address for rate limiting, supplied by Console.
+    client_ip: Optional[str] = None
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -133,6 +143,8 @@ class ForgotPasswordRequest(BaseModel):
 
     email: EmailStr
     captcha_token: Optional[str] = None  # Cloudflare Turnstile token
+    #: Caller's address for rate limiting, supplied by Console.
+    client_ip: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -175,6 +187,8 @@ class ResendVerificationRequest(BaseModel):
         pattern=r"^(signup|password_reset)$",
         description="Purpose of the verification: 'signup' or 'password_reset'",
     )
+    #: Caller's address for rate limiting, supplied by Console.
+    client_ip: Optional[str] = None
 
 
 class AuthRegisterResponse(BaseModel):
@@ -249,6 +263,8 @@ class MFAVerifyRequest(BaseModel):
 
     user_id: str
     code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    #: Caller's address for rate limiting, supplied by Console.
+    client_ip: Optional[str] = None
 
 
 class MFAVerifyResponse(BaseModel):
@@ -262,6 +278,8 @@ class MFAVerifyRecoveryRequest(BaseModel):
 
     user_id: str
     code: str = Field(..., min_length=1, max_length=20)
+    #: Caller's address for rate limiting, supplied by Console.
+    client_ip: Optional[str] = None
 
 
 class MFAVerifyRecoveryResponse(BaseModel):
