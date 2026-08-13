@@ -20,13 +20,17 @@ jobs:
 
     steps:
     - name: Run contact resource levy
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_YEAR: ${{ github.event.inputs.year }}
+        INPUT_MONTH: ${{ github.event.inputs.month }}
       run: |
         PARAMS=""
-        if [ -n "${{ github.event.inputs.year }}" ]; then
-          PARAMS="${PARAMS}&year=${{ github.event.inputs.year }}"
+        if [ -n "$INPUT_YEAR" ]; then
+          PARAMS="${PARAMS}&year=${INPUT_YEAR}"
         fi
-        if [ -n "${{ github.event.inputs.month }}" ]; then
-          PARAMS="${PARAMS}&month=${{ github.event.inputs.month }}"
+        if [ -n "$INPUT_MONTH" ]; then
+          PARAMS="${PARAMS}&month=${INPUT_MONTH}"
         fi
         PARAMS="${PARAMS#&}"
         URL="https://api.unify.ai/v0/admin/billing/resource-levy"
