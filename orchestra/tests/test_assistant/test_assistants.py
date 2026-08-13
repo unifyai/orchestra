@@ -436,6 +436,17 @@ async def test_delete_deployment_target_rejected(
     assert resp.status_code == status.HTTP_409_CONFLICT
     assert resp.json().get("detail") == "cannot_delete_deployment_target"
 
+    listed = await client.get(
+        "/v0/admin/assistant",
+        params={
+            "agent_id": target.agent_id,
+            "from_fields": "agent_id,is_deployment_target",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert listed.status_code == status.HTTP_200_OK
+    assert listed.json()["info"][0]["is_deployment_target"] is True
+
 
 @pytest.mark.anyio
 async def test_owner_cannot_flag_own_assistant_as_deployment_target(
