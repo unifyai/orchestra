@@ -41,6 +41,8 @@ from orchestra.web.api.context.views import admin_router as context_admin_router
 from orchestra.web.api.dependencies import (
     auth_admin_key,
     auth_api_key,
+    bind_integration_principal,
+    bind_system_integration_principal,
     check_account_not_frozen,
 )
 from orchestra.web.api.desktop import router as desktop_router
@@ -284,7 +286,7 @@ api_router.include_router(
     integrations.admin_router,
     prefix="/admin",
     include_in_schema=False,
-    dependencies=ADMIN_AUTH,
+    dependencies=[*ADMIN_AUTH, Depends(bind_system_integration_principal)],
 )
 # API_KEY_AUTH endpoints
 
@@ -359,7 +361,7 @@ api_router.include_router(
 )
 api_router.include_router(
     integrations.router,
-    dependencies=API_KEY_AUTH,
+    dependencies=[*API_KEY_AUTH, Depends(bind_integration_principal)],
 )
 
 # Account
