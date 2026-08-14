@@ -1716,6 +1716,11 @@ COORDINATOR_ONBOARDING_EVENT_TYPE = "coordinator_onboarding_event"
 SUBTYPE_WORKSPACE_CONNECTED = "workspace_connected"
 SUBTYPE_INTEGRATION_CONNECTED = "integration_connected"
 SUBTYPE_ONBOARDING_STEP_SKIPPED = "step_skipped"
+# Fired when the user un-skips a step from the Console checklist. Skips are
+# narrated to the brain, so without the mirror event an undone skip leaves
+# the brain claiming a step is parked while the checklist shows it pending —
+# the two surfaces diverge until the next backstop fetch.
+SUBTYPE_ONBOARDING_STEP_UNSKIPPED = "step_unskipped"
 SUBTYPE_ONBOARDING_STEP_STARTED = "onboarding_step_started"
 # Fired when the user resets a completed step from the Console checklist.
 # The derivation already excludes evidence older than the reset cutoff, but
@@ -1808,6 +1813,7 @@ COORDINATOR_ONBOARDING_SUBTYPES = frozenset(
         SUBTYPE_WORKSPACE_CONNECTED,
         SUBTYPE_INTEGRATION_CONNECTED,
         SUBTYPE_ONBOARDING_STEP_SKIPPED,
+        SUBTYPE_ONBOARDING_STEP_UNSKIPPED,
         SUBTYPE_ONBOARDING_STEP_STARTED,
         SUBTYPE_ONBOARDING_STEP_RESET,
         SUBTYPE_ONBOARDING_STEP_COMPLETED,
@@ -3455,6 +3461,38 @@ async def emit_onboarding_step_skipped_event(
         coordinator=coordinator,
         subtype=SUBTYPE_ONBOARDING_STEP_SKIPPED,
         message=f"User skipped the '{step_id}' onboarding step.",
+        details={
+            "step_id": step_id,
+            "completed_step_ids": completed,
+            "skipped_step_ids": skipped,
+        },
+    )
+
+
+async def emit_onboarding_step_unskipped_event(
+    session: Session,
+    *,
+    coordinator: Assistant,
+    step_id: str,
+    completed_step_ids: Sequence[str] | None = None,
+    skipped_step_ids: Sequence[str] | None = None,
+) -> bool:
+    """Notify Unity that the user un-skipped an onboarding step."""
+    completed = list(
+        completed_step_ids
+        or derive_onboarding_progress(session, coordinator=coordinator),
+    )
+    skipped = normalize_onboarding_step_ids(
+        skipped_step_ids
+        or get_coordinator_state(session, coordinator=coordinator).get(
+            "skipped_step_ids",
+        ),
+    )
+    return await notify_coordinator_onboarding_event(
+        session,
+        coordinator=coordinator,
+        subtype=SUBTYPE_ONBOARDING_STEP_UNSKIPPED,
+        message=f"User un-skipped the '{step_id}' onboarding step.",
         details={
             "step_id": step_id,
             "completed_step_ids": completed,
