@@ -700,16 +700,20 @@ def _trigger(
     # user is now expecting the clue on this channel. Twin may already have
     # sent it of its own accord (e.g. the user also asked verbally on a call) —
     # in that case the click and the spoken ask are the same directive in two
-    # forms, and Twin must not send a duplicate.
+    # forms, and Twin must not send a duplicate. The no-duplicate rule is
+    # scoped to the current conversation: a clue dispatched in an earlier
+    # session is lost from the user's point of view, and treating it as
+    # pending leaves them polling a channel nothing will ever arrive on.
     event = OnboardingEventSpec(
         event_type="coordinator_onboarding_event",
         message=(
             f"The user just clicked '{title}', so they're now expecting the "
             "reference-quiz clue on that channel and are checking whether it "
             "has been sent. This is a poll, not a request to send another one: "
-            "if you have already sent the clue (for example because they asked "
-            "you to on a call), treat this as confirmation and do NOT send a "
-            "duplicate."
+            "if you already sent the clue in this conversation (for example "
+            "because they asked you to on a call), treat this as confirmation "
+            "and do NOT send a duplicate. A clue dispatched in an earlier "
+            "session is lost, not pending — send a fresh one now."
         ),
         subtype="reference_quiz_clue_requested",
         details={

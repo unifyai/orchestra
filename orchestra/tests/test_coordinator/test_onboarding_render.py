@@ -22,6 +22,21 @@ def test_graph_integrity_and_pairing() -> None:
         assert graph.TRIGGER_TO_OUTBOUND_MEDIUMS[trigger_id]
 
 
+def test_trigger_poll_scopes_no_duplicate_to_this_conversation() -> None:
+    """A re-click after a stale dispatch must produce a fresh clue.
+
+    The poll framing suppresses duplicates only for clues sent in the current
+    conversation; a clue from an earlier session is lost from the user's point
+    of view, and a categorical no-duplicate rule would strand them polling a
+    channel nothing will ever arrive on.
+    """
+    for trigger_id in graph.TRIGGER_TO_REPLY:
+        message = graph.STEP_BY_ID[trigger_id].event.message
+        assert "in this conversation" in message
+        assert "earlier session is lost" in message
+        assert "send a fresh one now" in message
+
+
 def test_dependencies_satisfied_levels() -> None:
     """ADDRESSED accepts completed-or-skipped; COMPLETED needs completed."""
     assert graph.dependencies_satisfied({}, set(), set()) is True
