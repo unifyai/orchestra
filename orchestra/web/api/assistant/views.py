@@ -119,6 +119,7 @@ from orchestra.services.coordinator_service import (
     emit_onboarding_step_reset_event,
     emit_onboarding_step_skipped_event,
     emit_onboarding_step_started_event,
+    emit_onboarding_step_unskipped_event,
     emit_secret_landed_event,
     get_coordinator_state,
     heal_coordinator_universal_contacts,
@@ -1982,6 +1983,14 @@ async def update_coordinator_state_endpoint(
             session,
             coordinator=coordinator,
             step_id=update.skip_onboarding_step,
+            completed_step_ids=_completed_step_ids(),
+            skipped_step_ids=next_state.get("skipped_step_ids", []),
+        )
+    if update.unskip_onboarding_step:
+        await emit_onboarding_step_unskipped_event(
+            session,
+            coordinator=coordinator,
+            step_id=update.unskip_onboarding_step,
             completed_step_ids=_completed_step_ids(),
             skipped_step_ids=next_state.get("skipped_step_ids", []),
         )
