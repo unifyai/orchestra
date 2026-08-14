@@ -2363,3 +2363,184 @@ def test_a_personal_task_surface_still_matches_destination_less_rows(monkeypatch
         destination=None,
     )
     assert seen == [None]
+
+
+def _recurring_task_entries(*, task_id: int) -> dict:
+    """A scheduled task whose ``repeat`` actually parses into a rule.
+
+    ``_scheduled_task_entries`` carries ``{"unit": "day", "count": 1}``, which
+    the tests using it only ever truthiness-check: ``RepeatPattern`` requires
+    ``frequency`` and raises on that shape. Successor projection has to derive
+    a real slot from the rule, so it needs one that survives being read.
+    """
+
+    entries = _scheduled_task_entries(task_id=task_id)
+    entries["repeat"] = [{"frequency": "daily", "interval": 1}]
+    return entries
+
+
+@pytest.mark.anyio
+async def test_adopting_a_projected_occurrence_records_that_it_started(
+    client: AsyncClient,
+    materialization_calls,
+):
+    """A scheduled occurrence exists before it runs, so starting it adopts.
+
+    The adopt branch used to return the row untouched and drop the
+    ``started_at`` and ``running`` the runtime had just sent. Two missing
+    timestamps were the least of it: successor projection fires on an observed
+    transition into ``running``, so a series that never recorded one advanced
+    only when the supervisor sweep happened to notice.
+    """
+
+    await _ensure_task_machine_project(client)
+    created = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_recurring_task_entries(task_id=460),
+    )
+    assert created.status_code == 200, created.json()
+    source_task_log_id = created.json()["log_event_ids"][0]
+
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    projected = next(e["entries"] for e in executions if e["entries"]["task_id"] == 460)
+    assert projected["state"] == "scheduled"
+    assert "started_at" not in projected
+    materialization_calls.clear()
+
+    adopted = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": projected["run_key"],
+            "assistant_id": "42",
+            "task_id": 460,
+            "source_task_log_id": source_task_log_id,
+            "wake": "scheduled",
+            "delivery": "live",
+            "revision": projected["revision"],
+            "scheduled_for": projected["scheduled_for"],
+            "state": "running",
+            "started_at": "2026-04-10T09:00:03+00:00",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert adopted.status_code == 200, adopted.json()
+    body = adopted.json()
+    # Adopted, not created: the occurrence was already there to be started.
+    assert body["created"] is False
+    assert body["run"]["state"] == "running"
+    assert body["run"]["started_at"] == "2026-04-10T09:00:03+00:00"
+
+    # And the point of recording the transition: the next occurrence exists.
+    after = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    successors = [
+        e["entries"]
+        for e in after
+        if e["entries"]["task_id"] == 460 and e["entries"]["state"] == "scheduled"
+    ]
+    assert len(successors) == 1
+    assert successors[0]["scheduled_for"] > projected["scheduled_for"]
+
+
+@pytest.mark.anyio
+async def test_adopting_never_reopens_a_run_that_already_finished(
+    client: AsyncClient,
+    materialization_calls,
+):
+    """A redelivered wake must not restart a completed occurrence."""
+
+    await _ensure_task_machine_project(client)
+    created = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=461),
+    )
+    assert created.status_code == 200, created.json()
+    source_task_log_id = created.json()["log_event_ids"][0]
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    projected = next(e["entries"] for e in executions if e["entries"]["task_id"] == 461)
+
+    finished = await client.post(
+        "/v0/admin/task-execution/update",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "assistant_id": "42",
+            "run_key": projected["run_key"],
+            "source_task_log_id": source_task_log_id,
+            "updates": {"state": "completed", "result_summary": "done"},
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert finished.status_code == 200, finished.json()
+
+    adopted = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": projected["run_key"],
+            "assistant_id": "42",
+            "task_id": 461,
+            "source_task_log_id": source_task_log_id,
+            "wake": "scheduled",
+            "delivery": "live",
+            "revision": projected["revision"],
+            "state": "running",
+            "started_at": "2026-04-10T09:00:03+00:00",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert adopted.status_code == 200, adopted.json()
+    assert adopted.json()["run"]["state"] == "completed"
+    assert adopted.json()["run"]["result_summary"] == "done"
+
+
+@pytest.mark.anyio
+async def test_an_adopt_that_asserts_no_start_leaves_the_row_alone(
+    client: AsyncClient,
+    materialization_calls,
+):
+    """The offline dispatcher adopts to read state, not to claim a start.
+
+    It sends ``pending`` and no ``started_at`` precisely so it can tell from
+    the row it gets back whether the run it found had already completed, and
+    decide about retrying. Applying a transition it never asked for would
+    take that answer away.
+    """
+
+    await _ensure_task_machine_project(client)
+    created = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=_scheduled_task_entries(task_id=462),
+    )
+    assert created.status_code == 200, created.json()
+    source_task_log_id = created.json()["log_event_ids"][0]
+    executions = await _get_context_logs(client, context_name=TASK_EXECUTIONS_CONTEXT)
+    projected = next(e["entries"] for e in executions if e["entries"]["task_id"] == 462)
+
+    adopted = await client.post(
+        "/v0/admin/task-execution/create-or-adopt",
+        json={
+            "project_name": TASK_MACHINE_PROJECT_NAME,
+            "run_key": projected["run_key"],
+            "assistant_id": "42",
+            "task_id": 462,
+            "source_task_log_id": source_task_log_id,
+            "wake": "scheduled",
+            "delivery": "offline",
+            "revision": projected["revision"],
+            "state": "pending",
+        },
+        headers=ADMIN_HEADERS,
+    )
+
+    assert adopted.status_code == 200, adopted.json()
+    assert adopted.json()["created"] is False
+    assert adopted.json()["run"]["state"] == "scheduled"
+    assert "started_at" not in adopted.json()["run"]
