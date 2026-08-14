@@ -3,13 +3,13 @@ import os
 import secrets
 from contextlib import contextmanager
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
-from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND, AdminUser
+from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND, AdminUser, User
 from orchestra.db.request_principal import (
     RequestPrincipal,
     reset_request_principal,
@@ -96,6 +96,88 @@ def _ro_session(autoflush=False, expire_on_commit=False):
             session.close()
 
 
+SYSTEM_READ_USER_PARAM = "as_user_id"
+SYSTEM_READ_ORG_PARAM = "as_organization_id"
+
+
+def _apply_system_read_target(request_fastapi: Request) -> None:
+    """Let the system key read one named principal's data.
+
+    ``__system__`` owns the platform's own projects and nothing else, so it
+    resolves ``Builtins`` and ``AssistantJobs`` and reads empty everywhere
+    else. That is correct for seeding and wrong for debugging, where the
+    question is almost always "what does *this* tenant see".
+
+    The target has to be named rather than inferred. ``Project.name`` is not
+    unique — every account has its own ``Assistants`` — so resolving a bare
+    name for the system principal would hand back whichever row sorted first
+    and present one tenant's data as another's. An unresolvable name is a
+    better answer than a plausible wrong one.
+
+    Reads only. The key is a deployment-wide credential; letting it write as
+    someone else would leave mutations attributed to a principal that did not
+    make them.
+    """
+
+    target_user = (
+        request_fastapi.query_params.get(SYSTEM_READ_USER_PARAM) or ""
+    ).strip()
+    target_org = (request_fastapi.query_params.get(SYSTEM_READ_ORG_PARAM) or "").strip()
+    if not target_user and not target_org:
+        return
+
+    if request_fastapi.method != "GET":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"'{SYSTEM_READ_USER_PARAM}' is read-only; the system key "
+                f"cannot {request_fastapi.method} as another principal."
+            ),
+        )
+
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{SYSTEM_READ_ORG_PARAM}' selects an organization context "
+                f"for a user, so '{SYSTEM_READ_USER_PARAM}' is required with it."
+            ),
+        )
+
+    organization_id: int | None = None
+    if target_org:
+        try:
+            organization_id = int(target_org)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"'{SYSTEM_READ_ORG_PARAM}' must be an integer.",
+            )
+
+    with _ro_session() as session:
+        user = session.get(User, target_user)
+        if user is None:
+            # A silent empty read is how a typo becomes a conclusion about
+            # production, so an unknown principal fails loudly here.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No user {target_user!r} to read as.",
+            )
+        email = user.email
+
+    request_fastapi.state.user_id = target_user
+    request_fastapi.state.user_email = email
+    request_fastapi.state.organization_id = organization_id
+    request_fastapi.state.system_read_target = target_user
+
+    logger.info(
+        "system-key read: target_user=%s organization_id=%s path=%s",
+        target_user,
+        organization_id,
+        request_fastapi.url.path,
+    )
+
+
 def auth_api_key(
     request_fastapi: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -118,6 +200,7 @@ def auth_api_key(
         request_fastapi.state.api_key = apikey
         request_fastapi.state.is_system_api_key = True
         request_fastapi.state.key_kind = CONSOLE_KEY_KIND
+        _apply_system_read_target(request_fastapi)
         set_user_context(
             user_id=request_fastapi.state.user_id,
             user_email=request_fastapi.state.user_email,
