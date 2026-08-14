@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -2214,6 +2215,10 @@ async def test_live_composio_oauth_connect_route_uses_backend_config(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Orchestra scopes connections to the authenticated caller, so the owner
+    # user must be the account HEADERS authenticates as.
+    account_user_id = os.environ["AUTH_ACCOUNT_USER_ID"]
+
     class FakeConnectAdapter:
         def get_or_create_auth_config(self, toolkit_slug: str) -> str:
             assert toolkit_slug == "DISCORD"
@@ -2227,7 +2232,7 @@ async def test_live_composio_oauth_connect_route_uses_backend_config(
             callback_url=None,
             alias=None,
         ):
-            assert user_id == "integration-user"
+            assert user_id == account_user_id
             assert auth_config_id == "authcfg_discord"
             assert alias and alias.startswith("ic_")
             assert (
@@ -2254,7 +2259,7 @@ async def test_live_composio_oauth_connect_route_uses_backend_config(
         json={
             "owner_scope": "assistant",
             "assistant_id": 123,
-            "user_id": "integration-user",
+            "user_id": account_user_id,
             "canonical_app_slug": "discord",
             "backend_id": "composio",
             "provider_app_id": "DISCORD",

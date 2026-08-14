@@ -18,8 +18,11 @@ jobs:
 
     steps:
     - name: Call cleanup endpoint
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_MONTHS_TO_KEEP: ${{ github.event.inputs.months_to_keep }}
       run: |
-        MONTHS="${{ github.event.inputs.months_to_keep || '6' }}"
+        MONTHS="${INPUT_MONTHS_TO_KEEP:-6}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
           "https://api.unify.ai/v0/admin/cleanup/spending-limit-notifications?months_to_keep=${MONTHS}" \

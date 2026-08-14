@@ -33,6 +33,7 @@ from orchestra.db.models.integration_provider_models import (
     IntegrationOverlay,
     ProviderActionAudit,
 )
+from orchestra.db.request_principal import get_request_principal
 from orchestra.integrations.providers import (
     ProviderExecutionRequest,
     get_provider_adapter,
@@ -1086,6 +1087,45 @@ def _assert_audit_owner(
         raise PermissionError("Execution audit does not belong to the requested owner.")
 
 
+def _assert_principal_may_act_as_owner(
+    session: Session,
+    owner: OwnerContext,
+) -> None:
+    """Guard the *create/bind* paths that mint a connection from a client-
+    declared owner (read paths are scoped in the DAO). Verifies the request
+    principal is allowed to act as ``owner`` — otherwise an attacker could
+    plant a connection on a victim's assistant by supplying its id.
+    """
+    principal = get_request_principal()
+    if principal is None:
+        raise PermissionError("No request principal in context.")
+    if principal.is_system:
+        return
+    owner_user_id = owner.user_id
+    owner_org_id = owner.org_id
+    if owner.owner_scope == "assistant" and owner.assistant_id is not None:
+        from orchestra.db.models.orchestra_models import Assistant
+
+        assistant = session.get(Assistant, owner.assistant_id)
+        if assistant is not None:
+            # A real assistant's ownership is authoritative — client-supplied
+            # owner fields cannot override it (that is the hijack vector).
+            owner_user_id = assistant.user_id
+            owner_org_id = getattr(assistant, "organization_id", None)
+    # Any owner that resolves to a real tenant must be the caller's own. An
+    # owner that resolves to nobody (all identity fields None, e.g. a
+    # not-yet-created assistant) can only mint an un-owned row that no scoped
+    # query will ever return, so it is harmless and allowed.
+    resolved = owner_user_id is not None or owner_org_id is not None
+    matches = (owner_user_id is not None and owner_user_id == principal.user_id) or (
+        owner_org_id is not None and owner_org_id == principal.organization_id
+    )
+    if resolved and not matches:
+        raise PermissionError(
+            "Owner scope does not belong to the authenticated caller.",
+        )
+
+
 def _owner_tokens(owner: OwnerContext) -> set[str]:
     tokens = {owner.owner_scope}
     if owner.org_id is not None:
@@ -1619,6 +1659,7 @@ def update_app_preference(
     canonical_app_slug: str,
     usage_mode: str,
 ) -> IntegrationAppPreferenceResponse:
+    _assert_principal_may_act_as_owner(session, owner)
     seed_default_provider_catalog(session)
     preference = IntegrationProviderDAO(session).upsert_app_preference(
         owner=owner,
@@ -1676,6 +1717,7 @@ def start_connection(
     redirect_url: Optional[str],
     account_label: Optional[str] = None,
 ) -> tuple[IntegrationConnectionResponse, Optional[str], str, bool, list[str]]:
+    _assert_principal_may_act_as_owner(session, owner)
     seed_default_provider_catalog(session)
     dao = IntegrationProviderDAO(session)
     resolved_backend_id = backend_id or "composio"

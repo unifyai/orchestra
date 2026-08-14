@@ -73,7 +73,10 @@ _INTERNAL_TASK_MACHINE_CONTEXT_NAMES = frozenset(
 )
 
 _OPEN_EXECUTION_STATES = {"scheduled", "triggerable"}
-_RUNNING_STATE = "running"
+#: Public because the create-or-adopt endpoint decides against it whether an
+#: adopted occurrence is a run beginning, and that decision has to name the
+#: same state this module projects successors from.
+RUNNING_STATE = "running"
 _DEFAULT_SCHEDULED_TASK_VISIBILITY_POLICY = "silent_by_default"
 _RECURRING_WAKE_HINT = "recurring"
 _ONE_OFF_WAKE_HINT = "one_off"
@@ -1325,6 +1328,90 @@ def _occurrence_is_in_the_future(data: Mapping[str, Any]) -> bool:
     return due + timedelta(seconds=offset) > datetime.now(timezone.utc)
 
 
+#: How long after its dispatch moment an occurrence may still legitimately be
+#: sitting in ``scheduled``. It covers the whole gap between the delayed task
+#: firing and the runtime recording a start: queue hop, pod cold start,
+#: assignment, manager init, and the five-minute desktop wait a
+#: resource-gated task can take. Half an hour is far past all of it, because
+#: the cost of being wrong is asymmetric -- expiring a live occurrence loses a
+#: run, while expiring one late merely delays the repair to the next pass.
+MISSED_OCCURRENCE_GRACE_SECONDS = 1800
+
+_MISSED_OCCURRENCE_ERROR = (
+    "The occurrence was never started: its dispatch moment passed with no run "
+    "recorded against it. Expired by the supervisor sweep so the series can "
+    "project its next occurrence."
+)
+
+
+def expire_missed_task_executions(
+    session: Session,
+    *,
+    project_id: int,
+    task_ids: Sequence[int],
+    tasks_context_name: str,
+    grace_seconds: float = MISSED_OCCURRENCE_GRACE_SECONDS,
+) -> int:
+    """Terminalize occurrences whose moment passed without anything running them.
+
+    Projection picks a definition's head as the earliest open occurrence, with
+    no bound on how old that is, so an occurrence that fired and never started
+    stayed the head for good: the series had an open head, the sweep read that
+    as healthy and wrote nothing, and no further occurrence was ever minted.
+    One assistant's two workflows stopped firing this way and nothing recorded
+    it -- their next slots simply never appeared.
+
+    Expiring the head is what makes the rest self-healing: with no open
+    occurrence left, the projection that runs straight after this mints the
+    next one from the repeat rule. The row is kept and marked rather than
+    deleted, because "this run never happened" is the answer to why the
+    briefing never arrived, and a deleted row answers nothing.
+
+    Returns the number of occurrences expired.
+    """
+
+    if not task_ids:
+        return 0
+
+    context_ids = ensure_task_machine_contexts(
+        session=session,
+        project_id=project_id,
+        tasks_context_name=tasks_context_name,
+    )
+    rows = (
+        session.query(LogEvent)
+        .join(LogEventContext, log_event_context_join())
+        .filter(
+            LogEvent.project_id == project_id,
+            LogEventContext.project_id == project_id,
+            LogEventContext.context_id == context_ids.executions_context_id,
+            LogEvent.data["state"].astext == "scheduled",
+            LogEvent.data["task_id"].astext.in_([str(int(t)) for t in task_ids]),
+        )
+        .all()
+    )
+
+    now = datetime.now(timezone.utc)
+    expired = 0
+    for row in rows:
+        data = row.data or {}
+        due = _parse_datetime(_coerce_datetime_string(data.get("scheduled_for")))
+        if due is None:
+            continue
+        offset = float(data.get("dispatch_offset_seconds") or 0.0)
+        if due + timedelta(seconds=offset + grace_seconds) > now:
+            continue
+        payload = dict(data)
+        payload["state"] = "failed"
+        payload["completed_at"] = now.isoformat()
+        payload["error"] = _MISSED_OCCURRENCE_ERROR
+        _replace_log_payload(row, payload)
+        expired += 1
+    if expired:
+        session.flush()
+    return expired
+
+
 def release_stuck_task_executions(
     session: Session,
     *,
@@ -1532,7 +1619,7 @@ def update_task_run(
     _replace_log_payload(existing, payload)
     session.flush()
 
-    if str(payload.get("state") or "") == _RUNNING_STATE != previous_state:
+    if str(payload.get("state") or "") == RUNNING_STATE != previous_state:
         _project_successor_for_started_run(
             session=session,
             project_id=project_id,

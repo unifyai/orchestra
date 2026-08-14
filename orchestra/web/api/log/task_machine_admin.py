@@ -6,6 +6,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant, Project
 from orchestra.routines.task_supervisor_sweep import sweep_task_supervision
 from orchestra.services.task_machine_state_service import (
+    RUNNING_STATE,
     create_task_outbound_operation_if_absent,
     create_task_run_if_absent,
     get_latest_task_execution_for_task,
@@ -202,6 +203,60 @@ def reproject_task_execution(
     }
 
 
+#: States an occurrence can be in before anything has run it. Adopting one of
+#: these is a run beginning; adopting anything else is a redelivery or a
+#: retry inspecting a run that already happened.
+_PRE_START_EXECUTION_STATES = frozenset({"scheduled", "triggerable", "pending", ""})
+
+
+def _adopt_started_run(
+    session,
+    *,
+    project_id: int,
+    request: TaskExecutionCreateOrAdoptRequest,
+    run,
+):
+    """Record the start on an occurrence that was projected ahead of its run.
+
+    A scheduled occurrence exists before it runs, so the runtime starting it
+    always takes the adopt branch -- which returned the row untouched and
+    dropped the ``started_at`` and ``running`` its caller had just sent. The
+    consequences were not confined to two missing timestamps: successor
+    projection fires on an observed transition into ``running``, so recurrence
+    fell to the supervisor sweep alone; ``_ensure_not_active_task`` and the
+    reconciler's guard both query ``running``, so a definition could be
+    rewritten under an in-flight run; and an occurrence still reading as open
+    would let a redelivered wake start it a second time.
+
+    Applied through ``update_task_run`` rather than by patching the row here,
+    because that is where the transition into ``running`` is observed and the
+    successor projected. Writing the fields directly would set the state
+    without any of that following from it.
+
+    Only a caller that actually asserts a start, and only onto a row that has
+    not started: the offline dispatcher adopts with ``state=pending`` and no
+    ``started_at`` precisely so it can read back whether the run it found had
+    already completed, and a terminal row must never be reopened.
+    """
+
+    if request.started_at is None or str(request.state or "") != RUNNING_STATE:
+        return run
+    if str((run.data or {}).get("state") or "") not in _PRE_START_EXECUTION_STATES:
+        return run
+
+    return update_task_run(
+        session=session,
+        project_id=project_id,
+        assistant_id=request.assistant_id,
+        run_key=request.run_key,
+        updates={
+            "state": RUNNING_STATE,
+            "started_at": request.started_at.isoformat(),
+        },
+        source_task_log_id=request.source_task_log_id,
+    )
+
+
 def create_or_adopt_task_execution_core(
     session,
     request: TaskExecutionCreateOrAdoptRequest,
@@ -223,6 +278,13 @@ def create_or_adopt_task_execution_core(
         project_id=project.id,
         payload=payload,
     )
+    if not created:
+        run = _adopt_started_run(
+            session,
+            project_id=project.id,
+            request=request,
+            run=run,
+        )
     return {"run": dict(run.data or {}), "created": created}
 
 

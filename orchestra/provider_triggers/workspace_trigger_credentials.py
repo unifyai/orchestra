@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.models.integration_provider_models import IntegrationConnection
+from orchestra.db.request_principal import system_principal
 from orchestra.provider_triggers.workspace_connection_facade import (
     is_workspace_facade_connection,
 )
@@ -40,7 +41,8 @@ class WorkspaceTriggerCredentialLoader:
         self,
         connection_id: str,
     ) -> WorkspaceTriggerCredentials:
-        connection = self._integration_dao.get_connection(connection_id)
+        with system_principal():
+            connection = self._integration_dao.get_connection(connection_id)
         if connection is None:
             raise LookupError(f"Unknown integration connection {connection_id!r}")
         if not is_workspace_facade_connection(connection):

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.models.integration_provider_models import IntegrationConnection
+from orchestra.db.request_principal import system_principal
 from orchestra.provider_triggers.backend_ids import (
     ASSISTANT_WORKSPACE_SECRETS_STORAGE,
     NATIVE_GOOGLE_BACKEND_ID,
@@ -312,10 +313,12 @@ def _find_facade_connection(
     owner: OwnerContext,
     app: _WorkspaceFacadeApp,
 ) -> IntegrationConnection | None:
-    for connection in integration_dao.list_connections(
-        owner,
-        include_disconnected=True,
-    ):
+    with system_principal():
+        facade_connections = integration_dao.list_connections(
+            owner,
+            include_disconnected=True,
+        )
+    for connection in facade_connections:
         if (
             connection.backend_id == app.backend_id
             and connection.canonical_app_slug == app.canonical_app_slug

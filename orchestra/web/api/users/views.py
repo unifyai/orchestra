@@ -1460,11 +1460,7 @@ def get_query_logging_status(
 ):
     """Get the current query logging status for the authenticated user."""
     user_dao = UserDAO(session)
-    user_id = request.state.user_id
-    user = user_dao.get_by_id(user_id)
-    if not user:
-        raise not_found("User")
-
+    user = user_dao.get_user_with_id(request.state.user_id)
     return QueryLoggingStatus(enabled=user.queries_enabled)
 
 

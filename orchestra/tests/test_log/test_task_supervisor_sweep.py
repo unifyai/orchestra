@@ -9,7 +9,7 @@ left exactly where they are.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
@@ -475,3 +475,87 @@ class TestBoundedWakeSummary:
             fallback="GTM SmartLead campaign runtime",
         )
         assert summary == "GTM SmartLead campaign runtime"
+
+
+@pytest.mark.anyio
+async def test_sweep_expires_an_occurrence_nothing_ever_ran(
+    client: AsyncClient,
+) -> None:
+    """A head that fired and never started must not pin the series forever.
+
+    Projection reads a definition's head as its earliest open occurrence,
+    with no bound on age, so an occurrence nobody ran kept that seat: the
+    definition had an open head, the sweep read it as healthy and wrote
+    nothing, and no later occurrence was ever minted. Two workflows on one
+    staging assistant stopped firing exactly this way, and the only visible
+    trace was that their next slots never appeared.
+    """
+
+    await _ensure_task_machine_project(client)
+    entries = _scheduled_task_entries(task_id=913)
+    entries["repeat"] = [{"frequency": "daily", "interval": 1}]
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    # The seed's anchor is in the past, so the projected head is already a
+    # moment that came and went with nothing running it.
+    projected = await _rows_for_task(client, 913)
+    assert len(projected) == 1
+    head = projected[0]
+    assert head["state"] == "scheduled"
+    assert _parse_iso(head["scheduled_for"]) < datetime.now(timezone.utc)
+
+    body = await _sweep(client)
+
+    assert body["expired"] == 1
+    rows = await _rows_for_task(client, 913)
+    missed = [row for row in rows if row["run_key"] == head["run_key"]]
+    assert len(missed) == 1
+    # Kept and marked rather than deleted: "this never ran" is the answer to
+    # why nothing arrived, and a deleted row answers nothing.
+    assert missed[0]["state"] == "failed"
+    assert "never started" in missed[0]["error"]
+    assert missed[0]["completed_at"]
+
+    # And with the seat vacated, the same pass minted the next occurrence.
+    successors = [row for row in rows if row["state"] == "scheduled"]
+    assert len(successors) == 1
+    assert _parse_iso(successors[0]["scheduled_for"]) > datetime.now(timezone.utc)
+
+
+@pytest.mark.anyio
+async def test_sweep_leaves_an_occurrence_that_is_merely_recent_alone(
+    client: AsyncClient,
+) -> None:
+    """Being past due is not the same as having been missed.
+
+    A wake in flight has a queue hop, a pod cold start and manager init to
+    get through before anything records a start. Expiring inside that window
+    would cancel live runs, which is the one outcome worse than the stall
+    this repair exists for.
+    """
+
+    await _ensure_task_machine_project(client)
+    entries = _scheduled_task_entries(task_id=914)
+    entries["repeat"] = [{"frequency": "daily", "interval": 1}]
+    entries["schedule"] = {
+        "start_at": (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
+    }
+    response = await _create_log(
+        client,
+        TASK_MACHINE_PROJECT_NAME,
+        context=TASKS_CONTEXT,
+        entries=entries,
+    )
+    assert response.status_code == 200, response.json()
+
+    body = await _sweep(client)
+
+    assert body["expired"] == 0
+    rows = await _rows_for_task(client, 914)
+    assert [row["state"] for row in rows] == ["scheduled"]

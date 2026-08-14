@@ -18,8 +18,11 @@ jobs:
 
     steps:
     - name: Process assistant cleanup queue
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_LIMIT: ${{ github.event.inputs.limit }}
       run: |
-        LIMIT="${{ github.event.inputs.limit || '50' }}"
+        LIMIT="${INPUT_LIMIT:-50}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
           "https://api.unify.ai/v0/admin/cleanup/assistant-runtime?limit=${LIMIT}" \
@@ -59,8 +62,11 @@ jobs:
 
     steps:
     - name: Process assistant cleanup queue
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_LIMIT: ${{ github.event.inputs.limit }}
       run: |
-        LIMIT="${{ github.event.inputs.limit || '50' }}"
+        LIMIT="${INPUT_LIMIT:-50}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
           "https://internal.example.com/v0/admin/cleanup/assistant-runtime?limit=${LIMIT}" \

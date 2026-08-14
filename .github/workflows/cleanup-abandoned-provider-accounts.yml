@@ -30,9 +30,13 @@ jobs:
 
     steps:
     - name: Call cleanup endpoint
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_OLDER_THAN_SECONDS: ${{ github.event.inputs.older_than_seconds }}
+        INPUT_LIMIT: ${{ github.event.inputs.limit }}
       run: |
-        older=${{ github.event.inputs.older_than_seconds || '3600' }}
-        limit=${{ github.event.inputs.limit || '500' }}
+        older="${INPUT_OLDER_THAN_SECONDS:-3600}"
+        limit="${INPUT_LIMIT:-500}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
           "https://api.unify.ai/v0/admin/cleanup/abandoned-provider-accounts?older_than_seconds=${older}&limit=${limit}" \

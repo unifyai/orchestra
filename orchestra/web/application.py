@@ -175,6 +175,13 @@ def get_app() -> FastAPI:
 
     app.add_middleware(UnifyMembersOnlyMiddleware)
 
+    @app.exception_handler(PermissionError)
+    async def _forbidden_handler(request, exc):  # noqa: ANN001
+        # Tenant-scope denials (e.g. the integration request-principal guard)
+        # raise PermissionError deep in the stack; surface them as 403 rather
+        # than a fail-closed 500.
+        return JSONResponse({"detail": str(exc) or "Forbidden"}, status_code=403)
+
     register_startup_event(app)
     register_shutdown_event(app)
 

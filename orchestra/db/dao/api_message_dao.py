@@ -8,6 +8,17 @@ from sqlalchemy.orm import Session
 from orchestra.db.models.orchestra_models import ApiMessage
 
 
+def _without_nul(value):
+    """Strip NUL (0x00) characters, which Postgres rejects in TEXT and JSONB."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_without_nul(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _without_nul(item) for key, item in value.items()}
+    return value
+
+
 class ApiMessageDAO:
     def __init__(self, session: Session):
         self.session = session
@@ -26,10 +37,10 @@ class ApiMessageDAO:
             assistant_id=assistant_id,
             user_id=user_id,
             organization_id=organization_id,
-            message=message,
+            message=_without_nul(message),
             status="processing",
-            tags=tags or [],
-            attachments=attachments or [],
+            tags=_without_nul(tags or []),
+            attachments=_without_nul(attachments or []),
         )
         self.session.add(api_message)
         self.session.flush()

@@ -10,6 +10,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.billing_account_dao import BillingAccountDAO
 from orchestra.db.models.orchestra_models import CONSOLE_KEY_KIND, AdminUser
+from orchestra.db.request_principal import (
+    RequestPrincipal,
+    reset_request_principal,
+    set_request_principal,
+)
 from orchestra.observability.observability import set_user_context
 from orchestra.settings import settings
 from orchestra.web.api.utils.http_responses import (
@@ -151,6 +156,36 @@ def auth_api_key(
             )
             return
     raise invalid_api_key
+
+
+async def bind_integration_principal(request_fastapi: Request):
+    """Stamp the authenticated caller's tenant identity into request context.
+
+    Must be an async-generator dependency ordered *after* ``auth_api_key``:
+    async-generator deps are the only kind whose ``ContextVar`` writes reach a
+    sync path operation (and the DAO it calls), and by then ``auth_api_key``
+    has populated ``request.state``. The integration DAO reads this back to
+    scope every connection/audit lookup to the caller.
+    """
+    principal = RequestPrincipal(
+        user_id=getattr(request_fastapi.state, "user_id", None),
+        organization_id=getattr(request_fastapi.state, "organization_id", None),
+        is_system=bool(getattr(request_fastapi.state, "is_system_api_key", False)),
+    )
+    token = set_request_principal(principal)
+    try:
+        yield
+    finally:
+        reset_request_principal(token)
+
+
+async def bind_system_integration_principal():
+    """Tenant-scope bypass for admin-key integration routes (already trusted)."""
+    token = set_request_principal(RequestPrincipal(is_system=True))
+    try:
+        yield
+    finally:
+        reset_request_principal(token)
 
 
 def auth_admin_key(

@@ -191,7 +191,6 @@ async def _provision_email_password_user(
 )
 async def register(
     body: EmailRegisterRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -203,45 +202,36 @@ async def register(
     """
     email = body.email.lower().strip()
 
-    # Every limit here keys on the address Console saw the browser at.
-    # The connection itself comes from Console on every registration, so
-    # keying on it throttles the platform as a whole rather than anyone
-    # in particular.
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_register",
         max_attempts=5,
         identifier=email,
-        client_ip=body.signup_ip,
     )
-    # The (IP, email) limit above never trips for a farmer rotating
-    # email addresses; these two throttle raw signup velocity per IP and
-    # per /24 subnet regardless of the email used.
+    # The (address, email) limit above never trips for a farmer rotating
+    # email addresses; these two throttle raw signup velocity per address
+    # and per /24 subnet regardless of the email used.
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_register_ip",
         max_attempts=10,
         window_minutes=60,
-        client_ip=body.signup_ip,
     )
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_register_subnet",
         max_attempts=30,
         window_minutes=1440,
         use_subnet=True,
-        client_ip=body.signup_ip,
     )
 
     # 0a. User-Agent heuristic check, against the browser's agent as
-    # Console saw it. The request's own is Console's HTTP client and
-    # matches nothing, so judging it passed every registration alike.
-    # An absent agent is not judged: the check reads a missing one as a
-    # bot, which would refuse every signup for as long as the two
-    # deployments disagreed about sending it.
+    # Console saw it. This request's own agent belongs to Console's HTTP
+    # client and is the same string on every signup, so checking it
+    # asks nothing of the signer.
     if body.signup_user_agent and not check_user_agent(body.signup_user_agent):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -296,13 +286,8 @@ async def register(
             name=user.name,
         )
 
-    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new
-    # registrations. Turnstile checks the address against the one the
-    # challenge was solved at, so it wants the browser's; the connection
-    # here is Console's server, which never solved anything. The
-    # parameter is optional, so sending nothing beats sending the wrong
-    # address.
-    captcha_ok = await verify_turnstile_token(body.captcha_token, body.signup_ip)
+    # 3. Validate CAPTCHA (Cloudflare Turnstile) — only for genuinely new registrations
+    captcha_ok = await verify_turnstile_token(body.captcha_token, body.client_ip)
     if not captcha_ok:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -362,7 +347,6 @@ async def register(
 )
 def verify_code(
     body: EmailVerifyRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -380,7 +364,7 @@ def verify_code(
 
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_verify",
         max_attempts=5,
         identifier=email,
@@ -529,7 +513,6 @@ async def create_user_after_verification(
 )
 def authenticate(
     body: EmailAuthenticateRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -542,7 +525,7 @@ def authenticate(
 
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_login",
         max_attempts=10,
         identifier=email,
@@ -633,7 +616,6 @@ def authenticate(
 )
 async def forgot_password(
     body: ForgotPasswordRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -645,15 +627,14 @@ async def forgot_password(
 
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_reset",
         max_attempts=3,
         identifier=email,
     )
 
     # Validate CAPTCHA (Cloudflare Turnstile)
-    remote_ip = request.client.host if request.client else None
-    captcha_ok = await verify_turnstile_token(body.captcha_token, remote_ip)
+    captcha_ok = await verify_turnstile_token(body.captcha_token, body.client_ip)
     if not captcha_ok:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -785,7 +766,6 @@ def reset_password(
 )
 async def resend_verification(
     body: ResendVerificationRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -799,7 +779,7 @@ async def resend_verification(
 
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_resend",
         max_attempts=3,
         identifier=email,
@@ -1381,7 +1361,6 @@ def mfa_status(
 )
 def mfa_verify(
     body: MFAVerifyRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -1392,7 +1371,7 @@ def mfa_verify(
     """
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_mfa",
         max_attempts=5,
         identifier=body.user_id,
@@ -1430,7 +1409,6 @@ def mfa_verify(
 )
 def mfa_verify_recovery(
     body: MFAVerifyRecoveryRequest,
-    request: Request,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -1441,7 +1419,7 @@ def mfa_verify_recovery(
     """
     enforce_auth_rate_limit(
         session,
-        request,
+        body.client_ip,
         "auth_mfa_recovery",
         max_attempts=5,
         identifier=body.user_id,

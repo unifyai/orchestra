@@ -870,6 +870,7 @@ def _build_assistant_read(
         is_local=a.is_local,
         is_coordinator=a.is_coordinator,
         is_multiplayer=a.is_multiplayer,
+        is_deployment_target=a.is_deployment_target,
         monthly_spending_cap=(
             float(a.monthly_spending_cap)
             if a.monthly_spending_cap is not None

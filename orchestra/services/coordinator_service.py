@@ -2051,15 +2051,17 @@ class _OnboardingProbeScope:
     def integration_connections(self) -> list[Any]:
         if self._integration_connections is None:
             from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
+            from orchestra.db.request_principal import system_principal
             from orchestra.web.api.integrations.operations import OwnerContext
 
             owner = OwnerContext(
                 owner_scope="assistant",
                 assistant_id=self.coordinator.agent_id,
             )
-            self._integration_connections = IntegrationProviderDAO(
-                self.session,
-            ).list_connections(owner)
+            with system_principal():
+                self._integration_connections = IntegrationProviderDAO(
+                    self.session,
+                ).list_connections(owner)
         return self._integration_connections
 
     @property
@@ -3524,13 +3526,15 @@ def _probe_connected_integration_count(
     coordinator: Assistant,
 ) -> int:
     from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
+    from orchestra.db.request_principal import system_principal
     from orchestra.web.api.integrations.operations import OwnerContext
 
     owner = OwnerContext(
         owner_scope="assistant",
         assistant_id=coordinator.agent_id,
     )
-    connections = IntegrationProviderDAO(session).list_connections(owner)
+    with system_principal():
+        connections = IntegrationProviderDAO(session).list_connections(owner)
     return sum(1 for connection in connections if connection.status == "connected")
 
 

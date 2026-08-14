@@ -66,6 +66,7 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.services.task_machine_state_service import (
     TASK_MACHINE_PROJECT_NAME,
+    expire_missed_task_executions,
     is_task_surface_context_name,
     sync_task_executions_for_task_ids,
 )
@@ -94,6 +95,11 @@ class TaskSupervisorSweepResult:
     upserted: int = 0
     deleted: int = 0
     unchanged: int = 0
+    #: Occurrences whose moment passed with nothing running them. Counted
+    #: separately from ``upserted`` because it is the one number here that
+    #: reports lost work rather than routine repair: a fleet that expires
+    #: occurrences every pass is dropping runs somewhere upstream.
+    expired: int = 0
     errors: List[str] = field(default_factory=list)
 
     @property
@@ -125,6 +131,7 @@ class TaskSupervisorSweepResult:
             "upserted": self.upserted,
             "deleted": self.deleted,
             "unchanged": self.unchanged,
+            "expired": self.expired,
             "errors": self.errors,
         }
 
@@ -240,6 +247,18 @@ def _sweep_with_session(
             result.surfaces_scanned += 1
             result.definitions_scanned += len(task_ids)
             try:
+                # Before re-projecting, not after: projection reads the
+                # earliest open occurrence as the definition's head, so an
+                # occurrence that fired and never started keeps that seat and
+                # the pass writes nothing. Expiring it first is what leaves
+                # the projection below with no head to find, so it mints the
+                # next one.
+                result.expired += expire_missed_task_executions(
+                    session,
+                    project_id=project_id,
+                    task_ids=task_ids,
+                    tasks_context_name=context_name,
+                )
                 counts = sync_task_executions_for_task_ids(
                     session,
                     project_id,

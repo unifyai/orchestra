@@ -472,6 +472,15 @@ class TaskSupervisorSweepResponse(BaseModel):
         default=0,
         description="Heads the sweep found already correct and left untouched.",
     )
+    expired: int = Field(
+        default=0,
+        description=(
+            "Occurrences whose moment passed with nothing running them, "
+            "terminalized so the series could project its next one. Unlike "
+            "`upserted` this counts lost runs rather than repairs: a fleet "
+            "expiring occurrences every pass is dropping wakes upstream."
+        ),
+    )
     errors: List[str] = Field(
         default_factory=list,
         description="Per-surface failures; the sweep continues past them.",

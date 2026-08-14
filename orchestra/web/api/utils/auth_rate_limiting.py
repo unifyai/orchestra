@@ -1,15 +1,29 @@
-"""IP-based rate limiting for unauthenticated auth endpoints.
+"""Address-based rate limiting for unauthenticated auth endpoints.
 
-Provides helpers that throttle auth endpoints by client IP, optionally
-combined with an identifier (email, user_id). Uses the same 5-minute
-time bucket pattern as the existing RateLimitCounter system but doesn't
-require an authenticated user.
+Throttles auth endpoints by the caller's address, optionally combined
+with an identifier (email, user_id). Uses the same 5-minute time bucket
+pattern as the existing RateLimitCounter system but doesn't require an
+authenticated user.
+
+**The address arrives explicitly, never from the request.** Every auth
+call reaches Orchestra through Console's Next.js server on an admin-key
+endpoint, so the transport request describes Console: one egress address
+shared by every signup on the platform. Keying on it does not throttle a
+caller, it collapses the platform onto a single counter — a limit of
+thirty signups a day between everyone, which then holds itself closed
+because each rejected retry extends the window it is measured against.
+
+Console holds the browser's request and passes what it saw. Unlike the
+advisory record in :mod:`signup_provenance`, this value is a security
+control, so Console derives it from the hop its load balancer appended
+rather than the left-most hop a caller supplies: whatever reaches this
+module must be an address the caller could not choose for themselves.
 
 Usage in endpoint handlers:
 
-    def my_endpoint(body: MyRequest, request: Request, session: Session = ...):
+    def my_endpoint(body: MyRequest, session: Session = ...):
         enforce_auth_rate_limit(
-            session, request, "auth_login",
+            session, body.client_ip, "auth_login",
             max_attempts=10, identifier=body.email,
         )
         ...
@@ -42,6 +56,12 @@ def _get_time_bucket(dt: Optional[datetime] = None) -> datetime:
 
 
 def get_client_ip(request: Request) -> str:
+    """The address a request arrived from.
+
+    For callers that reach Orchestra directly, such as inbound provider
+    webhooks. Auth endpoints must not use this: they are reached through
+    Console, so it describes Console rather than the person signing up.
+    """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -49,10 +69,10 @@ def get_client_ip(request: Request) -> str:
 
 
 def subnet_of(ip: str) -> str:
-    """Collapse an IP to its /24 (IPv4) or /48 (IPv6) prefix.
+    """Collapse an address to its /24 (IPv4) or /48 (IPv6) prefix.
 
     Farmers rotating addresses within one allocation share a prefix even
-    when individual IPs differ.
+    when individual addresses differ.
     """
     if ":" in ip:
         return ":".join(ip.split(":")[:3]) + "::/48"
@@ -60,73 +80,49 @@ def subnet_of(ip: str) -> str:
     return f"{parts[0]}.0/24" if len(parts) == 2 else ip
 
 
-def rate_limit_origin(
-    request: Request,
-    *,
-    client_ip: Optional[str] = None,
-    use_subnet: bool = False,
-) -> str:
-    """What an attempt is counted against.
-
-    The caller's own address wins when it knows one, because on the auth
-    endpoints the connection belongs to Console's server rather than to
-    whoever is signing up.
-    """
-    origin = client_ip or get_client_ip(request)
-    return subnet_of(origin) if use_subnet else origin
-
-
 def enforce_auth_rate_limit(
     session: Session,
-    request: Request,
+    client_ip: Optional[str],
     category: str,
     max_attempts: int,
     window_minutes: int = 5,
     identifier: Optional[str] = None,
     use_subnet: bool = False,
-    client_ip: Optional[str] = None,
 ) -> None:
     """
-    Record an auth attempt and raise 429 if the limit is exceeded.
+    Raise 429 if this caller is over the limit, otherwise record the attempt.
 
     Call this at the top of auth endpoint handlers, after the body is parsed.
 
     Args:
         session: DB session.
-        request: FastAPI request (used to extract client IP).
+        client_ip: The caller's address as Console observed it, or None
+            when Console could not determine one.
         category: Rate limit category (e.g. 'auth_login').
         max_attempts: Max allowed attempts within the window.
         window_minutes: Rolling window size in minutes.
-        identifier: Optional secondary key (email, user_id) combined with IP.
-        use_subnet: Key on the client's /24 (or IPv6 /48) prefix instead
-            of the exact IP, so limits hold across a rotating allocation.
-        client_ip: The signer's address, where the caller knows it better
-            than the connection does. These endpoints are called by
-            Console's server, so the requesting peer is Console on every
-            attempt: a limit keyed on it throttles the platform rather
-            than a person, and one keyed on IP alone lets strangers
-            exhaust each other's allowance. Falls back to the peer when
-            absent, which is no worse than keying on it throughout.
+        identifier: Optional secondary key (email, user_id) combined with
+            the address.
+        use_subnet: Key on the caller's /24 (or IPv6 /48) prefix instead
+            of the exact address, so limits hold across a rotating
+            allocation.
     """
     if settings.is_staging or settings.environment == "dev":
         return
 
-    ip = rate_limit_origin(request, client_ip=client_ip, use_subnet=use_subnet)
-    key = f"{ip}:{identifier}" if identifier else ip
-    bucket = _get_time_bucket()
-
-    stmt = insert(AuthRateLimitEntry).values(
-        key=key,
-        endpoint_category=category,
-        time_bucket=bucket,
-        attempt_count=1,
-    )
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_auth_rate_limit_entry",
-        set_={"attempt_count": AuthRateLimitEntry.attempt_count + 1},
-    )
-    session.execute(stmt)
-    session.flush()
+    if client_ip:
+        ip = subnet_of(client_ip) if use_subnet else client_ip
+        key = f"{ip}:{identifier}" if identifier else ip
+    elif identifier:
+        key = identifier
+    else:
+        # Console sends an address on every proxied auth route, so an
+        # absence is a bug there rather than something a caller can
+        # arrange. A limit with nothing else to key on would put every
+        # signup on the platform behind one counter, which is the
+        # failure this argument exists to end.
+        logger.warning("No client address for %s — check the Console route", category)
+        return
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
     total = session.execute(
@@ -137,8 +133,11 @@ def enforce_auth_rate_limit(
         ),
     ).scalar()
 
-    if total and int(total) > max_attempts:
-        session.commit()
+    # Counted before the attempt is recorded. Recording first lets a
+    # rejected attempt extend the window it is then measured against, so
+    # a caller retrying against a closed limit holds it closed for as
+    # long as they keep trying.
+    if total and int(total) >= max_attempts:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
@@ -147,6 +146,19 @@ def enforce_auth_rate_limit(
                 "retry_after_seconds": 60,
             },
         )
+
+    stmt = insert(AuthRateLimitEntry).values(
+        key=key,
+        endpoint_category=category,
+        time_bucket=_get_time_bucket(),
+        attempt_count=1,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_auth_rate_limit_entry",
+        set_={"attempt_count": AuthRateLimitEntry.attempt_count + 1},
+    )
+    session.execute(stmt)
+    session.flush()
 
 
 def cleanup_auth_rate_limit_entries(session: Session) -> int:

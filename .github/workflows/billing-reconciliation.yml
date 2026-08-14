@@ -28,9 +28,13 @@ jobs:
 
     steps:
     - name: Run billing reconciliation
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_AUTO_FIX: ${{ github.event.inputs.auto_fix }}
+        INPUT_LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days }}
       run: |
-        AUTO_FIX="${{ github.event.inputs.auto_fix || 'moderate' }}"
-        LOOKBACK="${{ github.event.inputs.lookback_days || '30' }}"
+        AUTO_FIX="${INPUT_AUTO_FIX:-moderate}"
+        LOOKBACK="${INPUT_LOOKBACK_DAYS:-30}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
           "https://api.unify.ai/v0/admin/billing/reconcile?auto_fix=${AUTO_FIX}&lookback_days=${LOOKBACK}" \
@@ -73,9 +77,13 @@ jobs:
 
     steps:
     - name: Run billing reconciliation
+      env:
+        # Dispatch inputs reach the shell as data, not as script text.
+        INPUT_AUTO_FIX: ${{ github.event.inputs.auto_fix }}
+        INPUT_LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days }}
       run: |
-        AUTO_FIX="${{ github.event.inputs.auto_fix || 'moderate' }}"
-        LOOKBACK="${{ github.event.inputs.lookback_days || '30' }}"
+        AUTO_FIX="${INPUT_AUTO_FIX:-moderate}"
+        LOOKBACK="${INPUT_LOOKBACK_DAYS:-30}"
 
         response=$(curl -s -w "\n%{http_code}" -X POST \
           "https://internal.example.com/v0/admin/billing/reconcile?auto_fix=${AUTO_FIX}&lookback_days=${LOOKBACK}" \

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.integration_provider_dao import IntegrationProviderDAO
 from orchestra.db.dao.trigger_catalog_dao import TriggerCatalogDAO
+from orchestra.db.request_principal import system_principal
 from orchestra.integrations.provider_resolution import slug_variants
 from orchestra.provider_triggers.backend_ids import (
     NATIVE_GOOGLE_BACKEND_ID,
@@ -186,7 +187,8 @@ def list_connected_app_slugs(
 
     dao = IntegrationProviderDAO(session)
     owner = OwnerContext(owner_scope="assistant", assistant_id=assistant_id)
-    connections = dao.list_connections(owner)
+    with system_principal():
+        connections = dao.list_connections(owner)
     connected: set[tuple[str, str]] = set()
     for connection in connections:
         if connection.status not in {"connected", "active"}:
@@ -328,12 +330,13 @@ def validate_provider_event_trigger_for_assistant(
     """Reject provider-event tasks that reference unknown connections or slugs."""
 
     owner = OwnerContext(owner_scope="assistant", assistant_id=assistant_id)
-    connection = IntegrationProviderDAO(session).best_connection(
-        owner=owner,
-        canonical_app_slug=trigger.canonical_app_slug,
-        backend_id=trigger.backend_id,
-        connection_id=trigger.connection_id,
-    )
+    with system_principal():
+        connection = IntegrationProviderDAO(session).best_connection(
+            owner=owner,
+            canonical_app_slug=trigger.canonical_app_slug,
+            backend_id=trigger.backend_id,
+            connection_id=trigger.connection_id,
+        )
     if connection is None:
         raise ValueError(
             f"provider_event_connection_not_found: {trigger.connection_id}",
