@@ -4798,6 +4798,18 @@ async def _cleanup_after_assistant_delete(
         bg_session.close()
 
 
+@admin_router.delete(
+    "/assistant/{assistant_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: delete an assistant",
+    description=(
+        "Deletes an assistant by ID irrespective of its owner, for operational "
+        "cleanup and abuse response. Requires ``reason``, which is written to "
+        "the server log."
+    ),
+    tags=["Assistant Management", "Admin"],
+    include_in_schema=False,
+)
 @router.delete(
     "/assistant/{assistant_id}",
     status_code=status.HTTP_200_OK,
@@ -4825,6 +4837,13 @@ async def delete_assistant(
     assistant_id: int,
     request: Request,
     background_tasks: BackgroundTasks,
+    reason: Optional[str] = Query(
+        None,
+        description=(
+            "Why this assistant is being deleted. Required on the admin route "
+            "and ignored on the owner route."
+        ),
+    ),
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
@@ -4839,24 +4858,67 @@ async def delete_assistant(
     are handed to the durable ``AssistantCleanupTask`` queue, which is retried
     out of band; a terminally failed task is visible via the admin cleanup
     endpoint.
+
+    The ``/admin`` mount deletes an assistant whoever owns it, for operational
+    cleanup and abuse response. It is a named route rather than a general
+    "admin may call user routes" bypass, so the admin surface stays
+    enumerable: what the deployment-wide key can reach is exactly what
+    ``@admin_router`` decorates.
+
+    Admin deletion keeps the coordinator and deployment-target refusals. Those
+    guard structure rather than ownership -- a workspace without its
+    Coordinator is broken, not tidy -- and an override flag would make the
+    dangerous case the easy one. Removing a user's Coordinator is part of
+    deleting the user, which ``DELETE /admin/user`` already owns.
     """
     dao = AssistantDAO(session)
+    is_admin_request = request.url.path.startswith("/v0/admin/")
     organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors: list[str] = []
 
     try:
-        assistant = dao.get_assistant_by_id(
-            user_id=request.state.user_id,
-            agent_id=assistant_id,
-            organization_id=organization_id,
-        )
+        if is_admin_request:
+            if not (reason or "").strip():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="reason is required to delete an assistant as admin.",
+                )
+            # The admin key authenticates as ``__system__``, which owns no
+            # assistants, so an owner-scoped lookup would find nothing. Read
+            # the row directly and take ownership from it, so the purge below
+            # is still scoped to the owner whose data this actually is.
+            assistant = session.get(Assistant, assistant_id)
+            owner_user_id = assistant.user_id if assistant else None
+            organization_id = assistant.organization_id if assistant else None
+        else:
+            owner_user_id = request.state.user_id
+            assistant = dao.get_assistant_by_id(
+                user_id=owner_user_id,
+                agent_id=assistant_id,
+                organization_id=organization_id,
+            )
         if not assistant:
+            # The admin router authenticates with ``auth_admin_key``, which
+            # sets no principal on ``request.state``, so name the caller from
+            # what this route resolved rather than reading it back off state.
             logging.warning(
-                f"Assistant with ID {assistant_id} not found for user {request.state.user_id}.",
+                "Assistant with ID %s not found for %s.",
+                assistant_id,
+                "admin" if is_admin_request else owner_user_id,
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
+            )
+
+        if is_admin_request:
+            # The admin key is deployment-wide and carries no principal of its
+            # own, so this line is the only attribution the deletion gets.
+            logging.warning(
+                "Admin deletion of assistant %s (owner %s): %s",
+                assistant_id,
+                owner_user_id,
+                reason,
             )
 
         if assistant.is_coordinator:
@@ -4871,7 +4933,7 @@ async def delete_assistant(
                 detail="cannot_delete_deployment_target",
             )
 
-        if organization_id is not None:
+        if organization_id is not None and not is_admin_request:
             resource_access_dao = ResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
                 request.state.user_id,
@@ -4927,7 +4989,7 @@ async def delete_assistant(
         release_assistant_connections(session, assistant_id=assistant_id)
 
         dao.delete_assistant(
-            user_id=request.state.user_id,
+            user_id=owner_user_id,
             agent_id=assistant_id,
             organization_id=organization_id,
         )
