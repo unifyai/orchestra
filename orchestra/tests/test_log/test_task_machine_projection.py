@@ -372,7 +372,7 @@ def test_post_task_execution_request_skips_in_self_host_mode(monkeypatch):
             posts.append((args, kwargs))
 
     monkeypatch.setenv("SELF_HOST", "1")
-    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "http://comms.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
 
@@ -405,7 +405,7 @@ def test_post_task_execution_request_posts_when_not_self_host(monkeypatch):
             )
 
     monkeypatch.delenv("SELF_HOST", raising=False)
-    monkeypatch.setenv("UNITY_COMMS_URL", "http://comms.test")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "http://comms.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
     monkeypatch.setattr(task_machine_state_service.httpx, "Client", _FakeClient)
 

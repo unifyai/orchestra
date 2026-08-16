@@ -222,7 +222,7 @@ def test_native_microsoft_provision_fails_closed_without_adapters_url() -> None:
         raise AssertionError("no HTTP call expected without adapters URL")
 
     adapter = _adapter(request_fn=request_fn, adapters_base_url="")
-    with pytest.raises(RuntimeError, match="UNITY_ADAPTERS_URL"):
+    with pytest.raises(RuntimeError, match="UNIFY_ADAPTERS_URL"):
         adapter.provision(_provision_request())
 
 

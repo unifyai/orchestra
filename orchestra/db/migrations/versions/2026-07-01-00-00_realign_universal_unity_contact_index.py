@@ -38,7 +38,7 @@ _DROID_PREDICATE = (
     "AND NOT (contact_type IN ('email', 'phone') "
     "AND COALESCE(metadata ->> 'universal_droid', 'false') = 'true')"
 )
-_UNITY_PREDICATE = (
+_UNIFY_PREDICATE = (
     "status != 'deleted' "
     "AND contact_type NOT IN ('whatsapp', 'discord') "
     "AND NOT (contact_type IN ('email', 'phone') "
@@ -51,7 +51,7 @@ _DROID_TO_UNITY = sa.text(
     "|| '{\"universal_unity\": true}'::jsonb "
     "WHERE (metadata ->> 'universal_droid') = 'true'",
 )
-_UNITY_TO_DROID = sa.text(
+_UNIFY_TO_DROID = sa.text(
     "UPDATE assistant_contacts "
     "SET metadata = (COALESCE(metadata, '{}'::jsonb) - 'universal_unity') "
     "|| '{\"universal_droid\": true}'::jsonb "
@@ -67,13 +67,13 @@ def upgrade() -> None:
         "assistant_contacts",
         ["contact_value"],
         unique=True,
-        postgresql_where=sa.text(_UNITY_PREDICATE),
+        postgresql_where=sa.text(_UNIFY_PREDICATE),
     )
 
 
 def downgrade() -> None:
     op.drop_index("uq_active_contact_value", table_name="assistant_contacts")
-    op.execute(_UNITY_TO_DROID)
+    op.execute(_UNIFY_TO_DROID)
     op.create_index(
         "uq_active_contact_value",
         "assistant_contacts",

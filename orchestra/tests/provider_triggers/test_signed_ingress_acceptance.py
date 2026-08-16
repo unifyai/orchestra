@@ -20,7 +20,7 @@ from orchestra.db.models.provider_trigger_models import (
     ProviderEventDispatch,
     ProviderEventReceipt,
 )
-from orchestra.provider_triggers.dispatch_request import UNITY_DISPATCH_AUDIENCE
+from orchestra.provider_triggers.dispatch_request import UNIFY_DISPATCH_AUDIENCE
 from orchestra.provider_triggers.ingress_rate_limit import (
     reset_ingress_rate_limiter_for_tests,
 )
@@ -191,7 +191,7 @@ async def test_signed_composio_webhook_accepts_redelivery_once_and_surfaces_prov
     dispatch = dispatches[0]
     assert dispatch.run_id == receipt.run_id
     assert dispatch.run_key == receipt.run_key
-    assert dispatch.audience == UNITY_DISPATCH_AUDIENCE
+    assert dispatch.audience == UNIFY_DISPATCH_AUDIENCE
 
     expected_run_key = build_provider_event_run_key(
         assistant_id=str(assistant_id),

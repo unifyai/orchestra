@@ -43,7 +43,7 @@ _DROID_PREDICATE = (
     "AND NOT (contact_type IN ('email', 'phone') "
     "AND COALESCE(metadata ->> 'universal_droid', 'false') = 'true')"
 )
-_UNITY_PREDICATE = (
+_UNIFY_PREDICATE = (
     "status != 'deleted' "
     "AND contact_type NOT IN ('whatsapp', 'discord') "
     "AND NOT (contact_type IN ('email', 'phone') "
@@ -58,23 +58,23 @@ _UNITY_PREDICATE = (
 # explicit ``false`` keeps its semantics — only genuine pool contacts are moved.
 # Other metadata keys are preserved by the ``-`` (drop one key) + ``||`` (merge)
 # pair; no row is deleted and no other field is touched.
-_UNITY_TO_DROID = sa.text(
+_UNIFY_TO_DROID = sa.text(
     "UPDATE assistant_contacts "
     "SET metadata = (COALESCE(metadata, '{}'::jsonb) - 'universal_unity') "
     "|| '{\"universal_droid\": true}'::jsonb "
-    "WHERE (metadata ->> 'universal_unity') = 'true'"
+    "WHERE (metadata ->> 'universal_unity') = 'true'",
 )
 _DROID_TO_UNITY = sa.text(
     "UPDATE assistant_contacts "
     "SET metadata = (COALESCE(metadata, '{}'::jsonb) - 'universal_droid') "
     "|| '{\"universal_unity\": true}'::jsonb "
-    "WHERE (metadata ->> 'universal_droid') = 'true'"
+    "WHERE (metadata ->> 'universal_droid') = 'true'",
 )
 
 
 def upgrade() -> None:
     op.drop_index("uq_active_contact_value", table_name="assistant_contacts")
-    op.execute(_UNITY_TO_DROID)
+    op.execute(_UNIFY_TO_DROID)
     op.create_index(
         "uq_active_contact_value",
         "assistant_contacts",
@@ -92,5 +92,5 @@ def downgrade() -> None:
         "assistant_contacts",
         ["contact_value"],
         unique=True,
-        postgresql_where=sa.text(_UNITY_PREDICATE),
+        postgresql_where=sa.text(_UNIFY_PREDICATE),
     )

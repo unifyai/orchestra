@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator, validator
+from pydantic import BaseModel, field_validator, model_validator, validator
 
 # ---------------------------------------------------------------------------
 # Canonical ledger category sets
@@ -85,6 +85,23 @@ class DeductCreditsRequest(BaseModel):
         if v <= 0:
             raise ValueError("amount must be greater than 0")
         return v
+
+    @model_validator(mode="after")
+    def usage_must_say_what_it_was(self) -> "DeductCreditsRequest":
+        """A usage debit records what was used, so it must say what that was.
+
+        Every platform meter annotates its debits — ``Assistant work`` with the
+        model and source, ``Photo generation``, ``Contact setup`` — and the
+        usage views downstream read that annotation as the sign that something
+        was actually metered. A bare amount posted with a usage category is not
+        a record of anything and is refused.
+        """
+        if not (self.description and self.description.strip()) and not self.detail:
+            raise ValueError(
+                "usage debits must carry a description or detail saying what "
+                "was used",
+            )
+        return self
 
 
 class DeductCreditsResponse(BaseModel):

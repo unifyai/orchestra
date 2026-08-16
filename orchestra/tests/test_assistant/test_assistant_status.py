@@ -49,7 +49,7 @@ def test_comms_url_prefers_configured_unity_gateway_urls():
         ),
         patch.object(
             assistant_infra,
-            "UNITY_GATEWAY_URL",
+            "UNIFY_GATEWAY_URL",
             "http://127.0.0.1:9001",
         ),
     ):
@@ -77,7 +77,7 @@ def test_adapters_url_falls_back_to_local_comms_url():
         ),
         patch.object(
             assistant_infra,
-            "UNITY_GATEWAY_URL",
+            "UNIFY_GATEWAY_URL",
             None,
         ),
         patch.dict(

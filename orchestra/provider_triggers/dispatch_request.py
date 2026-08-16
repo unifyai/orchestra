@@ -15,7 +15,7 @@ EVENT_CONTEXT_AUDIENCE = "orchestra:event-context"
 
 # Short-lived internal credential audiences for delivering one dispatch operation
 # to the live Unity or offline Communication execution rail.
-UNITY_DISPATCH_AUDIENCE = "unity:provider-event-dispatch"
+UNIFY_DISPATCH_AUDIENCE = "unity:provider-event-dispatch"
 COMMUNICATION_DISPATCH_AUDIENCE = "communication:provider-event-dispatch"
 
 

@@ -135,7 +135,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 full_stack_state_file() {
-  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNITY_HOME:-$HOME/.unity}}"
+  printf '%s/full-stack-state.json' "${SELF_HOST_STATE_DIR:-${UNIFY_HOME:-$HOME/.unity}}"
 }
 
 port_is_listening() {
@@ -161,7 +161,7 @@ PY
 
 refuse_isolated_when_full_stack_active() {
   local action="$1"
-  if [[ "${ORCHESTRA_ALLOW_ISOLATED:-0}" == "1" || -n "${UNITY_STACK_ORCHESTRATOR:-}" ]]; then
+  if [[ "${ORCHESTRA_ALLOW_ISOLATED:-0}" == "1" || -n "${UNIFY_STACK_ORCHESTRATOR:-}" ]]; then
     return 0
   fi
   if full_stack_source_is_active; then
@@ -1089,11 +1089,11 @@ start_orchestra_server() {
   # Comms gateway URL so /v0/features can probe channel availability (phone,
   # whatsapp, discord) and Console can surface those channels. In self-host the
   # bundled unity.gateway serves comms locally; default to it when unset.
-  if [[ -z "${UNITY_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
-    UNITY_COMMS_URL="http://127.0.0.1:${UNITY_GATEWAY_PORT:-8001}"
+  if [[ -z "${UNIFY_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
+    UNIFY_COMMS_URL="http://127.0.0.1:${UNIFY_GATEWAY_PORT:-8001}"
   fi
-  [[ -n "${UNITY_COMMS_URL:-}" ]] && export UNITY_COMMS_URL
-  [[ -n "${UNITY_ADAPTERS_URL:-}" ]] && export UNITY_ADAPTERS_URL
+  [[ -n "${UNIFY_COMMS_URL:-}" ]] && export UNIFY_COMMS_URL
+  [[ -n "${UNIFY_ADAPTERS_URL:-}" ]] && export UNIFY_ADAPTERS_URL
   [[ -n "${COMMUNICATION_URL:-}" ]] && export COMMUNICATION_URL
   [[ -n "${COMMS_URL:-}" ]] && export COMMS_URL
 

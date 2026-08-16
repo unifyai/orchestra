@@ -104,11 +104,11 @@ def _signed_recording_url(
         session,
     )
 
-    comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
+    comms_url = os.environ.get("UNIFY_COMMS_URL", "").rstrip("/")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     if not comms_url or not admin_key:
         logger.error(
-            "Cannot sign call recording: UNITY_COMMS_URL / ORCHESTRA_ADMIN_KEY unset",
+            "Cannot sign call recording: UNIFY_COMMS_URL / ORCHESTRA_ADMIN_KEY unset",
         )
         raise HTTPException(
             status_code=503,

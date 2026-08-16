@@ -978,7 +978,7 @@ async def _wake_assistant(entry, invocation_id: int, action_name: str) -> None:
 
     if not ADAPTERS_URL:
         logger.warning(
-            "UNITY_ADAPTERS_URL not set; canvas invocation %s recorded but not dispatched",
+            "UNIFY_ADAPTERS_URL not set; canvas invocation %s recorded but not dispatched",
             invocation_id,
         )
         return

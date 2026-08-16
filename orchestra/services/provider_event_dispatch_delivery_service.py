@@ -15,7 +15,7 @@ from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.db.models.provider_trigger_models import ProviderEventDispatch
 from orchestra.provider_triggers.dispatch_request import (
     COMMUNICATION_DISPATCH_AUDIENCE,
-    UNITY_DISPATCH_AUDIENCE,
+    UNIFY_DISPATCH_AUDIENCE,
     ProviderEventDispatchRequest,
 )
 from orchestra.provider_triggers.runtime_types import (
@@ -421,7 +421,7 @@ class ProviderEventDispatchDeliveryService:
         if dispatch.dispatch_mode == "offline":
             audience = COMMUNICATION_DISPATCH_AUDIENCE
         elif dispatch.dispatch_mode == "live":
-            audience = UNITY_DISPATCH_AUDIENCE
+            audience = UNIFY_DISPATCH_AUDIENCE
 
         return ProviderEventDispatchRequest(
             operation_id=dispatch.operation_id,
@@ -453,14 +453,14 @@ class ProviderEventDispatchDeliveryService:
 
     @staticmethod
     def _rail_credentials() -> tuple[str, str]:
-        comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
+        comms_url = os.environ.get("UNIFY_COMMS_URL", "").rstrip("/")
         admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         return comms_url, admin_key
 
     @staticmethod
     def _adapters_credentials() -> tuple[str, str]:
-        adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "").rstrip("/")
-        comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
+        adapters_url = os.environ.get("UNIFY_ADAPTERS_URL", "").rstrip("/")
+        comms_url = os.environ.get("UNIFY_COMMS_URL", "").rstrip("/")
         resolved = adapters_url or comms_url
         admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         return resolved, admin_key

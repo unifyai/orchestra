@@ -187,7 +187,7 @@ async def test_releasing_a_crashed_run_leaves_a_future_scheduled_head(
     """
 
     # Hermetic like CI: no comms/adapters backend to wake or sync against.
-    monkeypatch.delenv("UNITY_COMMS_URL", raising=False)
+    monkeypatch.delenv("UNIFY_COMMS_URL", raising=False)
     import orchestra.web.api.assistant.views as assistant_views
 
     monkeypatch.setattr(

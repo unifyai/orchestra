@@ -10,7 +10,7 @@ Two message families live here:
   only; never deletion, suspension, or billing language.
 
 Both are sent **from the shared Coordinator mailbox** (the
-``UNITY_COORDINATOR_EMAIL_ADDRESS`` setting, surfaced via
+``UNIFY_COORDINATOR_EMAIL_ADDRESS`` setting, surfaced via
 :func:`orchestra.services.universal_unity_email.get_universal_unity_email_address`)
 rather than the general ``hello@unify.ai`` outbound address, so the
 message lands in the user's inbox as if their Coordinator wrote it.
@@ -215,7 +215,7 @@ async def send_coordinator_emails(
     from_address = get_universal_unity_email_address()
     if not from_address:
         logger.warning(
-            "Coordinator mailbox (UNITY_COORDINATOR_EMAIL_ADDRESS) not "
+            "Coordinator mailbox (UNIFY_COORDINATOR_EMAIL_ADDRESS) not "
             "configured; skipping coordinator email %r.",
             subject,
         )

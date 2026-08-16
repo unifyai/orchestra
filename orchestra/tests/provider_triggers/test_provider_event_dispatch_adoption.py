@@ -16,7 +16,7 @@ from orchestra.db.models.orchestra_models import Assistant
 from orchestra.db.models.provider_trigger_models import ProviderEventDispatch
 from orchestra.provider_triggers.dispatch_request import (
     COMMUNICATION_DISPATCH_AUDIENCE,
-    UNITY_DISPATCH_AUDIENCE,
+    UNIFY_DISPATCH_AUDIENCE,
 )
 from orchestra.provider_triggers.runtime_types import (
     DispatchProcessingState,
@@ -79,7 +79,7 @@ def _seed_dispatch(
     dbsession: Session,
     *,
     dispatch_mode: str = "live",
-    audience: str = UNITY_DISPATCH_AUDIENCE,
+    audience: str = UNIFY_DISPATCH_AUDIENCE,
 ) -> _DispatchFixture:
     assistant = Assistant(
         user_id=PRIMARY_USER_ID,

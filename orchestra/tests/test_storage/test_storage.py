@@ -423,7 +423,7 @@ RECORDING_URI = "gs://bucket/staging/42/unity_call_abc_2026-07-27.mp3"
 
 @pytest.fixture
 def comms_recording_env(monkeypatch):
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example.com")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.example.com")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "test-admin-key")
 
 
@@ -583,7 +583,7 @@ async def test_recording_signing_reports_unconfigured_playback(
     """No comms URL configured is a 503, not a signing attempt."""
     from orchestra.web.api.storage import views as storage_views
 
-    monkeypatch.delenv("UNITY_COMMS_URL", raising=False)
+    monkeypatch.delenv("UNIFY_COMMS_URL", raising=False)
     monkeypatch.setattr(
         storage_views,
         "require_owned_assistant",

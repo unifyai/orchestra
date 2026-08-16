@@ -637,13 +637,13 @@ class Settings(BaseSettings):
     # Assistant creation
     assistant_creation_cost: float = 0.0
     unity_coordinator_whatsapp_number: Optional[str] = (
-        os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
-        or os.environ.get("UNITY_WHATSAPP_POOL_NUMBER")
-        or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
+        os.environ.get("UNIFY_COORDINATOR_WHATSAPP_NUMBER")
+        or os.environ.get("UNIFY_WHATSAPP_POOL_NUMBER")
+        or os.environ.get("ORCHESTRA_UNIFY_WHATSAPP_POOL_NUMBER")
     )
     unity_coordinator_email_address: Optional[str] = (
-        os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
-        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
+        os.environ.get("UNIFY_COORDINATOR_EMAIL_ADDRESS")
+        or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_EMAIL_ADDRESS")
         or "twin@unify.ai"
     )
     # Catch-all domain for multiplayer twin alias addresses. Each multiplayer
@@ -651,33 +651,33 @@ class Settings(BaseSettings):
     # is routed by recipient address (unlike the shared coordinator address,
     # which routes by verified sender).
     unity_twin_alias_email_domain: Optional[str] = (
-        os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
-        or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+        os.environ.get("UNIFY_TWIN_ALIAS_EMAIL_DOMAIN")
+        or os.environ.get("ORCHESTRA_UNIFY_TWIN_ALIAS_EMAIL_DOMAIN")
         or "twins.unify.ai"
     )
     # Discrete per-country Coordinator phone numbers. The UK number is keyed
     # under ISO country code "GB". The correct prod/staging value is mounted
     # from Secret Manager per service.
     unity_coordinator_phone_uk: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_PHONE_UK",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_UK")
+        "UNIFY_COORDINATOR_PHONE_UK",
+    ) or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_PHONE_UK")
     unity_coordinator_phone_us: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_PHONE_US",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_US")
+        "UNIFY_COORDINATOR_PHONE_US",
+    ) or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_PHONE_US")
     unity_coordinator_default_phone_country: str = (
-        os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
-        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        os.environ.get("UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or "US"
     )
     # Universal Coordinator Discord bot. The bot ID is a Discord snowflake;
     # the token authenticates the Gateway connection. Unity pulls both from
     # Orchestra's shared pool, so the secrets only live in this project.
     unity_coordinator_discord_id: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_DISCORD_ID",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_ID")
+        "UNIFY_COORDINATOR_DISCORD_ID",
+    ) or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_DISCORD_ID")
     unity_coordinator_discord_token: Optional[str] = os.environ.get(
-        "UNITY_COORDINATOR_DISCORD_TOKEN",
-    ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DISCORD_TOKEN")
+        "UNIFY_COORDINATOR_DISCORD_TOKEN",
+    ) or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_DISCORD_TOKEN")
 
     # Slack app credentials, needed to fully uninstall the app from a
     # workspace (``apps.uninstall``) when an install is revoked. Optional:

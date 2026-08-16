@@ -130,7 +130,7 @@ def _dao(session: Session) -> SharedPoolDAO:
 
 async def _notify_comms_sync() -> None:
     """Best-effort: tell Communication to re-sync its bot pool from Orchestra."""
-    comms_url = os.environ.get("UNITY_COMMS_URL")
+    comms_url = os.environ.get("UNIFY_COMMS_URL")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
     if not comms_url or not admin_key:
         return

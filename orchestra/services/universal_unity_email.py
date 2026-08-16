@@ -8,7 +8,7 @@ from orchestra.db.dao.assistant_contact_dao import AssistantContactDAO
 from orchestra.db.models.orchestra_models import Assistant, AssistantContact
 from orchestra.settings import settings
 
-UNIVERSAL_UNITY_EMAIL_METADATA = {"universal_unity": True}
+UNIVERSAL_UNIFY_EMAIL_METADATA = {"universal_unity": True}
 
 
 def get_universal_unity_email_address() -> str | None:
@@ -45,7 +45,7 @@ def ensure_coordinator_universal_email_contact(
         contact_value=address,
         provider="google_workspace",
         provisioned_by="platform",
-        metadata=UNIVERSAL_UNITY_EMAIL_METADATA,
+        metadata=UNIVERSAL_UNIFY_EMAIL_METADATA,
     )
     session.flush()
     return contact

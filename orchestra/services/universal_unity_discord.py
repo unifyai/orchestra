@@ -25,7 +25,7 @@ from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
 
-UNIVERSAL_UNITY_DISCORD_METADATA = {"universal_unity": True}
+UNIVERSAL_UNIFY_DISCORD_METADATA = {"universal_unity": True}
 DISCORD_PLATFORM = "discord"
 
 
@@ -113,7 +113,7 @@ def ensure_coordinator_universal_discord_contact(
         contact_value=pool.number,
         provider=DISCORD_PLATFORM,
         provisioned_by="platform",
-        metadata=UNIVERSAL_UNITY_DISCORD_METADATA,
+        metadata=UNIVERSAL_UNIFY_DISCORD_METADATA,
     )
     session.flush()
     return contact
@@ -121,7 +121,7 @@ def ensure_coordinator_universal_discord_contact(
 
 async def notify_comms_discord_sync() -> None:
     """Best-effort: ask the Unity gateway to re-sync its Discord bot pool."""
-    comms_url = os.environ.get("UNITY_COMMS_URL")
+    comms_url = os.environ.get("UNIFY_COMMS_URL")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
     if not comms_url or not admin_key:
         return

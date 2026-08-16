@@ -34,7 +34,7 @@ class _FakeCommsClient:
 
 def _patch_comms_verify(monkeypatch: pytest.MonkeyPatch) -> _FakeCommsClient:
     fake = _FakeCommsClient()
-    monkeypatch.setenv("UNITY_COMMS_URL", "https://comms.example.test")
+    monkeypatch.setenv("UNIFY_COMMS_URL", "https://comms.example.test")
     monkeypatch.setattr(
         "orchestra.web.api.utils.http_client.get_async_client",
         lambda: fake,

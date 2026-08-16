@@ -306,7 +306,7 @@ class TestCredits:
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": deduct_amount},
+            json={"amount": deduct_amount, "description": "Assistant work"},
         )
 
         assert response.status_code == status.HTTP_200_OK
@@ -342,7 +342,10 @@ class TestCredits:
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": current_credits + overshoot},
+            json={
+                "amount": current_credits + overshoot,
+                "description": "Assistant work",
+            },
         )
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -358,7 +361,7 @@ class TestCredits:
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": 0},
+            json={"amount": 0, "description": "Assistant work"},
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -367,9 +370,35 @@ class TestCredits:
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": -5.0},
+            json={"amount": -5.0, "description": "Assistant work"},
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    @pytest.mark.anyio
+    async def test_deduct_credits_refuses_a_bare_amount(self, client: AsyncClient):
+        """A usage debit records what was used; a bare amount records nothing."""
+        before = (await client.get("/v0/credits", headers=HEADERS)).json()["credits"]
+        response = await client.post(
+            "/v0/credits/deduct",
+            headers=HEADERS,
+            json={"amount": 999999, "category": "llm"},
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert "description or detail" in response.text
+        after = (await client.get("/v0/credits", headers=HEADERS)).json()["credits"]
+        assert after == before
+
+        # Either annotation is enough: detail alone is how the LLM meter writes.
+        response = await client.post(
+            "/v0/credits/deduct",
+            headers=HEADERS,
+            json={
+                "amount": 0.5,
+                "category": "llm",
+                "detail": {"model": "m", "source": "chat"},
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
 
     @pytest.mark.anyio
     async def test_deduct_credits_exact_balance(self, client: AsyncClient):
@@ -380,7 +409,7 @@ class TestCredits:
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": exact_balance},
+            json={"amount": exact_balance, "description": "Assistant work"},
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["current_credits"] == 0.0
@@ -393,7 +422,7 @@ class TestCredits:
         response = await client.post(
             "/v0/credits/deduct",
             headers=HEADERS,
-            json={"amount": 0.123},
+            json={"amount": 0.123, "description": "Assistant work"},
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["deducted"] == 0.123
@@ -463,7 +492,7 @@ class TestCredits:
 
         response = await client.post(
             "/v0/credits/deduct",
-            json={"amount": 3.0},
+            json={"amount": 3.0, "description": "Assistant work"},
             headers={"Authorization": f"Bearer {api_key}"},
         )
         assert response.status_code == 200
@@ -988,7 +1017,7 @@ class TestDeductEndpoint:
 
         response = await client.post(
             "/v0/credits/deduct",
-            json={"amount": 10.0},
+            json={"amount": 10.0, "description": "Assistant work"},
             headers=user["headers"],
         )
         assert response.status_code == 200
@@ -1026,7 +1055,7 @@ class TestDeductEndpoint:
 
         response = await client.post(
             "/v0/credits/deduct",
-            json={"amount": 5.0},
+            json={"amount": 5.0, "description": "Assistant work"},
             headers=user["headers"],
         )
         assert response.status_code == 200
@@ -1064,7 +1093,7 @@ class TestDeductEndpoint:
 
         response = await client.post(
             "/v0/credits/deduct",
-            json={"amount": 5.0},
+            json={"amount": 5.0, "description": "Assistant work"},
             headers=user["headers"],
         )
         assert response.status_code == 200
@@ -1104,7 +1133,7 @@ class TestDeductEndpoint:
 
         response = await client.post(
             "/v0/credits/deduct",
-            json={"amount": 0.069576},
+            json={"amount": 0.069576, "description": "Assistant work"},
             headers=user["headers"],
         )
         assert response.status_code == 200
