@@ -23,6 +23,7 @@ from orchestra.web.api import (  # noqa: WPS235
     teams,
     users,
 )
+from orchestra.web.api.admin import metrics_export as metrics_export_admin
 from orchestra.web.api.admin import (
     provider_event_dispatch as provider_event_dispatch_admin,
 )
@@ -175,6 +176,13 @@ api_router.include_router(
     provider_trigger_catalog_admin.router,
     prefix="/admin",
     tags=["Provider Trigger Catalog"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
+api_router.include_router(
+    metrics_export_admin.router,
+    prefix="/admin/metrics",
+    tags=["Metrics Export"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
