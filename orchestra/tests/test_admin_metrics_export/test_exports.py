@@ -507,6 +507,8 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
         *,
         user_id: str | None = user.id,
         billing_account_id: int = ba.id,
+        source: str | None = "chat",
+        description: str | None = "Assistant work",
     ) -> None:
         dbsession.add(
             CreditTransaction(
@@ -516,6 +518,8 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
                 category=category,
                 assistant_id=assistant_id,
                 user_id=user_id,
+                description=description,
+                detail={"source": source} if source else None,
             ),
         )
 
@@ -526,13 +530,26 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
         "-0.25",
         "media",
         12,
+        source=None,
+        description="Photo generation",
     )
     txn(day1 + timedelta(days=1, minutes=30), "-2", "llm", 11)
-    txn(day1 + timedelta(days=1, hours=5), "-0.5", "hire", 12)
-    txn(day1 + timedelta(days=1, hours=6), "-0.75", "resources", None)
+    # Work the scheduler and the platform started: metered, not user-initiated.
+    txn(day1 + timedelta(days=1, hours=5), "-0.5", "hire", 12, source="task")
+    txn(day1 + timedelta(days=1, hours=6), "-0.75", "resources", None, source="system")
     txn(day1 + timedelta(days=1, hours=7), "-3", "seat", 11)
     txn(day1 + timedelta(days=1, hours=8), "10", "recharge")
     txn(day1 + timedelta(days=1, hours=9), "-1", "llm", 11, user_id=None)
+    # A bare debit posted straight to /credits/deduct: no description, no
+    # detail — nobody metered anything, so it is not usage.
+    txn(
+        day1 + timedelta(days=1, hours=10),
+        "-999999",
+        "llm",
+        None,
+        source=None,
+        description=None,
+    )
     txn(
         day1 + timedelta(days=2),
         "-4",
@@ -540,6 +557,7 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
         13,
         user_id=other.id,
         billing_account_id=other_ba.id,
+        source="call",
     )
     txn(datetime(2000, 1, 1, tzinfo=timezone.utc), "-9", "llm", 11)
     dbsession.flush()
@@ -561,6 +579,10 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
             "media_credits": 0.25,
             "n_debits": 2,
             "n_assistants": 2,
+            # The photo carries no source: without evidence to the contrary a
+            # metered debit is the person's.
+            "user_debits": 2,
+            "user_credits": 1.75,
         },
         {
             "user_id": user.id,
@@ -572,6 +594,8 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
             "media_credits": 0.0,
             "n_debits": 3,
             "n_assistants": 2,
+            "user_debits": 1,
+            "user_credits": 2.0,
         },
         {
             "user_id": other.id,
@@ -583,6 +607,8 @@ async def test_activity_export_buckets_billable_debits_by_utc_day(
             "media_credits": 0.0,
             "n_debits": 1,
             "n_assistants": 1,
+            "user_debits": 1,
+            "user_credits": 4.0,
         },
     ]
 

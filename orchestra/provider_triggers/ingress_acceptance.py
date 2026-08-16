@@ -25,7 +25,7 @@ from orchestra.observability.provider_trigger_metrics import (
 )
 from orchestra.provider_triggers.dispatch_request import (
     COMMUNICATION_DISPATCH_AUDIENCE,
-    UNITY_DISPATCH_AUDIENCE,
+    UNIFY_DISPATCH_AUDIENCE,
 )
 from orchestra.provider_triggers.provider_identity import (
     binding_event_identity_hmac,
@@ -541,7 +541,7 @@ def _accept_matched_delivery(
     audience = (
         COMMUNICATION_DISPATCH_AUDIENCE
         if run_delivery == "offline"
-        else UNITY_DISPATCH_AUDIENCE
+        else UNIFY_DISPATCH_AUDIENCE
     )
     dispatch = dao.adopt_dispatch(
         receipt=receipt,

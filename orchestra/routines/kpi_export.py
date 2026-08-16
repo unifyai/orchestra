@@ -26,6 +26,8 @@ from typing import Any, Callable, Iterable
 from sqlalchemy import (
     ColumnElement,
     Date,
+    Text,
+    and_,
     cast,
     distinct,
     func,
@@ -63,6 +65,14 @@ BILLABLE_CATEGORIES = ("llm", "hire", "resources", "media")
 
 #: How far back the activity export reaches when the caller gives no ``since``.
 ACTIVITY_DEFAULT_WINDOW = timedelta(days=45)
+
+#: ``detail.source`` values the runtime stamps on LLM work a person started —
+#: a message or a call. Task-driven and system-driven turns are ``task`` and
+#: ``system``. Rows with no source at all — everything before the runtime
+#: tagged turns (mid-2026), and the non-LLM meters — count as user-initiated:
+#: excluding a debit from activity takes positive evidence that nobody was
+#: there, not the absence of a tag.
+USER_INITIATED_SOURCES = ("chat", "call")
 
 #: Console writes these into ``onboarding_status.step_data`` at signup.
 ATTRIBUTION_KEYS = (
@@ -469,7 +479,17 @@ def export_activity(
     cursor: str | None,
     limit: int,
 ) -> dict[str, Any]:
-    """One page of per-(user, UTC day) billable debits, ordered by ``(day, user_id)``."""
+    """One page of per-(user, UTC day) billable debits, ordered by ``(day, user_id)``.
+
+    Only debits the platform metered count: every writer of usage — the LLM
+    meter, media generation, contact setup and levies — annotates its row with
+    a description or detail, while a bare debit posted straight to
+    ``/credits/deduct`` carries neither and is not usage of anything. Within
+    the metered debits, ``user_debits`` / ``user_credits`` are the ones a
+    person started — ``detail.source`` of ``chat`` or ``call``, or no source
+    at all — while a ``task`` or ``system`` source marks work the scheduler or
+    the platform started on the user's behalf.
+    """
     after = _cursor_after(cursor, date.fromisoformat, str)
     if since is None:
         today = datetime.now(timezone.utc).date()
@@ -481,6 +501,8 @@ def export_activity(
 
     day = cast(func.timezone("UTC", CreditTransaction.at), Date)
     spent = -CreditTransaction.amount
+    source = CreditTransaction.detail["source"].astext
+    user_initiated = or_(source.in_(USER_INITIATED_SOURCES), source.is_(None))
 
     def spent_in(category: str) -> ColumnElement[Decimal]:
         return func.coalesce(
@@ -488,10 +510,18 @@ def export_activity(
             0,
         )
 
+    metered = or_(
+        CreditTransaction.description.is_not(None),
+        and_(
+            CreditTransaction.detail.is_not(None),
+            cast(CreditTransaction.detail, Text).notin_(("{}", "null")),
+        ),
+    )
     conditions = [
         CreditTransaction.amount < 0,
         CreditTransaction.category.in_(BILLABLE_CATEGORIES),
         CreditTransaction.user_id.is_not(None),
+        metered,
         CreditTransaction.at >= _as_utc(since),
     ]
     if until is not None:
@@ -510,6 +540,10 @@ def export_activity(
             spent_in("media").label("media_credits"),
             func.count().label("n_debits"),
             func.count(distinct(CreditTransaction.assistant_id)).label("n_assistants"),
+            func.count().filter(user_initiated).label("user_debits"),
+            func.coalesce(func.sum(spent).filter(user_initiated), 0).label(
+                "user_credits",
+            ),
         )
         .where(*conditions)
         .group_by(CreditTransaction.user_id, day)
@@ -528,6 +562,8 @@ def export_activity(
             "media_credits": float(row.media_credits),
             "n_debits": row.n_debits,
             "n_assistants": row.n_assistants,
+            "user_debits": row.user_debits,
+            "user_credits": float(row.user_credits),
         }
         for row in session.execute(stmt)
     ]

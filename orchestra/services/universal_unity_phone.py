@@ -17,7 +17,7 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 from orchestra.web.api.utils.phone_number_validator import PhoneNumberValidator
 
-UNIVERSAL_UNITY_PHONE_METADATA = {"universal_unity": True}
+UNIVERSAL_UNIFY_PHONE_METADATA = {"universal_unity": True}
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 
 
@@ -209,7 +209,7 @@ def ensure_coordinator_universal_phone_contact(
                     provisioned_by="platform",
                     country_code=existing_country,
                     metadata={
-                        **UNIVERSAL_UNITY_PHONE_METADATA,
+                        **UNIVERSAL_UNIFY_PHONE_METADATA,
                         "country": existing_country,
                         "assignment_source": "reconcile",
                         "shared_pool_number_id": pool.id,
@@ -234,7 +234,7 @@ def ensure_coordinator_universal_phone_contact(
         return None
 
     metadata = {
-        **UNIVERSAL_UNITY_PHONE_METADATA,
+        **UNIVERSAL_UNIFY_PHONE_METADATA,
         "country": country,
         "assignment_source": assignment_source,
         "shared_pool_number_id": pool.id,

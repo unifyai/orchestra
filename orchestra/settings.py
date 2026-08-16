@@ -638,8 +638,8 @@ class Settings(BaseSettings):
     assistant_creation_cost: float = 0.0
     unity_coordinator_whatsapp_number: Optional[str] = (
         os.environ.get("UNITY_COORDINATOR_WHATSAPP_NUMBER")
-        or os.environ.get("UNITY_WHATSAPP_POOL_NUMBER")
-        or os.environ.get("ORCHESTRA_UNITY_WHATSAPP_POOL_NUMBER")
+        or os.environ.get("UNIFY_WHATSAPP_POOL_NUMBER")
+        or os.environ.get("ORCHESTRA_UNIFY_WHATSAPP_POOL_NUMBER")
     )
     unity_coordinator_email_address: Optional[str] = (
         os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
@@ -651,8 +651,8 @@ class Settings(BaseSettings):
     # is routed by recipient address (unlike the shared coordinator address,
     # which routes by verified sender).
     unity_twin_alias_email_domain: Optional[str] = (
-        os.environ.get("UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
-        or os.environ.get("ORCHESTRA_UNITY_TWIN_ALIAS_EMAIL_DOMAIN")
+        os.environ.get("UNIFY_TWIN_ALIAS_EMAIL_DOMAIN")
+        or os.environ.get("ORCHESTRA_UNIFY_TWIN_ALIAS_EMAIL_DOMAIN")
         or "twins.unify.ai"
     )
     # Discrete per-country Coordinator phone numbers. The UK number is keyed
@@ -665,8 +665,8 @@ class Settings(BaseSettings):
         "UNITY_COORDINATOR_PHONE_US",
     ) or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_PHONE_US")
     unity_coordinator_default_phone_country: str = (
-        os.environ.get("UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
-        or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        os.environ.get("UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
+        or os.environ.get("ORCHESTRA_UNIFY_COORDINATOR_DEFAULT_PHONE_COUNTRY")
         or "US"
     )
     # Universal Coordinator Discord bot. The bot ID is a Discord snowflake;

@@ -12,7 +12,7 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.settings import settings
 
-UNIVERSAL_UNITY_WHATSAPP_METADATA = {"universal_unity": True}
+UNIVERSAL_UNIFY_WHATSAPP_METADATA = {"universal_unity": True}
 
 
 def get_universal_unity_whatsapp_number() -> str | None:
@@ -77,7 +77,7 @@ def ensure_coordinator_universal_whatsapp_contact(
         contact_value=pool.number,
         provider="twilio",
         provisioned_by="platform",
-        metadata=UNIVERSAL_UNITY_WHATSAPP_METADATA,
+        metadata=UNIVERSAL_UNIFY_WHATSAPP_METADATA,
     )
     session.flush()
     return contact

@@ -15,7 +15,7 @@ from orchestra.db.dao.provider_trigger_dao import ProviderTriggerDAO
 from orchestra.db.models.provider_trigger_models import ProviderEventDispatch
 from orchestra.provider_triggers.dispatch_request import (
     COMMUNICATION_DISPATCH_AUDIENCE,
-    UNITY_DISPATCH_AUDIENCE,
+    UNIFY_DISPATCH_AUDIENCE,
     ProviderEventDispatchRequest,
 )
 from orchestra.provider_triggers.runtime_types import (
@@ -421,7 +421,7 @@ class ProviderEventDispatchDeliveryService:
         if dispatch.dispatch_mode == "offline":
             audience = COMMUNICATION_DISPATCH_AUDIENCE
         elif dispatch.dispatch_mode == "live":
-            audience = UNITY_DISPATCH_AUDIENCE
+            audience = UNIFY_DISPATCH_AUDIENCE
 
         return ProviderEventDispatchRequest(
             operation_id=dispatch.operation_id,

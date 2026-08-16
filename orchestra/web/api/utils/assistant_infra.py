@@ -16,7 +16,7 @@ COMMUNICATION_URL = os.environ.get("COMMUNICATION_URL")
 COMMS_URL_LEGACY = os.environ.get("COMMS_URL")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 LOCAL_ADAPTERS_URL = os.environ.get("LOCAL_ADAPTERS_URL")
-UNITY_GATEWAY_URL = os.environ.get("UNITY_GATEWAY_URL")
+UNIFY_GATEWAY_URL = os.environ.get("UNIFY_GATEWAY_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 PERMANENT_CLEANUP_TIMEOUT_SECONDS = 10.0
@@ -147,8 +147,8 @@ def _comms_url() -> str:
             return url.rstrip("/")
     if LOCAL_ADAPTERS_URL:
         return LOCAL_ADAPTERS_URL.rstrip("/")
-    if UNITY_GATEWAY_URL:
-        return UNITY_GATEWAY_URL.rstrip("/")
+    if UNIFY_GATEWAY_URL:
+        return UNIFY_GATEWAY_URL.rstrip("/")
     orchestra_url = os.environ.get("ORCHESTRA_URL", "")
     if "localhost" in orchestra_url or "127.0.0.1" in orchestra_url:
         return "http://127.0.0.1:8001"
@@ -169,7 +169,7 @@ def comms_explicitly_configured() -> bool:
         or COMMUNICATION_URL
         or COMMS_URL_LEGACY
         or LOCAL_ADAPTERS_URL
-        or UNITY_GATEWAY_URL,
+        or UNIFY_GATEWAY_URL,
     )
 
 
