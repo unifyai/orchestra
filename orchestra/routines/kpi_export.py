@@ -36,6 +36,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session, aliased
 
+from orchestra.db.models.enums import RECHARGE_TYPE_PROMO
 from orchestra.db.models.orchestra_models import (
     Account,
     Assistant,
@@ -365,13 +366,18 @@ def export_payments(
 ) -> dict[str, Any]:
     """One page of money-carrying recharges, ordered by ``(at, id)``.
 
-    Zero-USD rows (promos, free grants) are never money and are excluded
-    outright; the status filter is the caller's, defaulting upstream to
-    ``PAID`` + ``DISPUTED`` so a later flip on an exported row shows up on
-    the next pull.
+    Zero-USD rows are never money and are excluded outright, and so is every
+    ``promo`` row: a promotional grant is recorded as a PAID recharge carrying
+    the credits' notional USD value, which nobody paid. The status filter is
+    the caller's, defaulting upstream to ``PAID`` + ``DISPUTED`` so a later
+    flip on an exported row shows up on the next pull.
     """
     after = _cursor_after(cursor, _naive_from_iso, int)
-    conditions = [Recharge.amount_usd > 0, Recharge.status.in_(list(statuses))]
+    conditions = [
+        Recharge.amount_usd > 0,
+        Recharge.type != RECHARGE_TYPE_PROMO,
+        Recharge.status.in_(list(statuses)),
+    ]
     if since is not None:
         conditions.append(Recharge.at >= _naive_utc(since))
     if until is not None:

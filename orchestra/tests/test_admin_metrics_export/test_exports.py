@@ -416,6 +416,16 @@ async def test_payments_export_resolves_accounts_and_plans(
         type=RECHARGE_TYPE_PROMO,
         status=RechargeStatus.PAID.value,
     )
+    # A promotional grant recorded with the credits' notional USD value is
+    # still not money: excluded by type, not just by a zero amount.
+    recharge(
+        at=_naive(T0 + timedelta(days=18, hours=1)),
+        billing_account_id=payer_ba.id,
+        quantity=Decimal("250"),
+        amount_usd=Decimal("250"),
+        type=RECHARGE_TYPE_PROMO,
+        status=RechargeStatus.PAID.value,
+    )
     failed = recharge(
         at=_naive(T0 + timedelta(days=19)),
         billing_account_id=payer_ba.id,
