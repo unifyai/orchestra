@@ -1089,11 +1089,11 @@ start_orchestra_server() {
   # Comms gateway URL so /v0/features can probe channel availability (phone,
   # whatsapp, discord) and Console can surface those channels. In self-host the
   # bundled unity.gateway serves comms locally; default to it when unset.
-  if [[ -z "${UNITY_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
-    UNITY_COMMS_URL="http://127.0.0.1:${UNIFY_GATEWAY_PORT:-8001}"
+  if [[ -z "${UNIFY_COMMS_URL:-}" && "${SELF_HOST:-0}" == "1" ]]; then
+    UNIFY_COMMS_URL="http://127.0.0.1:${UNIFY_GATEWAY_PORT:-8001}"
   fi
-  [[ -n "${UNITY_COMMS_URL:-}" ]] && export UNITY_COMMS_URL
-  [[ -n "${UNITY_ADAPTERS_URL:-}" ]] && export UNITY_ADAPTERS_URL
+  [[ -n "${UNIFY_COMMS_URL:-}" ]] && export UNIFY_COMMS_URL
+  [[ -n "${UNIFY_ADAPTERS_URL:-}" ]] && export UNIFY_ADAPTERS_URL
   [[ -n "${COMMUNICATION_URL:-}" ]] && export COMMUNICATION_URL
   [[ -n "${COMMS_URL:-}" ]] && export COMMS_URL
 

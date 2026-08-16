@@ -60,8 +60,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
-COMMS_URL = os.environ.get("UNITY_COMMS_URL")
+ADAPTERS_URL = os.environ.get("UNIFY_ADAPTERS_URL")
+COMMS_URL = os.environ.get("UNIFY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
@@ -179,7 +179,7 @@ async def _dispatch_offline_task_to_comms(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "UNITY_COMMS_URL and ORCHESTRA_ADMIN_KEY are required to dispatch "
+                "UNIFY_COMMS_URL and ORCHESTRA_ADMIN_KEY are required to dispatch "
                 "offline task triggers."
             ),
         )
@@ -242,7 +242,7 @@ async def _emit_task_trigger_system_event(
 
     adapters_url = ADAPTERS_URL
     if not adapters_url:
-        logger.warning("UNITY_ADAPTERS_URL not set, skipping task-trigger dispatch")
+        logger.warning("UNIFY_ADAPTERS_URL not set, skipping task-trigger dispatch")
         return
     extra_event_fields: dict = {
         "type": "task_trigger",
@@ -1087,7 +1087,7 @@ async def _stop_comms_job(*, job_name: str) -> bool:
     comms_url = (COMMS_URL or "").rstrip("/")
     if not comms_url or not ADMIN_KEY:
         logger.warning(
-            "Skipping job stop for %s; UNITY_COMMS_URL / ORCHESTRA_ADMIN_KEY unset",
+            "Skipping job stop for %s; UNIFY_COMMS_URL / ORCHESTRA_ADMIN_KEY unset",
             job_name,
         )
         return False
@@ -1121,7 +1121,7 @@ async def _emit_task_cancel_system_event(
 
     adapters_url = ADAPTERS_URL
     if not adapters_url:
-        logger.warning("UNITY_ADAPTERS_URL not set, skipping task-cancel dispatch")
+        logger.warning("UNIFY_ADAPTERS_URL not set, skipping task-cancel dispatch")
         return
     extra_event_fields: dict = {
         "type": "task_cancel",

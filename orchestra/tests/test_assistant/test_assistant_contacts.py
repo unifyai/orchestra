@@ -4635,7 +4635,7 @@ class TestConnectScopeReduction:
             ) as mock_settings,
             patch.dict(
                 _os.environ,
-                {"UNITY_ADAPTERS_URL": "http://adapters.test"},
+                {"UNIFY_ADAPTERS_URL": "http://adapters.test"},
             ),
             patch(
                 "httpx.AsyncClient",
@@ -4715,7 +4715,7 @@ class TestConnectScopeReduction:
             ) as mock_settings,
             patch.dict(
                 _os.environ,
-                {"UNITY_ADAPTERS_URL": "http://adapters.test"},
+                {"UNIFY_ADAPTERS_URL": "http://adapters.test"},
             ),
             patch(
                 "httpx.AsyncClient",
@@ -5077,8 +5077,8 @@ class TestDisconnectEndpoint:
             patch.dict(
                 _os.environ,
                 {
-                    "UNITY_COMMS_URL": "http://comms.test",
-                    "UNITY_ADAPTERS_URL": "http://adapters.test",
+                    "UNIFY_COMMS_URL": "http://comms.test",
+                    "UNIFY_ADAPTERS_URL": "http://adapters.test",
                 },
             ),
             patch(
@@ -5161,8 +5161,8 @@ class TestDisconnectEndpoint:
             patch.dict(
                 _os.environ,
                 {
-                    "UNITY_COMMS_URL": "http://comms.test",
-                    "UNITY_ADAPTERS_URL": "http://adapters.test",
+                    "UNIFY_COMMS_URL": "http://comms.test",
+                    "UNIFY_ADAPTERS_URL": "http://adapters.test",
                 },
             ),
             patch(
@@ -5277,7 +5277,7 @@ class TestDisconnectEndpoint:
 
         with (
             patch("orchestra.web.api.assistant.views.settings") as mock_settings,
-            patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
+            patch.dict(os.environ, {"UNIFY_COMMS_URL": "", "UNIFY_ADAPTERS_URL": ""}),
         ):
             mock_settings.is_staging = True
             mock_settings.charges_billing = False
@@ -5981,8 +5981,8 @@ class TestDisconnectEndpointOrg:
             patch.dict(
                 _os.environ,
                 {
-                    "UNITY_COMMS_URL": "http://comms.test",
-                    "UNITY_ADAPTERS_URL": "http://adapters.test",
+                    "UNIFY_COMMS_URL": "http://comms.test",
+                    "UNIFY_ADAPTERS_URL": "http://adapters.test",
                 },
             ),
             patch(
@@ -6181,7 +6181,7 @@ class TestDisconnectEndpointOrg:
 
         with (
             patch("orchestra.web.api.assistant.views.settings") as mock_settings,
-            patch.dict(os.environ, {"UNITY_COMMS_URL": "", "UNITY_ADAPTERS_URL": ""}),
+            patch.dict(os.environ, {"UNIFY_COMMS_URL": "", "UNIFY_ADAPTERS_URL": ""}),
         ):
             mock_settings.is_staging = True
             mock_settings.charges_billing = False

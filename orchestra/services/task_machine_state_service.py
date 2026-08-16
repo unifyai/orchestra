@@ -2465,11 +2465,11 @@ def _post_task_execution_request(*, path: str, body: Mapping[str, Any]) -> None:
         )
         return
 
-    comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
+    comms_url = os.environ.get("UNIFY_COMMS_URL", "").rstrip("/")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     if not comms_url or not admin_key:
         logger.info(
-            "Skipping task execution sync because UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY is missing.",
+            "Skipping task execution sync because UNIFY_COMMS_URL or ORCHESTRA_ADMIN_KEY is missing.",
         )
         return
     with httpx.Client() as client:

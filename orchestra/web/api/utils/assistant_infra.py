@@ -11,10 +11,10 @@ from orchestra.lib.deploy_env import env_suffix
 from orchestra.settings import settings
 from orchestra.web.api.utils.http_client import get_async_client
 
-COMMS_URL = os.environ.get("UNITY_COMMS_URL")
+COMMS_URL = os.environ.get("UNIFY_COMMS_URL")
 COMMUNICATION_URL = os.environ.get("COMMUNICATION_URL")
 COMMS_URL_LEGACY = os.environ.get("COMMS_URL")
-ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
+ADAPTERS_URL = os.environ.get("UNIFY_ADAPTERS_URL")
 LOCAL_ADAPTERS_URL = os.environ.get("LOCAL_ADAPTERS_URL")
 UNIFY_GATEWAY_URL = os.environ.get("UNIFY_GATEWAY_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")

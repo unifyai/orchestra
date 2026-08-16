@@ -453,14 +453,14 @@ class ProviderEventDispatchDeliveryService:
 
     @staticmethod
     def _rail_credentials() -> tuple[str, str]:
-        comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
+        comms_url = os.environ.get("UNIFY_COMMS_URL", "").rstrip("/")
         admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         return comms_url, admin_key
 
     @staticmethod
     def _adapters_credentials() -> tuple[str, str]:
-        adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "").rstrip("/")
-        comms_url = os.environ.get("UNITY_COMMS_URL", "").rstrip("/")
+        adapters_url = os.environ.get("UNIFY_ADAPTERS_URL", "").rstrip("/")
+        comms_url = os.environ.get("UNIFY_COMMS_URL", "").rstrip("/")
         resolved = adapters_url or comms_url
         admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         return resolved, admin_key

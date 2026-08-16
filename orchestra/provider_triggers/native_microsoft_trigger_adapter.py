@@ -143,13 +143,13 @@ class NativeMicrosoftTriggerAdapter(TriggerProviderAdapter):
     def _resolved_adapters_base_url(self) -> str:
         if self._adapters_base_url is not None:
             return self._adapters_base_url.strip().rstrip("/")
-        return (os.getenv("UNITY_ADAPTERS_URL") or "").strip().rstrip("/")
+        return (os.getenv("UNIFY_ADAPTERS_URL") or "").strip().rstrip("/")
 
     def _notification_url(self) -> str:
         base = self._resolved_adapters_base_url()
         if not base:
             raise RuntimeError(
-                "UNITY_ADAPTERS_URL is not configured for native Microsoft "
+                "UNIFY_ADAPTERS_URL is not configured for native Microsoft "
                 "Graph notificationUrl",
             )
         return f"{base}{_NATIVE_TRIGGERS_PATH}"

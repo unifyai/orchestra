@@ -75,7 +75,7 @@ def stub_coordinator_pubsub_boundary():
     """Stub Coordinator Pub/Sub provisioning during platform API tests.
 
     User and workspace creation now provisions a personal Coordinator, which
-    would otherwise call Communication with an unset ``UNITY_COMMS_URL``. Tests
+    would otherwise call Communication with an unset ``UNIFY_COMMS_URL``. Tests
     that need real infra fanout should patch or override this boundary locally.
     """
     with (

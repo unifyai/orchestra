@@ -3666,7 +3666,7 @@ async def connect_assistant_account(
     provider = body.provider
     features = body.features
     redirect_after = body.redirect_after
-    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
+    adapters_url = os.environ.get("UNIFY_ADAPTERS_URL", "")
 
     # Detect scope reduction at the scope-set level (not feature-set), so that
     # shrinking a bundle's contents also triggers revoke. Without this, Google's
@@ -3840,8 +3840,8 @@ async def disconnect_assistant_account(
             detail="No connected account found for this assistant.",
         )
 
-    adapters_url = os.environ.get("UNITY_ADAPTERS_URL", "")
-    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    adapters_url = os.environ.get("UNIFY_ADAPTERS_URL", "")
+    comms_url = os.environ.get("UNIFY_COMMS_URL", "")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
     auth_headers = {"Authorization": f"Bearer {admin_key}"}
 
@@ -4094,7 +4094,7 @@ async def _gateway_browse(provider: str, path: str, params: dict) -> dict:
     """Proxy an unfiltered browse call to the Unity gateway channel."""
     import httpx
 
-    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    comms_url = os.environ.get("UNIFY_COMMS_URL", "")
     if not comms_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

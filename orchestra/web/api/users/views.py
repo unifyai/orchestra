@@ -601,11 +601,11 @@ async def send_phone_verification(
 
     # Call communication service — it generates the code, sends SMS,
     # and returns the code so we can hash and store it server-side.
-    comms_url = os.environ.get("UNITY_COMMS_URL", "")
+    comms_url = os.environ.get("UNIFY_COMMS_URL", "")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
 
     if not comms_url or not admin_key:
-        logger.error("UNITY_COMMS_URL or ORCHESTRA_ADMIN_KEY not configured")
+        logger.error("UNIFY_COMMS_URL or ORCHESTRA_ADMIN_KEY not configured")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Verification service is not configured.",

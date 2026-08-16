@@ -121,7 +121,7 @@ def ensure_coordinator_universal_discord_contact(
 
 async def notify_comms_discord_sync() -> None:
     """Best-effort: ask the Unity gateway to re-sync its Discord bot pool."""
-    comms_url = os.environ.get("UNITY_COMMS_URL")
+    comms_url = os.environ.get("UNIFY_COMMS_URL")
     admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
     if not comms_url or not admin_key:
         return
