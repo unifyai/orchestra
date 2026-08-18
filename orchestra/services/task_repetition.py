@@ -21,6 +21,7 @@ import hashlib
 from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 from typing import Any, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -86,6 +87,19 @@ class RepeatPattern(BaseModel):
             "by the scheduler."
         ),
     )
+    timezone: Optional[str] = Field(
+        default=None,
+        description=(
+            "IANA zone the `time_of_day` clock reading belongs to, e.g. "
+            "'Asia/Karachi'. Omitted means UTC, which is what every schedule "
+            "written before this field existed meant by omission. Set it "
+            "whenever the time expresses a human hour -- 'before stand-up', "
+            "'end of day' -- because those are claims about somebody's local "
+            "clock and mean nothing in UTC: a 17:30 end-of-day log fires at "
+            "22:30 for a reader five hours east, and the previous morning for "
+            "one eight hours west."
+        ),
+    )
     jitter_seconds: Optional[int] = Field(
         default=None,
         ge=0,
@@ -114,6 +128,21 @@ class RepeatPattern(BaseModel):
             raise ValueError(
                 "`time_of_day` must be a `datetime.time`, not a full datetime",
             )
+        return v
+
+    @field_validator("timezone")
+    def _resolvable_zone(cls, v):
+        """Reject a zone this machine cannot resolve.
+
+        A typo would otherwise surface as a schedule firing at the wrong hour,
+        which is indistinguishable from the bug this field exists to fix.
+        """
+        if v is None:
+            return v
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA timezone: {v!r}") from exc
         return v
 
 
@@ -340,7 +369,12 @@ def _advance_one_occurrence(current: datetime, pattern: RepeatPattern) -> dateti
                 reference_now=current,
             )
         candidate = current + timedelta(days=pattern.interval)
-        return _apply_time_of_day(candidate, pattern.time_of_day, current)
+        return _apply_time_of_day(
+            candidate,
+            pattern.time_of_day,
+            current,
+            pattern.timezone,
+        )
     if pattern.frequency == Frequency.HOURLY:
         return current + timedelta(hours=pattern.interval)
     if pattern.frequency == Frequency.MINUTELY:
@@ -348,14 +382,29 @@ def _advance_one_occurrence(current: datetime, pattern: RepeatPattern) -> dateti
     if pattern.frequency == Frequency.WEEKLY:
         if not pattern.weekdays:
             candidate = current + timedelta(weeks=pattern.interval)
-            return _apply_time_of_day(candidate, pattern.time_of_day, current)
+            return _apply_time_of_day(
+                candidate,
+                pattern.time_of_day,
+                current,
+                pattern.timezone,
+            )
         return _next_weekday_occurrence(current, pattern)
     if pattern.frequency == Frequency.MONTHLY:
         candidate = _add_months(current, pattern.interval)
-        return _apply_time_of_day(candidate, pattern.time_of_day, current)
+        return _apply_time_of_day(
+            candidate,
+            pattern.time_of_day,
+            current,
+            pattern.timezone,
+        )
     if pattern.frequency == Frequency.YEARLY:
         candidate = _add_years(current, pattern.interval)
-        return _apply_time_of_day(candidate, pattern.time_of_day, current)
+        return _apply_time_of_day(
+            candidate,
+            pattern.time_of_day,
+            current,
+            pattern.timezone,
+        )
     raise ValueError(f"Unsupported repeat frequency: {pattern.frequency}")
 
 
@@ -368,12 +417,15 @@ def _next_time_of_day_occurrence(
     """Return the next daily wall-clock slot for a time-of-day pattern."""
 
     assert pattern.time_of_day is not None, "time-of-day occurrence requires a time"
-    anchor = datetime.combine(current.date(), pattern.time_of_day)
-    if current.tzinfo is not None:
-        anchor = anchor.replace(tzinfo=current.tzinfo)
+    anchor = _apply_time_of_day(
+        current,
+        pattern.time_of_day,
+        current,
+        pattern.timezone,
+    )
     if anchor > reference_now:
         return anchor
-    return anchor + timedelta(days=pattern.interval)
+    return _advance_days(anchor, pattern.interval, pattern)
 
 
 def _next_weekday_occurrence(current: datetime, pattern: RepeatPattern) -> datetime:
@@ -394,18 +446,58 @@ def _next_weekday_occurrence(current: datetime, pattern: RepeatPattern) -> datet
             candidate = datetime.combine(search_date, current.timetz())
             if current.tzinfo is not None:
                 candidate = candidate.replace(tzinfo=current.tzinfo)
-            return _apply_time_of_day(candidate, pattern.time_of_day, current)
+            return _apply_time_of_day(
+                candidate,
+                pattern.time_of_day,
+                current,
+                pattern.timezone,
+            )
+
+
+def _advance_days(anchor: datetime, days: int, pattern: RepeatPattern) -> datetime:
+    """Move a slot forward whole days, keeping its local clock reading.
+
+    Adding a `timedelta` to a UTC instant advances absolute time, which slides
+    a zoned slot by the offset change across a DST boundary — an 08:30 briefing
+    would start arriving at 07:30. Advancing the *date* and re-resolving the
+    clock keeps the local hour fixed, which is what a human schedule means.
+    """
+
+    if pattern.timezone is None:
+        return anchor + timedelta(days=days)
+    zone = ZoneInfo(pattern.timezone)
+    local_date = (anchor.astimezone(zone) + timedelta(days=days)).date()
+    local = datetime.combine(local_date, pattern.time_of_day).replace(tzinfo=zone)
+    return local.astimezone(anchor.tzinfo) if anchor.tzinfo is not None else local
 
 
 def _apply_time_of_day(
     candidate: datetime,
     override: time | None,
     reference: datetime,
+    zone: str | None = None,
 ) -> datetime:
-    """Apply `time_of_day` when present, otherwise preserve the reference time."""
+    """Apply `time_of_day` when present, otherwise preserve the reference time.
+
+    ``zone`` names the clock the reading belongs to. Without it a wall-clock
+    time was simply stamped with the candidate's tzinfo -- UTC in every
+    projection path -- so ``08:30`` meant 08:30 UTC no matter whose morning it
+    was describing.
+
+    Resolved in the named zone and converted back, so the instant tracks the
+    local clock across a DST boundary rather than drifting an hour twice a
+    year.
+    """
 
     target_time = override or reference.timetz().replace(tzinfo=None)
     updated = datetime.combine(candidate.date(), target_time)
+    if zone is not None:
+        local = updated.replace(tzinfo=ZoneInfo(zone))
+        return (
+            local.astimezone(candidate.tzinfo)
+            if candidate.tzinfo is not None
+            else local
+        )
     if candidate.tzinfo is not None:
         updated = updated.replace(tzinfo=candidate.tzinfo)
     return updated
