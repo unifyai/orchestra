@@ -2120,6 +2120,7 @@ class ChatGroup(Base):
         index=True,
     )
     name = Column(String, nullable=False)
+    icon = Column(String, nullable=True)
     created_by_user_id = Column(
         String,
         ForeignKey("user.id", ondelete="CASCADE"),

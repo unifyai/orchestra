@@ -221,6 +221,7 @@ def _chat_group_response(session: Session, group) -> ChatGroupResponse:
     return ChatGroupResponse(
         group_id=roster["group_id"],
         name=roster["name"],
+        icon=roster["icon"],
         organization_id=group.organization_id,
         created_by_user_id=roster["created_by_user_id"],
         created_at=roster["created_at"],
@@ -379,7 +380,7 @@ def update_org_group(
     body: ChatGroupUpdate,
     session: Session = Depends(get_db_session),
 ) -> ChatGroupResponse:
-    """Rename and/or replace membership for a chat group."""
+    """Rename, re-icon, and/or replace membership for a chat group."""
     user_id = request_fastapi.state.user_id
     org = _require_org(session, organization_id)
     _require_org_member(session, org=org, user_id=user_id)
@@ -398,6 +399,11 @@ def update_org_group(
                 detail="Group name cannot be empty",
             )
         group.name = trimmed
+
+    # An omitted icon leaves the current one alone; an explicit null clears it
+    # back to the member face-stack, so presence in the body is what counts.
+    if "icon" in body.model_fields_set:
+        group.icon = (body.icon or "").strip() or None
 
     if body.user_ids is not None or body.assistant_ids is not None:
         next_user_ids = (

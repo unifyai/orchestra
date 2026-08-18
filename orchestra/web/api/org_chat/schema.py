@@ -41,6 +41,7 @@ class RosterGroup(BaseModel):
 
     group_id: int
     name: str
+    icon: Optional[str] = None
     created_by_user_id: str
     created_at: Optional[datetime] = None
     member_user_ids: List[str] = Field(default_factory=list)
@@ -123,6 +124,10 @@ class ChatGroupCreate(BaseModel):
 
 class ChatGroupUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=200)
+    # A grapheme cluster, not a sentence: emoji with a skin tone and a ZWJ
+    # sequence run to a dozen or so codepoints, and nothing legible at avatar
+    # size is longer.
+    icon: Optional[str] = Field(default=None, max_length=16)
     user_ids: Optional[List[str]] = None
     assistant_ids: Optional[List[int]] = None
 
@@ -130,6 +135,7 @@ class ChatGroupUpdate(BaseModel):
 class ChatGroupResponse(BaseModel):
     group_id: int
     name: str
+    icon: Optional[str] = None
     organization_id: int
     created_by_user_id: str
     created_at: Optional[datetime] = None

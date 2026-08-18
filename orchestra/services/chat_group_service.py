@@ -287,6 +287,7 @@ def group_to_roster_dict(session: Session, group: ChatGroup) -> dict[str, Any]:
     return {
         "group_id": group.id,
         "name": group.name,
+        "icon": group.icon,
         "created_by_user_id": group.created_by_user_id,
         "created_at": group.created_at,
         "member_user_ids": [h["user_id"] for h in participants["humans"]],
