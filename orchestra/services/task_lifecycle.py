@@ -23,7 +23,10 @@ from orchestra.db.models.orchestra_models import LogEvent
 __all__ = ["Lifecycle", "derive_task_lifecycle"]
 
 _RUNNING_STATE = "running"
-_TERMINAL_STATES = ("completed", "failed", "cancelled")
+#: ``held`` is a run the assistant's runtime finished without performing its
+#: effect because a verification it depended on failed or could not be
+#: settled; the owner was told why. It is terminal like the other three.
+_TERMINAL_STATES = ("completed", "failed", "cancelled", "held")
 
 
 class Lifecycle(StrEnum):
