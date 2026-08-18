@@ -648,6 +648,72 @@ async def test_worker_converges_from_orchestra_adoption_and_run_state_without_ra
 
 
 @pytest.mark.anyio
+async def test_worker_converges_a_held_run_as_terminal_failed(
+    dbsession: Session,
+) -> None:
+    """A held run is terminal and the effect did not happen.
+
+    The assistant's runtime holds a run when a verification it depended on
+    failed or could not be settled; nothing was sent or changed and the owner
+    was told why. Convergence must not leave the dispatch in flight forever,
+    and must not call it succeeded: it failed with the run's own reason.
+    """
+    fixture = _seed_dispatch(
+        dbsession,
+        dispatch_mode="offline",
+        audience=COMMUNICATION_DISPATCH_AUDIENCE,
+    )
+    service = ProviderEventDispatchAdoptionService(dbsession)
+    claimed = service.claim(
+        authorization=_authorization(fixture),
+        claimant_id="communication-1",
+        launch_identity=f"unity-task-execution-{fixture.operation_id}",
+    )
+    service.report_started(
+        operation_id=fixture.operation_id,
+        fencing_token=claimed.fencing_token,
+        launch_identity=f"unity-task-execution-{fixture.operation_id}",
+    )
+    dispatch = (
+        dbsession.query(ProviderEventDispatch)
+        .filter_by(operation_id=fixture.operation_id)
+        .one()
+    )
+    dispatch.processing_state = DispatchProcessingState.started.value
+    dispatch.next_retry_at = datetime.now(timezone.utc)
+    dbsession.commit()
+
+    update_task_run(
+        dbsession,
+        fixture.project_id,
+        assistant_id=str(fixture.assistant_id),
+        run_key=fixture.run_key,
+        updates={
+            "state": "held",
+            "held_reason": "unsettled_verdict: send_digest could not be verified",
+        },
+    )
+    dbsession.commit()
+
+    delivery = ProviderEventDispatchDeliveryService(dbsession)
+    stats = delivery.process_status_convergence_batch(batch_size=10)
+    dbsession.commit()
+    assert stats["dispatches_terminal_failed"] >= 1
+
+    final = (
+        dbsession.query(ProviderEventDispatch)
+        .filter_by(operation_id=fixture.operation_id)
+        .one()
+    )
+    assert final.processing_state == DispatchProcessingState.failed.value
+    assert final.downstream_adoption_status == DownstreamAdoptionStatus.terminal.value
+    assert final.downstream_adoption_ref == "held"
+    assert final.terminal_error_code == (
+        "unsettled_verdict: send_digest could not be verified"
+    )
+
+
+@pytest.mark.anyio
 async def test_admin_claim_and_report_http_round_trip(
     dbsession: Session,
     client: AsyncClient,

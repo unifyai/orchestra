@@ -80,6 +80,7 @@ cover/
 # (auth_dao loads them at import time).
 !orchestra/db/dao/data/*.txt
 *.json
+!.claude/settings.json
 !.cursor/worktrees.json
 !orchestra/tests/fixtures/provider_trigger_contract/*.json
 !orchestra/tests/fixtures/task_trigger_contract/*.json
