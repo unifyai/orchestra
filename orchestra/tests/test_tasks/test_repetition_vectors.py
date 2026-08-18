@@ -91,6 +91,10 @@ class TestScheduleTimezone:
         nxt = next_repeated_start_at(
             previous_start=datetime(2026, 8, 17, 8, 30, tzinfo=timezone.utc),
             patterns=[pattern],
+            # Anchored, not read off the wall clock: without this the answer
+            # is "the next one after *now*", so the assertion below silently
+            # becomes a different question every day it runs.
+            now=datetime(2026, 8, 17, 8, 31, tzinfo=timezone.utc),
         )
 
         assert nxt == datetime(2026, 8, 18, 8, 30, tzinfo=timezone.utc)
@@ -113,6 +117,10 @@ class TestScheduleTimezone:
         nxt = next_repeated_start_at(
             previous_start=datetime(2026, 8, 17, 8, 30, tzinfo=timezone.utc),
             patterns=[pattern],
+            # Anchored, not read off the wall clock: without this the answer
+            # is "the next one after *now*", so the assertion below silently
+            # becomes a different question every day it runs.
+            now=datetime(2026, 8, 17, 8, 31, tzinfo=timezone.utc),
         )
 
         # 08:30 in UTC+5 is 03:30Z — the hour the user means, not the digits.
@@ -125,7 +133,7 @@ class TestScheduleTimezone:
         A briefing set for 08:30 would start arriving at 07:30 for half the
         year, which is the failure a naive timedelta produces.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
         from zoneinfo import ZoneInfo
 
         from orchestra.services.task_repetition import (
@@ -145,7 +153,11 @@ class TestScheduleTimezone:
         # 25 absolute hours. A naive `+ timedelta(days=1)` would hold 12:30Z
         # and land at 07:30 local.
         before = datetime(2026, 10, 31, 12, 30, tzinfo=timezone.utc)
-        after = next_repeated_start_at(previous_start=before, patterns=[pattern])
+        after = next_repeated_start_at(
+            previous_start=before,
+            patterns=[pattern],
+            now=before + timedelta(minutes=1),
+        )
 
         assert before.astimezone(zone).strftime("%H:%M") == "08:30"
         assert after.astimezone(zone).strftime("%H:%M") == "08:30"
