@@ -15,6 +15,10 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService, create_bucket_service
 from orchestra.services.local_bucket_service import LocalBucketService
 from orchestra.settings import settings
+from orchestra.web.api.storage.authorization import (
+    RECORDING_PATH_RE,
+    authorize_object_access,
+)
 from orchestra.web.api.storage.schema import (
     DownloadRequest,
     DownloadResponse,
@@ -75,10 +79,8 @@ def _sanitize_filename(filename: str) -> str:
     return re.sub(r'["\r\n\x00/\\]', "_", filename)
 
 
-# Recording objects are named {deploy_env}/{assistant_id}/{room}_{ts}.mp3 by the
-# comms gateway's egress request. The assistant segment is what authorizes
-# playback, so a path without one cannot be served.
-_RECORDING_PATH_RE = re.compile(r"^[^/]+/(?P<assistant_id>\d+)/[^/]+\.mp3$")
+# Recording path convention shared with the authorization module.
+_RECORDING_PATH_RE = RECORDING_PATH_RE
 
 
 def _signed_recording_url(
@@ -187,6 +189,14 @@ def generate_signed_url(
             object_path=object_path,
         )
 
+    authorize_object_access(
+        request_fastapi,
+        session,
+        bucket_service,
+        bucket_name,
+        object_path,
+    )
+
     try:
         bucket = bucket_service.storage_client.bucket(bucket_name)
         blob = bucket.blob(object_path)
@@ -230,7 +240,9 @@ def generate_signed_url(
 )
 def download_object(
     request: DownloadRequest,
+    request_fastapi: Request,
     bucket_service: BucketService = Depends(create_bucket_service),
+    session: Session = Depends(get_db_session),
 ) -> DownloadResponse:
     """Download a GCS object and return its content as base64."""
     bucket_name, object_path = parse_gcs_url(request.gcs_uri)
@@ -241,6 +253,14 @@ def download_object(
         )
 
     _validate_bucket(bucket_name, bucket_service)
+
+    authorize_object_access(
+        request_fastapi,
+        session,
+        bucket_service,
+        bucket_name,
+        object_path,
+    )
 
     try:
         bucket = bucket_service.storage_client.bucket(bucket_name)

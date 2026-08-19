@@ -206,6 +206,7 @@ from orchestra.web.api.assistant.schema import (
     CoordinatorTranscriptSeed,
     CoordinatorTranscriptSeedResponse,
     CoordinatorWakeupResponse,
+    CrossOrgConsentResponse,
     DefaultModelOptionRead,
     GrantedFeaturesResponse,
     InfoResponse,
@@ -3597,6 +3598,100 @@ async def list_assistant_contacts(
         for c in contacts
     ]
     return InfoResponse(info=contact_reads)
+
+
+# Least privilege per purpose. ``.default`` is deliberately never used here:
+# on an authorize request it means "every permission this application has ever
+# registered", so a counterparty administrator is shown mail-send and
+# site-wide write when all that was wanted was to read one shared folder --
+# and refusing that is the correct decision on their part.
+_CROSS_ORG_SCOPES: dict[str, dict[str, list[str]]] = {
+    "microsoft": {
+        "files": [
+            "https://graph.microsoft.com/Files.Read.All",
+            "offline_access",
+        ],
+    },
+}
+
+
+@router.get(
+    "/assistant/{assistant_id}/cross-org-consent",
+    response_model=InfoResponse[CrossOrgConsentResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Build an approval request for another organisation's administrator",
+    description=(
+        "Content shared into a connected workspace from a different tenant is "
+        "reachable only after that tenant's administrator approves this "
+        "application. Returns the URL they open, the exact permissions asked "
+        "for, and a justification to send with it."
+    ),
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Consent request generated."},
+        404: {"description": "Assistant not found."},
+        422: {"description": "Unknown provider or purpose, or OAuth not configured."},
+    },
+)
+async def cross_org_consent(
+    assistant_id: int,
+    request: Request,
+    tenant_id: str,
+    provider: str = "microsoft",
+    purpose: str = "files",
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[CrossOrgConsentResponse]:
+    """Build the approval URL for a counterparty tenant."""
+    from urllib.parse import urlencode
+
+    require_owned_assistant(request, assistant_id, session)
+
+    purposes = _CROSS_ORG_SCOPES.get(provider)
+    if purposes is None or purpose not in purposes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"No cross-organisation consent defined for {provider}/{purpose}.",
+        )
+    scopes = purposes[purpose]
+
+    client_id = settings.microsoft_byod_client_id
+    if not client_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Microsoft BYOD OAuth is not configured on this deployment.",
+        )
+
+    adapters_url = os.environ.get("UNIFY_ADAPTERS_URL", "").rstrip("/")
+    # The admin-consent endpoint, not authorize: it grants for the tenant, which
+    # is what an administrator is being asked for, and it is reachable whether
+    # or not that tenant has configured an admin-consent request workflow.
+    oauth_url = (
+        f"https://login.microsoftonline.com/{tenant_id}/v2.0/adminconsent?"
+        + urlencode(
+            {
+                "client_id": client_id,
+                "redirect_uri": f"{adapters_url}/microsoft/auth/callback",
+                "scope": " ".join(scopes),
+            },
+        )
+    )
+
+    justification = (
+        "This application reads files that have already been shared with a "
+        "guest account in your tenant. It requests read-only file access and "
+        "the ability to stay signed in -- no mail, chat, calendar or write "
+        "permissions. Access is bounded by what that guest account can already "
+        "open, so approving this grants nothing beyond their existing access."
+    )
+
+    return InfoResponse(
+        info=CrossOrgConsentResponse(
+            consent_url=oauth_url,
+            tenant_id=tenant_id,
+            scopes=scopes,
+            justification=justification,
+        ),
+    )
 
 
 @router.post(

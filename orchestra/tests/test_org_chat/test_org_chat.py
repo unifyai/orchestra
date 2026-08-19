@@ -1578,6 +1578,75 @@ async def test_group_membership_patch_is_idempotent(
 
 
 @pytest.mark.anyio
+async def test_group_rename_and_icon_round_trip(client: AsyncClient):
+    owner, member, org = await _create_org_with_member(client, "grp-icon")
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Placeholder",
+        user_ids=[member["id"]],
+    )
+    assert group["icon"] is None
+
+    renamed = await client.patch(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+        json={"name": "Design Sync", "icon": "\U0001f3a8"},
+    )
+    assert renamed.status_code == status.HTTP_200_OK, renamed.json()
+    assert renamed.json()["name"] == "Design Sync"
+    assert renamed.json()["icon"] == "\U0001f3a8"
+
+    # Omitting the icon leaves it alone; a membership-only patch must not
+    # silently strip it.
+    membership_only = await client.patch(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+        json={"user_ids": [owner["id"], member["id"]]},
+    )
+    assert membership_only.status_code == status.HTTP_200_OK, membership_only.json()
+    assert membership_only.json()["icon"] == "\U0001f3a8"
+
+    roster_response = await client.get(
+        f"/v0/organizations/{org['id']}/roster",
+        headers=member["headers"],
+    )
+    assert roster_response.status_code == status.HTTP_200_OK
+    roster_groups = {g["group_id"]: g for g in roster_response.json()["groups"]}
+    assert roster_groups[group["group_id"]]["icon"] == "\U0001f3a8"
+
+    cleared = await client.patch(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+        json={"icon": None},
+    )
+    assert cleared.status_code == status.HTTP_200_OK, cleared.json()
+    assert cleared.json()["icon"] is None
+
+
+@pytest.mark.anyio
+async def test_group_icon_rejects_prose(client: AsyncClient):
+    owner, member, org = await _create_org_with_member(client, "grp-icon-long")
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Icon Guard",
+        user_ids=[member["id"]],
+    )
+
+    response = await client.patch(
+        f"/v0/organizations/{org['id']}/groups/{group['group_id']}",
+        headers=org["headers"],
+        json={"icon": "a whole sentence, not a glyph"},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
 async def test_group_messages_post_and_dispatch(
     client: AsyncClient,
     dbsession,

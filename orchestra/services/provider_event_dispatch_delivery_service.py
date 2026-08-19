@@ -31,7 +31,12 @@ logger = logging.getLogger(__name__)
 COMM_PROVIDER_EVENT_DISPATCH_PATH = "/infra/task-execution/provider-event-dispatch"
 ADAPTERS_SYSTEM_EVENT_PATH = "/unity/system-event"
 
-TERMINAL_RUN_STATES = {"completed", "succeeded", "failed", "cancelled"}
+#: ``held`` is terminal without the effect having happened: the run stopped
+#: because a verification it depended on failed or could not be settled, and
+#: the owner was told. For a dispatch that is a failure to converge on, with
+#: the run's ``held_reason`` as the error code.
+TERMINAL_RUN_STATES = {"completed", "succeeded", "failed", "cancelled", "held"}
+UNPERFORMED_RUN_STATES = {"failed", "cancelled", "held"}
 ACTIVE_RUN_STATES = {"running", "active"}
 QUEUED_RUN_STATES = {"pending", "queued"}
 
@@ -328,9 +333,11 @@ class ProviderEventDispatchDeliveryService:
 
         run_state = str((run_row.data or {}).get("state") or "").lower()
         if run_state in TERMINAL_RUN_STATES:
-            if run_state in {"failed", "cancelled"}:
+            if run_state in UNPERFORMED_RUN_STATES:
+                run_data = run_row.data or {}
                 error_code = str(
-                    (run_row.data or {}).get("terminal_reason")
+                    run_data.get("terminal_reason")
+                    or run_data.get("held_reason")
                     or DispatchErrorCode.dispatch_run_terminal_failed.value,
                 )
                 self._dao.mark_dispatch_failed(
