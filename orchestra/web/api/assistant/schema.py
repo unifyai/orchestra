@@ -2274,6 +2274,31 @@ class ConnectResponse(BaseModel):
     )
 
 
+class CrossOrgConsentResponse(BaseModel):
+    """An approval request for content owned by a different organisation.
+
+    Distinct from ``ConnectResponse``: nobody who uses this assistant can act
+    on it. Content shared from another tenant is only reachable once *that*
+    organisation's administrator approves the application, so the payload is
+    addressed to someone outside the product and carries what they need to
+    decide -- who is asking, for what, and how little.
+    """
+
+    consent_url: str = Field(
+        ...,
+        description="URL the counterparty's administrator opens to approve access.",
+    )
+    tenant_id: str = Field(..., description="The organisation being asked.")
+    scopes: List[str] = Field(
+        ...,
+        description="Exactly the permissions requested, for display before approval.",
+    )
+    justification: str = Field(
+        ...,
+        description="Prefilled rationale the requester can send to that administrator.",
+    )
+
+
 class GrantedFeaturesResponse(BaseModel):
     """Response from the granted-features endpoint."""
 
