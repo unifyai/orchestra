@@ -73,6 +73,16 @@ CallAction = Literal[
     "participant_left",
 ]
 
+# The opening an assistant gets when it is invited into a conversation that is
+# already under way — see `_opening_for_invited_assistant` for when that applies.
+# The runtime's default opening generates and speaks a greeting written for
+# answering a 1:1 call ("hi, how can I help?"), which on a live call lands on top
+# of people mid-sentence and then, unanswered, escalates into "can you hear me?".
+# Somebody walking into a meeting does not announce themselves over the
+# discussion, so neither does an assistant: it arrives listening and speaks when
+# a turn is actually put to it.
+JOINED_MID_CALL_OPENING: dict[str, Any] = {"mode": "silent"}
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -148,6 +158,26 @@ def _require_call_participant(
 
 def _joined_human_count(call_session: CallSession) -> int:
     return sum(1 for p in call_session.participants or [] if p.status == "joined")
+
+
+def _opening_for_invited_assistant(call_session: CallSession) -> dict | None:
+    """The opening for an assistant invited onto an existing call.
+
+    Keyed on whether anybody is actually in the room, which is not the same
+    question as the session's status. A room call is created `ringing` with its
+    host already `joined`, and only turns `active` once a *second* human
+    answers — so the commonest invite of all, one person adding an assistant to
+    their own call, happens while the session still reads `ringing`. Gating on
+    status let that case fall through to the runtime's default and greet over
+    somebody who was already talking.
+
+    Nobody joined yet means nobody to talk over, so the call's own opening
+    stands: an assistant-initiated call leaves its owner `invited` until they
+    pick up, and its opener is the whole point of placing it.
+    """
+    if _joined_human_count(call_session) > 0:
+        return JOINED_MID_CALL_OPENING
+    return None
 
 
 def _finalize_room_name(session: Session, call_session: CallSession) -> None:
@@ -311,8 +341,16 @@ async def _post_meet_dispatch(
     *,
     assistant_id: int,
     roster: list[CallRosterMember],
+    opening_config: dict[str, Any] | None = None,
 ) -> None:
-    """POST one assistant's Meet dispatch (session + roster) to adapters."""
+    """POST one assistant's Meet dispatch (session + roster) to adapters.
+
+    ``opening_config`` overrides the session's own opening for this dispatch.
+    The session's copy describes how the call *started* — the owner's opener,
+    a recorded intro — which is the wrong thing to hand an assistant joining
+    later, and handing it the owner's verbatim opener is worse than handing it
+    nothing.
+    """
     adapters_url = (LOCAL_ADAPTERS_URL or ADAPTERS_URL or "").rstrip("/")
     if not adapters_url or not ADMIN_KEY:
         return
@@ -322,8 +360,9 @@ async def _post_meet_dispatch(
         "call_session_id": call_session.id,
         "participants": _roster_payload(roster),
     }
-    if call_session.opening_config:
-        payload["opening_config"] = call_session.opening_config
+    opening = opening_config or call_session.opening_config
+    if opening:
+        payload["opening_config"] = opening
     try:
         await get_async_client().post(
             f"{adapters_url}/unify/meet",
@@ -1213,6 +1252,7 @@ async def add_assistant_to_call(
         call_session,
         assistant_id=body.assistant_id,
         roster=roster,
+        opening_config=_opening_for_invited_assistant(call_session),
     )
     if was_added:
         await _dispatch_call_frame(

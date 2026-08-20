@@ -43,6 +43,16 @@ class SettleRequest(BaseModel):
     usage: dict[str, Any]
     assistant_id: int | None = Field(default=None)
     lease: str | None = None
+    #: The provider's own response id (``gen-...``), for cross-checking a
+    #: ledger row against ``GET /api/v1/generation?id=``.
+    generation_id: str | None = Field(default=None)
+    #: A short, human-readable description of what the assistant was working
+    #: on, threaded from the caller's billing context. Best-effort: only
+    #: calls carrying billing context (act/chat traffic) have one.
+    label: str | None = Field(default=None)
+    #: What triggered the call (``"chat"``, ``"tool"``, ...), also threaded
+    #: from the caller's billing context.
+    source: str | None = Field(default=None)
 
 
 class SettleResponse(BaseModel):

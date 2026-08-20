@@ -228,6 +228,41 @@ def _precheck(request: Request, assistant_id: Optional[int]) -> _BillingCtx:
     return _BillingCtx(billing_account_id=billing_account_id, charges=charges)
 
 
+def _token_counts_from_usage(
+    usage: Any,
+) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """Normalize prompt/completion/cached token counts across provider shapes.
+
+    OpenAI-compatible usage reports ``prompt_tokens``/``completion_tokens``,
+    with cache hits nested under ``prompt_tokens_details.cached_tokens`` --
+    or, when the broker's stream-tail merge already hoisted it, a top-level
+    ``cached_tokens`` scalar. Anthropic reports ``input_tokens``/
+    ``output_tokens`` and splits its cache accounting across
+    ``cache_read_input_tokens``/``cache_creation_input_tokens``.
+    """
+    if not isinstance(usage, dict):
+        return None, None, None
+
+    def _int(value: Any) -> Optional[int]:
+        return int(value) if isinstance(value, (int, float)) else None
+
+    prompt = _int(usage.get("prompt_tokens"))
+    completion = _int(usage.get("completion_tokens"))
+    if prompt is None and completion is None:
+        prompt = _int(usage.get("input_tokens"))
+        completion = _int(usage.get("output_tokens"))
+
+    cached = _int(usage.get("cached_tokens"))
+    if cached is None:
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict):
+            cached = _int(details.get("cached_tokens"))
+    if cached is None:
+        cached = _int(usage.get("cache_read_input_tokens"))
+
+    return prompt, completion, cached
+
+
 def _charge_usage(
     session_factory: Any,
     *,
@@ -237,6 +272,10 @@ def _charge_usage(
     assistant_id: Optional[int],
     model: str,
     raw_cost: float,
+    generation_id: Optional[str] = None,
+    usage: Any = None,
+    label: Optional[str] = None,
+    source: Optional[str] = None,
 ) -> None:
     """Settle a completed call against the ledger with the platform markup."""
     if not ctx.charges or ctx.billing_account_id is None:
@@ -244,6 +283,27 @@ def _charge_usage(
     amount = float(raw_cost) * float(settings.chat_completions_markup_rate)
     if amount <= 0:
         return
+    detail: dict[str, Any] = {
+        "model": model,
+        # The caller's own action source (``chat``/``tool``/...) when it
+        # carried billing context; otherwise the "gateway" tag this field
+        # has always held, marking the row as gateway- rather than
+        # client-settled.
+        "source": source or "gateway",
+        "raw_cost": float(raw_cost),
+        "markup": float(settings.chat_completions_markup_rate),
+    }
+    if generation_id:
+        detail["generation_id"] = generation_id
+    prompt_tokens, completion_tokens, cached_tokens = _token_counts_from_usage(usage)
+    if prompt_tokens is not None:
+        detail["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        detail["completion_tokens"] = completion_tokens
+    if cached_tokens is not None:
+        detail["cached_tokens"] = cached_tokens
+    if label:
+        detail["label"] = label
     session = session_factory()
     try:
         BillingAccountDAO(session).deduct_credits(
@@ -254,12 +314,7 @@ def _charge_usage(
             user_id=user_id,
             organization_id=organization_id,
             description="LLM gateway",
-            detail={
-                "model": model,
-                "source": "gateway",
-                "raw_cost": float(raw_cost),
-                "markup": float(settings.chat_completions_markup_rate),
-            },
+            detail=detail,
         )
         session.commit()
     except Exception:
@@ -378,6 +433,10 @@ def settle(request: Request, body: SettleRequest) -> SettleResponse:
         assistant_id=body.assistant_id,
         model=body.model,
         raw_cost=cost,
+        generation_id=body.generation_id,
+        usage=body.usage,
+        label=body.label,
+        source=body.source,
     )
     charged = cost * float(settings.chat_completions_markup_rate)
     return SettleResponse(charged=charged, metered=bool(ctx.charges))
