@@ -950,6 +950,86 @@ async def test_assistant_dm_call_create_dispatches_assistant(
     assert end_response.json()["status"] == "ended"
 
 
+@pytest.mark.anyio
+async def test_assistant_invited_onto_live_call_opens_silently(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
+):
+    """An assistant joining a conversation already under way arrives listening.
+
+    The two dispatches in this test are the whole distinction. The one that
+    starts the call keeps the session's own opening, so a 1:1 call still gets
+    its greeting; the one that answers an invite is overridden to ``silent``,
+    because the people on the call are mid-discussion and an assistant
+    announcing itself over them (and then asking whether it can be heard) is
+    not how anyone joins a meeting.
+    """
+    owner, _member, org = await _create_org_with_member(client, "midjoin")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    first_assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Ada",
+        surname="One",
+        organization_id=org["id"],
+    )
+    late_assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Bea",
+        surname="Two",
+        organization_id=org["id"],
+    )
+    dbsession.add_all([first_assistant, late_assistant])
+    dbsession.commit()
+
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={
+            "kind": "assistant_dm",
+            "assistant_id": first_assistant.agent_id,
+            "opening_config": {"mode": "speak"},
+        },
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    body = create_response.json()
+    # An assistant_dm has no human to ring, so it is live from creation. The
+    # override must not key on that status, or every 1:1 call loses its opening.
+    assert body["status"] == "active"
+
+    starting_dispatch = call_meet_dispatch_mock.await_args
+    assert starting_dispatch.kwargs["assistant_id"] == first_assistant.agent_id
+    assert starting_dispatch.kwargs.get("opening_config") is None
+    assert starting_dispatch.args[0].opening_config == {"mode": "speak"}
+
+    invited = await client.post(
+        f"/v0/calls/{body['call_id']}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": late_assistant.agent_id},
+    )
+    assert invited.status_code == status.HTTP_200_OK, invited.json()
+    assert set(invited.json()["assistant_ids"]) == {
+        first_assistant.agent_id,
+        late_assistant.agent_id,
+    }
+
+    late_dispatch = next(
+        call
+        for call in call_meet_dispatch_mock.await_args_list
+        if call.kwargs["assistant_id"] == late_assistant.agent_id
+    )
+    assert late_dispatch.kwargs["opening_config"] == {"mode": "silent"}
+    # The session still describes how the call started; only this dispatch is
+    # overridden, so the owner's opener is never replayed by the late joiner.
+    assert late_dispatch.args[0].opening_config == {"mode": "speak"}
+
+
 def _seed_runtime_contact(
     dbsession,
     *,
