@@ -94,3 +94,46 @@ async def test_no_opening_is_sent_when_neither_is_set(adapters):
         roster=[],
     )
     assert "opening_config" not in adapters[0]
+
+
+def _session_with(*participant_statuses: str, status: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id="call-1",
+        status=status,
+        participants=[SimpleNamespace(status=s) for s in participant_statuses],
+    )
+
+
+class TestOpeningForInvitedAssistant:
+    """Whether an invited assistant greets, keyed on who is already in the room.
+
+    Session status is the wrong signal and reading it that way was a real bug: a
+    room call is created ``ringing`` with its host already ``joined``, and only
+    turns ``active`` when a *second* human answers. So the commonest invite —
+    one person adding an assistant to their own call — was still greeting over
+    somebody who was already there.
+    """
+
+    def test_the_host_alone_on_a_ringing_call_is_somebody_to_talk_over(self):
+        """The case the status gate missed, and the one users actually hit."""
+        session = _session_with("joined", status="ringing")
+        assert views._opening_for_invited_assistant(session) == {"mode": "silent"}
+
+    def test_an_active_call_with_several_people_is_silent(self):
+        session = _session_with("joined", "joined", status="active")
+        assert views._opening_for_invited_assistant(session) == {"mode": "silent"}
+
+    def test_nobody_joined_yet_keeps_the_calls_own_opening(self):
+        """An assistant-initiated call leaves its owner ``invited`` until they
+        pick up, and delivering its opener is the whole point of placing it."""
+        session = _session_with("invited", status="ringing")
+        assert views._opening_for_invited_assistant(session) is None
+
+    def test_a_call_with_no_participants_at_all_keeps_its_opening(self):
+        session = _session_with(status="ringing")
+        assert views._opening_for_invited_assistant(session) is None
+
+    def test_a_departed_participant_is_not_somebody_to_talk_over(self):
+        """Everyone having left is not a conversation in progress."""
+        session = _session_with("left", "invited", status="active")
+        assert views._opening_for_invited_assistant(session) is None

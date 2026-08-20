@@ -74,12 +74,13 @@ CallAction = Literal[
 ]
 
 # The opening an assistant gets when it is invited into a conversation that is
-# already under way. The runtime's default opening generates and speaks a
-# greeting written for answering a 1:1 call ("hi, how can I help?"), which on a
-# live call lands on top of people mid-sentence and then, unanswered, escalates
-# into "can you hear me?". Somebody walking into a meeting does not announce
-# themselves over the discussion, so neither does an assistant: it arrives
-# listening and speaks when a turn is actually put to it.
+# already under way — see `_opening_for_invited_assistant` for when that applies.
+# The runtime's default opening generates and speaks a greeting written for
+# answering a 1:1 call ("hi, how can I help?"), which on a live call lands on top
+# of people mid-sentence and then, unanswered, escalates into "can you hear me?".
+# Somebody walking into a meeting does not announce themselves over the
+# discussion, so neither does an assistant: it arrives listening and speaks when
+# a turn is actually put to it.
 JOINED_MID_CALL_OPENING: dict[str, Any] = {"mode": "silent"}
 
 
@@ -157,6 +158,26 @@ def _require_call_participant(
 
 def _joined_human_count(call_session: CallSession) -> int:
     return sum(1 for p in call_session.participants or [] if p.status == "joined")
+
+
+def _opening_for_invited_assistant(call_session: CallSession) -> dict | None:
+    """The opening for an assistant invited onto an existing call.
+
+    Keyed on whether anybody is actually in the room, which is not the same
+    question as the session's status. A room call is created `ringing` with its
+    host already `joined`, and only turns `active` once a *second* human
+    answers — so the commonest invite of all, one person adding an assistant to
+    their own call, happens while the session still reads `ringing`. Gating on
+    status let that case fall through to the runtime's default and greet over
+    somebody who was already talking.
+
+    Nobody joined yet means nobody to talk over, so the call's own opening
+    stands: an assistant-initiated call leaves its owner `invited` until they
+    pick up, and its opener is the whole point of placing it.
+    """
+    if _joined_human_count(call_session) > 0:
+        return JOINED_MID_CALL_OPENING
+    return None
 
 
 def _finalize_room_name(session: Session, call_session: CallSession) -> None:
@@ -1227,17 +1248,11 @@ async def add_assistant_to_call(
         call_session=call_session,
         assistant_id=body.assistant_id,
     )
-    # An invite onto an `active` call means the conversation is already running,
-    # whether this is a new assistant or one recovering from a dropped job —
-    # either way it is arriving mid-discussion and opens silently. A `ringing`
-    # call has not started, so its own opening still applies.
     await _post_meet_dispatch(
         call_session,
         assistant_id=body.assistant_id,
         roster=roster,
-        opening_config=(
-            JOINED_MID_CALL_OPENING if call_session.status == "active" else None
-        ),
+        opening_config=_opening_for_invited_assistant(call_session),
     )
     if was_added:
         await _dispatch_call_frame(

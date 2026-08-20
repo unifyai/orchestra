@@ -951,6 +951,70 @@ async def test_assistant_dm_call_create_dispatches_assistant(
 
 
 @pytest.mark.anyio
+async def test_assistant_invited_by_a_host_alone_on_a_ringing_call_is_silent(
+    client: AsyncClient,
+    dbsession,
+    org_chat_dispatch_mock: AsyncMock,
+    call_meet_dispatch_mock: AsyncMock,
+):
+    """The invite users actually make, and the one a status gate got wrong.
+
+    A room call is created ``ringing`` with its host already ``joined``, and only
+    turns ``active`` when a second human answers. Someone starting a group call
+    and pulling an assistant in is therefore inviting it onto a ``ringing``
+    session while sitting in the room talking — so keying the silent opening on
+    ``status == "active"`` let exactly this case greet over them.
+    """
+    owner, member, org = await _create_org_with_member(client, "ringinvite")
+    await ensure_assistants_project(client, org["headers"])
+
+    from orchestra.db.models.orchestra_models import Assistant
+
+    assistant = Assistant(
+        user_id=owner["id"],
+        first_name="Ada",
+        surname="One",
+        organization_id=org["id"],
+    )
+    dbsession.add(assistant)
+    dbsession.commit()
+
+    group = await _create_group(
+        client,
+        org["headers"],
+        organization_id=org["id"],
+        name="Ring Group",
+        user_ids=[member["id"]],
+        assistant_ids=[assistant.agent_id],
+    )
+    create_response = await client.post(
+        "/v0/calls",
+        headers=org["headers"],
+        json={"kind": "group", "group_id": group["group_id"]},
+    )
+    assert (
+        create_response.status_code == status.HTTP_201_CREATED
+    ), create_response.json()
+    body = create_response.json()
+    # The host is in the room, but nobody else has answered yet.
+    assert body["status"] == "ringing"
+
+    invited = await client.post(
+        f"/v0/calls/{body['call_id']}/assistants",
+        headers=org["headers"],
+        json={"assistant_id": assistant.agent_id},
+    )
+    assert invited.status_code == status.HTTP_200_OK, invited.json()
+
+    dispatch = next(
+        call
+        for call in call_meet_dispatch_mock.await_args_list
+        if call.kwargs["assistant_id"] == assistant.agent_id
+    )
+    assert dispatch.kwargs["opening_config"] == {"mode": "silent"}
+
+
+@pytest.mark.anyio
 async def test_assistant_invited_onto_live_call_opens_silently(
     client: AsyncClient,
     dbsession,
