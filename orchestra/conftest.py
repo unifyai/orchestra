@@ -71,6 +71,31 @@ def _restore_detached_indexes(removed_indexes: list[tuple[Any, Any]]) -> None:
 
 
 @pytest.fixture(autouse=True)
+def settings_singleton_is_stable():
+    """Fail the test that swaps the process-wide ``settings`` instance.
+
+    Most of the codebase binds the object by value at import time
+    (``from orchestra.settings import settings``), so reloading
+    ``orchestra.settings`` leaves those modules on the old instance while
+    anything importing later gets the new one. Patches then land on an object
+    the code under test never reads, and the damage surfaces as an unrelated
+    failure in whichever test happens to run next on the same xdist worker.
+    Pin the identity here, where the assertion still names the culprit. To
+    exercise an env-derived field, patch it on the live instance:
+    ``monkeypatch.setattr(settings, "field", value)``.
+    """
+    import orchestra.settings as settings_module
+
+    original = settings_module.settings
+    yield
+    assert settings_module.settings is original, (
+        "orchestra.settings.settings was replaced during this test "
+        "(importlib.reload?), desynchronising every module that imported it "
+        "by value"
+    )
+
+
+@pytest.fixture(autouse=True)
 def stub_coordinator_pubsub_boundary():
     """Stub Coordinator Pub/Sub provisioning during platform API tests.
 

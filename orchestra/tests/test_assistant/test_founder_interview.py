@@ -100,7 +100,11 @@ class TestInterviewTemplates:
         assert "15 minutes" in founder_interview_subject("engaged_quiet").lower()
         assert "hey daniel," in normalized
         assert "went quiet" in normalized
-        assert "https://cal.com/team/unify/chat" in body
+        # No booking link by default: the ask stays in the thread the reader
+        # is already in, and the closing line invites the reply.
+        assert "cal.com" not in body
+        assert "15-min chat" not in normalized
+        assert "just reply with whatever's on your mind" in normalized
         assert "👋" in body
         assert "🫶" in body
         assert "my the droid be with you!" in normalized
@@ -116,12 +120,36 @@ class TestInterviewTemplates:
             owner_first_name="Sam",
             variant="engaged_active",
         )
-        assert "hoping" in never.lower()
-        assert "what's working" in active.lower() or "what isnt" in re.sub(
-            r"\s+",
-            " ",
-            active.lower(),
+        # Normalise first: the template wraps these lines, so a raw substring
+        # check passes or fails on where the paragraph happens to break.
+        never_flat = re.sub(r"\s+", " ", never.lower())
+        active_flat = re.sub(r"\s+", " ", active.lower())
+        assert "hoping" in never_flat
+        assert "what's working" in active_flat
+        # The active variant asked for "15 minutes" outright; with calls off it
+        # asks for the same thing without naming a meeting length.
+        assert "15 minutes" not in active_flat
+
+    def test_the_switch_restores_the_booking_link(self, monkeypatch):
+        from orchestra.routines import founder_interview as fi
+        from orchestra.settings import settings
+
+        # Flip the field on the live settings instance rather than reloading
+        # ``orchestra.settings`` for the new env var: a reload rebinds the
+        # module's ``settings`` to a fresh object while every module that did
+        # ``from orchestra.settings import settings`` at import time keeps the
+        # old one, and the two halves of the process then disagree for the
+        # rest of the session.
+        monkeypatch.setattr(settings, "founder_interview_offer_call", True)
+
+        body = fi.build_founder_interview_email(
+            owner_first_name="Daniel",
+            variant="engaged_quiet",
+            cal_url="https://cal.com/team/unify/chat",
         )
+
+        assert "https://cal.com/team/unify/chat" in body
+        assert "15-min chat" in re.sub(r"\s+", " ", body.lower())
 
 
 class TestInterviewDAO:
@@ -249,7 +277,7 @@ class TestInterviewRoutine:
         )
         dbsession.commit()
 
-        with patch(_SEND_TARGET, new_callable=AsyncMock, return_value=False):
+        with patch(_SEND_TARGET, new_callable=AsyncMock, return_value=None):
             result = await run_founder_interview_ask(session=dbsession)
 
         assert result.interviews_failed >= 1
@@ -301,6 +329,35 @@ class TestInterviewSendHelper:
                 new_callable=AsyncMock,
             ) as mock_send,
         ):
+            mock_send.return_value = {"id": "m1", "threadId": "t-1"}
+            sent = await fi.send_founder_interview_email(
+                recipient_email="owner@test.com",
+                owner_first_name="Olivia",
+                variant="engaged_quiet",
+            )
+
+        assert sent == "t-1"
+        kwargs = mock_send.await_args.kwargs
+        assert kwargs["from_email"] == "dan@unify.ai"
+        assert kwargs["impersonate_email"] == "dan@unify.ai"
+        assert "cal.com" not in kwargs["email_body"]
+
+    @pytest.mark.anyio
+    async def test_a_send_gmail_does_not_thread_is_still_a_send(self):
+        """ "" is a delivered email with no thread named, not a failure."""
+        from orchestra.routines import founder_interview as fi
+
+        with (
+            patch.object(
+                fi,
+                "get_founder_interview_from_email",
+                return_value="founder@example.com",
+            ),
+            patch(
+                "orchestra.web.api.utils.email.send_email_async_result",
+                new_callable=AsyncMock,
+            ) as mock_send,
+        ):
             mock_send.return_value = {"id": "m1"}
             sent = await fi.send_founder_interview_email(
                 recipient_email="owner@test.com",
@@ -308,8 +365,29 @@ class TestInterviewSendHelper:
                 variant="engaged_quiet",
             )
 
-        assert sent is True
-        kwargs = mock_send.await_args.kwargs
-        assert kwargs["from_email"] == "dan@unify.ai"
-        assert kwargs["impersonate_email"] == "dan@unify.ai"
-        assert "https://cal.com/team/unify/chat" in kwargs["email_body"]
+        assert sent == ""
+        assert sent is not None
+
+    @pytest.mark.anyio
+    async def test_a_refused_send_returns_none(self):
+        from orchestra.routines import founder_interview as fi
+
+        with (
+            patch.object(
+                fi,
+                "get_founder_interview_from_email",
+                return_value="founder@example.com",
+            ),
+            patch(
+                "orchestra.web.api.utils.email.send_email_async_result",
+                new_callable=AsyncMock,
+            ) as mock_send,
+        ):
+            mock_send.return_value = None
+            sent = await fi.send_founder_interview_email(
+                recipient_email="owner@test.com",
+                owner_first_name="Olivia",
+                variant="engaged_quiet",
+            )
+
+        assert sent is None

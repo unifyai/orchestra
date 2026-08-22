@@ -724,7 +724,7 @@ class Settings(BaseSettings):
         "yes",
     )
     founder_welcome_from_email: str = (
-        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan@unify.ai"
+        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "daniel@unify.ai"
     )
 
     # Founder interview asks (dan@) — automated, one-shot per personal
@@ -741,7 +741,22 @@ class Settings(BaseSettings):
     founder_interview_from_email: str = (
         os.environ.get("FOUNDER_INTERVIEW_FROM_EMAIL")
         or os.environ.get("FOUNDER_WELCOME_FROM_EMAIL")
-        or "dan@unify.ai"
+        or "daniel@unify.ai"
+    )
+    # Whether the ask proposes a call at all. Off means the email still goes
+    # out and still asks for the same thing, in the thread the reader is
+    # already in: a templated email that asks for someone's diary before they
+    # have asked for anything is a bigger request than it looks. The booking
+    # URL and its wiring stay put, so this is a setting to flip rather than a
+    # template to rewrite, and anyone who wants a call can still find the
+    # booking page on the site.
+    founder_interview_offer_call: bool = os.environ.get(
+        "FOUNDER_INTERVIEW_OFFER_CALL",
+        "false",
+    ).lower() in (
+        "1",
+        "true",
+        "yes",
     )
     founder_interview_cal_url: str = (
         os.environ.get("FOUNDER_INTERVIEW_CAL_URL") or "https://cal.com/team/unify/chat"

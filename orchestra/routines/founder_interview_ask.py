@@ -48,6 +48,7 @@ def _stamp_interview_asked(
     when: _dt.datetime,
     *,
     variant: str,
+    thread_id: str | None = None,
     bind=None,
 ) -> None:
     SessionLocal = sessionmaker(
@@ -59,6 +60,7 @@ def _stamp_interview_asked(
             agent_id,
             when,
             variant=variant,
+            thread_id=thread_id,
         )
         session.commit()
 
@@ -183,7 +185,11 @@ async def _dispatch_interview_ask(
             owner_first_name=owner_first_name,
             variant=variant,
         )
-        if not sent:
+        # `sent` is the thread id, and "" is a real success: Gmail accepted the
+        # message but named no thread. Only None means it never went out, so a
+        # falsy check here would report a delivered email as a failure and
+        # leave it eligible to send again.
+        if sent is None:
             result.error = "send_failed"
             return result
 
@@ -191,6 +197,7 @@ async def _dispatch_interview_ask(
             agent_id,
             now,
             variant=variant,
+            thread_id=sent or None,
             bind=session.get_bind(),
         )
         result.dispatched = True
