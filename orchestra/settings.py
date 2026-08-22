@@ -724,7 +724,7 @@ class Settings(BaseSettings):
         "yes",
     )
     founder_welcome_from_email: str = (
-        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan.lenton@unify.ai"
+        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "daniel@unify.ai"
     )
 
     # Founder interview asks (dan@) — automated, one-shot per personal
@@ -741,7 +741,7 @@ class Settings(BaseSettings):
     founder_interview_from_email: str = (
         os.environ.get("FOUNDER_INTERVIEW_FROM_EMAIL")
         or os.environ.get("FOUNDER_WELCOME_FROM_EMAIL")
-        or "dan.lenton@unify.ai"
+        or "daniel@unify.ai"
     )
     # Whether the ask proposes a call at all. Off means the email still goes
     # out and still asks for the same thing, in the thread the reader is

@@ -1,4 +1,4 @@
-"""Founder interview-ask emails from dan.lenton@unify.ai with Cal.com booking.
+"""Founder interview-ask emails from daniel@unify.ai.
 
 Fully automated one-shot outreach across three cohorts:
 

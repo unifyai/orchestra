@@ -1,4 +1,4 @@
-"""Personal founder welcome email from dan.lenton@unify.ai.
+"""Personal founder welcome email from daniel@unify.ai.
 
 Sent once when a personal Coordinator is provisioned at signup (same hooks
 as the twin@ Coordinator welcome). Complements the product welcome with a
