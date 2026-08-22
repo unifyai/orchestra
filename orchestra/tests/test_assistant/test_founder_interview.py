@@ -249,7 +249,7 @@ class TestInterviewRoutine:
         )
         dbsession.commit()
 
-        with patch(_SEND_TARGET, new_callable=AsyncMock, return_value=False):
+        with patch(_SEND_TARGET, new_callable=AsyncMock, return_value=None):
             result = await run_founder_interview_ask(session=dbsession)
 
         assert result.interviews_failed >= 1
@@ -301,6 +301,35 @@ class TestInterviewSendHelper:
                 new_callable=AsyncMock,
             ) as mock_send,
         ):
+            mock_send.return_value = {"id": "m1", "threadId": "t-1"}
+            sent = await fi.send_founder_interview_email(
+                recipient_email="owner@test.com",
+                owner_first_name="Olivia",
+                variant="engaged_quiet",
+            )
+
+        assert sent == "t-1"
+        kwargs = mock_send.await_args.kwargs
+        assert kwargs["from_email"] == "dan@unify.ai"
+        assert kwargs["impersonate_email"] == "dan@unify.ai"
+        assert "https://cal.com/team/unify/chat" in kwargs["email_body"]
+
+    @pytest.mark.anyio
+    async def test_a_send_gmail_does_not_thread_is_still_a_send(self):
+        """ "" is a delivered email with no thread named, not a failure."""
+        from orchestra.routines import founder_interview as fi
+
+        with (
+            patch.object(
+                fi,
+                "get_founder_interview_from_email",
+                return_value="founder@example.com",
+            ),
+            patch(
+                "orchestra.web.api.utils.email.send_email_async_result",
+                new_callable=AsyncMock,
+            ) as mock_send,
+        ):
             mock_send.return_value = {"id": "m1"}
             sent = await fi.send_founder_interview_email(
                 recipient_email="owner@test.com",
@@ -308,8 +337,29 @@ class TestInterviewSendHelper:
                 variant="engaged_quiet",
             )
 
-        assert sent is True
-        kwargs = mock_send.await_args.kwargs
-        assert kwargs["from_email"] == "dan@unify.ai"
-        assert kwargs["impersonate_email"] == "dan@unify.ai"
-        assert "https://cal.com/team/unify/chat" in kwargs["email_body"]
+        assert sent == ""
+        assert sent is not None
+
+    @pytest.mark.anyio
+    async def test_a_refused_send_returns_none(self):
+        from orchestra.routines import founder_interview as fi
+
+        with (
+            patch.object(
+                fi,
+                "get_founder_interview_from_email",
+                return_value="founder@example.com",
+            ),
+            patch(
+                "orchestra.web.api.utils.email.send_email_async_result",
+                new_callable=AsyncMock,
+            ) as mock_send,
+        ):
+            mock_send.return_value = None
+            sent = await fi.send_founder_interview_email(
+                recipient_email="owner@test.com",
+                owner_first_name="Olivia",
+                variant="engaged_quiet",
+            )
+
+        assert sent is None

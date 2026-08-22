@@ -127,17 +127,25 @@ async def send_founder_interview_email(
     recipient_email: Optional[str],
     owner_first_name: Optional[str],
     variant: str,
-) -> bool:
-    """Best-effort interview ask from Dan's mailbox."""
+) -> Optional[str]:
+    """Best-effort interview ask from the founder's mailbox.
+
+    Returns the Gmail thread id on a successful send, or None. The id is the
+    record of which threads in that mailbox are ours: anything answering the
+    replies acts on this set alone, so unrelated correspondence is outside its
+    reach by construction rather than by pattern-matching subjects. An empty
+    string is returned when the send succeeded but Gmail named no thread, so a
+    caller can still tell "sent" from "not sent".
+    """
     if not recipient_email:
-        return False
+        return None
 
     from_address = get_founder_interview_from_email()
     if not from_address:
         logger.info(
             "Founder interview asks disabled or from-address unset; skipping.",
         )
-        return False
+        return None
 
     from orchestra.web.api.utils.email import send_email_async_result
 
@@ -154,13 +162,15 @@ async def send_founder_interview_email(
         impersonate_email=from_address,
     )
     if result:
+        thread_id = str(result.get("threadId") or "")
         logger.info(
-            "Founder interview ask (%s) sent to %s from %s",
+            "Founder interview ask (%s) sent to %s from %s (thread %s)",
             variant,
             recipient_email,
             from_address,
+            thread_id or "unknown",
         )
-        return True
+        return thread_id
 
     logger.warning(
         "Failed to send founder interview ask (%s) to %s from %s",
@@ -168,4 +178,4 @@ async def send_founder_interview_email(
         recipient_email,
         from_address,
     )
-    return False
+    return None

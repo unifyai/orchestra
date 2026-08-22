@@ -1189,8 +1189,16 @@ class AssistantDAO:
         when: datetime,
         *,
         variant: str,
+        thread_id: str | None = None,
     ) -> int:
-        """Stamp a successful founder interview ask (one-shot)."""
+        """Stamp a successful founder interview ask (one-shot).
+
+        ``thread_id`` is the Gmail thread the ask created. It is the record
+        that lets a reply automation act on our own threads only, so it is
+        written in the same statement as the timestamp rather than a later
+        one: a stamp without it would mark the ask sent while leaving the
+        thread unattributable.
+        """
         result = self.session.execute(
             update(Assistant)
             .where(
@@ -1200,6 +1208,7 @@ class AssistantDAO:
             .values(
                 founder_interview_asked_at=when,
                 founder_interview_ask_variant=variant,
+                founder_interview_thread_id=thread_id or None,
             ),
         )
         return int(result.rowcount or 0)

@@ -2608,6 +2608,10 @@ class Assistant(Base):
     # cohort template was used (engaged_quiet / never_engaged / engaged_active).
     founder_interview_asked_at = Column(TIMESTAMP(timezone=True), nullable=True)
     founder_interview_ask_variant = Column(String, nullable=True)
+    # Gmail thread the ask created. The reply automation acts only on threads
+    # named here, so a founder's unrelated correspondence is out of its reach
+    # by construction rather than by filtering.
+    founder_interview_thread_id = Column(String, nullable=True)
     voice_id = sa.Column(
         sa.String,
         nullable=True,
