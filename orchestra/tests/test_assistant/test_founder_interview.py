@@ -131,24 +131,25 @@ class TestInterviewTemplates:
         assert "15 minutes" not in active_flat
 
     def test_the_switch_restores_the_booking_link(self, monkeypatch):
-        import importlib
-
-        import orchestra.settings as settings_module
         from orchestra.routines import founder_interview as fi
+        from orchestra.settings import settings
 
-        monkeypatch.setenv("FOUNDER_INTERVIEW_OFFER_CALL", "true")
-        importlib.reload(settings_module)
-        try:
-            body = fi.build_founder_interview_email(
-                owner_first_name="Daniel",
-                variant="engaged_quiet",
-                cal_url="https://cal.com/team/unify/chat",
-            )
-            assert "https://cal.com/team/unify/chat" in body
-            assert "15-min chat" in re.sub(r"\s+", " ", body.lower())
-        finally:
-            monkeypatch.delenv("FOUNDER_INTERVIEW_OFFER_CALL", raising=False)
-            importlib.reload(settings_module)
+        # Flip the field on the live settings instance rather than reloading
+        # ``orchestra.settings`` for the new env var: a reload rebinds the
+        # module's ``settings`` to a fresh object while every module that did
+        # ``from orchestra.settings import settings`` at import time keeps the
+        # old one, and the two halves of the process then disagree for the
+        # rest of the session.
+        monkeypatch.setattr(settings, "founder_interview_offer_call", True)
+
+        body = fi.build_founder_interview_email(
+            owner_first_name="Daniel",
+            variant="engaged_quiet",
+            cal_url="https://cal.com/team/unify/chat",
+        )
+
+        assert "https://cal.com/team/unify/chat" in body
+        assert "15-min chat" in re.sub(r"\s+", " ", body.lower())
 
 
 class TestInterviewDAO:
