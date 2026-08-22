@@ -724,7 +724,7 @@ class Settings(BaseSettings):
         "yes",
     )
     founder_welcome_from_email: str = (
-        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan@unify.ai"
+        os.environ.get("FOUNDER_WELCOME_FROM_EMAIL") or "dan.lenton@unify.ai"
     )
 
     # Founder interview asks (dan@) — automated, one-shot per personal
@@ -741,7 +741,7 @@ class Settings(BaseSettings):
     founder_interview_from_email: str = (
         os.environ.get("FOUNDER_INTERVIEW_FROM_EMAIL")
         or os.environ.get("FOUNDER_WELCOME_FROM_EMAIL")
-        or "dan@unify.ai"
+        or "dan.lenton@unify.ai"
     )
     founder_interview_cal_url: str = (
         os.environ.get("FOUNDER_INTERVIEW_CAL_URL") or "https://cal.com/team/unify/chat"
