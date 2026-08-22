@@ -31,7 +31,7 @@ class OneTimeCreditGrantLinkDAO:
 
     def create(
         self,
-        expires_at: datetime.datetime,
+        expires_at: Optional[datetime.datetime] = None,
         credit_amount: Optional[float] = None,
         max_claims: Optional[int] = 1,
         name: Optional[str] = None,
@@ -125,18 +125,30 @@ class OneTimeCreditGrantLinkDAO:
         link = self.get_by_token(token)
         if not link:
             return None
-        if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
+        if link.expires_at is not None and link.expires_at < datetime.datetime.now(
+            datetime.timezone.utc,
+        ):
             return None
         if self.is_fully_redeemed(link):
             return None
 
+        now = datetime.datetime.now(datetime.timezone.utc)
         claim = CreditGrantLinkClaim(
             link_id=link.id,
             user_id=user_id,
             organization_id=organization_id,
-            claimed_at=datetime.datetime.now(datetime.timezone.utc),
+            claimed_at=now,
         )
         self.session.add(claim)
+        # The window starts here, at first use, not at mint time. A link with
+        # no expiry waits indefinitely to be opened; once somebody actually
+        # claims it, the offer runs for a bounded period like any promotion.
+        # Only the first claim sets it, so a multi-claim link is not extended
+        # by every later claimant.
+        if link.expires_at is None:
+            link.expires_at = now + datetime.timedelta(
+                days=settings.credit_grant_days_after_first_claim,
+            )
         return claim
 
     # ------------------------------------------------------------------
@@ -194,6 +206,7 @@ class OneTimeCreditGrantLinkDAO:
         )
         stmt = (
             delete(OneTimeCreditGrantLink)
+            .where(OneTimeCreditGrantLink.expires_at.is_not(None))
             .where(OneTimeCreditGrantLink.expires_at < now_utc)
             .where(~has_claims)
         )

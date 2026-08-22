@@ -498,6 +498,13 @@ class Settings(BaseSettings):
     # Promo credits
     max_promo_amount: float = 100.0
 
+    #: How long a credit grant link stays valid once it has been claimed.
+    #: Links are minted without an expiry so they cannot go stale in an
+    #: unopened inbox; this bounds the offer from first use instead.
+    credit_grant_days_after_first_claim: int = int(
+        os.environ.get("CREDIT_GRANT_DAYS_AFTER_FIRST_CLAIM", "14"),
+    )
+
     # Signup credit grant (free credits for new users)
     signup_credit_grant: float = float(
         os.environ.get("SIGNUP_CREDIT_GRANT", "100"),
