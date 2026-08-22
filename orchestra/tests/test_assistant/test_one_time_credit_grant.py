@@ -887,3 +887,76 @@ async def test_credit_grant_link_user_route_allows_admin_key(client: AsyncClient
         headers=ADMIN_HEADERS,
     )
     assert resp.status_code == status.HTTP_201_CREATED, resp.json()
+
+
+@pytest.mark.anyio
+async def test_a_link_without_an_expiry_never_goes_stale(client: AsyncClient):
+    """Omitting expires_in_days mints a link that keeps working.
+
+    Expiry that starts at mint time punishes someone for opening the email
+    late: the link dies holding the credit, and the person it was minted for
+    is told there is nothing there. That is what the default now avoids.
+    """
+    user = await create_test_user(client, "no_expiry_user@example.com")
+    before = await get_credits(client, user_headers=user["headers"])
+
+    created = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"credit_amount": 200.0, "name": "no-expiry"},
+        headers=ADMIN_HEADERS,
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.json()
+    assert created.json()["expires_at"] is None
+
+    claimed = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": created.json()["token"]},
+        headers=user["headers"],
+    )
+    assert claimed.status_code == status.HTTP_200_OK, claimed.json()
+    assert claimed.json()["credits_granted"] == 200.0
+    after = await get_credits(client, user_headers=user["headers"])
+    assert after == before + 200.0
+
+
+@pytest.mark.anyio
+async def test_the_window_starts_at_first_use(client: AsyncClient):
+    """A claim starts the clock; minting does not.
+
+    This is the whole point of the change: the link waits indefinitely in an
+    unopened inbox, then runs for a bounded period once someone acts on it.
+    """
+    created = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"credit_amount": 25.0, "name": "window-starts-on-claim"},
+        headers=ADMIN_HEADERS,
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.json()
+    assert created.json()["expires_at"] is None
+
+    user = await create_test_user(client, "window_user@example.com")
+    claimed = await client.post(
+        "/v0/user/claim-credit-grant-link",
+        json={"token": created.json()["token"]},
+        headers=user["headers"],
+    )
+    assert claimed.status_code == status.HTTP_200_OK, claimed.json()
+
+    listed = await client.get("/v0/admin/credit-grant-link", headers=ADMIN_HEADERS)
+    assert listed.status_code == status.HTTP_200_OK, listed.json()
+    link = next(
+        item for item in listed.json() if item["token"] == created.json()["token"]
+    )
+    assert link["expires_at"] is not None, "claiming must start the window"
+
+
+@pytest.mark.anyio
+async def test_an_explicit_expiry_is_still_honoured(client: AsyncClient):
+    """This is a default change, not a removal: opting in must still work."""
+    created = await client.post(
+        "/v0/admin/credit-grant-link",
+        json={"credit_amount": 5.0, "expires_in_days": 30, "name": "with-expiry"},
+        headers=ADMIN_HEADERS,
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.json()
+    assert created.json()["expires_at"] is not None

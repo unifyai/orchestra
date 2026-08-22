@@ -1909,7 +1909,9 @@ def claim_credit_grant_link(
         )
 
     # --- Expiry check ---
-    if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
+    if link.expires_at is not None and link.expires_at < datetime.datetime.now(
+        datetime.timezone.utc,
+    ):
         raise HTTPException(status_code=400, detail="This link has expired.")
 
     try:
@@ -2112,13 +2114,16 @@ def _create_credit_grant_link_core(
 ) -> CreditGrantLinkResponse:
     """Shared credit-grant-link creation used by admin and Unify-staff routes."""
     token_dao = OneTimeCreditGrantLinkDAO(session)
-    if payload.expires_in_days <= 0:
+    if payload.expires_in_days is not None and payload.expires_in_days <= 0:
         raise HTTPException(status_code=400, detail="Expiration days must be positive.")
     if payload.max_claims is not None and payload.max_claims < 1:
         raise HTTPException(status_code=400, detail="max_claims must be at least 1.")
 
-    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
-        days=payload.expires_in_days,
+    expires_at = (
+        None
+        if payload.expires_in_days is None
+        else datetime.datetime.now(datetime.timezone.utc)
+        + datetime.timedelta(days=payload.expires_in_days)
     )
     link = token_dao.create(
         expires_at=expires_at,

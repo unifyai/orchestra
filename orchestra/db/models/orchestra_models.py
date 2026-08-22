@@ -3228,7 +3228,11 @@ class OneTimeCreditGrantLink(Base):
         nullable=True,
         comment="Optional admin-facing label (e.g. outreach channel or campaign)",
     )
-    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    #: NULL means the link never expires. Expiry that starts at mint time
+    #: only voids credits for someone who opened the email late: the link
+    #: dies holding the grant and its recipient is told there is nothing
+    #: there. The clock starts at first use instead.
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     credit_amount = Column(
         Float,

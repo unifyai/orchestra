@@ -143,7 +143,9 @@ class CreditGrantLinkClaimRequest(BaseModel):
 class CreditGrantLinkCreateRequest(BaseModel):
     """Request to create a credit grant link."""
 
-    expires_in_days: int = 7
+    #: None means the link never expires, which is the default: a link that
+    #: dies before it is claimed takes the credit with it.
+    expires_in_days: Optional[int] = None
     credit_amount: Optional[float] = None  # Defaults to assistant_creation_cost
     max_claims: Optional[int] = 1  # None = unlimited
     name: OptionalSafeLabel = None
@@ -165,7 +167,7 @@ class CreditGrantLinkResponse(BaseModel):
     id: str
     token: str
     name: Optional[str] = None
-    expires_at: datetime
+    expires_at: Optional[datetime] = None
     credit_amount: float
     max_claims: Optional[int] = 1  # None = unlimited
     claim_count: int = 0
