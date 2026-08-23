@@ -17,6 +17,7 @@ fixes are applied.  Each tier includes all lower tiers:
     Fixes with zero financial impact — purely defensive cleanup:
 
     - Clear deleted/missing Stripe customer ID.
+    - Cancel subscriptions whose Orchestra billing account was deleted.
     - Dispute lost → status set to ``FAILED`` (credits already voided).
     - Orphaned grace-period contacts → ``active`` (BA has credits ≥ 0).
 
@@ -87,7 +88,7 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 
 import stripe
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.enums import BillingMode, CollectionMethod
@@ -325,6 +326,7 @@ def _reconcile_with_session(
     )
     _check_orphaned_grace_periods(session, result, fix_level=fix_level)
     _check_unjustified_suspensions(session, result, fix_level=fix_level)
+    _check_orphaned_stripe_subscriptions(session, result, fix_level=fix_level)
     _check_subscription_state_drift(session, result)
     _check_plan_assignment_integrity(session, result)
     _check_metered_invoicing_completeness(
@@ -1510,6 +1512,89 @@ def _check_plan_assignment_integrity(
 # ---------------------------------------------------------------------------
 # Self-serve subscriptions: local ↔ Stripe state drift
 # ---------------------------------------------------------------------------
+
+
+def _check_orphaned_stripe_subscriptions(
+    session: Session,
+    result: ReconciliationResult,
+    *,
+    fix_level: int,
+) -> None:
+    """Close our Stripe subscriptions whose billing account was deleted.
+
+    Every Orchestra subscription carries its ``billing_account_id`` in
+    metadata. That ID is the stable link for both personal and organization
+    billing, so membership changes cannot cause an organization subscription
+    to be mistaken for a member's personal subscription.
+    """
+    local_ids = {
+        ba_id
+        for (ba_id,) in session.execute(
+            text(
+                """
+            SELECT ba.id
+            FROM billing_account ba
+            WHERE EXISTS (
+                SELECT 1 FROM "user" u WHERE u.billing_account_id = ba.id
+            )
+            OR EXISTS (
+                SELECT 1 FROM organization o WHERE o.billing_account_id = ba.id
+            )
+            """,
+            ),
+        ).all()
+    }
+    try:
+        subscriptions = stripe.Subscription.list(status="all", limit=100)
+        iterator = subscriptions.auto_paging_iter()
+        for subscription in iterator:
+            metadata = (
+                subscription.get("metadata", {})
+                if isinstance(subscription, dict)
+                else getattr(subscription, "metadata", {}) or {}
+            )
+            billing_account_id = metadata.get("billing_account_id")
+            try:
+                billing_account_id = int(billing_account_id)
+            except (TypeError, ValueError):
+                continue
+            if billing_account_id in local_ids:
+                continue
+
+            subscription_id = (
+                subscription.get("id")
+                if isinstance(subscription, dict)
+                else subscription.id
+            )
+            status = (
+                subscription.get("status")
+                if isinstance(subscription, dict)
+                else subscription.status
+            )
+            if status in {"canceled", "incomplete_expired"}:
+                continue
+
+            discrepancy = Discrepancy(
+                category="orphaned_stripe_subscription",
+                severity="critical",
+                stripe_id=subscription_id,
+                detail=(
+                    f"Stripe subscription {subscription_id} references deleted "
+                    f"billing account {billing_account_id}"
+                ),
+            )
+            if fix_level >= FIX_SAFE:
+                try:
+                    stripe.Subscription.delete(subscription_id)
+                    discrepancy.auto_fixed = True
+                except stripe.StripeError as exc:
+                    result.errors.append(
+                        f"Failed to cancel orphaned subscription "
+                        f"{subscription_id}: {exc}",
+                    )
+            result.discrepancies.append(discrepancy)
+    except stripe.StripeError as exc:
+        result.errors.append(f"Stripe API error checking subscriptions: {exc}")
 
 
 def _check_subscription_state_drift(

@@ -15,7 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -33,11 +33,10 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Assistant,
     OrganizationMember,
-    Recharge,
-    RechargeStatus,
     Team,
     TeamAssistantMembership,
 )
+from orchestra.lib.subscription_billing import cancel_customer_subscriptions
 from orchestra.services.assistant_cleanup_service import (
     CleanupSource,
     build_cleanup_specs_for_assistants,
@@ -76,6 +75,9 @@ from orchestra.services.team_cleanup_service import (
 from orchestra.services.team_membership_refresh_service import (
     membership_refresh_payloads,
     publish_membership_refreshes_best_effort,
+)
+from orchestra.services.user_account_cleanup_service import (
+    billing_account_deletion_blockers,
 )
 from orchestra.web.api.dependencies import require_console_origin_for_free_accounts
 from orchestra.web.api.organization.schema import (
@@ -673,54 +675,16 @@ async def delete_organization(
     # Check for billing blockers before allowing deletion
     ba = org.billing_account
     if ba:
-        # Check for pending invoices
-        pending_recharges = (
-            session.query(Recharge)
-            .filter(
-                Recharge.billing_account_id == ba.id,
-                Recharge.status.in_(
-                    [
-                        RechargeStatus.PENDING_INVOICE,
-                        RechargeStatus.INVOICE_CREATED,
-                    ],
-                ),
-            )
-            .all()
-        )
-        if pending_recharges:
-            pending_amount = sum(r.amount_usd for r in pending_recharges)
+        blockers = billing_account_deletion_blockers(session, ba.id)
+        if blockers:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Organization has ${pending_amount:.2f} in pending invoices. "
-                "Please wait for invoices to be processed before deleting.",
-            )
-
-        # Check for open disputes
-        disputed_recharges = (
-            session.query(Recharge)
-            .filter(
-                Recharge.billing_account_id == ba.id,
-                Recharge.status == RechargeStatus.DISPUTED,
-            )
-            .first()
-        )
-        if disputed_recharges:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Organization has open payment disputes. "
-                "Please wait for disputes to be resolved before deleting.",
-            )
-
-        # Check for problematic account status
-        if ba.account_status in ("SUSPENDED", "CLOSED"):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Organization billing account is {ba.account_status}. "
-                "Please contact support before deleting.",
+                detail=blockers[0].details.get("message", blockers[0].reason),
             )
 
     # Store Stripe customer ID for post-deletion archival
     stripe_customer_id = ba.stripe_customer_id if ba else None
+    stripe_subscription_id = ba.stripe_subscription_id if ba else None
 
     cleanup_task_ids: list[int] = []
 
@@ -803,6 +767,28 @@ async def delete_organization(
 
         org_dao.delete(organization_id)
 
+        # Organization ownership is the only live reference to this billing
+        # account. Remove it after the organization row is gone so a later
+        # reconciliation run cannot mistake the deleted org for an owner.
+        if ba:
+            session.execute(
+                text(
+                    """
+                    DELETE FROM billing_account
+                    WHERE id = :billing_account_id
+                    AND NOT EXISTS (
+                        SELECT 1 FROM "user"
+                        WHERE billing_account_id = :billing_account_id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM organization
+                        WHERE billing_account_id = :billing_account_id
+                    )
+                    """,
+                ),
+                {"billing_account_id": ba.id},
+            )
+
         # Re-enable personal workspaces for members who no longer belong to any
         # (non-Unify) organization now that this org (and its memberships) is
         # gone. Without this the personal-workspace disabled flag is one-way and
@@ -854,6 +840,18 @@ async def delete_organization(
             f"Failed to initialize BucketService for org {organization_id} "
             f"GCS cleanup: {e}",
         )
+
+    if stripe_customer_id and stripe_subscription_id:
+        try:
+            cancel_customer_subscriptions(stripe_customer_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to cancel subscriptions for deleted organization "
+                "customer %s: %s",
+                stripe_customer_id,
+                exc,
+                exc_info=True,
+            )
 
     # Archive Stripe customer (best-effort, don't fail if this errors)
     if stripe_customer_id:

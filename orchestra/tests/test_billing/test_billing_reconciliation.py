@@ -57,6 +57,8 @@ def _make_mock_stripe(
     charge_retrieve=None,
     payment_method_list=None,
     event_list=None,
+    subscription_list=None,
+    subscription_delete=None,
     InvalidRequestError=None,
     StripeError=None,
 ):
@@ -79,6 +81,10 @@ def _make_mock_stripe(
         ),
         Event=SimpleNamespace(
             list=event_list or (lambda **kw: _empty_stripe_list()),
+        ),
+        Subscription=SimpleNamespace(
+            list=subscription_list or (lambda **kw: _empty_stripe_list()),
+            delete=subscription_delete or (lambda sid: {"id": sid}),
         ),
         InvalidRequestError=InvalidRequestError or Exception,
         StripeError=StripeError or Exception,
@@ -1622,6 +1628,48 @@ class TestEnrichment:
         from orchestra.routines.billing_reconciliation import _stripe_dashboard_url
 
         assert _stripe_dashboard_url(None, "live") is None
+
+
+class TestOrphanedStripeSubscriptions:
+    """Subscriptions whose Orchestra billing account was deleted are closed."""
+
+    def test_auto_fix_closes_subscription_for_deleted_billing_account(
+        self,
+        dbsession: Session,
+        monkeypatch,
+    ):
+        import orchestra.routines.billing_reconciliation as recon_mod
+
+        deleted = SimpleNamespace(
+            id="sub_deleted_account",
+            customer="cus_deleted_account",
+            status="active",
+            metadata={"billing_account_id": "987654321"},
+        )
+        deleted_ids = []
+        monkeypatch.setattr(
+            recon_mod,
+            "stripe",
+            _make_mock_stripe(
+                subscription_list=lambda **kw: SimpleNamespace(
+                    auto_paging_iter=lambda: iter([deleted]),
+                    data=[deleted],
+                ),
+                subscription_delete=lambda sid: deleted_ids.append(sid),
+            ),
+        )
+
+        result = recon_mod.reconcile(session=dbsession, auto_fix="safe")
+
+        hits = [
+            d
+            for d in result.discrepancies
+            if d.category == "orphaned_stripe_subscription"
+        ]
+        assert len(hits) == 1
+        assert hits[0].stripe_id == "sub_deleted_account"
+        assert hits[0].auto_fixed is True
+        assert deleted_ids == ["sub_deleted_account"]
 
 
 # ============================================================================

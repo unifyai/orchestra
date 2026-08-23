@@ -138,6 +138,78 @@ async def test_org_deletion_queues_cleanup_without_direct_assistant_gcs_calls(
 
 
 @pytest.mark.anyio
+async def test_org_deletion_cancels_organization_subscription(
+    client: AsyncClient,
+    dbsession,
+    mock_infra_and_bucket,
+):
+    """Deleting an organization cancels its organization-owned subscription."""
+    from orchestra.db.models.orchestra_models import Organization
+
+    owner = await create_test_user(client, "org_subscription_delete@test.com")
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Subscription Delete"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org = dbsession.query(Organization).filter_by(id=org_id).one()
+    org.billing_account.stripe_customer_id = "cus_org_delete"
+    org.billing_account.stripe_subscription_id = "sub_org_delete"
+    dbsession.commit()
+
+    with patch(
+        "orchestra.web.api.organization.views.cancel_customer_subscriptions",
+    ) as cancel:
+        response = await client.delete(
+            f"/v0/organizations/{org_id}",
+            headers=owner["headers"],
+        )
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+    cancel.assert_called_once_with("cus_org_delete")
+
+
+@pytest.mark.anyio
+async def test_org_deletion_blocked_by_unpaid_bill(
+    client: AsyncClient,
+    dbsession,
+    mock_infra_and_bucket,
+):
+    """An organization cannot be deleted while its bill is unpaid."""
+    from decimal import Decimal
+
+    from orchestra.db.models.orchestra_models import Organization, Recharge
+
+    owner = await create_test_user(client, "org_unpaid_delete@test.com")
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Unpaid Delete"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org = dbsession.query(Organization).filter_by(id=org_id).one()
+    dbsession.add(
+        Recharge(
+            billing_account_id=org.billing_account_id,
+            quantity=Decimal("50"),
+            amount_usd=Decimal("50"),
+            status="FAILED",
+            type="usage",
+        ),
+    )
+    dbsession.commit()
+
+    response = await client.delete(
+        f"/v0/organizations/{org_id}",
+        headers=owner["headers"],
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "unpaid" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
 async def test_org_deletion_deprovisions_contacts_and_persists_cleanup_tasks(
     client: AsyncClient,
     dbsession,

@@ -66,6 +66,38 @@ class SubscriptionError(Exception):
     """Raised for self-serve subscription validation failures."""
 
 
+def cancel_customer_subscriptions(customer_id: str) -> list[str]:
+    """Cancel every non-terminal subscription belonging to a customer.
+
+    Account deletion must close the Stripe collection engine before its local
+    billing entity disappears. Listing all subscriptions also handles stale
+    duplicate subscriptions left by an earlier failed deletion.
+    """
+    configure_stripe()
+    subscriptions = stripe.Subscription.list(
+        customer=customer_id,
+        status="all",
+        limit=100,
+    )
+    canceled: list[str] = []
+    for subscription in subscriptions.auto_paging_iter():
+        status = (
+            subscription.get("status")
+            if isinstance(subscription, dict)
+            else subscription.status
+        )
+        if status in {"canceled", "incomplete_expired"}:
+            continue
+        subscription_id = (
+            subscription.get("id")
+            if isinstance(subscription, dict)
+            else subscription.id
+        )
+        stripe.Subscription.delete(subscription_id)
+        canceled.append(subscription_id)
+    return canceled
+
+
 # Annual tiers bill once a year and grant the whole year of credits up
 # front (lump-sum bucket); the monthly tier rung is multiplied by this.
 ANNUAL_MONTHS = 12

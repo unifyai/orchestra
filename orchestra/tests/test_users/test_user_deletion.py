@@ -110,6 +110,60 @@ async def test_delete_user_blocked_by_pending_bills(client: AsyncClient, dbsessi
 
 
 @pytest.mark.anyio
+async def test_delete_user_blocked_by_failed_bill(client: AsyncClient, dbsession):
+    """Deletion is blocked while a bill remains unpaid after final retry."""
+    from orchestra.db.dao.recharge_dao import RechargeDAO
+    from orchestra.db.dao.user_dao import UserDAO
+    from orchestra.db.models.orchestra_models import RechargeStatus
+
+    user = await create_test_user(client, "failed_bill@test.com")
+    user_obj = UserDAO(dbsession).get_user_with_id(user["id"])
+    RechargeDAO(dbsession).create_recharge(
+        billing_account_id=user_obj.billing_account_id,
+        quantity=100,
+        amount_usd=Decimal("50.00"),
+        invoice_group=date.today(),
+        type_="usage",
+        status=RechargeStatus.FAILED,
+    )
+    dbsession.flush()
+
+    response = await client.delete(
+        f"/v0/admin/user?user_id={user['id']}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "unpaid" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_delete_user_cancels_personal_subscription(
+    client: AsyncClient,
+    dbsession,
+):
+    """Deleting a personal account cancels its Stripe subscription first."""
+    from orchestra.db.dao.user_dao import UserDAO
+
+    user = await create_test_user(client, "subscription_delete@test.com")
+    user_obj = UserDAO(dbsession).get_user_with_id(user["id"])
+    user_obj.billing_account.stripe_customer_id = "cus_personal_delete"
+    user_obj.billing_account.stripe_subscription_id = "sub_personal_delete"
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.user_account_cleanup_service.cancel_customer_subscriptions",
+    ) as cancel:
+        response = await client.delete(
+            f"/v0/admin/user?user_id={user['id']}",
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 200, response.json()
+    cancel.assert_called_once_with("cus_personal_delete")
+
+
+@pytest.mark.anyio
 async def test_delete_user_blocked_by_organization_ownership(client: AsyncClient):
     """Deletion blocked when user owns an organization."""
     user = await create_test_user(client, "org_owner@test.com")
@@ -150,6 +204,44 @@ async def test_delete_user_force_bypasses_org_check(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     assert response.json()["success"] is True
+
+
+@pytest.mark.anyio
+async def test_force_delete_owner_cancels_organization_subscription(
+    client: AsyncClient,
+    dbsession,
+):
+    """Forced owner deletion also closes the cascaded organization's subscription."""
+    from orchestra.db.dao.user_dao import UserDAO
+    from orchestra.db.models.orchestra_models import Organization
+
+    user = await create_test_user(client, "force_org_subscription_delete@test.com")
+    response = await client.post(
+        "/v0/admin/organization",
+        params={"name": "ForceOrgSubscriptionDelete", "owner_id": user["id"]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    org = (
+        dbsession.query(Organization)
+        .filter(Organization.owner_id == user["id"])
+        .one()
+    )
+    org.billing_account.stripe_customer_id = "cus_force_org_delete"
+    org.billing_account.stripe_subscription_id = "sub_force_org_delete"
+    dbsession.commit()
+
+    with patch(
+        "orchestra.services.user_account_cleanup_service.cancel_customer_subscriptions",
+    ) as cancel:
+        response = await client.delete(
+            f"/v0/admin/user?user_id={user['id']}&force=true",
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 200, response.json()
+    cancel.assert_called_once_with("cus_force_org_delete")
 
 
 @pytest.mark.anyio

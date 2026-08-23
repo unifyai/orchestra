@@ -14,6 +14,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from orchestra.lib.subscription_billing import cancel_customer_subscriptions
 from orchestra.services.assistant_cleanup_service import (
     AssistantCleanupSpec,
     CleanupSource,
@@ -86,6 +87,119 @@ def run_user_runtime_cleanup_tasks(
         session.close()
 
 
+def billing_account_deletion_blockers(
+    session: Session,
+    billing_account_id: int | None,
+) -> list[DeletionBlocker]:
+    """Return financial conditions that must be settled before deletion."""
+    if billing_account_id is None:
+        return []
+
+    result = session.execute(
+        text(
+            """
+            SELECT
+                EXISTS(
+                    SELECT 1 FROM recharge
+                    WHERE billing_account_id = :ba_id
+                    AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
+                ) AS has_pending_bills,
+                COALESCE(
+                    (SELECT SUM(amount_usd) FROM recharge
+                     WHERE billing_account_id = :ba_id
+                     AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
+                    0
+                ) AS pending_amount,
+                EXISTS(
+                    SELECT 1 FROM recharge
+                    WHERE billing_account_id = :ba_id
+                    AND status = 'FAILED'
+                ) AS has_failed_bills,
+                COALESCE(
+                    (SELECT SUM(amount_usd) FROM recharge
+                     WHERE billing_account_id = :ba_id
+                     AND status = 'FAILED'),
+                    0
+                ) AS failed_amount,
+                EXISTS(
+                    SELECT 1 FROM recharge
+                    WHERE billing_account_id = :ba_id
+                    AND status = 'DISPUTED'
+                ) AS has_disputed_charges,
+                ba.account_status,
+                ba.payment_past_due_at
+            FROM billing_account ba
+            WHERE ba.id = :ba_id
+            """,
+        ),
+        {"ba_id": billing_account_id},
+    ).fetchone()
+    if result is None:
+        return []
+
+    blockers: list[DeletionBlocker] = []
+    if result.has_pending_bills:
+        blockers.append(
+            DeletionBlocker(
+                reason="pending_bills",
+                details={
+                    "pending_amount_usd": float(result.pending_amount),
+                    "message": (
+                        f"Account has ${result.pending_amount:.2f} in pending invoices. "
+                        "Please wait for invoices to be processed before deleting."
+                    ),
+                },
+            ),
+        )
+    if result.has_failed_bills:
+        blockers.append(
+            DeletionBlocker(
+                reason="unpaid_bills",
+                details={
+                    "unpaid_amount_usd": float(result.failed_amount),
+                    "message": (
+                        f"Account has ${result.failed_amount:.2f} in unpaid invoices. "
+                        "Settle them before deleting the account."
+                    ),
+                },
+            ),
+        )
+    if result.has_disputed_charges:
+        blockers.append(
+            DeletionBlocker(
+                reason="open_disputes",
+                details={
+                    "message": "Account has open payment disputes. "
+                    "Please wait for disputes to be resolved before deleting."
+                },
+            ),
+        )
+    if result.payment_past_due_at is not None:
+        blockers.append(
+            DeletionBlocker(
+                reason="past_due_subscription",
+                details={
+                    "message": "Account has a past-due subscription invoice. "
+                    "Settle it before deleting the account."
+                },
+            ),
+        )
+    if result.account_status in ("SUSPENDED", "CLOSED"):
+        blockers.append(
+            DeletionBlocker(
+                reason="account_status",
+                details={
+                    "account_status": result.account_status,
+                    "message": (
+                        f"Account billing status is {result.account_status}. "
+                        "Please resolve outstanding billing issues before deleting."
+                    ),
+                },
+            ),
+        )
+    return blockers
+
+
 class UserAccountCleanupService:
     """
     Service for deleting user accounts with all associated data.
@@ -93,7 +207,7 @@ class UserAccountCleanupService:
     Performance optimizations:
     - Raw SQL for all operations (no ORM overhead)
     - Single DELETE statement per table (no loops/chunking)
-    - Combined blocker checks in single query
+    - Combined billing blocker checks in one query
     - Database CASCADE handles related tables
     """
 
@@ -104,57 +218,19 @@ class UserAccountCleanupService:
         """
         Check all conditions that would block account deletion.
 
-        Executes a single optimized query that checks:
-        - User exists in user table
-        - Has pending bills (PENDING_INVOICE or INVOICE_CREATED)
-        - Has disputed recharges (DISPUTED)
-        - Billing account is in SUSPENDED or CLOSED state
-        - Owns any organizations
+        Checks the user's billing account for unpaid invoices, disputes,
+        past-due subscriptions, and blocked account status, then checks
+        organization ownership.
 
         :param user_id: The user's ID
         :return: List of blockers (empty if deletion is allowed)
         """
-        result = self.session.execute(
-            text(
-                """
-                SELECT
-                    EXISTS(SELECT 1 FROM "user" WHERE id = :uid) as user_exists,
-                    EXISTS(
-                        SELECT 1 FROM recharge r
-                        JOIN "user" u ON u.billing_account_id = r.billing_account_id
-                        WHERE u.id = :uid
-                        AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
-                    ) as has_pending_bills,
-                    COALESCE(
-                        (SELECT SUM(r.amount_usd) FROM recharge r
-                         JOIN "user" u ON u.billing_account_id = r.billing_account_id
-                         WHERE u.id = :uid
-                         AND r.status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
-                        0
-                    ) as pending_amount,
-                    EXISTS(
-                        SELECT 1 FROM recharge r
-                        JOIN "user" u ON u.billing_account_id = r.billing_account_id
-                        WHERE u.id = :uid
-                        AND r.status = 'DISPUTED'
-                    ) as has_disputed_charges,
-                    (
-                        SELECT ba.account_status FROM billing_account ba
-                        JOIN "user" u ON u.billing_account_id = ba.id
-                        WHERE u.id = :uid
-                    ) as account_status,
-                    EXISTS(
-                        SELECT 1 FROM organization WHERE owner_id = :uid
-                    ) as owns_organizations,
-                    (SELECT array_agg(name) FROM organization WHERE owner_id = :uid) as owned_org_names
-            """,
-            ),
+        blockers: list[DeletionBlocker] = []
+        user_result = self.session.execute(
+            text('SELECT billing_account_id FROM "user" WHERE id = :uid'),
             {"uid": user_id},
         ).fetchone()
-
-        blockers = []
-
-        if not result.user_exists:
+        if user_result is None:
             blockers.append(
                 DeletionBlocker(
                     reason="user_not_found",
@@ -163,47 +239,29 @@ class UserAccountCleanupService:
             )
             return blockers
 
-        if result.has_pending_bills:
-            blockers.append(
-                DeletionBlocker(
-                    reason="pending_bills",
-                    details={
-                        "pending_amount_usd": float(result.pending_amount),
-                        "message": f"User has ${result.pending_amount:.2f} in pending invoices. "
-                        "Please wait for invoices to be processed before deleting account.",
-                    },
-                ),
-            )
+        blockers = billing_account_deletion_blockers(
+            self.session,
+            user_result.billing_account_id,
+        )
 
-        if result.has_disputed_charges:
-            blockers.append(
-                DeletionBlocker(
-                    reason="open_disputes",
-                    details={
-                        "message": "User has open payment disputes. "
-                        "Please wait for disputes to be resolved before deleting account.",
-                    },
-                ),
-            )
+        ownership = self.session.execute(
+            text(
+                """
+                SELECT EXISTS(SELECT 1 FROM organization WHERE owner_id = :uid)
+                    AS owns_organizations,
+                    (SELECT array_agg(name) FROM organization WHERE owner_id = :uid)
+                    AS owned_org_names
+                """,
+            ),
+            {"uid": user_id},
+        ).fetchone()
 
-        if result.account_status in ("SUSPENDED", "CLOSED"):
-            blockers.append(
-                DeletionBlocker(
-                    reason="account_status",
-                    details={
-                        "account_status": result.account_status,
-                        "message": f"User's billing account is {result.account_status}. "
-                        "Please resolve outstanding billing issues before deleting account.",
-                    },
-                ),
-            )
-
-        if result.owns_organizations:
+        if ownership.owns_organizations:
             blockers.append(
                 DeletionBlocker(
                     reason="organization_owner",
                     details={
-                        "organizations": result.owned_org_names or [],
+                        "organizations": ownership.owned_org_names or [],
                         "message": "User owns organizations. "
                         "Transfer ownership before deleting account.",
                     },
@@ -224,7 +282,8 @@ class UserAccountCleanupService:
         1. Check blockers
         2. Delete from tables with user.id FK (no CASCADE)
         3. Delete from user table (cascades all user.id FKs)
-        4. Archive Stripe customer (post-commit, best-effort)
+        4. Commit local deletion
+        5. Cancel Stripe subscriptions and archive the customer post-commit
 
         Assistant cleanup follows the creator-owned lifecycle model. Any org-
         scoped assistants whose ``user_id`` points at this user cascade with the
@@ -239,6 +298,29 @@ class UserAccountCleanupService:
         if force_org_check:
             blockers = [b for b in blockers if b.reason != "organization_owner"]
 
+        owned_org_billing_rows = self.session.execute(
+            text(
+                """
+                SELECT o.id AS organization_id,
+                       ba.id AS billing_account_id,
+                       ba.stripe_customer_id,
+                       ba.stripe_subscription_id
+                FROM organization o
+                LEFT JOIN billing_account ba ON o.billing_account_id = ba.id
+                WHERE o.owner_id = :uid
+                """,
+            ),
+            {"uid": user_id},
+        ).fetchall()
+        if force_org_check:
+            for org_row in owned_org_billing_rows:
+                org_blockers = billing_account_deletion_blockers(
+                    self.session,
+                    org_row.billing_account_id,
+                )
+                if org_blockers:
+                    blockers.extend(org_blockers)
+
         if blockers:
             first_blocker = blockers[0]
             return DeletionResult(
@@ -251,7 +333,8 @@ class UserAccountCleanupService:
         ba_info = self.session.execute(
             text(
                 """
-                SELECT ba.id as ba_id, ba.stripe_customer_id
+                SELECT ba.id as ba_id, ba.stripe_customer_id,
+                       ba.stripe_subscription_id
                 FROM "user" u
                 LEFT JOIN billing_account ba ON u.billing_account_id = ba.id
                 WHERE u.id = :uid
@@ -262,6 +345,17 @@ class UserAccountCleanupService:
 
         stripe_customer_id = ba_info.stripe_customer_id if ba_info else None
         billing_account_id = ba_info.ba_id if ba_info else None
+
+        canceled_customer_ids = {
+            stripe_customer_id,
+        }
+        for org_row in owned_org_billing_rows:
+            if (
+                org_row.stripe_customer_id
+                and org_row.stripe_subscription_id
+                and org_row.stripe_customer_id not in canceled_customer_ids
+            ):
+                canceled_customer_ids.add(org_row.stripe_customer_id)
 
         assistant_cleanup_specs = self._get_user_assistant_cleanup_specs(user_id)
         assistant_ids = [int(spec.assistant_id) for spec in assistant_cleanup_specs]
@@ -305,10 +399,56 @@ class UserAccountCleanupService:
                 text("DELETE FROM billing_account WHERE id = :ba_id"),
                 {"ba_id": billing_account_id},
             )
+        for org_row in owned_org_billing_rows:
+            if org_row.billing_account_id:
+                self.session.execute(
+                    text(
+                        """
+                        DELETE FROM billing_account
+                        WHERE id = :ba_id
+                        AND NOT EXISTS (
+                            SELECT 1 FROM "user" WHERE billing_account_id = :ba_id
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM organization
+                            WHERE billing_account_id = :ba_id
+                        )
+                        """,
+                    ),
+                    {"ba_id": org_row.billing_account_id},
+                )
 
         self.session.commit()
 
         # Post-commit cleanup operations (best-effort, don't block on failure)
+        subscription_customer_ids = {
+            customer_id
+            for customer_id in (
+                (
+                    stripe_customer_id
+                    if ba_info and ba_info.stripe_subscription_id
+                    else None
+                ),
+                *(
+                    row.stripe_customer_id
+                    for row in owned_org_billing_rows
+                    if row.stripe_subscription_id
+                ),
+            )
+            if customer_id
+        }
+        for customer_id in subscription_customer_ids:
+            try:
+                cancel_customer_subscriptions(customer_id)
+            except Exception as exc:
+                logger.error(
+                    "Failed to cancel subscriptions for deleted billing customer "
+                    "%s: %s",
+                    customer_id,
+                    exc,
+                    exc_info=True,
+                )
+
         if stripe_customer_id:
             self._archive_stripe_customer(stripe_customer_id)
 
